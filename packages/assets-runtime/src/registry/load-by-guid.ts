@@ -473,11 +473,11 @@ export async function ddcLoad<T = Asset>(
     parentGuidKey = parentGuidStr.toLowerCase();
     const matAsset = asset as unknown as MaterialAsset & { parentGuid?: string };
     const passes = matAsset.passes;
-    const paramValues = matAsset.paramValues;
+    const values = matAsset.values;
     assetToRegister = {
       kind: 'material',
       ...(passes !== undefined ? { passes } : {}),
-      ...(paramValues !== undefined ? { paramValues } : {}),
+      ...(values !== undefined ? { values } : {}),
       parent: parentGuid.value,
     };
   }
@@ -931,7 +931,7 @@ export function registerParsedAsset<T = Asset>(
  * bug-20260610: fetch one pack file and return the raw asset entry without
  * parsing. Used by `loadByGuidProd` for material kinds so the caller can
  * recursively preload `refs[]` (texture sub-assets) BEFORE the synchronous
- * materialLoader runs and rewrites paramValues handle fields to their refs[]
+ * materialLoader runs and rewrites values handle fields to their refs[]
  * GUID strings (feat-20260614 M8 / D-19: GUID verbatim, no handle minting).
  */
 export async function fetchPackEntry(
@@ -994,7 +994,7 @@ export async function fetchPackEntry(
  * Fetch one pack file, locate the requested asset entry, and either parse it
  * inline or expose the entry to the caller (for kinds that need to preload
  * `refs[]` BEFORE running the loader — currently 'material', whose
- * paramValues handle fields are rewritten to their refs[] GUID strings
+ * values handle fields are rewritten to their refs[] GUID strings
  * (feat-20260614 M8 / D-19: GUID verbatim, no handle minting at load time)).
  *
  * bug-20260610 Fix B (M3 / D-4): the fetch+parse result is cached per
@@ -1318,13 +1318,13 @@ export function makeLoadContext(registry: AssetRegistry): LoadContext {
     },
     // feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
     // expose the registered shader's derive(paramSchema).textureFieldNames to
-    // the materialLoader so it can decide which paramValues fields carry
+    // the materialLoader so it can decide which values fields carry
     // refs[] indices without a hardcoded texture-field allowlist Set
     // (AC-03). Returns `undefined` when the shader is not registered (cross-
     // worktree shader-late-register, plan R-4) — the loader then falls back
     // to a graceful "try every int paramValue" walk.
     getMaterialShaderTextureFieldNames: (shaderId: string) => {
-      const lookup = registry.shaderRegistry.lookupMaterialShader(shaderId);
+      const lookup = registry.shaderRegistry.findMaterialArtifact(shaderId);
       if (!lookup.ok) return undefined;
       return derive(lookup.value.paramSchema).textureFieldNames;
     },

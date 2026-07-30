@@ -23,7 +23,7 @@ import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-import blobShader from './happy-blob.wgsl';
+import './happy-blob.wgsl';
 
 const BLOB_SHADER_PATH = 'shadertoy::happy-blob';
 
@@ -87,41 +87,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const shader = renderer.shader;
   const assets = renderer.assets;
-  if (shader === null || assets === null) {
-    console.error('[happy-blob] renderer.shader or renderer.assets is null; the fullscreen-effect demo requires a fully initialized WebGPU backend.');
+  if (assets === null) {
+    console.error('[happy-blob] renderer.assets is null; the fullscreen-effect demo requires a fully initialized WebGPU backend.');
     return;
   }
   const world = new World();
 
-  if (!shader.lookupMaterialShader(BLOB_SHADER_PATH).ok) {
-    shader.registerMaterialShader(BLOB_SHADER_PATH, {
-      source: blobShader.wgsl,
-      paramSchema: [
-        { name: 'iResolution', type: 'vec2' },
-        { name: 'iTime', type: 'f32' },
-      ],
-    });
-  }
-
-  const paramValues: Record<string, number | number[]> = {
+  const values: Record<string, number | number[]> = {
     iResolution: [target.width, target.height],
     iTime: 0,
   };
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: BLOB_SHADER_PATH,
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-        // The fullscreen quad must never be back-face culled.
-        renderState: { cullMode: 'none' },
-      },
+      { name: 'Forward', program: { module: BLOB_SHADER_PATH }, renderState: { ...{ cullMode: 'none' }, tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues,
+    values,
   });
 
   const planeRes = createPlaneGeometry(1, 1);
@@ -152,14 +134,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const h = target.clientHeight || cssH;
       target.width = Math.max(1, Math.floor(w * renderScale));
       target.height = Math.max(1, Math.floor(h * renderScale));
-      paramValues.iResolution = [target.width, target.height];
+      values.iResolution = [target.width, target.height];
     });
   }
 
   const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    paramValues.iTime = (now - startTime) / 1000;
+    values.iTime = (now - startTime) / 1000;
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error('[happy-blob] draw error:', r.error);
     requestAnimationFrame(frame);

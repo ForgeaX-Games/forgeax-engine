@@ -1,5 +1,12 @@
 # forgeax-engine 使用手册：路由层
 
+## MaterialAsset route
+
+Material authoring with `passes`, `values`, `parent`, and `coordinates`, plus
+cook, catalog loading, and structured recovery share one
+entry point. Route material work through the material and shader skills before
+adding a new package surface.
+
 > 你是 forgeax 引擎的**主用户**（AGENTS.md §Core rule）。本 rule 是**常驻路由**——按任务名挑一个 `forgeax-engine-*` skill load 其正文；它**不教 API**，API 教学在各 skill 正文。
 
 > [!IMPORTANT]
@@ -16,11 +23,11 @@
 | Animation graph / player / clip lookup / playback | `@forgeax/engine-animation`（见 `packages/animation/README.md`） |
 | Render vocabulary / frame stages / Renderer construction | `@forgeax/engine-render` + `forgeax-engine-app`（见 `packages/render/README.md`） |
 | 让东西可见：MeshFilter + MeshRenderer + Material + 灯光（含 `forgeax::sprite-lit` per-light forward） | `forgeax-engine-material` |
-| 写自定义 WGSL + registerMaterialShader | `forgeax-engine-shader` |
+| 写自定义 WGSL + cooked MaterialAsset module | `forgeax-engine-shader` |
 | 加 pass / 后处理 / tonemap / bloom / fxaa / skybox | `forgeax-engine-render-pipeline` |
 | Assemble a renderer, diagnose backend selection, or recover a lost renderer | `forgeax-engine-app` + `packages/runtime/README.md` assembly owner |
 | Vec/Mat/Quat/Color / 从 mat4 读 pose / screenToRay | `forgeax-engine-math` |
-| sidecar (`*.meta.json` / `*.pack.json`) → 导入 → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
+| authored package → cook/catalog → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
 | VFX source / operator cook / Pack v2 GUID load / `ParticleEffectPlayer` / `ParticleRenderBatch` | `forgeax-engine-assets` for the shared Pack v2 path, then `packages/vfx/README.md` and `packages/vfx-compiler/README.md` for the VFX public contract |
 | Public `RenderFeature<ParticleRenderBatch>` compatibility | Wave 2 Rendering loop per `docs/vfx-particle-runtime-design.md`; keep the adapter test-only and do not import RenderFeature into VFX production |
 | inspector (JSON-RPC WS) / kubectl 式 CLI 子命令 | `forgeax-engine-cli` |
@@ -40,6 +47,6 @@ API 签名 / error 码 / capability 全表 SSOT 在 `packages/<pkg>/src/` 与 `p
 
 ## feat / bug 合入后维护
 
-任何对 AI 用户面的影响（公共 API 重命名、入口参数变化、`*ErrorCode` 增删、sidecar schema 变化、内置组件/系统默认行为变化、新增 `@forgeax/engine-*` 包、反复踩中的坑）必须在 finalize 前同步对应 skill。plan 阶段加 milestone `M-N: 同步 forgeax-engine-<cluster> skill`,与代码同 PR。direct-edit 也算。
+任何对 AI 用户面的影响（公共 API 重命名、入口参数变化、`*ErrorCode` 增删、pack schema 变化、内置组件/系统默认行为变化、新增 `@forgeax/engine-*` 包、反复踩中的坑）必须在 finalize 前同步对应 skill。plan 阶段加 milestone `M-N: 同步 forgeax-engine-<cluster> skill`,与代码同 PR。direct-edit 也算。
 
 基线：commit [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03, #297) 一次性产出 11 skill;累积偏离显著时再统一 bump。

@@ -15,7 +15,7 @@ import process from 'node:process';
 
 const root = process.argv[2] ?? 'packages/shader/src';
 const pat =
-  /import\s+[^'"]*['"](@forgeax\/shader-compiler|@forgeax\/wgpu-wasm|@forgeax\/naga|naga|naga-wasm)['"]/;
+  /(?:import\s+[^'"`]*from\s*|import\s*\(|require\s*\()\s*['"](@forgeax\/engine-shader-compiler|@forgeax\/engine-wgpu-wasm|@forgeax\/engine-naga|@forgeax\/shader-compiler|@forgeax\/wgpu-wasm|@forgeax\/naga|naga-wasm?)['"]/;
 const hits = [];
 
 function walk(dir) {

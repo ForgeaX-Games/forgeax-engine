@@ -46,6 +46,7 @@ export interface GltfMetaJson {
   readonly subAssets: readonly GltfSubAssetEntry[];
   readonly importSettings: {
     readonly defaultSceneIndex: number;
+    readonly standardMaterialGuid?: string;
     readonly downscaleMaxDimension?: number;
     readonly diagnostics: {
       readonly nodeNames: readonly string[];

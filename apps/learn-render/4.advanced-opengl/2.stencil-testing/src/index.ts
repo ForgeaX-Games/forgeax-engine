@@ -50,7 +50,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 // 2. example glue
 
-import outlineSolidShader from './outline-solid.wgsl';
+import './outline-solid.wgsl';
 
 const OUTLINE_SHADER_ID = 'learn-render::outline-solid';
 
@@ -118,19 +118,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
-  // Register the custom outline-solid material shader before scene setup.
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[learn-render 4.2 stencil-testing] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(OUTLINE_SHADER_ID).ok) {
-    shader.registerMaterialShader(OUTLINE_SHADER_ID, {
-      source: outlineSolidShader.wgsl,
-      paramSchema: [{ name: 'baseColor', type: 'color' }],
-    });
-  }
-
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);
 
@@ -166,17 +153,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const floorMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: RenderQueue.Geometry as number,
-        renderState: {
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { ...{
           stencilWriteMask: 0x00,
-        },
-      },
+        }, tags: { LightMode: 'Forward' }, queue: RenderQueue.Geometry as number } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.9,
@@ -189,19 +170,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: RenderQueue.Geometry as number,
-        renderState: {
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { ...{
           stencilWriteMask: 0xFF,
           stencil: { compare: 'always', passOp: 'replace' },
-        },
-        stencilReference: 1,
-      },
+        }, tags: { LightMode: 'Forward' }, queue: RenderQueue.Geometry as number, stencilReference: 1 } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.5,
@@ -217,27 +191,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const outlineMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        // Single-pass outline: shares URP's main scene pass (selector
-        // `{ LightMode: ['Forward'] }`). The pass-name "ForwardOutline"
-        // documents intent inside the multi-pass material; the LightMode
-        // tag must remain 'Forward' so the URP main pass selects this
-        // pass (post-#344 pipeline-driven pass selector). Stencil ref-1
-        // not-equal compare + queue Geometry+1 ensure outline draws
-        // after the cube body within the same scene pass.
-        name: 'ForwardOutline',
-        shader: OUTLINE_SHADER_ID,
-        tags: { LightMode: 'Forward' },
-        queue: (RenderQueue.Geometry as number) + 1,
-        renderState: {
+      { name: 'ForwardOutline', program: { module: OUTLINE_SHADER_ID }, renderState: { ...{
           stencilReadMask: 0xFF,
           stencil: { compare: 'not-equal' },
           depthWriteEnabled: false,
-        },
-        stencilReference: 1,
-      },
+        }, tags: { LightMode: 'Forward' }, queue: (RenderQueue.Geometry as number) + 1, stencilReference: 1 } },
     ],
-    paramValues: {
+    values: {
       baseColor: OUTLINE_COLOR,
     },
   });

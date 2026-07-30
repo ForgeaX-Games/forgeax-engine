@@ -1,6 +1,6 @@
 # hello-sprite
 
-> **这个 demo 展示 sprite 的两种用法：region+quad 与 9-slice 双模式。** 顶部屏幕区是 9-slice 区段（左侧 stretch 面板 + 右侧另一尺寸 stretch 面板，下方 tile 砖块），下半屏是经典 region+quad 区段（scene-A 横向 layer-z / scene-B JRPG 脚锚 Y-sort，用键盘 `1` / `2` 切换）。两个区段共用同一 sprite shader (`forgeax::sprite`) + 同一 `MaterialAsset` 入口形态（charter P4 一致抽象），区别仅在 `paramValues` 内是否带 `slices` / `sliceMode` 两字段（feat-20260527-sprite-nineslice / D-1）。AI 用户读这一个 demo 即可看到 sprite 物料的两种编写路径并排呈现，无需切到第二个 demo 比对。
+> **这个 demo 展示 sprite 的两种用法：region+quad 与 9-slice 双模式。** 顶部屏幕区是 9-slice 区段（左侧 stretch 面板 + 右侧另一尺寸 stretch 面板，下方 tile 砖块），下半屏是经典 region+quad 区段（scene-A 横向 layer-z / scene-B JRPG 脚锚 Y-sort，用键盘 `1` / `2` 切换）。两个区段共用同一 sprite shader (`forgeax::sprite`) + 同一 `MaterialAsset` 入口形态（charter P4 一致抽象），区别仅在 `values` 内是否带 `slices` / `sliceMode` 两字段（feat-20260527-sprite-nineslice / D-1）。AI 用户读这一个 demo 即可看到 sprite 物料的两种编写路径并排呈现，无需切到第二个 demo 比对。
 
 ## Run locally
 
@@ -34,11 +34,11 @@ The two scenes share the same texture + the same 3 `colorTint` slots (warm red /
 
 ### Section 1 · region+quad 经典区（屏幕下半屏，scene-A / scene-B 切换）
 
-下半屏的 3 个 sprite 共用 `HANDLE_QUAD`（builtin mesh id=3）+ `forgeax::sprite` shader，`paramValues` 内**不带** `slices` / `sliceMode` 字段——`paramSchema` 默认让两字段走 sentinel `[0, 0, 0, 0]` / `0`，runtime record-stage 自动绑定 `HANDLE_QUAD` 而非 `HANDLE_NINESLICE_QUAD`（plan-strategy D-1 + D-2 sentinel 早退）。键盘 `1` / `2` 在 scene-A（layer-z 横向）与 scene-B（pivot 脚锚 + layer-y JRPG sort）间切换。
+下半屏的 3 个 sprite 共用 `HANDLE_QUAD`（builtin mesh id=3）+ `forgeax::sprite` shader，`values` 内**不带** `slices` / `sliceMode` 字段——`paramSchema` 默认让两字段走 sentinel `[0, 0, 0, 0]` / `0`，runtime record-stage 自动绑定 `HANDLE_QUAD` 而非 `HANDLE_NINESLICE_QUAD`（plan-strategy D-1 + D-2 sentinel 早退）。键盘 `1` / `2` 在 scene-A（layer-z 横向）与 scene-B（pivot 脚锚 + layer-y JRPG sort）间切换。
 
 ### Section 2 · 9-slice stretch（屏幕上半屏，左右两面板）
 
-上半屏的 2 个 stretch 面板共用**同一** `MaterialAsset` handle，仅 `Transform.scale[xy]` 不同——这是 AC-06 的核心命题（"一张 material，多种尺寸，4 个圆角不形变"）。`paramValues` 内：
+上半屏的 2 个 stretch 面板共用**同一** `MaterialAsset` handle，仅 `Transform.scale[xy]` 不同——这是 AC-06 的核心命题（"一张 material，多种尺寸，4 个圆角不形变"）。`values` 内：
 
 ```ts
 {
@@ -72,7 +72,7 @@ The two scenes share the same texture + the same 3 `colorTint` slots (warm red /
 ```
 
 > [!CAUTION]
-> **`sliceMode: 0 | 1` 是数值字面量、不是字符串**——`paramValues` schema-driven UBO 写入只支持 `wgsl f32` 兼容的数值类型；`sliceMode: 'stretch'` 字符串会触发 `MATERIAL_PARAM_TYPES_V1` 校验失败。当 `sliceMode: 1` 但绑定的 `sampler.addressMode` 不是 `'repeat'` 时，引擎**不抛错**，而是经 `renderer.metrics.snapshot()['nineslice.tile-needs-repeat-sampler']` 计数器报告（plan-strategy D-9 register-time soft-warn）；视觉退化为 clamp-stretch。
+> **`sliceMode: 0 | 1` 是数值字面量、不是字符串**——`values` schema-driven UBO 写入只支持 `wgsl f32` 兼容的数值类型；`sliceMode: 'stretch'` 字符串会触发 `MATERIAL_PARAM_TYPES_V1` 校验失败。当 `sliceMode: 1` 但绑定的 `sampler.addressMode` 不是 `'repeat'` 时，引擎**不抛错**，而是经 `renderer.metrics.snapshot()['nineslice.tile-needs-repeat-sampler']` 计数器报告（plan-strategy D-9 register-time soft-warn）；视觉退化为 clamp-stretch。
 
 ## FAQ（常见疑问）
 

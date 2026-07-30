@@ -1,4 +1,5 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#define_import_path forgeax_material::sprite-lit
 
 #import forgeax_view::common::{View, Mesh, InstanceData, PointLight, SpotLight, view, meshes, instances, pointLightsBuffer, spotLightsBuffer, sampleMaterialTexture}
 

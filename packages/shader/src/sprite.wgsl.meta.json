@@ -12,31 +12,5 @@
       "sourceIndex": 0,
       "kind": "material-shader"
     }
-  ],
-  "paramSchema": [
-    {
-      "name": "colorTint",
-      "type": "vec4",
-      "default": [1.0, 1.0, 1.0, 1.0]
-    },
-    {
-      "name": "region",
-      "type": "vec4",
-      "default": [0.0, 0.0, 1.0, 1.0]
-    },
-    {
-      "name": "pivotAndSize",
-      "type": "vec4",
-      "default": [0.5, 0.5, 1.0, 1.0]
-    },
-    {
-      "name": "slicesAndMode",
-      "type": "vec4",
-      "default": [0.0, 0.0, 0.0, 0.0]
-    },
-    {
-      "name": "baseColorTexture",
-      "type": "texture2d"
-    }
   ]
 }

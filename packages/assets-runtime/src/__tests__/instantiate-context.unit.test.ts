@@ -15,9 +15,9 @@ defineComponent('T709CtxMeshFilter', { assetHandle: 'shared<MeshAsset>' });
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry({
     getMaterialShaderManifest: vi.fn().mockReturnValue(undefined),
-    lookupMaterialShader: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
+    findMaterialArtifact: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
     getPipeline: vi.fn().mockReturnValue(undefined),
-    registerMaterialShader: vi.fn(),
+    installMaterialArtifact: vi.fn(),
     inspect: vi.fn().mockReturnValue({ materialShaders: [] }),
   } as unknown as import('@forgeax/engine-shader').ShaderRegistry);
 }

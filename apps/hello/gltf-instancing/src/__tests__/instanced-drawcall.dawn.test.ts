@@ -253,8 +253,8 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     };
     const materialAsset: MaterialAsset = {
       kind: 'material',
-      passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-      paramValues: { baseColor: matIr.baseColorFactor },
+      passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+      values: { baseColor: matIr.baseColorFactor },
     };
     const ready = await renderer.ready;
     expect(ready.ok).toBe(true);

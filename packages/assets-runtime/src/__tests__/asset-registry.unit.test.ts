@@ -16,9 +16,9 @@ const GUID_B = '22222222-2222-4222-8222-222222222222';
 function makeMockShaderRegistry() {
   return {
     getMaterialShaderManifest: vi.fn().mockReturnValue(undefined),
-    lookupMaterialShader: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
+    findMaterialArtifact: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
     getPipeline: vi.fn().mockReturnValue(undefined),
-    registerMaterialShader: vi.fn(),
+    installMaterialArtifact: vi.fn(),
     inspect: vi.fn().mockReturnValue({ materialShaders: [] }),
   } as unknown as import('@forgeax/engine-shader').ShaderRegistry;
 }
@@ -88,7 +88,7 @@ describe('catalog + lookup', () => {
 
   it('rejects a material with an explicit empty passes[]', () => {
     const reg = makeRegistry();
-    const bad = { kind: 'material', passes: [] } as MaterialAsset;
+    const bad = { kind: 'material', passes: [] } as unknown as MaterialAsset;
     expect(reg.catalog(GUID_A, bad).ok).toBe(false);
   });
 });

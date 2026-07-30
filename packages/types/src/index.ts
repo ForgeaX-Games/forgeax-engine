@@ -6,7 +6,7 @@
 //
 // Scope:
 // - POD types & union aliases — Asset / MaterialAsset / RenderQueue / PassKind /
-//   ShaderAsset / FontAsset / RenderPipelineAsset / SceneAsset /
+//   FontAsset / RenderPipelineAsset / SceneAsset /
 //   PackErrorCode / ImageErrorCode / AudioErrorCode / PhysicsErrorCode etc.
 // - Structured error classes — AssetError / FontError / TextError / AudioError /
 //   PhysicsError (carry .code / .expected / .hint surface).
@@ -36,11 +36,13 @@
 // single-entry indexability; AC-03 grep gate).
 
 import type { Handle } from './handle';
+import type { MaterialAsset } from './material/asset.js';
 import type { ParticleEffectAsset } from './vfx';
 
 export * from './asset.js';
 export * from './asset-errors.js';
 export * from './handle';
+export * from './material/index.js';
 
 // === Result<T, E> SSOT (tweak-20260612-result-into-types) ======================
 //
@@ -433,72 +435,11 @@ export interface SamplerAsset {
   readonly compare?: GPUCompareFunction;
 }
 
-// === MaterialAsset pass-based interface (feat-20260526-material-asset-multipass-renderstate M1 / w7) ===
-//
-// Decision anchors:
-//   - requirements AC-01 (no shadingModel field; single interface replaces
-//     the old Unlit/SchemaDriven/Sprite 3-variant discriminated union)
-//   - requirements scope #1 (deprecate shadingModel tri-variant, unify to
-//     pass-based declaration model)
-//   - plan-strategy D-1 (drop shadingModel discriminator; MaterialAsset
-//     becomes single interface with passes[] + parent? + paramValues)
-//   - plan-strategy D-8 (parent handle enables lazy-resolve inheritance)
-//   - AGENTS.md §Change stance "Optimal > compatible" (one-cut migration,
-//     no deprecation window / shim / dual-path)
-//   - charter P4 (consistent abstraction — single interface replaces
-//     three switch arms; AI users write one shape for all material kinds)
-
-/**
- * Material asset — unified pass-based interface (AC-01, AC-02).
- *
- * Replaces the old `shadingModel` tri-variant discriminated union
- * (`'unlit' | 'schema-driven' | 'sprite'`) with a single interface.
- * All material kinds (unlit, PBR, sprite, custom) are expressed through
- * the same shape — the `passes[]` array + `paramValues` record carries
- * the rendering behaviour (charter P4 consistent abstraction).
- *
- * | Field | Required | Default | Purpose |
- * |:--|:--|:--|:--|
- * | `kind` | yes | — | Asset discriminator (`'material'`) |
- * | `passes` | no | `[]` | Array of {@link MaterialPassDescriptor} — rendering passes for this material |
- * | `parent` | no | — | Handle to a parent material for inheritance (lazy resolve, D-8) |
- * | `paramValues` | no | `{}` | Material parameter values — passed through to material uniform binding |
- *
- * When `passes` is omitted, the material inherits the parent's passes list
- * (AC-06). When `passes` is provided, same-`name` passes override the
- * parent's, and new names are appended. `paramValues` is shallow-merged
- * with the parent's (child overrides parent keys).
- *
- * AI-user surface: register via `assetRegistry.register<MaterialAsset>(asset)`
- * → returns `Handle<'MaterialAsset', 'shared'>`.
- */
-export interface MaterialAsset {
-  readonly kind: 'material';
-  /** Array of pass descriptors for this material. Omit to inherit from parent. */
-  readonly passes?: readonly MaterialPassDescriptor[];
-  /**
-   * Parent material GUID for lazy-resolve inheritance (D-8 / D-19). Payload-
-   * internal sub-asset refs are GUID identities, not column handles: the
-   * AssetRegistry holds no World and cannot mint a handle during the loadByGuid
-   * recursion, so it stores the parent's AssetGuid verbatim. The World-holding
-   * consumer (render extract / material-walk) resolves the GUID to a handle via
-   * loadByGuid -> world.allocSharedRef once at read time.
-   */
-  readonly parent?: AssetGuid;
-  /**
-   * Material parameter values — passed through to material uniform binding.
-   * Shallow-merged with parent on resolve. Texture-typed entries (detected via
-   * the shader paramSchema textureFieldNames) carry an AssetGuid (D-19), not a
-   * handle; the consumer resolves them the same way as `parent`.
-   */
-  readonly paramValues?: Readonly<Record<string, unknown>>;
-}
-
 // feat-20260613 fix-issue-4: MATERIAL_PARAM_TYPES_V1 (9-Set) deleted —
 // MATERIAL_PARAM_TYPES (14-tuple, declared below) is the single SSOT.
 // §Change stance forbids v1/v2 dual-paths; the 9 v1 literals are a strict
 // subset of the 14-tuple, so all consumers (buildMaterialAssetValidator,
-// scanner.ts, registerMaterialShader) migrate to the 14-tuple in one cut.
+// scanner.ts) migrate to the 14-tuple in one cut.
 
 // === MaterialParamType v2 (feat-20260613-material-paramschema-driven-binding M1 / w2) ===
 //
@@ -571,7 +512,7 @@ export const MATERIAL_PARAM_TYPES = [
 ] as const satisfies readonly MaterialParamType[];
 
 // Numeric-family schema entry (run-merged into a single UBO entry by derive).
-// `default` is optional; when present, paramValues may omit the key.
+// `default` is optional; when present, values may omit the key.
 //   - scalar numeric (f32 / i32 / u32) defaults to a single number
 //   - vector + color types default to a length-N number tuple
 export interface NumericParamSchemaEntry {
@@ -730,89 +671,6 @@ export interface MaterialRenderState {
   readonly frontFace?: 'ccw' | 'cw';
 }
 
-// === MaterialPassDescriptor POD interface (feat-20260526-material-asset-multipass-renderstate M1 / w2) ===
-//
-// Decision anchors:
-//   - requirements AC-02 (9 fields: name / shader / vertexEntry / fragmentEntry /
-//     defines / tags / renderState / queue / stencilReference)
-//   - plan-strategy D-7 (entry point selection lives in pass descriptor, not shader registry)
-//   - plan-strategy D-4 (tags are free Record<string, string>)
-//   - research F-9 (MaterialShaderEntry stays unchanged; pass descriptor carries
-//     entry point + defines + renderState)
-//   - charter P1 (only name + shader are required; remaining 6 fields optional with
-//     sensible defaults — AI users add only what they need)
-
-/**
- * Single pass descriptor inside a {@link MaterialAsset}'s `passes[]` array (AC-02).
- *
- * Only `name` and `shader` are required — the remaining 7 fields are optional
- * and fall back to engine defaults when omitted (charter P1 progressive disclosure).
- *
- * | Field | Required | Default | Purpose |
- * |:--|:--|:--|:--|
- * | `name` | yes | — | Pass identifier for by-name inheritance override (AC-06) |
- * | `shader` | yes | — | Shader registry entry id (e.g. `'forgeax::default-standard-pbr'`) |
- * | `vertexEntry` | no | `'vs_main'` | Vertex shader entry-point function name |
- * | `fragmentEntry` | no | `'fs_main'` | Fragment shader entry-point function name |
- * | `defines` | no | `{}` | Per-pass preprocessor defines injected before shader compile |
- * | `tags` | no | `{}` | Free key-value tags used by {@link PassSelector} for pass routing |
- * | `renderState` | no | engine defaults | Per-pass GPU pipeline render state overrides |
- * | `queue` | no | `RenderQueue.Geometry` | Sort key for the single dispatch list |
- * | `passKind` | no | `'forward'` | {@link PassKind} tag for HDRP execute-stage routing |
- */
-export interface MaterialPassDescriptor {
-  /** Pass identifier — used for by-name inheritance override (AC-06). */
-  readonly name: string;
-  /** Shader registry entry id (e.g. `'forgeax::default-standard-pbr'`). */
-  readonly shader: string;
-  /** Vertex shader entry-point function name. Default: `'vs_main'`. */
-  readonly vertexEntry?: string;
-  /** Fragment shader entry-point function name. Default: `'fs_main'`. */
-  readonly fragmentEntry?: string;
-  /**
-   * Per-pass shader defines. Build-time shader authors use the same names for
-   * `#define` composition; when a manifest variant axis is present, the
-   * runtime uses these values to select that already-compiled variant. Default:
-   * `{}`.
-   */
-  readonly defines?: Record<string, string>;
-  /** Free key-value tags for pass routing via {@link PassSelector}. Default: `{}`. */
-  readonly tags?: Record<string, string>;
-  /**
-   * Per-pass GPU pipeline render state overrides. Default: engine defaults (D-2).
-   *
-   * The presence of `renderState.blend` is the SSOT for transparent routing:
-   * the runtime derives `MaterialSnapshot.transparent` from
-   * `passes[0].renderState?.blend !== undefined`, drives the LDR-split
-   * sub-pass + premultiplied-alpha composite + back-to-front sort, and
-   * folds the geometry into the transparent bucket. AI users opt into
-   * transparency by assigning a {@link MaterialBlendState} on `blend`
-   * (recommended preset: `SPRITE_PREMULTIPLIED_ALPHA_BLEND` from
-   * `@forgeax/engine-runtime` for sprite atlases / PNGs with
-   * premultiplied alpha) — no separate boolean flag exists; omit `blend`
-   * for opaque.
-   */
-  readonly renderState?: MaterialRenderState;
-  /** Sort key for the single dispatch list. Default: {@link RenderQueue.Geometry} (2000). */
-  readonly queue?: number;
-  /**
-   * Stencil reference value for draw-call dynamic state (set via
-   * RHI `setStencilReference` per draw). Default: `0`.
-   */
-  readonly stencilReference?: number;
-  /**
-   * Render-pass kind tag for HDRP multi-stage dispatch routing.
-   *
-   * Defaults to `'forward'` when omitted (backward-compatible with single-pass
-   * materials). HDRP execute filters ShaderPass entries by this tag:
-   * opaque material routes `passKind='deferred'` to g-buffer,
-   * transparent material routes `passKind='forward'` to cluster-forward.
-   *
-   * @see {@link PassKind} for the 4-value closed union.
-   */
-  readonly passKind?: PassKind;
-}
-
 // === PassKind as open string + KNOWN_PASS_KINDS (feat-20260615-pipeline-spec-ssot D-10) ===
 //
 // Decision anchors:
@@ -879,49 +737,6 @@ export const KNOWN_PASS_KINDS: readonly string[] = [
  * ```
  */
 export type PassSelector = Record<string, readonly string[]>;
-
-// === ShaderAsset POD shape (feat-20260528-material-shader-registration-unification M1 / w1) ===
-//
-// Decision anchors:
-//   - requirements AC-01 (ShaderAsset type definition as first-class Asset union member)
-//   - plan-strategy D-1 (ShaderAsset with kind: 'shader', joining Asset union)
-//   - research Finding 3 (current Asset union has 10 kinds, missing shader)
-//   - charter P4 (consistent abstraction: ShaderAsset follows existing *Asset suffix convention)
-
-/**
- * Shader asset POD shape -- material-shader registration SSOT in AssetRegistry.
- *
- * Each material-shader variant owns one ShaderAsset, registered in the
- * AssetRegistry alongside the ShaderRegistry MaterialShaderEntry. The GUID
- * is the primary identity key; `name` is the human-readable identifier
- * (e.g. 'forgeax::default-standard-pbr') that maps to the shader registry
- * entry for material-pass shader selection.
- *
- * | Field | Purpose |
- * |:--|:--|
- * | `kind` | Asset discriminator (`'shader'`) |
- * | `name` | Human-readable shader identifier matching ShaderRegistry name |
- * | `source` | Full composed WGSL source after naga_oil preprocessing |
- * | `paramSchema` | Material parameter schema (ParamSchemaEntry[]), the SSOT for material-shader param validation AND BGL derivation (M3 / D-1 / D-2 — `derive(paramSchema).bglEntries` is the binding-slot layout source) |
- *
- * When registered via `AssetRegistry.register<ShaderAsset>(asset)`, returns
- * `Handle<'ShaderAsset', 'shared'>`. AI users retrieve via
- * `assets.getByGuid<ShaderAsset>(guid)` for runtime shader introspection.
- *
- * @example AI-user consumption path
- * ```ts
- * const shaderAsset = await assets.getByGuid<ShaderAsset>(pbrGuid);
- * for (const param of shaderAsset.paramSchema) {
- *   console.log(param.name, param.type);
- * }
- * ```
- */
-export interface ShaderAsset {
-  readonly kind: 'shader';
-  readonly name: string;
-  readonly source: string;
-  readonly paramSchema: readonly ParamSchemaEntry[];
-}
 
 // === FontAsset POD shape (feat-20260531-world-space-msdf-text-rendering M2 / w5) ===
 //
@@ -1090,9 +905,6 @@ export interface RenderPipelineAsset {
  *   - feat-20260514-scene-as-world-blueprint w3 added `'scene'` variant
  *     (4 -> 5, minor add per AGENTS.md `Evolution contract`); declarative
  *     SceneEntity list, no overrides at the asset layer.
- *   - feat-20260528-material-shader-registration-unification w1 added `'shader'`
- *     variant (10 -> 11, minor add per AGENTS.md `Evolution contract`);
- *     ShaderAsset with name + source + paramSchema.
  *   - feat-20260531-world-space-msdf-text-rendering w5 added `'font'` variant
  *     (11 -> 12, minor add per AGENTS.md `Evolution contract`);
  *     FontAsset with atlas handle + sampler handle + glyph metrics.
@@ -1114,7 +926,6 @@ export interface RenderPipelineAsset {
  * | `'sampler'` | `SamplerAsset` |
  * | `'material'` | `MaterialAsset` (further narrows on `.passes`) |
  * | `'scene'` | `SceneAsset` (declarative SceneEntity list, no overrides) |
- * | `'shader'` | `ShaderAsset` (material-shader registration SSOT, name + source + paramSchema) |
  * | `'font'` | `FontAsset` (MSDF atlas handle + glyph metrics) |
  * | `'render-pipeline'` | `RenderPipelineAsset` (installable pipeline logic id + config) |
  * | `'video'` | `VideoAsset` (runtime-only `{ url }` descriptor, no width/height/duration) |
@@ -1127,7 +938,6 @@ export type Asset =
   | SamplerAsset
   | MaterialAsset
   | SceneAsset
-  | ShaderAsset
   | SkeletonAsset
   | SkinAsset
   | AnimationClip
@@ -1810,7 +1620,7 @@ export interface AudioClipAsset {
  * `videoHeight` / `duration` after `loadedmetadata` fires (requirements
  * constraint "payload must not inline video bytes").
  *
- * Consumers reference a VideoAsset via `MaterialAsset.paramValues` texture
+ * Consumers reference a VideoAsset via a material texture value
  * fields (e.g. `baseColorTexture`), sharing the same `texture2d` slot with
  * static textures (charter P4 consistent abstraction). The extraction layer
  * (render-system-extract `resolveTexLike`) identifies the video kind and
@@ -2005,7 +1815,7 @@ export function countExtraUvSets(attrs: UvAttributeSource | undefined): number {
  * | `'asset-parse-failed'` | decoded bytes are not a valid image (PNG / JPG header corruption on the load path; dimensions <= 0 / segments < 1 on the procedural geometry constructor path — double semantics locked by requirements §9 "constructor path" extension). |
  * | `'asset-format-unsupported'` | URL content-type / magic bytes are neither PNG nor JPG (v1 scope; KTX2 / Basis / GLTF embedded textures deferred to M3+). |
  * | `'asset-fetch-failed'` | `fetch(url)` returned non-2xx, threw, or the URL was otherwise unreachable (404 / network / CORS surface). |
- * | `'asset-invalid-value'` | `register<MaterialAsset>(payload)` paramValues fails the 3-tier validator (type-mismatch / extra-key / missing-required) or `paramSchema[].type` is not in {@link MATERIAL_PARAM_TYPES} — fail-fast at register entry (feat-20260523-shader-template-instance-split M8-T01 + M1; charter P3 explicit failure structured `.code` / `.expected` / `.hint` / `.detail`). |
+ * | `'asset-invalid-value'` | `register<MaterialAsset>(payload)` value validation fails the 3-tier validator (type-mismatch / extra-key / missing-required) — fail-fast at register entry. |
  * | `'cubemap-handle-missing'` | internal equirect-to-cubemap projection has no live cubemap for a `Skylight.equirect` handle; `.hint` points to loading an EquirectAsset + caps.rgba16floatRenderable. |
  * | `'invalid-source-format'` | image importer path when `.hdr` decode needs rgba16float / rgba32float. |
  * | `'load-failed'` | `loadByGuid` when guid entry exists in catalog but file is inaccessible. |
@@ -3779,7 +3589,7 @@ export interface MaterialShaderNotFoundDetail {
 }
 
 /**
- * Detail for `material-param-type-mismatch` — paramValues value does not match
+ * Detail for `material-param-type-mismatch` — a material value does not match
  * paramSchema expected type at runtime register.
  */
 export interface MaterialParamTypeMismatchDetail {
@@ -3790,7 +3600,7 @@ export interface MaterialParamTypeMismatchDetail {
 }
 
 /**
- * Detail for `material-param-unknown` — paramValues contains a key not in
+ * Detail for `material-param-unknown` — material values contain a key not in
  * paramSchema.
  */
 export interface MaterialParamUnknownDetail {
@@ -3799,7 +3609,7 @@ export interface MaterialParamUnknownDetail {
 }
 
 /**
- * Detail for `material-param-missing-required` — paramValues missing a key
+ * Detail for `material-param-missing-required` — material values miss a key
  * that paramSchema declares without a default.
  */
 export interface MaterialParamMissingRequiredDetail {
@@ -4595,7 +4405,7 @@ export interface LoadContext {
    * feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
    * derive(paramSchema).textureFieldNames for the given material-shader id,
    * built from the registered shader's paramSchema. Used by materialLoader
-   * to know which paramValues fields carry refs[] indices vs scalar values
+   * to know which material value fields carry refs[] indices vs scalar values
    * (replacing the deleted hardcoded texture-field allowlist Set per AC-03).
    *
    * Returns `undefined` when the shader is not yet registered (the cross-

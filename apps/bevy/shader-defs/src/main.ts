@@ -5,7 +5,7 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import shaderDefs from './shader-defs.wgsl';
+import './shader-defs.wgsl';
 
 const SHADER_ID = 'bevy::shader_defs';
 
@@ -26,23 +26,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const app = appResult.value;
-  const shader = app.renderer.shader;
-  if (shader === null) {
-    console.error('[bevy-shader-defs] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(SHADER_ID).ok) {
-    shader.registerMaterialShader(SHADER_ID, {
-      source: shaderDefs.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
-        { name: 'time', type: 'f32', default: 0 },
-        { name: 'speed', type: 'f32', default: 1 },
-        { name: 'baseColorTexture', type: 'texture2d' },
-      ],
-    });
-  }
-
   const geometry = createBoxGeometry(1, 1, 1);
   if (!geometry.ok) {
     console.error('[bevy-shader-defs] createBoxGeometry failed:', geometry.error);
@@ -99,15 +82,16 @@ function makeMaterial(
   const material: MaterialAsset = {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: SHADER_ID,
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-        defines: { IS_RED: String(isRed) },
-      },
+      { name: 'Forward', program: { module: SHADER_ID, moduleSlots: { IS_RED: String(isRed) } }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: { baseColor, time: 0, speed: 1, baseColorTexture: texture },
+    parameters: [
+      { name: 'baseColor', type: 'color' },
+      { name: 'time', type: 'f32' },
+      { name: 'speed', type: 'f32' },
+      { name: 'baseColorTexture', type: 'texture' },
+      { name: 'IS_RED', type: 'bool', static: true },
+    ],
+    values: { baseColor, time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
   };
   return world.allocSharedRef('MaterialAsset', material);
 }

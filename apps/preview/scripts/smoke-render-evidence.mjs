@@ -208,11 +208,11 @@ const recovery = await page.evaluate(() => {
   const value = globalThis.__forgeaxGameDefaultRenderEvidence;
   let invalidError = '';
   try {
-    value.renderer.shader.registerMaterialShader(value.shaderId, { source: value.shaderSource, paramSchema: [] });
+    value.renderer.shader.installMaterialArtifact(value.shaderId, { source: value.shaderSource, paramSchema: [] });
   } catch (error) {
     invalidError = error instanceof Error ? error.message : String(error);
   }
-  value.renderer.shader.registerMaterialShader('game_default::recovery_probe', {
+  value.renderer.shader.installMaterialArtifact('game_default::recovery_probe', {
     source: value.shaderSource,
     paramSchema: [{ name: 'baseColor', type: 'color' }, { name: 'intensity', type: 'f32' }],
   });

@@ -34,19 +34,27 @@
 
 import { packMeshBin } from '@forgeax/engine-import';
 import type {
+  AssetGuid,
   AssetRef,
   Handle,
   ImportContext,
   ImportedAsset,
   Importer,
   ImportResult,
+  MaterialTextureValue,
+  MaterialValue,
 } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
-import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from './bridge.js';
+import {
+  gltfDocToSceneAsset,
+  meshIrToMeshAsset,
+  toMaterialAsset,
+  validateMaterialUvSets,
+} from './bridge.js';
 import { gltfErr } from './errors.js';
 import { extractImageBytes } from './extract-image-bytes.js';
 import { deriveTextureColorSpace } from './image-color-space.js';
-import type { GltfDoc, GltfMaterialIr } from './parse-gltf.js';
+import type { GltfDoc, GltfMaterialIr, GltfTextureInfoIr } from './parse-gltf.js';
 import { parseGlb, parseGltf } from './parse-gltf.js';
 
 function isGlbBytes(source: string): boolean {
@@ -98,6 +106,7 @@ interface HandleMaps {
   readonly meshGuidByIndex: Map<number, string>;
   readonly materialGuidByIndex: Map<number, string>;
   readonly textureGuidByIndex: Map<number, string>;
+  readonly samplerGuidByIndex: Map<number, string>;
 }
 
 /**
@@ -125,6 +134,7 @@ function buildHandleMaps(
   const meshGuidByIndex = new Map<number, string>();
   const materialGuidByIndex = new Map<number, string>();
   const textureGuidByIndex = new Map<number, string>();
+  const samplerGuidByIndex = new Map<number, string>();
   // bug-20260610 layer 7c-2: scene's `refs[]` is concatenated in the order
   // [mesh sub-assets..., material sub-assets..., texture sub-assets...] (see
   // gltf-importer scene branch). The synthetic handle values stamped here
@@ -153,6 +163,8 @@ function buildHandleMaps(
       materialCursor += 1;
     } else if (sub.kind === 'texture') {
       textureGuidByIndex.set(sub.sourceIndex, sub.guid);
+    } else if (sub.kind === 'sampler') {
+      samplerGuidByIndex.set(sub.sourceIndex, sub.guid);
     }
   }
   const meshCount = meshCursor;
@@ -162,11 +174,11 @@ function buildHandleMaps(
       materialHandles.set(k, toShared<'MaterialAsset'>(local + meshCount));
     }
   }
-  // For material binding (toMaterialAsset / paramValues.<X>Texture) the handle
+  // For material binding (toMaterialAsset / values.<X>Texture) the handle
   // value is the texture's slot offset within the SAME asset's `refs[]` (which
   // is `materialTextureRefs` order, not the scene-level refs concat).
   // toMaterialAsset only consumes textureHandles to copy a number into the
-  // paramValues; the gltf-importer's later 7a fix-up rewrites those values
+  // values; the gltf-importer's later 7a fix-up rewrites those values
   // into refs[] indices for the runtime materialLoader. Keying by texIndex
   // and storing `tex.source` here matches the existing 7a path.
   const textures = doc.textures ?? [];
@@ -177,6 +189,9 @@ function buildHandleMaps(
       textureHandles.set(texIndex, toShared<'TextureAsset'>(tex.source));
     }
   }
+  for (const [samplerIndex] of samplerGuidByIndex) {
+    samplerHandles.set(samplerIndex, toShared<'SamplerAsset'>(samplerIndex));
+  }
   return {
     meshHandles,
     materialHandles,
@@ -185,33 +200,113 @@ function buildHandleMaps(
     meshGuidByIndex,
     materialGuidByIndex,
     textureGuidByIndex,
+    samplerGuidByIndex,
   };
 }
 
-/** Collect texture-GUID refs for one material (AC-11 cross-edge). */
-function materialTextureRefs(
+function textureInfo(info: GltfTextureInfoIr | number | undefined): GltfTextureInfoIr | undefined {
+  return info === undefined ? undefined : typeof info === 'number' ? { texture: info } : info;
+}
+
+/** Collect texture and sampler GUID refs for one material (AC-11 cross-edge). */
+export function materialRefsForPack(
   mat: GltfMaterialIr,
   doc: GltfDoc,
   textureGuidByIndex: ReadonlyMap<number, string>,
+  samplerGuidByIndex: ReadonlyMap<number, string> = new Map(),
 ): readonly AssetRef[] {
   const refs: AssetRef[] = [];
   const textures = doc.textures ?? [];
-  function pushRefForTextureIndex(texIdx: number | undefined, fieldName: string): void {
-    if (texIdx === undefined) return;
-    const tex = textures[texIdx];
+  function pushRefsForSlot(info: GltfTextureInfoIr | number | undefined, fieldName: string): void {
+    const binding = textureInfo(info);
+    if (binding === undefined) return;
+    const tex = textures[binding.texture];
     if (tex === undefined) return;
     const guid = textureGuidByIndex.get(tex.source);
-    if (guid !== undefined)
+    if (guid !== undefined) {
       refs.push({
         guid,
         sourceField: { componentName: '<material>', fieldName },
       });
+    }
+    if (binding.sampler !== undefined) {
+      const samplerGuid = samplerGuidByIndex.get(binding.sampler);
+      if (samplerGuid !== undefined) {
+        refs.push({
+          guid: samplerGuid,
+          sourceField: { componentName: '<material>', fieldName: `${fieldName}.sampler` },
+        });
+      }
+    }
   }
-  pushRefForTextureIndex(mat.baseColorTexture, 'baseColorTexture');
-  pushRefForTextureIndex(mat.metallicRoughnessTexture, 'metallicRoughnessTexture');
-  pushRefForTextureIndex(mat.normalTexture, 'normalTexture');
-  pushRefForTextureIndex(mat.emissiveTexture, 'emissiveTexture');
+  pushRefsForSlot(mat.baseColorTexture, 'baseColorTexture');
+  pushRefsForSlot(mat.metallicRoughnessTexture, 'metallicRoughnessTexture');
+  pushRefsForSlot(mat.normalTexture, 'normalTexture');
+  pushRefsForSlot(mat.occlusionTexture, 'occlusionTexture');
+  pushRefsForSlot(mat.emissiveTexture, 'emissiveTexture');
   return refs;
+}
+
+function availableUvSets(mesh: GltfDoc['meshes'][number]): readonly number[] {
+  const sets: number[] = [];
+  for (let set = 0; set <= 7; set++) {
+    const field = `texcoord${set}` as keyof typeof mesh;
+    if (mesh[field] !== undefined) sets.push(set);
+  }
+  return sets;
+}
+
+function rewriteMaterialAssetRefs(
+  matAsset: ReturnType<typeof toMaterialAsset>,
+  mat: GltfMaterialIr,
+  doc: GltfDoc,
+  maps: HandleMaps,
+): ReturnType<typeof toMaterialAsset> {
+  const values = { ...(matAsset.values ?? {}) } as Record<string, MaterialValue | null>;
+  const textures = doc.textures ?? [];
+  const slots: readonly [
+    (
+      | 'baseColorTexture'
+      | 'metallicRoughnessTexture'
+      | 'normalTexture'
+      | 'occlusionTexture'
+      | 'emissiveTexture'
+    ),
+    GltfTextureInfoIr | number | undefined,
+  ][] = [
+    ['baseColorTexture', mat.baseColorTexture],
+    ['metallicRoughnessTexture', mat.metallicRoughnessTexture],
+    ['normalTexture', mat.normalTexture],
+    ['occlusionTexture', mat.occlusionTexture],
+    ['emissiveTexture', mat.emissiveTexture],
+  ];
+  let cursor = 0;
+  for (const [slot, rawBinding] of slots) {
+    const binding = textureInfo(rawBinding);
+    if (binding === undefined) continue;
+    const texture = textures[binding.texture];
+    const textureGuid =
+      texture === undefined ? undefined : maps.textureGuidByIndex.get(texture.source);
+    const value = values[slot];
+    if (textureGuid === undefined || typeof value !== 'object' || value === null) {
+      delete values[slot];
+      continue;
+    }
+    const textureValue = value as MaterialTextureValue;
+    const textureRef = cursor as unknown as MaterialTextureValue['texture'];
+    cursor++;
+    const rewritten =
+      binding.sampler !== undefined && maps.samplerGuidByIndex.has(binding.sampler)
+        ? {
+            ...textureValue,
+            texture: textureRef,
+            sampler: cursor as unknown as NonNullable<MaterialTextureValue['sampler']>,
+          }
+        : { ...textureValue, texture: textureRef };
+    if (binding.sampler !== undefined && maps.samplerGuidByIndex.has(binding.sampler)) cursor++;
+    values[slot] = rewritten;
+  }
+  return { ...matAsset, values };
 }
 
 async function importGltf(ctx: ImportContext): Promise<ImportResult> {
@@ -320,12 +415,27 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
           break;
         }
       }
+      for (let primitiveIndex = 0; primitiveIndex < doc.meshes.length; primitiveIndex++) {
+        const meshIr = doc.meshes[primitiveIndex];
+        if (meshIr?.materialIndex !== sub.sourceIndex) continue;
+        const uvResult = validateMaterialUvSets(
+          mat,
+          `primitive-${primitiveIndex}`,
+          availableUvSets(meshIr),
+        );
+        if (!uvResult.ok) {
+          throw Object.assign(new Error(uvResult.error.message), uvResult.error);
+        }
+      }
       const matAsset = toMaterialAsset(mat, {
         textureHandles: maps.textureHandles,
         samplerHandles: maps.samplerHandles,
         skinned,
+        ...(typeof ctx.importSettings.standardMaterialGuid === 'string'
+          ? { standardRootGuid: ctx.importSettings.standardMaterialGuid as unknown as AssetGuid }
+          : {}),
       });
-      const refs = materialTextureRefs(mat, doc, maps.textureGuidByIndex);
+      const refs = materialRefsForPack(mat, doc, maps.textureGuidByIndex, maps.samplerGuidByIndex);
       // D-8: if material has a parent, add parent edge to refs
       const materialRefs: AssetRef[] = [...refs];
       if (matAsset.parent !== undefined) {
@@ -334,42 +444,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
           sourceField: { fieldName: 'parent' },
         });
       }
-      // bug-20260610: pack-side material handle fields (`<X>Texture`) must
-      // carry refs[] indices on disk, NOT image indices. The runtime
-      // materialLoader resolves these at registerWithGuid time using the
-      // refs[] -> handle map; storing image-index here makes the runtime
-      // sample handle-1 (BUILTIN_TRIANGLE) for every material instead of
-      // the real texture. Mirror the ordering of materialTextureRefs.
-      const textures = doc.textures ?? [];
-      const slotKeys = [
-        'baseColorTexture',
-        'metallicRoughnessTexture',
-        'normalTexture',
-        'emissiveTexture',
-      ] as const;
-      const slotImageIndices: ReadonlyArray<number | undefined> = [
-        mat.baseColorTexture !== undefined ? textures[mat.baseColorTexture]?.source : undefined,
-        mat.metallicRoughnessTexture !== undefined
-          ? textures[mat.metallicRoughnessTexture]?.source
-          : undefined,
-        mat.normalTexture !== undefined ? textures[mat.normalTexture]?.source : undefined,
-        mat.emissiveTexture !== undefined ? textures[mat.emissiveTexture]?.source : undefined,
-      ];
-      const newParamValues: Record<string, unknown> = { ...matAsset.paramValues };
-      let refsCursor = 0;
-      for (let slot = 0; slot < slotKeys.length; slot++) {
-        const key = slotKeys[slot] as string;
-        const imgIdx = slotImageIndices[slot];
-        if (imgIdx === undefined) continue;
-        const guid = maps.textureGuidByIndex.get(imgIdx);
-        if (guid === undefined) {
-          delete newParamValues[key];
-          continue;
-        }
-        newParamValues[key] = refsCursor;
-        refsCursor++;
-      }
-      const rewrittenAsset = { ...matAsset, paramValues: newParamValues };
+      const rewrittenAsset = rewriteMaterialAssetRefs(matAsset, mat, doc, maps);
       const matName = isMultiAsset ? mat.name : undefined;
       out.push({
         guid: sub.guid,
@@ -431,6 +506,36 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
           },
         },
       });
+    } else if (sub.kind === 'sampler') {
+      const sampler = doc.samplers?.[sub.sourceIndex];
+      if (sampler === undefined) continue;
+      const filter = (value: number | undefined): 'nearest' | 'linear' | undefined => {
+        if (value === undefined) return undefined;
+        return value === 9728 || value === 9984 || value === 9986 || value === 9988
+          ? 'nearest'
+          : 'linear';
+      };
+      const mipmapFilter = (value: number | undefined): 'nearest' | 'linear' | undefined => {
+        if (value === undefined) return undefined;
+        return value === 9984 || value === 9985 ? 'nearest' : 'linear';
+      };
+      const addressMode = (value: number): 'repeat' | 'mirror-repeat' | 'clamp-to-edge' => {
+        if (value === 33071) return 'clamp-to-edge';
+        if (value === 33648) return 'mirror-repeat';
+        return 'repeat';
+      };
+      const magFilter = filter(sampler.magFilter);
+      const minFilter = filter(sampler.minFilter);
+      const mipmap = mipmapFilter(sampler.minFilter);
+      const payload = {
+        kind: 'sampler' as const,
+        ...(magFilter === undefined ? {} : { magFilter }),
+        ...(minFilter === undefined ? {} : { minFilter }),
+        ...(mipmap === undefined ? {} : { mipmapFilter: mipmap }),
+        addressModeU: addressMode(sampler.wrapS),
+        addressModeV: addressMode(sampler.wrapT),
+      };
+      out.push({ guid: sub.guid, kind: 'sampler', payload, refs: [], artifacts: {} });
     } else if (sub.kind === 'scene') {
       // #317 multi-material design: bridge accepts glTF mesh-index keyed
       // meshHandles + materialHandles only; primitive merge happens via

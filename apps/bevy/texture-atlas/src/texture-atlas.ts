@@ -96,8 +96,15 @@ export function makeAtlas(variant: AtlasVariant): AtlasTexture {
 function spriteMaterial(texture: number, sampler: number): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } }],
-    paramValues: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1] },
+    passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
+    parameters: [
+      { name: 'colorTint', type: 'vec4' },
+      { name: 'region', type: 'vec4', optional: true },
+      { name: 'pivotAndSize', type: 'vec4' },
+      { name: 'slicesAndMode', type: 'vec4', optional: true },
+      { name: 'baseColorTexture', type: 'texture' },
+    ],
+    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1] },
   };
 }
 

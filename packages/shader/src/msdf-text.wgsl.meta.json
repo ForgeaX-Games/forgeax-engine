@@ -12,21 +12,5 @@
       "sourceIndex": 0,
       "kind": "material-shader"
     }
-  ],
-  "paramSchema": [
-    {
-      "name": "tintColor",
-      "type": "color",
-      "default": [1.0, 1.0, 1.0, 1.0]
-    },
-    {
-      "name": "distanceRange",
-      "type": "f32",
-      "default": 4.0
-    },
-    {
-      "name": "baseColorTexture",
-      "type": "texture2d"
-    }
   ]
 }

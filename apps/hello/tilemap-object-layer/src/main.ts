@@ -194,11 +194,11 @@ async function main(): Promise<void> {
         // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
         // `renderState.blend` drives LDR split + premultiplied-alpha
         // pipeline routing (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
+        { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
       ],
-      paramValues: {
+      values: {
         // feat-20260625 M3 / w11 (D-4): UBO-aligned field names 1:1 with
-        // sprite.wgsl.meta.json paramSchema.
+        // sprite.material.json paramSchema.
         colorTint: [1, 1, 1, 1],
         baseColorTexture: atlasA,
         sampler: samplerHandle,

@@ -300,22 +300,22 @@ const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: containerHandle },
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: containerHandle },
 });
 const floorMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: metalHandle },
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: metalHandle },
 });
 
 const FLOOR_QUAT_X = Math.sin(-Math.PI / 4);

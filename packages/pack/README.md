@@ -1,6 +1,13 @@
 # @forgeax/engine-pack
 
 > [!IMPORTANT]
+> The pack contract has one material authoring shape: a `MaterialAsset` payload. The cook stage resolves inheritance, values, texture coordinates, module references, artifact bytes, and a receipt into one record. Runtime consumers use the GUID and catalog locator; they do not author a second shader resource.
+
+## MaterialAsset cook contract
+
+Put the material payload in the package `assets[]` row and keep its `refs[]` graph complete. The `passes`, `values`, `parent`, and texture `coordinates` remain one authored route. A valid cooked material record contains `resolved`, `refs`, `artifact`, and `receipt`. If any part is absent, recover by fixing the producer payload or re-running the cook; this is the recovery route. Then repeat `lookup/verify --guid --project --catalog --json`.
+
+> [!IMPORTANT]
 > The producer publishes facts; the consumer does not guess. `packageId`,
 > `provenance`, `revision`, `sourceKey`, relations, and diagnostics survive
 > package moves and DDC relocation. Paths and array positions are locators,
@@ -117,7 +124,7 @@ authoritative fact store.
 
 ### MaterialAsset shape -- pass-based material in `.pack.json`
 
-When `kind: 'material'`, the `payload` object carries `passes[]` + `paramValues` (feat-20260527-material-registration-unification M3).
+When `kind: 'material'`, the `payload` object carries `passes[]` + `values` (feat-20260527-material-registration-unification M3).
 
 ```json
 {
@@ -128,12 +135,10 @@ When `kind: 'material'`, the `payload` object carries `passes[]` + `paramValues`
     "passes": [
       {
         "name": "Forward",
-        "shader": "forgeax::default-standard-pbr",
-        "tags": { "LightMode": "Forward" },
-        "queue": 2000
+        "program": { "module": "forgeax::default-standard-pbr" }
       }
     ],
-    "paramValues": {
+    "values": {
       "baseColor": [1.0, 0.8, 0.2],
       "metallic": 0.3
     }
@@ -146,10 +151,12 @@ When `kind: 'material'`, the `payload` object carries `passes[]` + `paramValues`
 
 | Field | Type | Description |
 |:--|:--|:--|
-| `passes` | `MaterialPassDescriptor[]` | Array of pass descriptors; `pass.shader` routes to `ShaderRegistry.lookupMaterialShader` for register-time validation. |
-| `paramValues` | `Record<string, unknown>` | Instantiated parameter values; validated at register-time via union paramSchema (extra-key ignore, missing-required error). |
+| `passes` | `MaterialPass[]` | Root pass descriptors; each pass names a `program.module`. |
+| `parameters` | `MaterialParameter[]` | Root parameter contract used by cook and reflection. |
+| `values` | `Record<string, unknown>` | Child-owned values, including per-slot texture coordinates. |
+| `parent` | `AssetGuid` | Optional serialized parent edge. |
 
-**Validation** is performed by `AssetRegistry._validateMaterialPasses` at register-time (per-pass ShaderRegistry lookup + union paramSchema). The `parseAssetPayload` `'material'` arm only accepts `passes[]` format; legacy `materialShader` / `shadingModel` formats return structured error. SSOT: `AssetRegistry` in `@forgeax/engine-runtime`.
+**Validation** is performed by the material schema and build-time cook. The cook resolves the parent chain, validates values and pass programs, and emits the effective record, artifact, references, and receipt. Runtime reports a structured missing-cook error instead of compiling a material.
 
 ## `AssetGuid` API
 

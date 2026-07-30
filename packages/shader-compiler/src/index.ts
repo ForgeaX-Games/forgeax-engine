@@ -103,9 +103,9 @@ export interface CompileResult {
 // === Main API =======================================================================
 
 const DEFINE_WITH_VALUE_RE = /^\s*#define\s+\w+\s+(\S.*)$/;
-const IMPORT_DIRECTIVE_RE = /^\s*#import\s+([A-Za-z0-9_:]+)/;
-const MODULE_ID_PREFIX_RE = /^([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)/;
-const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:]+)/;
+const IMPORT_DIRECTIVE_RE = /^\s*#import\s+([A-Za-z0-9_:-]+)/;
+const MODULE_ID_PREFIX_RE = /^([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)/;
+const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/;
 
 /**
  * Build-time pure function: WGSL -> triplet artefacts + reflection derivation.
@@ -541,6 +541,48 @@ export {
   type ShaderErrorDetail,
   shaderNotFound,
 } from './errors.js';
+export {
+  type ComposedMaterial,
+  composeMaterial,
+  type MaterialComposeCompiler,
+  type MaterialComposedSource,
+  type MaterialComposeRequest,
+} from './material/compose.js';
+export {
+  characterizeMaterialWgslProfile,
+  MATERIAL_WGSL_PROFILE,
+  MATERIAL_WGSL_PROFILE_CAPABILITIES,
+  type MaterialProfileError,
+  type MaterialWgslProfileCapability,
+  type MaterialWgslProfileFeature,
+  validateMaterialWgslSource,
+} from './material/profile.js';
+export {
+  type MaterialProjection,
+  type MaterialProjectionContext,
+  type MaterialStaticSelection,
+  projectMaterial,
+} from './material/project.js';
+export { type ResolvedMaterial, resolveMaterialAsset } from './material/resolve.js';
+export {
+  buildMaterialSourceCatalog,
+  MaterialSourceCatalog,
+  type MaterialSourceCatalogInput,
+  type MaterialSourceInput,
+  type MaterialSourceRecord,
+} from './material/source-catalog.js';
+export {
+  createMaterialSpecializationKey,
+  type MaterialDefineValue,
+  type MaterialSpecializationKey,
+  type MaterialSpecializationKeyInput,
+  type MaterialSpecializationPassInput,
+} from './material/specialization-key.js';
+export {
+  type MaterialReflection,
+  type MaterialReflectionInput,
+  reflectMaterial,
+} from './reflection.js';
 
 /** Package version string (debug tag). */
 export const SHADER_COMPILER_PACKAGE_VERSION = '0.0.0';

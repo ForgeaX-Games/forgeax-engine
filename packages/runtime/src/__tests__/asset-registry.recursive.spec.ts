@@ -60,8 +60,14 @@ function makeMesh(): TypesMeshAsset {
 function makeMaterialAsset(): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-    paramValues: {},
+    passes: [
+      {
+        name: 'forward',
+        program: { module: 'test::dummy' },
+        renderState: { tags: { LightMode: 'Forward' } },
+      },
+    ],
+    values: {},
   };
 }
 
@@ -505,12 +511,12 @@ describe('AC-08 — in-flight dedup + cycle', () => {
   });
 });
 
-// ── AC-02: material recursive (D-8 — paramValues string-only walker) ─────────
+// ── AC-02: material recursive (D-8 — values string-only walker) ─────────
 
 describe('AC-02 — material recursive loadByGuid', () => {
   it('loadByGuid<MaterialAsset> recurses into texture sub-assets pre-registered in dev mode', async () => {
     // Verify that the recursive loadByGuid<MaterialAsset> walk reaches
-    // texture GUIDs from paramValues. The textures are pre-registered in dev
+    // texture GUIDs from values. The textures are pre-registered in dev
     // mode (fast-path hit), simulating the typical dev workflow where leaf
     // assets are registered before the material. The material itself is
     // loaded via the prod path, and the recursive walk triggers loadByGuid
@@ -549,8 +555,14 @@ describe('AC-02 — material recursive loadByGuid', () => {
           guid: MATERIAL_PARENT_GUID,
           kind: 'material',
           payload: {
-            passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-            paramValues: {
+            passes: [
+              {
+                name: 'forward',
+                program: { module: 'test::dummy' },
+                renderState: { tags: { LightMode: 'Forward' } },
+              },
+            ],
+            values: {
               u_albedoMap: TEXTURE_A_GUID,
               u_normalMap: TEXTURE_B_GUID,
             },
@@ -658,11 +670,11 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     // D-9: runtime Asset union contains no GltfAsset POD; gltf importer
     // output (mesh + material + texture) is covered via SceneAsset recursion.
     // This fixture mirrors that output: a scene whose entities reference mesh
-    // + material, and the material's paramValues reference a texture GUID.
+    // + material, and the material's values reference a texture GUID.
     // The recursive walk must reach all three kinds.
     //
     // Texture is pre-registered in dev mode (fast-path compatible); the
-    // material envelope's refs[] carries the texture GUIDs from paramValues,
+    // material envelope's refs[] carries the texture GUIDs from values,
     // and the recursive loadByGuid hits the dev fast-path.
 
     defineComponent('Transform', { pos: 'array<f32, 3>' });
@@ -751,11 +763,17 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
           guid: MATERIAL_A_GUID,
           kind: 'material',
           payload: {
-            passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+            passes: [
+              {
+                name: 'forward',
+                program: { module: 'test::dummy' },
+                renderState: { tags: { LightMode: 'Forward' } },
+              },
+            ],
             // feat-20260622 M4 / w14: texture handle fields carry refs[] indices
             // (resolved by materialLoader); the texture edge rides material
             // refs[] so the unified for-loop recurses into it.
-            paramValues: {
+            values: {
               u_baseColorMap: 0,
               u_normalMap: 0, // same texture via two params (diamond)
               u_metallic: 0.5, // non-GUID value → skipped
@@ -793,7 +811,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
         // All three kinds should be registered:
         // - mesh (via scene entity MeshFilter, prod path)
         // - material (via scene entity MeshRenderer, prod path)
-        // - texture (via material paramValues, dev fast-path hit)
+        // - texture (via material values, dev fast-path hit)
         expect(reg.lookup(parseGuid(MESH_GUID))).not.toBe(undefined);
         expect(reg.lookup(parseGuid(MATERIAL_A_GUID))).not.toBe(undefined);
         expect(reg.lookup(parseGuid(TEXTURE_C_GUID))).not.toBe(undefined);
@@ -823,7 +841,7 @@ const LEAF_TEST_GUIDS: Record<string, string> = {
   mesh: 'f0000000-0000-4000-f000-000000000001',
   texture: 'f0000000-0000-4000-f000-000000000002',
   sampler: 'f0000000-0000-4000-f000-000000000004',
-  shader: 'f0000000-0000-4000-f000-000000000005',
+  program: 'f0000000-0000-4000-f000-000000000005',
   skeleton: 'f0000000-0000-4000-f000-000000000006',
   'animation-clip': 'f0000000-0000-4000-f000-000000000007',
   audio: 'f0000000-0000-4000-f000-000000000008',
@@ -871,16 +889,6 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
       kind: 'sampler' as const,
       magFilter: 'linear' as const,
       minFilter: 'linear' as const,
-    }),
-  },
-  {
-    label: 'shader',
-    kind: 'shader',
-    makeAsset: () => ({
-      kind: 'shader' as const,
-      name: 'test::leaf-shader',
-      source: 'fn main() {}',
-      paramSchema: [],
     }),
   },
   {

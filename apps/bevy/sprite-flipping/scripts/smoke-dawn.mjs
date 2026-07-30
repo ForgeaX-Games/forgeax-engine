@@ -109,8 +109,15 @@ const sampler = world.allocSharedRef('SamplerAsset', {
 });
 const material = (flipX = 0, flipY = 0) => ({
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } }],
-  paramValues: { colorTint: [1, 1, 1, 1], baseColorTexture: textureId, sampler, pivotAndSize: [0.5, 0.5, 1, 1], flipX, flipY },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 } }],
+  parameters: [
+    { name: 'colorTint', type: 'vec4' },
+    { name: 'region', type: 'vec4', optional: true },
+    { name: 'pivotAndSize', type: 'vec4' },
+    { name: 'slicesAndMode', type: 'vec4', optional: true },
+    { name: 'baseColorTexture', type: 'texture' },
+  ],
+  values: { colorTint: [1, 1, 1, 1], baseColorTexture: textureId, sampler, pivotAndSize: [0.5, 0.5, 1, 1], flipX, flipY },
 });
 const mats = [world.allocSharedRef('MaterialAsset', material()), world.allocSharedRef('MaterialAsset', material(1)), world.allocSharedRef('MaterialAsset', material(0, 1))];
 for (const [x, mat] of [[-3, mats[0]], [0, mats[1]], [3, mats[2]]]) {

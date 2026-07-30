@@ -1,5 +1,12 @@
 # @forgeax/engine-assets-runtime
 
+> [!IMPORTANT]
+> Runtime material consumption is `configurePackIndex` -> `loadByGuid<MaterialAsset>` -> cooked readiness -> `world.allocSharedRef`. The registry returns the loaded payload and follows its dependency graph; it does not create an app-owned shader artifact or a parallel material authoring surface.
+
+## MaterialAsset runtime recovery
+
+Load a root and any inherited child through the same GUID catalog. A ready material must have its effective `passes`, `values`, `parent` chain, per-slot `coordinates`, references, artifact, and receipt. For a failure, switch on the structured code, read `detail` and `hint`, repair the package or cook output, and retry the same GUID. A missing cook is not a valid fallback to runtime compilation.
+
 The runtime asset layer: catalogue an asset by GUID, load its payload + all
 transitively-referenced sub-assets, resolve a `Handle` back to its payload, and
 wire the default loader set. Tier 2.1 package extracted from

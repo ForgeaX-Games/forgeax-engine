@@ -1,3 +1,4 @@
+#define_import_path forgeax_material::unlit
 #import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture}
 
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE

@@ -95,14 +95,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     assets.catalog(stdMatGuidResult.value, {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
-        },
+        { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
       ],
-      paramValues: {
+      values: {
         baseColor: [0.8, 0.4, 0.2],
         metallic: 0,
         roughness: 0.5,

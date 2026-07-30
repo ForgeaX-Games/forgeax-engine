@@ -94,12 +94,11 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1, 1] as [number, number, number, number] },
+      values: { baseColor: [1, 1, 1, 1] as [number, number, number, number] },
     };
     reg.catalog<MaterialAsset>(matGuid.value, mat);
 
@@ -138,12 +137,11 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1, 1] as [number, number, number, number] },
+      values: { baseColor: [1, 1, 1, 1] as [number, number, number, number] },
     };
     reg.catalog<MaterialAsset>(matGuid.value, mat);
 

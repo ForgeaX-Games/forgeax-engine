@@ -81,8 +81,6 @@ describe('TilesetAsset POD shape (M0 baseline)', () => {
           return 'material';
         case 'scene':
           return 'scene';
-        case 'shader':
-          return 'shader';
         case 'skeleton':
           return 'skeleton';
         case 'skin':

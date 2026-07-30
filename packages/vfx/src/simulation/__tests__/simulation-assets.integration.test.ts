@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 const material: MaterialAsset = {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'test-shader' }],
+  passes: [{ name: 'Forward', program: { module: 'test-shader' } }],
 };
 
 const effect: LoadedParticleEffect = {

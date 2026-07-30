@@ -252,19 +252,16 @@ const floorMat = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      fragmentEntry: 'fs_main',
-      tags: { LightMode: 'Forward' },
-      passKind: 'forward',
+      program: { module: 'forgeax::default-standard-pbr', fragmentEntry: 'fs_main' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
     {
       name: 'ShadowCaster',
-      shader: 'forgeax::default-shadow-caster',
-      tags: { LightMode: 'ShadowCaster' },
-      passKind: 'shadow-caster',
+      program: { module: 'forgeax::default-shadow-caster' },
+      renderState: { tags: { LightMode: 'ShadowCaster' } },
     },
   ],
-  paramValues: {
+  values: {
     baseColorTexture: unwrapHandle(woodHandle),
   },
 });

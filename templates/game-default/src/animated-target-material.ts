@@ -1,5 +1,4 @@
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset } from '@forgeax/engine-runtime';
 import animatedTargetShader from './animated-target.wgsl';
 
@@ -8,7 +7,7 @@ export const ANIMATED_TARGET_SHADER_SOURCE = animatedTargetShader.wgsl;
 
 type MutableMaterial = {
   passes?: MaterialAsset['passes'];
-  paramValues?: Readonly<Record<string, unknown>>;
+  values?: Readonly<Record<string, unknown>>;
 };
 
 export type AnimatedMaterialTarget = {
@@ -25,30 +24,19 @@ export function createAnimatedMaterialTarget(
   world: World,
   source: Omit<AnimatedMaterialTarget, 'baseHue' | 'baseColor'>,
   baseHue: number,
-  renderer?: Renderer,
 ): AnimatedMaterialTarget {
   const result = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(source.mat);
-  const values = result.ok ? result.value.paramValues as Record<string, unknown> | undefined : undefined;
+  const values = result.ok ? result.value.values as Record<string, unknown> | undefined : undefined;
   const rawColor = values?.baseColor;
   const color: [number, number, number, number] = Array.isArray(rawColor) && rawColor.length === 4
     ? [Number(rawColor[0]), Number(rawColor[1]), Number(rawColor[2]), Number(rawColor[3])]
     : [1, 1, 1, 1];
   const baseMaterial = result.ok ? { ...result.value } : { kind: 'material' as const };
   let shaderAnimated = false;
-  if (result.ok && renderer?.shader !== null && renderer?.shader !== undefined) {
-    const registry = renderer.shader;
-    if (!registry.lookupMaterialShader(ANIMATED_TARGET_SHADER_ID).ok) {
-      registry.registerMaterialShader(ANIMATED_TARGET_SHADER_ID, {
-        source: ANIMATED_TARGET_SHADER_SOURCE,
-        paramSchema: [
-          { name: 'baseColor', type: 'color' },
-          { name: 'time', type: 'f32', default: 0 },
-        ],
-      });
-    }
+  if (result.ok) {
     const material = result.value as unknown as MutableMaterial;
-    material.passes = [{ name: 'Forward', shader: ANIMATED_TARGET_SHADER_ID, tags: { LightMode: 'Forward' }, queue: 2000 }];
-    material.paramValues = { baseColor: color, time: 0 };
+    material.passes = [{ name: 'Forward', program: { module: ANIMATED_TARGET_SHADER_ID }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }];
+    material.values = { baseColor: color, time: 0 };
     shaderAnimated = true;
   }
   return { ...source, baseHue, baseColor: color, baseMaterial, shaderAnimated, shaderTime: 0 };
@@ -76,7 +64,7 @@ function hslToRgb(hue: number): readonly [number, number, number] {
 export function stepAnimatedMaterial(world: World, target: AnimatedMaterialTarget, elapsed: number): void {
   const result = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(target.mat);
   if (!result.ok) return;
-  const values = result.value.paramValues as Record<string, unknown> | undefined;
+  const values = result.value.values as Record<string, unknown> | undefined;
   if (values === undefined) return;
   if (target.shaderAnimated) {
     values.time = elapsed;
@@ -96,7 +84,7 @@ export function resetAnimatedMaterial(world: World, target: AnimatedMaterialTarg
     target.shaderTime = 0;
     return;
   }
-  const values = result.value.paramValues as Record<string, unknown> | undefined;
+  const values = result.value.values as Record<string, unknown> | undefined;
   if (values !== undefined) values.baseColor = [...target.baseColor];
 }
 

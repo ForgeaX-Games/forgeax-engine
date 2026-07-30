@@ -35,15 +35,15 @@
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-ui": "workspace:*"
   },
   "peerDependencies": {
-    "@forgeax/engine-pack": "workspace:*",
     "vite": "^7 || ^8"
   },
   "devDependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
-    "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@types/node": "^20.14.0",
     "ajv": "^8.20.0",

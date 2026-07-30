@@ -2,7 +2,7 @@
 //
 // `@forgeax/engine-vite-plugin-shader` transforms `*.wgsl` modules into a
 // `{ hash, wgsl }` JS module. The cutout-shadow demo imports its
-// custom shadow shader directly to feed `registerMaterialShader`.
+// custom shadow shader directly as a cooked material manifest input.
 
 declare module '*.wgsl' {
   const value: { readonly hash: string; readonly wgsl: string };

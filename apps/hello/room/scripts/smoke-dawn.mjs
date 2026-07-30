@@ -207,12 +207,11 @@ assets.catalog(stdMatGuidResult.value, {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [0.8, 0.4, 0.2],
     metallic: 0,
     roughness: 0.5,
@@ -228,7 +227,14 @@ if (!unlitMatGuidResult.ok) {
 // apps/hello/room/src/index.ts). The legacy hand-written unlit-discriminant
 // shape carried no `passes` array and resolved to empty passes at draw time,
 // firing `material-resolved-empty-passes` through renderer.onError.
-assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
+const unlitCatalogResult = assets.catalog(
+  unlitMatGuidResult.value,
+  Materials.unlit([0.2, 0.3, 0.9, 1]),
+);
+if (!unlitCatalogResult.ok) {
+  console.error(`[smoke] FAIL - unlit catalog: ${JSON.stringify(unlitCatalogResult.error)}`);
+  process.exit(1);
+}
 
 // feat-20260528-scene-asset-guid-refs-and-post-instantiate M4 / w11:
 // construct the SceneAsset POD from the pack JSON with GUID strings in

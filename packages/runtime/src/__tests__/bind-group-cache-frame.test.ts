@@ -837,12 +837,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1] },
+      values: { baseColor: [1, 1, 1] },
     });
   }
 

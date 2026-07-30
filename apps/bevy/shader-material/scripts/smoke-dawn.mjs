@@ -81,8 +81,8 @@ if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 const shaderEntry = (manifest.materialShaders ?? []).find((entry) => entry?.identifier === SHADER_ID);
 const shaderRegistry = renderer.shader;
 if (shaderRegistry === null || shaderEntry === undefined) throw new Error('shader material manifest entry missing');
-if (!shaderRegistry.lookupMaterialShader(SHADER_ID).ok) {
-  shaderRegistry.registerMaterialShader(SHADER_ID, {
+if (!shaderRegistry.findMaterialArtifact(SHADER_ID).ok) {
+  shaderRegistry.installMaterialArtifact(SHADER_ID, {
     source: shaderEntry.composedWgsl,
     paramSchema: JSON.parse(shaderEntry.paramSchema),
   });

@@ -42,8 +42,6 @@ describe('VideoAsset POD shape (M1 baseline)', () => {
           return 'material';
         case 'scene':
           return 'scene';
-        case 'shader':
-          return 'shader';
         case 'skeleton':
           return 'skeleton';
         case 'skin':

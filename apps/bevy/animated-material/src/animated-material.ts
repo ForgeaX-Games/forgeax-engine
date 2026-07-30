@@ -67,9 +67,9 @@ export function stepAnimatedMaterials(world: World, scene: AnimatedMaterialScene
   for (const material of scene.materials) {
     const result = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(material.handle);
     if (!result.ok) continue;
-    const paramValues = result.value.paramValues as Record<string, unknown> | undefined;
-    if (paramValues === undefined) continue;
-    paramValues.baseColor = [...hslToRgb(material.baseHue + hueDelta), 1];
+    const values = result.value.values as Record<string, unknown> | undefined;
+    if (values === undefined) continue;
+    values.baseColor = [...hslToRgb(material.baseHue + hueDelta), 1];
   }
   return hueDelta;
 }

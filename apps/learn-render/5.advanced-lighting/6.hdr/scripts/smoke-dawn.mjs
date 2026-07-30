@@ -377,11 +377,11 @@ const tunnelMat = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.85,
@@ -394,11 +394,11 @@ const strongMat = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.4,

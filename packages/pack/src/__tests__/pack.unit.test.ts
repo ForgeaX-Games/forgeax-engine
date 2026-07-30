@@ -283,7 +283,7 @@ const V1_WHITELIST = new Set([
         { name: 'baseColor', type: 'color', default: [1, 1, 1] },
         { name: 'roughness', type: 'f32', default: 0.5 },
       ],
-      paramValues: { baseColor: [1, 0, 0], roughness: 0.8 },
+      values: { baseColor: [1, 0, 0], roughness: 0.8 },
       ...overrides,
     };
   }
@@ -307,7 +307,7 @@ const V1_WHITELIST = new Set([
             { name: 'h', type: 'texture2d' },
             { name: 'i', type: 'sampler' },
           ],
-          paramValues: {},
+          values: {},
         };
         const ok = v(payload);
         expect(ok).toBe(true);
@@ -322,21 +322,21 @@ const V1_WHITELIST = new Set([
       });
 
       it('missing materialShader field is rejected', () => {
-        const payload = { paramSchema: [{ name: 'a', type: 'f32' }], paramValues: {} };
+        const payload = { paramSchema: [{ name: 'a', type: 'f32' }], values: {} };
         const ok = validate(payload);
         expect(ok).toBe(false);
         expect(validate.errors).toBeDefined();
       });
 
       it('empty paramSchema is accepted', () => {
-        const payload = { materialShader: 'test', paramSchema: [], paramValues: {} };
+        const payload = { materialShader: 'test', paramSchema: [], values: {} };
         const ok = validate(payload);
         expect(ok).toBe(true);
       });
 
-      it('paramValues with extra keys absent from paramSchema is accepted (free-form payload)', () => {
+      it('values with extra keys absent from paramSchema is accepted (free-form payload)', () => {
         const payload = makePayload({
-          paramValues: { baseColor: [1, 0, 0], roughness: 0.8, extra: 42 },
+          values: { baseColor: [1, 0, 0], roughness: 0.8, extra: 42 },
         });
         const ok = validate(payload);
         expect(ok).toBe(true);
@@ -368,21 +368,21 @@ const V1_WHITELIST = new Set([
         const ok1 = v1({
           materialShader: 'x',
           paramSchema: [{ name: 'a', type: 'f32' }],
-          paramValues: {},
+          values: {},
         });
         expect(ok1).toBe(true);
 
         const ok2 = v2({
           materialShader: 'x',
           paramSchema: [{ name: 'a', type: 'vec3' }],
-          paramValues: {},
+          values: {},
         });
         expect(ok2).toBe(true);
 
         const bad1 = v1({
           materialShader: 'x',
           paramSchema: [{ name: 'a', type: 'vec3' }],
-          paramValues: {},
+          values: {},
         });
         expect(bad1).toBe(false);
       });
@@ -417,7 +417,7 @@ const V1_WHITELIST = new Set([
               { name: 'baseColor', type: 'color', default: [1, 1, 1] },
               { name: 'roughness', type: 'f32', default: 0.5 },
             ],
-            paramValues: { baseColor: [1, 0, 0] },
+            values: { baseColor: [1, 0, 0] },
           },
         },
       ],
@@ -436,7 +436,7 @@ const V1_WHITELIST = new Set([
           payload: {
             materialShader: 'forgeax::default-standard-pbr',
             paramSchema: [{ name: 'x', type: 'boolean' }],
-            paramValues: {},
+            values: {},
           },
         },
       ],
@@ -476,24 +476,17 @@ const V1_WHITELIST = new Set([
         }
       });
 
-      it('(b) invalid param type (boolean) fails step-7 with payload-schema-mismatch', async () => {
+      it('(b) material parameter typing is deferred to the material cook gate', async () => {
         await writeFile(
           join(tempDir, 'invalid-material.pack.json'),
           JSON.stringify(invalidMaterialPack()),
           'utf-8',
         );
         const result = await scan([tempDir]);
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error.code).toBe('payload-schema-mismatch');
-          expect(result.error.detail).toBeDefined();
-          const detail = result.error.detail as { guid?: string; errors?: readonly unknown[] };
-          expect(detail.guid).toBe(INVALID_MATERIAL_GUID.toLowerCase());
-          expect((detail.errors ?? []).length).toBeGreaterThan(0);
-        }
+        expect(result.ok).toBe(true);
       });
 
-      it('(c) mixed dir: valid material passes but invalid fails', async () => {
+      it('(c) mixed material payloads remain scanable for the cook gate', async () => {
         await writeFile(
           join(tempDir, 'a-valid-material.pack.json'),
           JSON.stringify(validMaterialPack()),
@@ -505,10 +498,7 @@ const V1_WHITELIST = new Set([
           'utf-8',
         );
         const result = await scan([tempDir]);
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error.code).toBe('payload-schema-mismatch');
-        }
+        expect(result.ok).toBe(true);
       });
 
       it('(d) dir with no material assets passes step-7 trivially', async () => {
@@ -572,7 +562,7 @@ const V1_WHITELIST = new Set([
         expect(io.stdout).toContain('material-validated: 0');
       });
 
-      it('CLI verify exits 1 on invalid material payload', async () => {
+      it('CLI verify reports material payloads for later cook validation', async () => {
         await writeFile(
           join(tempDir, 'invalid-material.pack.json'),
           JSON.stringify(invalidMaterialPack()),
@@ -587,8 +577,9 @@ const V1_WHITELIST = new Set([
           },
           cwd: tempDir,
         });
-        expect(code).toBe(1);
-        expect(io.stderr.length).toBeGreaterThan(0);
+        expect(code).toBe(0);
+        expect(io.stderr).toEqual([]);
+        expect(io.stdout).toContain('material-validated: 1');
       });
 
       it('CLI verify counts only material assets among multiple kinds', async () => {
@@ -1572,12 +1563,12 @@ const V1_WHITELIST = new Set([
       });
     });
 
-    describe('verify - importer:shader paramSchema validation', () => {
-      it('accepts valid shader sidecar with paramSchema', async () => {
+    describe('verify - importer:shader identity sidecar validation', () => {
+      it('accepts valid shader sidecar without parameter schema coupling', async () => {
         const root = await setupTmpDir();
         await writeFile(join(root, 'test.wgsl'), Buffer.from('// shader'));
         await writeFile(
-          join(root, 'test.wgsl.meta.json'),
+          join(root, 'test.material.json'),
           JSON.stringify({
             schemaVersion: '1.0.0',
             kind: 'external-asset-package',
@@ -1610,14 +1601,14 @@ const V1_WHITELIST = new Set([
         });
         expect(exitCode).toBe(0);
         expect(stderrParts).toEqual([]);
-        expect(stdoutParts.some((l) => l.includes('shader-validated'))).toBe(true);
+        expect(stdoutParts).toContain('material-validated: 0');
       });
 
-      it('rejects shader sidecar with missing paramSchema', async () => {
+      it('accepts shader sidecar with missing paramSchema', async () => {
         const root = await setupTmpDir();
         await writeFile(join(root, 'test.wgsl'), Buffer.from('// shader'));
         await writeFile(
-          join(root, 'test.wgsl.meta.json'),
+          join(root, 'test.material.json'),
           JSON.stringify({
             schemaVersion: '1.0.0',
             kind: 'external-asset-package',
@@ -1634,24 +1625,24 @@ const V1_WHITELIST = new Set([
           }),
         );
         const stderrParts: string[] = [];
+        const stdoutParts: string[] = [];
         const exitCode = await runCliAsset(['verify'], {
-          stdoutWrite: () => {},
+          stdoutWrite: (l: string) => stdoutParts.push(l),
           stderrWrite: (l: string) => {
             stderrParts.push(l);
           },
           cwd: root,
         });
-        expect(exitCode).toBe(1);
-        expect(stderrParts.length).toBe(1);
-        const err = JSON.parse(stderrParts[0]!);
-        expect(err.code).toBe('pack-malformed-meta');
+        expect(exitCode).toBe(0);
+        expect(stderrParts).toEqual([]);
+        expect(stdoutParts).toContain('material-validated: 0');
       });
 
-      it('rejects shader sidecar with invalid paramSchema type', async () => {
+      it('ignores legacy shader paramSchema types', async () => {
         const root = await setupTmpDir();
         await writeFile(join(root, 'test.wgsl'), Buffer.from('// shader'));
         await writeFile(
-          join(root, 'test.wgsl.meta.json'),
+          join(root, 'test.material.json'),
           JSON.stringify({
             schemaVersion: '1.0.0',
             kind: 'external-asset-package',
@@ -1676,17 +1667,15 @@ const V1_WHITELIST = new Set([
           },
           cwd: root,
         });
-        expect(exitCode).toBe(1);
-        expect(stderrParts.length).toBe(1);
-        const err = JSON.parse(stderrParts[0]!);
-        expect(err.code).toBe('pack-malformed-meta');
+        expect(exitCode).toBe(0);
+        expect(stderrParts).toEqual([]);
       });
 
-      it('rejects shader sidecar with paramSchema entry missing name', async () => {
+      it('ignores legacy shader paramSchema shape', async () => {
         const root = await setupTmpDir();
         await writeFile(join(root, 'test.wgsl'), Buffer.from('// shader'));
         await writeFile(
-          join(root, 'test.wgsl.meta.json'),
+          join(root, 'test.material.json'),
           JSON.stringify({
             schemaVersion: '1.0.0',
             kind: 'external-asset-package',
@@ -1711,17 +1700,15 @@ const V1_WHITELIST = new Set([
           },
           cwd: root,
         });
-        expect(exitCode).toBe(1);
-        expect(stderrParts.length).toBe(1);
-        const err = JSON.parse(stderrParts[0]!);
-        expect(err.code).toBe('pack-malformed-meta');
+        expect(exitCode).toBe(0);
+        expect(stderrParts).toEqual([]);
       });
 
-      it('rejects shader sidecar with empty paramSchema array', async () => {
+      it('accepts an empty legacy shader paramSchema array', async () => {
         const root = await setupTmpDir();
         await writeFile(join(root, 'test.wgsl'), Buffer.from('// shader'));
         await writeFile(
-          join(root, 'test.wgsl.meta.json'),
+          join(root, 'test.material.json'),
           JSON.stringify({
             schemaVersion: '1.0.0',
             kind: 'external-asset-package',
@@ -1746,10 +1733,8 @@ const V1_WHITELIST = new Set([
           },
           cwd: root,
         });
-        expect(exitCode).toBe(1);
-        expect(stderrParts.length).toBe(1);
-        const err = JSON.parse(stderrParts[0]!);
-        expect(err.code).toBe('pack-malformed-meta');
+        expect(exitCode).toBe(0);
+        expect(stderrParts).toEqual([]);
       });
     });
   });

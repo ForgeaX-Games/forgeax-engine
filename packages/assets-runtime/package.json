@@ -35,7 +35,8 @@
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
-    "@forgeax/engine-ui": "workspace:*"
+    "@forgeax/engine-ui": "workspace:*",
+    "@webgpu/types": "^0.1.71"
   },
   "devDependencies": {
     "@forgeax/engine-skinning": "workspace:*"

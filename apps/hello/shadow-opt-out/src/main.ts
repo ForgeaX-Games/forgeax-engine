@@ -22,7 +22,7 @@ import { Materials } from '@forgeax/engine-render';
 
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import cutoutShader from '../shaders/cutout-shadow.wgsl';
+import '../shaders/cutout-shadow.wgsl';
 
 const CUTOUT_SHADER_PATH = 'shadow_opt_out::cutout_shadow';
 
@@ -59,28 +59,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!ready.ok) {
     console.error('[shadow-opt-out] renderer.ready failed:', ready.error);
     return;
-  }
-
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[shadow-opt-out] renderer.shader is null');
-    return;
-  }
-
-  // Register cutout shadow material shader. The shader has a fragment stage
-  // with discard for alpha-test cutout pattern on the shadow map.
-  //
-  // Idempotent guard: vite-plugin-shader scans .wgsl modules with
-  // `#define_import_path` and registers them at engine boot from the manifest;
-  // the same identifier may already be in the registry when this app runs in
-  // the browser via vite. The dawn-node smoke harness uses a hand-rolled
-  // manifest data-URL that does NOT auto-register, so the explicit register
-  // call below is still needed there. Look up first; only register on miss.
-  if (!shader.lookupMaterialShader(CUTOUT_SHADER_PATH).ok) {
-    shader.registerMaterialShader(CUTOUT_SHADER_PATH, {
-      source: cutoutShader.wgsl,
-      paramSchema: [{ name: 'baseColor', type: 'color' }],
-    });
   }
 
   const world = new World();
@@ -177,19 +155,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const matCHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-      },
-      {
-        name: 'ShadowCaster',
-        shader: CUTOUT_SHADER_PATH,
-        tags: { LightMode: 'ShadowCaster' },
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
+      { name: 'ShadowCaster', program: { module: CUTOUT_SHADER_PATH }, renderState: { tags: { LightMode: 'ShadowCaster' } } },
     ],
-    paramValues: {
+    values: {
       baseColor: [0.1, 0.1, 0.9, 1],
       metallic: 0,
       roughness: 0.5,

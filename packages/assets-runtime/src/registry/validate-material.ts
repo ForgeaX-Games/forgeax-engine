@@ -4,20 +4,20 @@ import {
   AssetError,
   derive,
   type MaterialAsset,
-  type ParamSchemaEntry,
+  type MaterialParameter,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 
 /**
  * Validate a MaterialAsset's passes[] against the ShaderRegistry's
  * paramSchema (union semantics: all declared params across all passes
- * must be satisfiable from paramValues).
+ * must be satisfiable from values).
  *
  * - Empty / undefined passes[] → error
  * - Each pass's shader must exist in ShaderRegistry
  * - Union of all pass paramSchemas: params without `default` must
- *   appear in paramValues with matching type
- * - Extra keys in paramValues are silently ignored (D-5)
+ *   appear in values with matching type
+ * - Extra keys in values are silently ignored (D-5)
  *
  * @returns AssetError on failure, null on success
  */
@@ -41,27 +41,22 @@ export function validateMaterialPasses(
     return null;
   }
 
-  const allSchemas: ParamSchemaEntry[] = [];
+  const allSchemas: MaterialParameter[] = [...(asset.parameters ?? [])];
   for (let passIndex = 0; passIndex < passes.length; passIndex++) {
     const pass = passes[passIndex];
     if (pass === undefined) continue;
-    const lookup = registry.shaderRegistry.lookupMaterialShader(pass.shader);
-    if (!lookup.ok) {
+    if (pass.program.module.length === 0) {
       return new AssetError({
         code: 'asset-invalid-value',
-        expected: `shader '${pass.shader}' registered in ShaderRegistry`,
-        hint: `pass[${passIndex}] references shader '${pass.shader}' which is not registered; register it via ShaderRegistry.registerMaterialShader('${pass.shader}', ...) at engine boot`,
-        detail: { passIndex, shaderKey: pass.shader, cause: 'shader-not-found' },
+        expected: 'pass.program.module to be a non-empty module identifier',
+        hint: `pass[${passIndex}] has an empty program.module`,
       });
-    }
-    for (const entry of lookup.value.paramSchema) {
-      allSchemas.push(entry);
     }
   }
 
   // Deduplicate by name (first occurrence wins)
   const seen = new Set<string>();
-  const unionSchema: ParamSchemaEntry[] = [];
+  const unionSchema: MaterialParameter[] = [];
   for (const entry of allSchemas) {
     if (!seen.has(entry.name)) {
       seen.add(entry.name);
@@ -69,7 +64,7 @@ export function validateMaterialPasses(
     }
   }
 
-  const paramValues: Record<string, unknown> = (asset.paramValues as Record<string, unknown>) ?? {};
+  const values: Record<string, unknown> = (asset.values as Record<string, unknown>) ?? {};
 
   // feat-20260613-material-paramschema-driven-binding M3 / w16 (D-2):
   // derive(schema) is the SSOT for which schema fields are textures vs
@@ -80,39 +75,24 @@ export function validateMaterialPasses(
   // resource handles may not be available yet — D-5 graceful path),
   // so derive-derived membership decides the skip set without keeping
   // a parallel literal table.
-  const derived = derive(unionSchema);
-  const textureFields = derived.textureFieldNames;
-  const samplerFields = new Set<string>();
-  for (const e of unionSchema) {
-    if (e.type === 'sampler' || e.type === 'sampler_comparison') {
-      samplerFields.add(e.name);
-    }
-  }
-
   const missingParams: string[] = [];
   for (const entry of unionSchema) {
-    // Param with default: skip if missing in paramValues
-    if (entry.default !== undefined) {
-      continue;
-    }
-    // Texture / sampler params are always optional at register time
-    // (asset handles may not be available yet); derive output is the
-    // SSOT for category membership.
-    if (textureFields.has(entry.name) || samplerFields.has(entry.name)) {
-      continue;
-    }
-    const value = paramValues[entry.name];
+    const value = values[entry.name];
     if (value === undefined) {
+      if (entry.default !== undefined || entry.optional || entry.type === 'texture') {
+        continue;
+      }
       missingParams.push(entry.name);
       continue;
     }
+    if (value === null && entry.optional) continue;
     // Type-check supplied values
     const typeOk = validateParamType(registry, entry.name, entry.type, value);
     if (!typeOk) {
       return new AssetError({
         code: 'asset-invalid-value',
-        expected: `paramValues.${entry.name} to be of type ${entry.type}`,
-        hint: `paramValues['${entry.name}'] has type ${typeof value} but paramSchema declares ${entry.type}`,
+        expected: `values.${entry.name} to be of type ${entry.type}`,
+        hint: `values['${entry.name}'] has type ${typeof value} but paramSchema declares ${entry.type}`,
         detail: { paramName: entry.name, expectedType: entry.type, got: typeof value },
       });
     }
@@ -121,7 +101,7 @@ export function validateMaterialPasses(
   if (missingParams.length > 0) {
     return new AssetError({
       code: 'asset-invalid-value',
-      expected: `paramValues to contain keys: ${missingParams.join(', ')}`,
+      expected: `values to contain keys: ${missingParams.join(', ')}`,
       hint: `missing required params: ${missingParams.join(', ')}`,
       detail: { missingParams },
     });
@@ -131,13 +111,13 @@ export function validateMaterialPasses(
 }
 
 /**
- * Sprite 9-slice paramValues fail-fast validation
+ * Sprite 9-slice values fail-fast validation
  * (feat-20260527-sprite-nineslice M2 / w8, plan-strategy §D-1 + AC-08).
  *
  * Fires when:
  *  - asset.kind === 'material'
  *  - first pass shader === 'forgeax::sprite'
- *  - paramValues.slices is present
+ *  - values.slices is present
  *
  * Six fail-fast branches (1:1 with w4 test):
  *   (1) any component is negative
@@ -163,18 +143,19 @@ export function validateSpriteSlices(
   const passes = asset.passes;
   if (passes === undefined || passes.length === 0) return null;
   const firstPass = passes[0];
-  if (firstPass === undefined || firstPass.shader !== 'forgeax::sprite') return null;
-  const pv = (asset.paramValues ?? {}) as Record<string, unknown>;
+  if (firstPass === undefined || firstPass.program.module !== 'forgeax_material::sprite')
+    return null;
+  const pv = (asset.values ?? {}) as Record<string, unknown>;
   const slicesRaw = pv.slices;
   // Field absent — caller relies on paramSchema default [0, 0, 0, 0]; nothing to check.
   if (slicesRaw === undefined) return null;
   const expected =
-    'paramValues.slices: [number, number, number, number] with 0 ≤ left + right < region.zw[0] and 0 ≤ top + bottom < region.zw[1]';
+    'values.slices: [number, number, number, number] with 0 ≤ left + right < region.zw[0] and 0 ≤ top + bottom < region.zw[1]';
   if (!Array.isArray(slicesRaw)) {
     return new AssetError({
       code: 'asset-invalid-value',
       expected,
-      hint: `paramValues.slices is not an array (got ${typeof slicesRaw}); must be a 4-tuple [left, top, right, bottom]`,
+      hint: `values.slices is not an array (got ${typeof slicesRaw}); must be a 4-tuple [left, top, right, bottom]`,
       detail: { paramName: 'slices', got: typeof slicesRaw },
     });
   }
@@ -183,7 +164,7 @@ export function validateSpriteSlices(
     return new AssetError({
       code: 'asset-invalid-value',
       expected,
-      hint: `paramValues.slices length is ${slicesRaw.length}; must be 4 ([left, top, right, bottom])`,
+      hint: `values.slices length is ${slicesRaw.length}; must be 4 ([left, top, right, bottom])`,
       detail: { paramName: 'slices', got: slicesRaw.length },
     });
   }
@@ -194,7 +175,7 @@ export function validateSpriteSlices(
       return new AssetError({
         code: 'asset-invalid-value',
         expected,
-        hint: `paramValues.slices[${i}] is not a number (got ${typeof slices[i]})`,
+        hint: `values.slices[${i}] is not a number (got ${typeof slices[i]})`,
         detail: { paramName: 'slices', got: typeof slices[i] },
       });
     }
@@ -209,7 +190,7 @@ export function validateSpriteSlices(
       return new AssetError({
         code: 'asset-invalid-value',
         expected,
-        hint: `paramValues.slices[${i}] is NaN; all four components must be finite non-negative numbers`,
+        hint: `values.slices[${i}] is NaN; all four components must be finite non-negative numbers`,
         detail: { paramName: 'slices', got: 'NaN' },
       });
     }
@@ -220,7 +201,7 @@ export function validateSpriteSlices(
       return new AssetError({
         code: 'asset-invalid-value',
         expected,
-        hint: `paramValues.slices[${i}] is Infinity; all four components must be finite non-negative numbers`,
+        hint: `values.slices[${i}] is Infinity; all four components must be finite non-negative numbers`,
         detail: { paramName: 'slices', got: 'Infinity' },
       });
     }
@@ -233,13 +214,13 @@ export function validateSpriteSlices(
       return new AssetError({
         code: 'asset-invalid-value',
         expected,
-        hint: `paramValues.slices[${i}] = ${slices[i]}; all four components must be non-negative`,
+        hint: `values.slices[${i}] = ${slices[i]}; all four components must be non-negative`,
         detail: { paramName: 'slices', got: slices[i] as number },
       });
     }
   }
   // (2)/(3) overlap with region. region default is [0, 0, 1, 1];
-  // user override comes via paramValues.region (vec4).
+  // user override comes via values.region (vec4).
   const regionRaw = pv.region;
   let regionZ = 1;
   let regionW = 1;
@@ -293,10 +274,10 @@ export function validateParamType(
         (value.length === 3 || value.length === 4) &&
         value.every((v) => typeof v === 'number')
       );
-    case 'texture2d':
-    case 'sampler':
-      // Texture/sampler params carry string GUIDs at registration time
-      return typeof value === 'string';
+    case 'texture':
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    case 'bool':
+      return typeof value === 'boolean';
     default:
       return false;
   }
@@ -310,7 +291,7 @@ export function validateParamType(
  * signal (charter P3 machine-readable; AC-08 closed, never extends
  * AssetErrorCode).
  *
- * feat-20260614 M8 (D-19): `paramValues.sampler` is now an embedded GUID
+ * feat-20260614 M8 (D-19): `values.sampler` is now an embedded GUID
  * string (dash-form), resolved against the catalogue rather than a handle.
  */
 export function detectTileNeedsRepeatSampler(registry: AssetRegistry, asset: MaterialAsset): void {
@@ -318,10 +299,20 @@ export function detectTileNeedsRepeatSampler(registry: AssetRegistry, asset: Mat
   const passes = asset.passes;
   if (passes === undefined || passes.length === 0) return;
   const firstPass = passes[0];
-  if (firstPass === undefined || firstPass.shader !== 'forgeax::sprite') return;
-  const pv = (asset.paramValues ?? {}) as Record<string, unknown>;
-  const sliceMode = typeof pv.sliceMode === 'number' ? pv.sliceMode : 0;
-  if (sliceMode !== 1) return;
+  if (
+    firstPass === undefined ||
+    (firstPass.program.module !== 'forgeax_material::sprite' &&
+      firstPass.program.module !== 'forgeax::sprite')
+  )
+    return;
+  const pv = (asset.values ?? {}) as Record<string, unknown>;
+  const slicesAndMode = pv.slicesAndMode;
+  const encodedTile =
+    Array.isArray(slicesAndMode) && typeof slicesAndMode[3] === 'number'
+      ? slicesAndMode[3] < 0
+      : false;
+  const legacyTile = typeof pv.sliceMode === 'number' && pv.sliceMode === 1;
+  if (!encodedTile && !legacyTile) return;
   const samplerGuid = typeof pv.sampler === 'string' ? pv.sampler : undefined;
   if (samplerGuid === undefined) return;
   const samplerEnvelope = registry.assetCatalog.get(samplerGuid.toLowerCase());
@@ -342,7 +333,7 @@ export function detectTileNeedsRepeatSampler(registry: AssetRegistry, asset: Mat
  * .textureFieldNames`. Returns `undefined` when the shader is not yet
  * registered (cross-worktree shader-late-register, plan R-4).
  *
- * Used by `extractFrame` to know which paramValues fields the shader
+ * Used by `extractFrame` to know which values fields the shader
  * declares as texture handles; the extract layer validates handle-vs-
  * scalar typing and drops misclassified slots so the record stage's
  * MISSING_TEXTURE_HANDLE fallback can take over (white default texture)
@@ -352,7 +343,7 @@ export function materialShaderTextureFieldNames(
   registry: AssetRegistry,
   shaderId: string,
 ): ReadonlySet<string> | undefined {
-  const lookup = registry.shaderRegistry.lookupMaterialShader(shaderId);
+  const lookup = registry.shaderRegistry.findMaterialArtifact(shaderId);
   if (!lookup.ok) return undefined;
   return derive(lookup.value.paramSchema).textureFieldNames;
 }

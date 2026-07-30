@@ -156,7 +156,7 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
     );
 
     // Sprite material with non-zero slices -- this triggers the w11 mesh
-    // routing override to HANDLE_NINESLICE_QUAD. paramValues includes
+    // routing override to HANDLE_NINESLICE_QUAD. values includes
     // texture + sampler so the missing-texture debug-pink branch stays cold.
     //
     // feat-20260625-refactor-sprite-as-transparent-mesh M4 / w16 — updated
@@ -164,7 +164,7 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
     //   - first-pass `transparent: true` flag (M2 / w6, Q3=b) drives the
     //     LDR split + premultiplied-alpha blend pipeline (replaces the
     //     legacy shadingModel='sprite' arm ablated in M3 / w15).
-    //   - paramValues field names are UBO-aligned to sprite.wgsl.meta.json
+    //   - values field names are UBO-aligned to sprite.material.json
     //     paramSchema (M3 / w11, D-4): `baseColorTexture` (was `texture`)
     //     and `slicesAndMode` vec4 (was `slices` + `sliceMode` split).
     // feat-20260626-sprite-transparent-collapse M1/M4: the boolean
@@ -180,15 +180,17 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       passes: [
         {
           name: 'Sprite',
-          shader: 'forgeax::sprite',
-          queue: 3000,
-          tags: { LightMode: 'Forward' },
-          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          program: { module: 'forgeax::sprite' },
+          renderState: {
+            ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+            queue: 3000,
+            tags: { LightMode: 'Forward' },
+          },
         },
       ],
-      paramValues: {
-        baseColorTexture: texHandle as unknown as string,
-        sampler: samplerHandle as unknown as string,
+      values: {
+        baseColorTexture: { texture: texHandle as unknown as never },
+        sampler: { texture: samplerHandle as unknown as never },
         slicesAndMode: [0.25, 0.25, 0.25, 0.25],
       },
     });

@@ -48,12 +48,7 @@ import {
 } from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
-import type {
-  Handle,
-  MaterialAsset,
-  MaterialPassDescriptor,
-  MeshAsset,
-} from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 interface CollectedError {
@@ -81,7 +76,7 @@ function makeShaderRegistryWithSpriteAndPbr(): ShaderRegistry {
     },
   };
   const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
-  sr.registerMaterialShader('forgeax::sprite', {
+  sr.installMaterialArtifact('forgeax::sprite', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -93,23 +88,20 @@ function makeShaderRegistryWithSpriteAndPbr(): ShaderRegistry {
       { name: 'sliceMode', type: 'f32', default: 0.0 },
     ],
   });
-  sr.registerMaterialShader('forgeax::default-unlit', {
+  sr.installMaterialArtifact('forgeax::default-unlit', {
     source: 'fn main() {}',
     paramSchema: [{ name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] }],
   });
   return sr;
 }
 
-const SPRITE_PASS: MaterialPassDescriptor = {
+const SPRITE_PASS: MaterialPass = {
   name: 'Sprite',
-  shader: 'forgeax::sprite',
-  queue: 3000,
+  program: { module: 'forgeax::sprite' },
+  renderState: { queue: 3000 },
 };
 
-const UNLIT_PASS: MaterialPassDescriptor = {
-  name: 'Forward',
-  shader: 'forgeax::default-unlit',
-};
+const UNLIT_PASS: MaterialPass = { name: 'Forward', program: { module: 'forgeax::default-unlit' } };
 
 function registerSpriteMesh(world: World): Handle<'MeshAsset', 'shared'> {
   return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
@@ -174,12 +166,12 @@ function makeScene(): {
   const spriteMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [SPRITE_PASS],
-    paramValues: {},
+    values: {},
   } as MaterialAsset);
   const unlitMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [UNLIT_PASS],
-    paramValues: {},
+    values: {},
   } as MaterialAsset);
   return { world, assets, collected, mesh, spriteMat, unlitMat };
 }

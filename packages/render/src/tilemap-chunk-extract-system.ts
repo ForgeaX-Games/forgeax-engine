@@ -90,12 +90,12 @@ import { worldEntityKey } from './record/frame-snapshot';
 // kinds of derived entities, each with a different material-key granularity:
 //
 //   1. `atlasMaterialCache` — key `${atlasId}|${regionIndex}` → per-region
-//      material with the UV rectangle baked into `paramValues.region`.
+//      material with the UV rectangle baked into `values.region`.
 //      Used by the per-cell entity path (sortScope='per-cell' object
 //      layers). Each tile graphic gets a distinct MaterialAsset.
 //
 //   2. `atlasOnlyMaterialCache` — key `${atlasId}` → per-atlas material
-//      with `paramValues.region: [0,0,1,1]` placeholder. Used by the
+//      with `values.region: [0,0,1,1]` placeholder. Used by the
 //      SpriteInstances batched path (sortScope='layer' terrain layers).
 //      The shader's PER_INSTANCE_REGION=true variant reads per-instance
 //      UV from the instance buffer, not from the material UBO, so the
@@ -256,7 +256,7 @@ export function encodeTilemapLayerValue(
  * skips the draw rather than silently sampling the wrong texture
  * (charter P3 fail-safe).
  *
- * The shader is `forgeax::sprite`; paramValues are filled with the atlas
+ * The shader is `forgeax::sprite`; values are filled with the atlas
  * texture handle + a UV region rectangle covering the supplied
  * TilesetRegion (half-texel inset added in m2-t4).
  */
@@ -304,13 +304,15 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        program: { module: 'forgeax::sprite' },
+        renderState: {
+          ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          tags: { LightMode: 'Forward' },
+          queue: 3000,
+        },
       },
     ],
-    paramValues: {
+    values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: atlasHandle,
       region: [u, v, w, h],
@@ -333,7 +335,7 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
  * (sortScope='layer'). The per-instance UV region rectangle lives in the
  * `SpriteInstances.regions` buffer instead of in the material UBO.
  *
- * `paramValues.region` is a `[0, 0, 1, 1]` placeholder. The sprite shader's
+ * `values.region` is a `[0, 0, 1, 1]` placeholder. The sprite shader's
  * `PER_INSTANCE_REGION=true` variant reads region from
  * `instances[idx].region` and ignores the material slot; selecting that
  * variant is the record stage's responsibility (see
@@ -358,13 +360,15 @@ function resolveAtlasOnlyMaterial(world: World, tileset: TilesetAsset, atlasInde
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        program: { module: 'forgeax::sprite' },
+        renderState: {
+          ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          tags: { LightMode: 'Forward' },
+          queue: 3000,
+        },
       },
     ],
-    paramValues: {
+    values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: atlasHandle,
       region: [0.0, 0.0, 1.0, 1.0],

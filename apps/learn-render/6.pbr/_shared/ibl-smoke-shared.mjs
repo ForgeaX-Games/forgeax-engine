@@ -285,12 +285,11 @@ const { Transform } = await import('@forgeax/engine-scene');
         passes: [
           {
             name: 'Forward',
-            shader: 'forgeax::default-standard-pbr',
-            tags: { LightMode: 'Forward' },
-            queue: 2000,
+            program: { module: 'forgeax::default-standard-pbr' },
+            renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
           },
         ],
-        paramValues: {
+        values: {
           baseColor: [baseColor[0], baseColor[1], baseColor[2]],
           metallic,
           roughness,

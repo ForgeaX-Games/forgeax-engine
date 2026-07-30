@@ -24,7 +24,7 @@ export function makeMockShaderRegistry(): ShaderRegistry {
     manifestUrl: undefined,
   });
   // Register a default test shader so M2 tests can validate against it.
-  sr.registerMaterialShader('test::standard', {
+  sr.installMaterialArtifact('test::standard', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color' },
@@ -32,7 +32,7 @@ export function makeMockShaderRegistry(): ShaderRegistry {
       { name: 'roughness', type: 'f32' },
     ],
   });
-  sr.registerMaterialShader('test::unlit', {
+  sr.installMaterialArtifact('test::unlit', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color' },
@@ -44,7 +44,7 @@ export function makeMockShaderRegistry(): ShaderRegistry {
   // Register the engine-shipped default-standard-pbr shader so tests
   // that use it pass the register-time validation gate (M2 / w6).
   // paramSchema mirrors packages/shader/src/default-standard-pbr.schema.json.
-  sr.registerMaterialShader('forgeax::default-standard-pbr', {
+  sr.installMaterialArtifact('forgeax::default-standard-pbr', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -63,7 +63,7 @@ export function makeMockShaderRegistry(): ShaderRegistry {
       { name: 'normalTexture', type: 'texture2d' },
     ],
   });
-  sr.registerMaterialShader('forgeax::default-unlit', {
+  sr.installMaterialArtifact('forgeax::default-unlit', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color' },
@@ -72,15 +72,15 @@ export function makeMockShaderRegistry(): ShaderRegistry {
     ],
   });
   // test::dummy used by M1 test (c)
-  sr.registerMaterialShader('test::dummy', {
+  sr.installMaterialArtifact('test::dummy', {
     source: 'fn main() {}',
     paramSchema: [],
   });
   // forgeax::msdf-text used by the glyph layout system (feat-20260531 F-1).
-  // paramSchema mirrors packages/shader/src/msdf-text.wgsl.meta.json so the
+  // paramSchema mirrors packages/shader/src/msdf-text.material.json so the
   // layout system's per-font MaterialAsset register passes validation in the
   // GPU-less unit tests.
-  sr.registerMaterialShader('forgeax::msdf-text', {
+  sr.installMaterialArtifact('forgeax::msdf-text', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'tintColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -92,15 +92,15 @@ export function makeMockShaderRegistry(): ShaderRegistry {
   // feat-20260609-pipeline-driven-pass-selector-shadowcaster-via-mat M3 / T-007:
   // forgeax::default-shadow-caster — vertex-only depth pass shader for
   // directional shadow maps. Registered as the 6th built-in material shader.
-  sr.registerMaterialShader('forgeax::default-shadow-caster', {
+  sr.installMaterialArtifact('forgeax::default-shadow-caster', {
     source: 'fn main() {}',
     paramSchema: [],
   });
   // feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild:
   // forgeax::sprite registered in the mock so resolveTilesetMaterial inside
   // tilemap-chunk-extract-system can register a per-tile material in unit
-  // tests (paramSchema mirrors packages/shader/src/sprite.wgsl.meta.json).
-  sr.registerMaterialShader('forgeax::sprite', {
+  // tests (paramSchema mirrors packages/shader/src/sprite.material.json).
+  sr.installMaterialArtifact('forgeax::sprite', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },

@@ -336,7 +336,10 @@ function parseConcurrency(value) {
     const { cpus, memoryBytes, containerized } = runnerResources();
     const concurrency = Math.min(
       4,
-      workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }),
+      // A Bevy build plus a Dawn smoke can peak above 2 GB. Keep the
+      // low-memory 4 CPU / 8 GB runner at two workers while retaining up to
+      // four workers on the larger Ubuntu runners.
+      workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 3 }),
     );
     process.stderr.write(
       `[bevy-smoke] auto concurrency=${concurrency} (${cpus} cpu, ${Math.ceil(memoryBytes / 1024 ** 3)}GB, ${containerized ? 'cgroup' : 'host'})\n`,

@@ -338,7 +338,7 @@ async function spawnPbrMultiMaterialScene(): Promise<unknown> {
   // Mint 3 distinct texture assets, each producing a unique GPU textureView
   // sentinel via the createTexture mock. allocSharedRef returns the bare
   // handle (a u32 slot id), which the extract stage accepts directly in
-  // paramValues.baseColorTexture.
+  // values.baseColorTexture.
   const textureHandles: Handle<'TextureAsset', 'shared'>[] = [];
   for (let i = 0; i < 3; i++) {
     textureHandles.push(
@@ -348,7 +348,7 @@ async function spawnPbrMultiMaterialScene(): Promise<unknown> {
       >,
     );
   }
-  // Use numeric handles directly in paramValues. Strings are not resolved
+  // Use numeric handles directly in values. Strings are not resolved
   // by render-system-extract (which gates on
   // `typeof pv.baseColorTexture === 'number'`); only the disk-pack
   // materialLoader resolves refs[]-index. Tests targeting the in-memory
@@ -365,12 +365,11 @@ async function spawnPbrMultiMaterialScene(): Promise<unknown> {
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: {
+      values: {
         baseColor: [1, 1, 1],
         metallic: 0,
         roughness: 0.5,
@@ -524,12 +523,11 @@ async function spawnPbrMissingTextureScene(): Promise<unknown> {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: [1, 1, 1],
       metallic: 0,
       roughness: 0.5,

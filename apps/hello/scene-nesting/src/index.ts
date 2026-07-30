@@ -38,9 +38,9 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   assets.catalog(stdMatGuid.value, {
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: { baseColor: [0.2, 0.3, 0.9], metallic: 0, roughness: 0.5 },
+    values: { baseColor: [0.2, 0.3, 0.9], metallic: 0, roughness: 0.5 },
   });
 
   const innerCubeGuid = AssetGuid.parse('f47ac10b-58cc-4372-a567-0e02b2c3d479');

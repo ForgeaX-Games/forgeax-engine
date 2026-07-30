@@ -1,16 +1,16 @@
-// w1 / M1 — sprite paramValues type-level fixture (feat-20260527-sprite-nineslice).
+// w1 / M1 — sprite values type-level fixture (feat-20260527-sprite-nineslice).
 // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11 update (D-4, D-6,
 // F-3): paramSchema is UBO-aligned (4 vec4 + baseColorTexture); SpriteParamValues
 // mirrors this 1:1.
 //
-// Type-level fixture for the sprite material `paramValues` literal at the
+// Type-level fixture for the sprite material `values` literal at the
 // MaterialAsset construction call-site. This is the AI-user-facing
 // autocomplete + ts-expect-error surface for the post-w11 sprite paramSchema.
 //
 // SpriteParamValues is a local helper type — it is NOT a public sibling
 // type of MaterialAsset (plan-strategy section D-1: do not introduce a
 // SpriteMaterialAsset variant). It mirrors the field set of
-// `packages/shader/src/sprite.wgsl.meta.json#paramSchema` 1:1 so AI users
+// `packages/shader/src/sprite.material.json#paramSchema` 1:1 so AI users
 // get the right autocomplete and the right ts-expect-error when they pass
 // the wrong shape.
 //
@@ -45,7 +45,7 @@ type SpriteParamValues = {
   slicesAndMode?: readonly [number, number, number, number];
 };
 
-describe('w11 type-level - sprite paramValues UBO-aligned schema (M3)', () => {
+describe('w11 type-level - sprite values UBO-aligned schema (M3)', () => {
   it('accepts a fully-specified literal with slicesAndMode + pivotAndSize', () => {
     const _ok: SpriteParamValues = {
       baseColorTexture: 'tex-guid',

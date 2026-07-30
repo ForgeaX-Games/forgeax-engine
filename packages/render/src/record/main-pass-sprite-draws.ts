@@ -306,7 +306,7 @@ function recordSpriteTransparentPbrDraws(
 ): void {
   const { runtime, pipelineState, frameState, bindGroupCounts, validatedOrdered, meshBindGroup } =
     c;
-  const MATERIAL_PER_ENTITY_STRIDE = 256;
+  const MATERIAL_PER_ENTITY_STRIDE = 512;
   let lastPbrSubPipelineHandle: typeof pipelineState.unlitPipeline = null;
   let lastPbrSubVertexBuffer: GpuBuffer | null = null;
   let lastPbrSubIndexBuffer: GpuBuffer | null = null;
@@ -457,7 +457,7 @@ function recordSpriteEntityDraws(
     meshBindGroup,
     foldDispatchPlan,
   } = c;
-  const MATERIAL_PER_ENTITY_STRIDE = 256;
+  const MATERIAL_PER_ENTITY_STRIDE = 512;
   // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
   let lastSpritePipelineHandle: any = null;
   let lastSpriteVertexBuffer: GpuBuffer | null = null;

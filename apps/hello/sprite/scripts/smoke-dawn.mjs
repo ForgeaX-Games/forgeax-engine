@@ -62,6 +62,13 @@ const FALSIFY_MISSING_SPRITE_BLEND = FALSIFY === 'missing-sprite-blend';
 
 const WIDTH = 800;
 const HEIGHT = 600;
+const SPRITE_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
+];
 const CLEAR_RGBA = [0.07, 0.07, 0.09, 1];
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -362,9 +369,10 @@ async function mintSpriteAssets(world, layout) {
           // feat-20260626-sprite-transparent-collapse M3 — post M1/M2
           // SSOT: `renderState.blend` drives LDR split + premultiplied-
           // alpha blend pipeline (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
-          { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: spritePassRenderState },
+          { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...spritePassRenderState, tags: { LightMode: 'Forward' }, queue: 3000 } },
         ],
-        paramValues: {
+        parameters: SPRITE_PARAMETERS,
+        values: {
           // feat-20260625 M3 / w11 (D-4): UBO-aligned field names. layout.pivot
           // [px, py] folds into pivotAndSize.xy; .zw is the unused legacy size
           // slot kept for std140 byte stability (sprite.wgsl ignores it).
@@ -415,7 +423,7 @@ for (const matrixCase of MATRIX) {
         {
           component: Transform,
           data: {
-            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 1],},
+            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], quat: [0, 0, 0, 1], scale: [0.16, 0.16, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -513,7 +521,6 @@ for (const matrixCase of MATRIX) {
       tightRgba[dst + 3] = bytes[off + 3] ?? 0;
     }
   }
-
   // Reference PNG compare or first-run write. Baseline path resolves
   // into the forgeax-engine-assets submodule (BASELINE_DIR above).
   const refPath = resolve(BASELINE_DIR, refFile);
@@ -578,7 +585,7 @@ for (const matrixCase of MATRIX) {
 //   1. HANDLE_NINESLICE_QUAD is exported from @forgeax/engine-runtime and
 //      its id === 5 (D-2 plan-strategy: HANDLE_QUAD=3 < HANDLE_SPHERE=4 <
 //      HANDLE_NINESLICE_QUAD=5 < FIRST_USER_HANDLE=1024).
-//   2. AssetRegistry.register accepts sprite paramValues with `slices` +
+//   2. AssetRegistry.register accepts sprite values with `slices` +
 //      `sliceMode` literals on the pass-based MaterialAsset surface (D-1).
 //   3. With sliceMode=1 + sampler.addressMode='clamp-to-edge' the D-9 soft
 //      -warn path increments `nineslice.tile-needs-repeat-sampler` >= 1
@@ -645,7 +652,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
   }
   const ninesliceMetricsBefore = renderer.metrics.snapshot();
   const beforeCount = ninesliceMetricsBefore['nineslice.tile-needs-repeat-sampler'] ?? 0;
-  // D-9 soft-warn fires at AssetRegistry.catalog time: it reads paramValues.sampler
+  // D-9 soft-warn fires at AssetRegistry.catalog time: it reads values.sampler
   // as an embedded GUID string (D-19) and resolves it against the catalogue. So
   // catalog the clamp sampler under a GUID, then catalog the sliceMode=1 material
   // referencing that GUID -- allocSharedRef stores the POD verbatim and never runs
@@ -672,30 +679,33 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
     : [0.25, 0.25, 0.25, 0.25];
   // Catalog a material whose sampler is the clamp GUID string -> trips the D-9
   // soft-warn counter. The rendered entity below uses the column-handle variant.
-  okResult(
-    assets.catalog('00000000-0000-4000-8000-0000000000c2', {
+  const debugCatalogResult = assets.catalog('00000000-0000-4000-8000-0000000000c2', {
       kind: 'material',
       passes: [
         // feat-20260626 M3: renderState.blend SSOT.
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
+        { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 } },
       ],
-      paramValues: {
+      parameters: SPRITE_PARAMETERS,
+      values: {
         // feat-20260625 M3/w11 (D-4): UBO-aligned. slicesAndMode merges legacy
         // slices[4] (LTRB) + sliceMode sign (mode>=0 stretch, <0 tile) into
-        // one vec4 (sprite.wgsl.meta.json paramSchema).
+        // one vec4 (sprite.material.json paramSchema).
         colorTint: [1, 1, 1, 1],
         sampler: clampSamplerGuid,
+        region: [0, 0, 1, 1],
+        pivotAndSize: [0.5, 0.5, 1, 1],
         slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], -ninesliceSlices[3]],
       },
-    }),
-  );
+    });
+  okResult(debugCatalogResult);
   const ninesliceMatHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
       // feat-20260626 M3: renderState.blend SSOT.
-      { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: {
+    parameters: SPRITE_PARAMETERS,
+    values: {
       // feat-20260625 M3/w11 (D-4): UBO-aligned. slicesAndMode merges legacy
       // slices[4] (LTRB) + sliceMode (mode>=0 stretch, <0 tile) into vec4.
       colorTint: [1, 1, 1, 1],

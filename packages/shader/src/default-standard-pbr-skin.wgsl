@@ -9,6 +9,7 @@
 #import forgeax_view::common::{shadowParams}
 #endif
 
+#define_import_path forgeax_material::pbr-skin
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
 // @forgeax/engine-shader - default-standard-pbr-skin.wgsl
@@ -63,6 +64,11 @@
 // 4 joints max; weighted sum of skinned positions from the palette buffer
 // indexed by the per-vertex skinIndex vector.
 
+struct MaterialTextureCoordinates {
+  transform : vec4<f32>,
+  metadata : vec4<f32>,
+};
+
 struct Material {
   baseColor          : vec4<f32>,
   metallic           : f32,
@@ -79,21 +85,16 @@ struct Material {
   emissive           : vec3<f32>,
   emissiveIntensity  : f32,
   occlusionStrength  : f32,
-  // feat-city-glb multi-UV tiling: per-material UV-set selector (mirrors
-  // default-standard-pbr.wgsl SSOT). 0.0 -> set 0 (in.uv), >=0.5 -> set 1
-  // (in.uv1). Clearcoat occupies offsets 76..84; specularTint is aligned to
-  // 96 B and the engine-owned UV scale tail begins at byte 112.
-  uvSet              : f32,
   alphaCutoff        : f32,
   clearcoat          : f32,
   clearcoatRoughness : f32,
   specularTint       : vec3<f32>,
-  baseColorUvScale          : vec2<f32>,
-  metallicRoughnessUvScale  : vec2<f32>,
-  normalUvScale             : vec2<f32>,
-  specularTintUvScale       : vec2<f32>,
-  emissiveUvScale           : vec2<f32>,
-  occlusionUvScale          : vec2<f32>,
+  baseColorCoordinates          : MaterialTextureCoordinates,
+  metallicRoughnessCoordinates  : MaterialTextureCoordinates,
+  normalCoordinates             : MaterialTextureCoordinates,
+  specularTintCoordinates       : MaterialTextureCoordinates,
+  emissiveCoordinates           : MaterialTextureCoordinates,
+  occlusionCoordinates          : MaterialTextureCoordinates,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -153,10 +154,15 @@ struct VsIn  {
   @location(3) tangent : vec4<f32>,
   @location(4) skinIndex  : vec4<u32>,
   @location(5) skinWeight : vec4<f32>,
-  // feat-city-glb multi-UV tiling: second UV set at canonical location 6
-  // (drives naga uvSetCount=2 reflection; clamp-to-last aliases onto uv0 for
-  // single-UV meshes). Mirrors default-standard-pbr.wgsl.
+  // MaterialAsset per-slot texCoord: reserve the canonical UV0-UV7 inputs.
+  // Missing mesh sets are supplied by the pipeline's clamp-to-last aliases.
   @location(6) uv1     : vec2<f32>,
+  @location(7) uv2     : vec2<f32>,
+  @location(8) uv3     : vec2<f32>,
+  @location(9) uv4     : vec2<f32>,
+  @location(10) uv5    : vec2<f32>,
+  @location(11) uv6    : vec2<f32>,
+  @location(12) uv7    : vec2<f32>,
 };
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -168,6 +174,12 @@ struct VsOut {
   // feat-city-glb multi-UV tiling: second UV set varying at location 5
   // (parity with default-standard-pbr.wgsl).
   @location(5) uv1 : vec2<f32>,
+  @location(8) uv2 : vec2<f32>,
+  @location(9) uv3 : vec2<f32>,
+  @location(10) uv4 : vec2<f32>,
+  @location(11) uv5 : vec2<f32>,
+  @location(12) uv6 : vec2<f32>,
+  @location(13) uv7 : vec2<f32>,
   @location(7) viewZ : f32,
 };
 
@@ -240,6 +252,12 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   out.worldTangent = vec4<f32>(worldTangentXyz, in.tangent.w);
   out.uv = in.uv;
   out.uv1 = in.uv1;
+  out.uv2 = in.uv2;
+  out.uv3 = in.uv3;
+  out.uv4 = in.uv4;
+  out.uv5 = in.uv5;
+  out.uv6 = in.uv6;
+  out.uv7 = in.uv7;
   out.instanceIdx = idx;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w19: viewZ replaces the
   // prior light-space-position varying; evalDirectional picks the cascade
@@ -248,18 +266,30 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   return out;
 }
 
-// feat-city-glb multi-UV tiling: mirror of default-standard-pbr.wgsl selectUv.
-fn selectUv(in : VsOut) -> vec2<f32> {
-  return select(in.uv, in.uv1, material.uvSet >= 0.5);
+fn transformedMaterialUv(coordinates : MaterialTextureCoordinates, in : VsOut) -> vec2<f32> {
+  var source = in.uv;
+  if (coordinates.metadata.x >= 1.0) { source = in.uv1; }
+  if (coordinates.metadata.x >= 2.0) { source = in.uv2; }
+  if (coordinates.metadata.x >= 3.0) { source = in.uv3; }
+  if (coordinates.metadata.x >= 4.0) { source = in.uv4; }
+  if (coordinates.metadata.x >= 5.0) { source = in.uv5; }
+  if (coordinates.metadata.x >= 6.0) { source = in.uv6; }
+  if (coordinates.metadata.x >= 7.0) { source = in.uv7; }
+  let scaled = source * coordinates.transform.zw;
+  let angle = coordinates.metadata.y;
+  let c = cos(angle);
+  let s = sin(angle);
+  return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + coordinates.transform.xy;
 }
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let uv = selectUv(in);
-  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
+  let baseUv = transformedMaterialUv(material.baseColorCoordinates, in);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorCoordinates.metadata.zw);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
-  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);
+  let mrUv = transformedMaterialUv(material.metallicRoughnessCoordinates, in);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, mrUv, material.metallicRoughnessCoordinates.metadata.zw);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -267,13 +297,16 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   a = a * roughnessTex;
   a = a * a;
 
-  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, uv, material.normalUvScale).rg;
+  let normalUv = transformedMaterialUv(material.normalCoordinates, in);
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalCoordinates.metadata.zw).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
   let v = normalize(view.cameraPos - in.worldPos);
   let specularTint = material.specularTint * sampleMaterialTexture(
-    specularTintTexture, specularTintSampler, uv, material.specularTintUvScale,
+    specularTintTexture, specularTintSampler,
+    transformedMaterialUv(material.specularTintCoordinates, in),
+    material.specularTintCoordinates.metadata.zw,
   ).rgb;
   let f0 = mix(vec3<f32>(0.04) * specularTint, albedo, metallic);
   let coatRoughness = max(material.clearcoatRoughness, 0.04);

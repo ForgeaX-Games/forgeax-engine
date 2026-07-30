@@ -24,59 +24,71 @@ describe('Materials.standard multi-pass (w14)', () => {
   describe('deferred pass', () => {
     it('includes a passKind=deferred pass', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const deferredPass = mat.passes?.find((p) => p.passKind === ('deferred' as PassKind));
+      const deferredPass = mat.passes?.find((p) => p.name === ('deferred' as PassKind));
       expect(deferredPass).toBeDefined();
     });
 
-    it('deferred pass uses forgeax::default-standard-pbr shader', () => {
+    it('deferred pass uses forgeax_material::standard shader', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const deferredPass = mat.passes?.find((p) => p.passKind === ('deferred' as PassKind));
-      expect(deferredPass?.shader).toBe('forgeax::default-standard-pbr');
+      const deferredPass = mat.passes?.find((p) => p.name === ('deferred' as PassKind));
+      expect(deferredPass?.program.module).toBe('forgeax_material::standard');
     });
 
     it('deferred pass fragment entry is fs_gbuffer', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const deferredPass = mat.passes?.find((p) => p.passKind === ('deferred' as PassKind));
-      expect(deferredPass?.fragmentEntry).toBe('fs_gbuffer');
+      const deferredPass = mat.passes?.find((p) => p.name === ('deferred' as PassKind));
+      expect(deferredPass?.program.fragmentEntry).toBe('fs_gbuffer');
+    });
+
+    it('routes only through the HDRP deferred selector', () => {
+      const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
+      const deferredPass = mat.passes?.find((p) => p.name === ('deferred' as PassKind));
+      expect(deferredPass?.renderState?.tags).toEqual({ LightMode: 'Deferred' });
     });
   });
 
   describe('forward pass', () => {
     it('includes a passKind=forward pass', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const forwardPass = mat.passes?.find((p) => p.passKind === ('forward' as PassKind));
+      const forwardPass = mat.passes?.find((p) => p.name === ('forward' as PassKind));
       expect(forwardPass).toBeDefined();
     });
 
-    it('forward pass uses forgeax::default-standard-pbr shader', () => {
+    it('forward pass uses forgeax_material::standard shader', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const forwardPass = mat.passes?.find((p) => p.passKind === ('forward' as PassKind));
-      expect(forwardPass?.shader).toBe('forgeax::default-standard-pbr');
+      const forwardPass = mat.passes?.find((p) => p.name === ('forward' as PassKind));
+      expect(forwardPass?.program.module).toBe('forgeax_material::standard');
     });
 
     it('forward pass fragment entry is fs_main', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const forwardPass = mat.passes?.find((p) => p.passKind === ('forward' as PassKind));
-      expect(forwardPass?.fragmentEntry).toBe('fs_main');
+      const forwardPass = mat.passes?.find((p) => p.name === ('forward' as PassKind));
+      expect(forwardPass?.program.fragmentEntry).toBe('fs_main');
+    });
+
+    it('routes only through the forward selector', () => {
+      const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
+      const forwardPass = mat.passes?.find((p) => p.name === ('forward' as PassKind));
+      expect(forwardPass?.renderState?.tags).toEqual({ LightMode: 'Forward' });
     });
   });
 
   describe('shadow-caster pass', () => {
     it('includes a passKind=shadow-caster pass by default', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const shadowPass = mat.passes?.find((p) => p.passKind === ('shadow-caster' as PassKind));
+      const shadowPass = mat.passes?.find((p) => p.name === ('shadow-caster' as PassKind));
       expect(shadowPass).toBeDefined();
     });
 
-    it('shadow-caster pass uses forgeax::default-shadow-caster shader', () => {
+    it('shadow-caster pass uses forgeax_material::standard shader', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      const shadowPass = mat.passes?.find((p) => p.passKind === ('shadow-caster' as PassKind));
-      expect(shadowPass?.shader).toBe('forgeax::default-shadow-caster');
+      const shadowPass = mat.passes?.find((p) => p.name === ('shadow-caster' as PassKind));
+      expect(shadowPass?.program.module).toBe('forgeax_material::standard');
     });
 
     it('castShadow=false suppresses the shadow-caster pass', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1], castShadow: false });
-      const shadowPass = mat.passes?.find((p) => p.passKind === ('shadow-caster' as PassKind));
+      const shadowPass = mat.passes?.find((p) => p.name === ('shadow-caster' as PassKind));
       expect(shadowPass).toBeUndefined();
     });
   });
@@ -94,32 +106,33 @@ describe('Materials.standard multi-pass (w14)', () => {
   });
 
   describe('PBR properties preserved', () => {
-    it('paramValues includes metallic and roughness defaults', () => {
+    it('values includes metallic and roughness defaults', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
-      expect(mat.paramValues?.metallic).toBe(0);
-      expect(mat.paramValues?.roughness).toBe(0.5);
+      expect(mat.values?.metallic).toBe(0);
+      expect(mat.values?.roughness).toBe(0.5);
     });
 
-    it('paramValues includes the optional clearcoat layer', () => {
+    it('values includes the optional clearcoat layer', () => {
       const mat = Materials.standard({
         baseColor: [0.5, 0.5, 0.5, 1],
         clearcoat: 1,
         clearcoatRoughness: 0.1,
       });
-      expect(mat.paramValues?.clearcoat).toBe(1);
-      expect(mat.paramValues?.clearcoatRoughness).toBe(0.1);
+      expect(mat.values?.clearcoat).toBe(1);
+      expect(mat.values?.clearcoatRoughness).toBe(0.1);
     });
 
-    it('rejects clearcoat values outside the normalized range', () => {
-      expect(() => Materials.standard({ baseColor: [1, 1, 1, 1], clearcoat: 1.1 })).toThrow(
-        'clearcoat must be in [0, 1]',
-      );
-      expect(() =>
-        Materials.standard({ baseColor: [1, 1, 1, 1], clearcoatRoughness: -0.1 }),
-      ).toThrow('clearcoatRoughness must be in [0, 1]');
+    it('preserves clearcoat values for cooked validation', () => {
+      const mat = Materials.standard({
+        baseColor: [1, 1, 1, 1],
+        clearcoat: 1.1,
+        clearcoatRoughness: -0.1,
+      });
+      expect(mat.values?.clearcoat).toBe(1.1);
+      expect(mat.values?.clearcoatRoughness).toBe(-0.1);
     });
 
-    it('paramValues includes optional emissive/occlusion', () => {
+    it('values includes optional emissive/occlusion', () => {
       const mat = Materials.standard({
         baseColor: [0.5, 0.5, 0.5, 1],
         emissive: [0.1, 0.2, 0.3],
@@ -128,11 +141,23 @@ describe('Materials.standard multi-pass (w14)', () => {
         occlusionTexture: 84,
         occlusionStrength: 0.75,
       });
-      expect(mat.paramValues?.emissive).toEqual([0.1, 0.2, 0.3]);
-      expect(mat.paramValues?.emissiveIntensity).toBe(2);
-      expect(mat.paramValues?.baseColorTexture).toBe(42);
-      expect(mat.paramValues?.occlusionTexture).toBe(84);
-      expect(mat.paramValues?.occlusionStrength).toBe(0.75);
+      expect(mat.values?.emissive).toEqual([0.1, 0.2, 0.3]);
+      expect(mat.values?.emissiveIntensity).toBe(2);
+      expect(mat.values?.baseColorTexture).toBe(42);
+      expect(mat.values?.occlusionTexture).toBe(84);
+      expect(mat.values?.occlusionStrength).toBe(0.75);
+    });
+
+    it('declares built-in PBR textures in bind-group slot order', () => {
+      const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
+      expect(mat.parameters?.filter((parameter) => parameter.type === 'texture')).toEqual([
+        { name: 'baseColorTexture', type: 'texture', optional: true },
+        { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
+        { name: 'normalTexture', type: 'texture', optional: true },
+        { name: 'specularTintTexture', type: 'texture', optional: true },
+        { name: 'emissiveTexture', type: 'texture', optional: true },
+        { name: 'occlusionTexture', type: 'texture', optional: true },
+      ]);
     });
 
     it('stores alphaCutoff and renderState on both standard passes', () => {
@@ -142,10 +167,13 @@ describe('Materials.standard multi-pass (w14)', () => {
         alphaCutoff: 0.5,
         renderState,
       });
-      expect(mat.paramValues?.alphaCutoff).toBe(0.5);
+      expect(mat.values?.alphaCutoff).toBe(0.5);
       expect(
-        mat.passes?.filter((p) => p.passKind !== 'shadow-caster').map((p) => p.renderState),
-      ).toEqual([renderState, renderState]);
+        mat.passes?.filter((p) => p.name !== 'shadow-caster').map((p) => p.renderState),
+      ).toEqual([
+        { ...renderState, tags: { LightMode: 'Forward' } },
+        { ...renderState, tags: { LightMode: 'Deferred' } },
+      ]);
     });
   });
 });
@@ -153,25 +181,25 @@ describe('Materials.standard multi-pass (w14)', () => {
 describe('Materials.unlit forward-only (w14)', () => {
   it('unlit material has no deferred pass', () => {
     const mat = Materials.unlit([1, 1, 1, 1]);
-    const deferredPass = mat.passes?.find((p) => p.passKind === ('deferred' as PassKind));
+    const deferredPass = mat.passes?.find((p) => p.name === ('deferred' as PassKind));
     expect(deferredPass).toBeUndefined();
   });
 
   it('unlit material has a forward pass', () => {
     const mat = Materials.unlit([1, 1, 1, 1]);
-    const forwardPass = mat.passes?.find((p) => p.passKind === ('forward' as PassKind));
+    const forwardPass = mat.passes?.find((p) => p.name === ('forward' as PassKind));
     expect(forwardPass).toBeDefined();
-    expect(forwardPass?.shader).toBe('forgeax::default-unlit');
+    expect(forwardPass?.program.module).toBe('forgeax_material::unlit');
   });
 
   it('unlit material includes shadow-caster by default', () => {
     const mat = Materials.unlit([1, 1, 1, 1]);
-    const shadowPass = mat.passes?.find((p) => p.passKind === ('shadow-caster' as PassKind));
+    const shadowPass = mat.passes?.find((p) => p.name === ('shadow-caster' as PassKind));
     expect(shadowPass).toBeDefined();
   });
 
   it('stores alphaCutoff on the unlit material', () => {
     const mat = Materials.unlit([1, 1, 1, 1], { alphaCutoff: 0.1 });
-    expect(mat.paramValues?.alphaCutoff).toBe(0.1);
+    expect(mat.values?.alphaCutoff).toBe(0.1);
   });
 });

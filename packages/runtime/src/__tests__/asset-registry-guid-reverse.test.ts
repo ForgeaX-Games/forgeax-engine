@@ -52,12 +52,11 @@ function unlitMaterial(): MaterialAsset {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [1, 1, 1] },
+    values: { baseColor: [1, 1, 1] },
   } as MaterialAsset;
 }
 
@@ -456,7 +455,7 @@ describe('w16 M4 — AC-08 reverse-lookup hit across kinds', () => {
     // A structurally-modified COPY (fresh object, never catalogued).
     const modifiedCopy: MaterialAsset = {
       ...mat,
-      paramValues: { baseColor: [0.2, 0.2, 0.2] },
+      values: { baseColor: [0.2, 0.2, 0.2] },
     } as MaterialAsset;
     expect(modifiedCopy).not.toBe(mat);
 

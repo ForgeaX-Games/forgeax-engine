@@ -7,7 +7,7 @@
 // displacement-visible + algo-switch diff) lives in scripts/smoke-browser.mjs.
 //
 // The custom parallax shader declares THREE textures (baseColor / normal /
-// HEIGHT). registerMaterialShader needs the post-naga_oil COMPOSED WGSL, which
+// HEIGHT). installMaterialArtifact needs the post-naga_oil COMPOSED WGSL, which
 // only the build produces -> this smoke reads dist/shaders/manifest.json (build
 // the demo first: `pnpm -F <pkg> build`).
 //
@@ -208,14 +208,14 @@ if (!existsSync(DEMO_MANIFEST_PATH)) {
 }
 const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
 const parallaxEntry = (demoManifest.materialShaders ?? []).find(
-  (m) => m && m.identifier === 'bevy::parallax-mapping',
+  (m) => m && m.identifier === 'bevy::parallax_mapping',
 );
 if (!parallaxEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing bevy::parallax-mapping entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing bevy::parallax_mapping entry');
   process.exit(1);
 }
-if (!shader.lookupMaterialShader('bevy::parallax-mapping').ok) {
-  shader.registerMaterialShader('bevy::parallax-mapping', {
+if (!shader.findMaterialArtifact('bevy::parallax_mapping').ok) {
+  shader.installMaterialArtifact('bevy::parallax_mapping', {
     source: parallaxEntry.composedWgsl,
     paramSchema: JSON.parse(parallaxEntry.paramSchema),
   });
@@ -258,8 +258,16 @@ console.log(`[bevy-parallax-mapping] registered bricks2 handle id=${diffuseHandl
 for (const [index, algoMode] of [0, 1, 2].entries()) {
   const material = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'bevy::parallax-mapping', tags: { LightMode: 'Forward' } }],
-    paramValues: {
+    passes: [{ name: 'Forward', program: { module: 'bevy::parallax_mapping' }, renderState: { tags: { LightMode: 'Forward' } } }],
+    parameters: [
+      { name: 'baseColor', type: 'color' },
+      { name: 'heightScale', type: 'f32' },
+      { name: 'algoMode', type: 'f32' },
+      { name: 'baseColorTexture', type: 'texture' },
+      { name: 'normalTexture', type: 'texture' },
+      { name: 'heightTexture', type: 'texture' },
+    ],
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       heightScale: 0.1,
       algoMode,

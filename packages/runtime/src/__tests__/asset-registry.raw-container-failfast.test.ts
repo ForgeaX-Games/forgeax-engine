@@ -54,9 +54,9 @@ function importedMaterialPack() {
           passes: [
             {
               name: 'forward',
-              shader: 'test::dummy',
-              tags: { LightMode: 'Forward' },
-              paramValues: {},
+              values: {},
+              program: { module: 'test::dummy' },
+              renderState: { tags: { LightMode: 'Forward' } },
             },
           ],
         },
@@ -94,9 +94,9 @@ describe('raw-container fail-fast (perf-20260706)', () => {
             passes: [
               {
                 name: 'forward',
-                shader: 'test::dummy',
-                tags: { LightMode: 'Forward' },
-                paramValues: {},
+                values: {},
+                program: { module: 'test::dummy' },
+                renderState: { tags: { LightMode: 'Forward' } },
               },
             ],
           },

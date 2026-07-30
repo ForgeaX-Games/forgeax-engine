@@ -228,24 +228,88 @@ function run(label, args, extraEnv = {}, cwd = repoRoot) {
   return { status: result.status, output };
 }
 
+function readLastJsonLine(output) {
+  for (const line of output.trim().split('\n').reverse()) {
+    try {
+      const value = JSON.parse(line);
+      if (value && typeof value === 'object' && value.status === 'pass') return value;
+    } catch {
+      // Ignore pnpm/Vite progress lines and keep looking for the smoke payload.
+    }
+  }
+  return undefined;
+}
+
+function runCustomMaterialBrowser(label, extraEnv = {}) {
+  return run(
+    label,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:browser'],
+    extraEnv,
+  );
+}
+
 const customMaterial = run('custom material', [
   '--filter',
   '@forgeax/hello-custom-shader',
   'smoke',
 ]);
+const customMaterialEvidence = customMaterial.status === 0 ? readLastJsonLine(customMaterial.output) : undefined;
 if (
   customMaterial.status !== 0 ||
-  !customMaterial.output.includes('[smoke] Pass-2 PASS -- ANTIALIAS_MSAA custom vs PBR GREEN') ||
-  !customMaterial.output.includes('[smoke] brightnessDelta_05=') ||
-  !customMaterial.output.includes(
-    '[smoke] custom texture binding: PASS schema=baseColorTexture textureSample=true',
-  )
+  customMaterialEvidence?.status !== 'pass' ||
+  customMaterialEvidence?.frames !== 300 ||
+  customMaterialEvidence?.rootArtifactDigest !== customMaterialEvidence?.derivedArtifactDigest ||
+  customMaterialEvidence?.pixel?.[0] < 240 ||
+  customMaterialEvidence?.pixel?.[3] !== 255
 ) {
-  console.error('[m3-programmable] custom material: FAIL - material/texture binding gate did not pass');
+  console.error('[m3-programmable] custom material: FAIL - Dawn material gate did not pass');
   process.exit(1);
 }
 console.log('[m3-programmable] custom material pixel: PASS');
+
+const customMaterialBrowserRuns = ['first', 'second'].map((repeat) => {
+  const result = runCustomMaterialBrowser(`custom material browser ${repeat}`);
+  const evidence = result.status === 0 ? readLastJsonLine(result.output) : undefined;
+  if (
+    result.status !== 0 ||
+    evidence?.browserPath !== true ||
+    evidence.rootArtifactDigest !== evidence.derivedArtifactDigest ||
+    typeof evidence.rootCookInputDigest !== 'string'
+  ) {
+    console.error(`[m3-programmable] custom material browser ${repeat}: FAIL - semantic browser evidence missing`);
+    process.exit(1);
+  }
+  return evidence;
+});
+if (repeatabilityDiff(customMaterialBrowserRuns[0], customMaterialBrowserRuns[1]) !== undefined) {
+  console.error(
+    `[m3-programmable] custom material browser repeatability: FAIL - ${JSON.stringify({ first: customMaterialBrowserRuns[0], second: customMaterialBrowserRuns[1] })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] custom material browser: PASS repeats=2 rootArtifactDigest=${customMaterialBrowserRuns[0].rootArtifactDigest}`,
+);
 console.log('[m3-programmable] custom material texture binding: PASS');
+
+const customMaterialBrowserFalsifiers = [
+  ['missing-parent', 'missing-derived-parent', 'FORGEAX_FALSIFY_MISSING_PARENT'],
+  ['uv-transform', 'uv0-transform-loss', 'FORGEAX_FALSIFY_UV0_TRANSFORM'],
+];
+for (const [label, expected, envKey] of customMaterialBrowserFalsifiers) {
+  for (const repeat of ['first', 'second']) {
+    const result = runCustomMaterialBrowser(`custom material browser ${label} falsifier ${repeat}`, {
+      [envKey]: '1',
+    });
+    if (result.status === 0 || !result.output.includes(`FALSIFY_EXPECTED_FAILURE:${expected}`)) {
+      console.error(
+        `[m3-programmable] custom material browser ${label} falsifier ${repeat}: FAIL - expected attributed failure missing`,
+      );
+      process.exit(1);
+    }
+  }
+  console.log(`[m3-programmable] custom material browser ${label} falsifier: PASS repeats=2`);
+}
 
 const renderGraph = run('render graph seam', [
   'vitest',
@@ -355,7 +419,7 @@ console.log(
 
 const browserVariant = run(
   'multi-UV browser variant',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-variant'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-variant'],
   {
     FORGEAX_M3_ARTIFACT_DIR:
       process.env.FORGEAX_M3_ARTIFACT_DIR ??
@@ -374,7 +438,7 @@ console.log('[m3-programmable] multi-UV browser variant: PASS');
 
 const browserLive = run(
   'browser live pipeline',
-  ['--filter', '@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers', 'smoke:browser-live'],
+  ['--filter', '@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers', 'run', 'smoke:browser-live'],
   {
     FORGEAX_M3_ARTIFACT_DIR:
       process.env.FORGEAX_M3_ARTIFACT_DIR ??
@@ -389,7 +453,7 @@ console.log('[m3-programmable] browser live pipeline: PASS');
 
 const browserComposed = run(
   'browser custom pipeline + post composition',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
   {
     FORGEAX_M3_ARTIFACT_DIR:
       process.env.FORGEAX_M3_ARTIFACT_DIR ??
@@ -409,7 +473,7 @@ console.log('[m3-programmable] browser multi-texture falsifier: PASS');
 
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
   {
     FORGEAX_M3_RESIZE_CHURN: '1',
     FORGEAX_M3_ARTIFACT_DIR:
@@ -437,7 +501,7 @@ for (const pass of ['first', 'second']) {
     pass,
     normal: run(
       `browser MSAA multi-texture double resize ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_RESIZE_CHURN: '1',
@@ -447,7 +511,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `browser MSAA multi-texture double resize ${pass} second-texture falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_RESIZE_CHURN: '1',
@@ -539,7 +603,7 @@ function runMsaaDualFalsifierMatrix({ artifactRoot, startVariant, label }) {
         pass,
         result: run(
           `browser ${label} ${family.label} ${pass}`,
-          ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+          ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
           {
             FORGEAX_M3_MSAA: '1',
             FORGEAX_M3_START_VARIANT: startVariant,
@@ -640,7 +704,7 @@ function runNoMsaaDualFalsifierMatrix({ artifactRoot, startVariant, label }) {
         pass,
         result: run(
           `browser ${label} ${family.label} ${pass}`,
-          ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+          ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
           {
             FORGEAX_M3_MSAA: '0',
             FORGEAX_M3_START_VARIANT: startVariant,
@@ -728,14 +792,14 @@ for (const [label, msaa] of [
   ['no-MSAA', '0'],
   ['MSAA', '1'],
 ]) {
-  const first = run(`browser depth post ${label} first`, ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'], {
+  const first = run(`browser depth post ${label} first`, ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'], {
     FORGEAX_M3_DEPTH_POST: '1',
     FORGEAX_M3_MSAA: msaa,
     FORGEAX_M3_RESIZE_CHURN: '1',
     FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
     FORGEAX_M3_ARTIFACT_DIR: resolve(depthPostArtifactRoot, label, 'first'),
   });
-  const second = run(`browser depth post ${label} second`, ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'], {
+  const second = run(`browser depth post ${label} second`, ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'], {
     FORGEAX_M3_DEPTH_POST: '1',
     FORGEAX_M3_MSAA: msaa,
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -767,12 +831,12 @@ const customRhiArtifactRoot =
   resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'custom-pipeline-rhi');
 const customRhi = run(
   'custom pipeline RHI',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   { FORGEAX_M3_ARTIFACT_DIR: resolve(customRhiArtifactRoot, 'normal') },
 );
 const customRhiFalsifier = run(
   'custom pipeline RHI falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_FALSIFY: '1',
     FORGEAX_M3_ARTIFACT_DIR: resolve(customRhiArtifactRoot, 'falsifier'),
@@ -796,7 +860,7 @@ console.log('[m3-programmable] custom pipeline RHI: PASS');
 const customRhiTrueArtifactRoot = resolve(customRhiArtifactRoot, 'true-variant');
 const customRhiTrue = run(
   'custom pipeline RHI true variant',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_VARIANT: 'true',
     FORGEAX_M3_ARTIFACT_DIR: resolve(customRhiTrueArtifactRoot, 'normal'),
@@ -804,7 +868,7 @@ const customRhiTrue = run(
 );
 const customRhiTrueFalsifier = run(
   'custom pipeline RHI true variant falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_VARIANT: 'true',
     FORGEAX_M3_FALSIFY: '1',
@@ -830,7 +894,7 @@ console.log('[m3-programmable] custom pipeline RHI texture binding: PASS');
 const resizeChurnRhiArtifactRoot = resolve(customRhiArtifactRoot, 'resize-churn');
 const resizeChurnRhi = run(
   'custom pipeline RHI resize churn',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_RESIZE_CHURN: '1',
     FORGEAX_M3_ARTIFACT_DIR: resolve(resizeChurnRhiArtifactRoot, 'normal'),
@@ -838,7 +902,7 @@ const resizeChurnRhi = run(
 );
 const resizeChurnRhiFalsifier = run(
   'custom pipeline RHI resize churn falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_RESIZE_CHURN: '1',
     FORGEAX_M3_FALSIFY: '1',
@@ -863,7 +927,7 @@ console.log('[m3-programmable] multi-texture resize churn RHI: PASS');
 const msaaResizeChurnArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-resize-churn');
 const msaaResizeChurn = run(
   'custom pipeline MSAA resize churn',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -872,7 +936,7 @@ const msaaResizeChurn = run(
 );
 const msaaResizeChurnFalsifier = run(
   'custom pipeline MSAA resize churn falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -923,7 +987,7 @@ console.log(
 const msaaResizeChurnRepeatArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-resize-churn-repeatability');
 const msaaResizeChurnRepeatNormalFirst = run(
   'custom pipeline MSAA resize churn repeatability normal first',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -932,7 +996,7 @@ const msaaResizeChurnRepeatNormalFirst = run(
 );
 const msaaResizeChurnRepeatNormalSecond = run(
   'custom pipeline MSAA resize churn repeatability normal second',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -941,7 +1005,7 @@ const msaaResizeChurnRepeatNormalSecond = run(
 );
 const msaaResizeChurnRepeatFalsifierFirst = run(
   'custom pipeline MSAA resize churn repeatability falsifier first',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -951,7 +1015,7 @@ const msaaResizeChurnRepeatFalsifierFirst = run(
 );
 const msaaResizeChurnRepeatFalsifierSecond = run(
   'custom pipeline MSAA resize churn repeatability falsifier second',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1039,7 +1103,7 @@ console.log(
 const msaaDoubleResizeChurnArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-double-resize-churn');
 const msaaDoubleResizeChurn = run(
   'custom pipeline MSAA double resize churn normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1049,7 +1113,7 @@ const msaaDoubleResizeChurn = run(
 );
 const msaaDoubleResizeChurnFalsifier = run(
   'custom pipeline MSAA double resize churn falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1103,7 +1167,7 @@ console.log(
 const msaaDoubleResizeChurnRepeatArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-double-resize-churn-repeatability');
 const msaaDoubleResizeChurnRepeatNormalFirst = run(
   'custom pipeline MSAA double resize churn repeatability normal first',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1113,7 +1177,7 @@ const msaaDoubleResizeChurnRepeatNormalFirst = run(
 );
 const msaaDoubleResizeChurnRepeatNormalSecond = run(
   'custom pipeline MSAA double resize churn repeatability normal second',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1123,7 +1187,7 @@ const msaaDoubleResizeChurnRepeatNormalSecond = run(
 );
 const msaaDoubleResizeChurnRepeatFalsifierFirst = run(
   'custom pipeline MSAA double resize churn repeatability falsifier first',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1134,7 +1198,7 @@ const msaaDoubleResizeChurnRepeatFalsifierFirst = run(
 );
 const msaaDoubleResizeChurnRepeatFalsifierSecond = run(
   'custom pipeline MSAA double resize churn repeatability falsifier second',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_RESIZE_CHURN: '1',
@@ -1232,7 +1296,7 @@ for (const pass of ['first', 'second']) {
   noMsaaDoubleResizeChurnRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA double resize churn repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -1243,7 +1307,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA double resize churn repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -1337,7 +1401,7 @@ console.log(
 const msaaCustomArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-custom-graph');
 const msaaCustom = run(
   'custom pipeline MSAA graph',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_SWITCH_VARIANT: '1',
@@ -1346,7 +1410,7 @@ const msaaCustom = run(
 );
 const msaaCustomFalsifier = run(
   'custom pipeline MSAA graph falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
@@ -1413,7 +1477,7 @@ console.log(
 const msaaRepeatArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-repeatability');
 const msaaRepeatNormal = run(
   'custom pipeline MSAA repeatability normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_SWITCH_VARIANT: '1',
@@ -1422,7 +1486,7 @@ const msaaRepeatNormal = run(
 );
 const msaaRepeatFalsifier = run(
   'custom pipeline MSAA repeatability falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
@@ -1456,7 +1520,7 @@ console.log(
 const msaaTrueVariantArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-true-variant');
 const msaaTrueVariant = run(
   'custom pipeline MSAA true variant',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_VARIANT: 'true',
@@ -1465,7 +1529,7 @@ const msaaTrueVariant = run(
 );
 const msaaTrueVariantFalsifier = run(
   'custom pipeline MSAA true variant falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_VARIANT: 'true',
@@ -1539,7 +1603,7 @@ console.log(
 const msaaTrueVariantSwitchArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-true-variant-switch');
 const msaaTrueVariantSwitch = run(
   'custom pipeline MSAA true variant live switch',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_VARIANT: 'true',
@@ -1549,7 +1613,7 @@ const msaaTrueVariantSwitch = run(
 );
 const msaaTrueVariantSwitchFalsifier = run(
   'custom pipeline MSAA true variant live switch falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_VARIANT: 'true',
@@ -1629,7 +1693,7 @@ console.log(
 const msaaPipelineFalsifierArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-pipeline-falsifier');
 const msaaPipelineNormal = run(
   'custom pipeline MSAA adjacent pipeline normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_VARIANT: 'true',
@@ -1639,7 +1703,7 @@ const msaaPipelineNormal = run(
 );
 const msaaPipelineFalsifier = run(
   'custom pipeline MSAA adjacent pipeline falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_VARIANT: 'true',
@@ -1738,7 +1802,7 @@ for (const pass of ['first', 'second']) {
   msaaTrueVariantPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA true variant pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_VARIANT: 'true',
@@ -1748,7 +1812,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA true variant pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_VARIANT: 'true',
@@ -1829,7 +1893,7 @@ for (const pass of ['first', 'second']) {
   msaaTrueInversionPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA true inversion pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -1840,7 +1904,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA true inversion pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -1927,7 +1991,7 @@ for (const pass of ['first', 'second']) {
   msaaFalsePassthroughPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA false passthrough pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -1937,7 +2001,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA false passthrough pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -2024,7 +2088,7 @@ for (const pass of ['first', 'second']) {
   msaaFalseInversionPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA false inversion pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -2034,7 +2098,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA false inversion pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -2121,7 +2185,7 @@ for (const pass of ['first', 'second']) {
   noMsaaFalseInversionPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA false inversion pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2131,7 +2195,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA false inversion pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2212,7 +2276,7 @@ for (const pass of ['first', 'second']) {
   noMsaaTrueInversionPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA true inversion pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2222,7 +2286,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA true inversion pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2303,7 +2367,7 @@ for (const pass of ['first', 'second']) {
   noMsaaTruePassthroughPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA true passthrough pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2313,7 +2377,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA true passthrough pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2394,7 +2458,7 @@ for (const pass of ['first', 'second']) {
   noMsaaFalsePassthroughPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA false passthrough pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2404,7 +2468,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA false passthrough pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2485,7 +2549,7 @@ for (const pass of ['first', 'second']) {
   noMsaaSteadyFalsePassthroughRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA steady false passthrough repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2495,7 +2559,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA steady false passthrough repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2576,7 +2640,7 @@ for (const pass of ['first', 'second']) {
   noMsaaSteadyFalseInversionRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA steady false inversion repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2586,7 +2650,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA steady false inversion repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2661,7 +2725,7 @@ for (const pass of ['first', 'second']) {
   noMsaaSteadyTruePassthroughRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA steady true passthrough repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2671,7 +2735,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA steady true passthrough repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -2746,7 +2810,7 @@ for (const pass of ['first', 'second']) {
   noMsaaSteadyTrueInversionRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA steady true inversion repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2756,7 +2820,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA steady true inversion repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -2827,7 +2891,7 @@ console.log(
 const msaaPostArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-postfx-falsifier');
 const msaaPostNormal = run(
   'custom pipeline MSAA inversion post normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'inversion',
@@ -2838,7 +2902,7 @@ const msaaPostNormal = run(
 );
 const msaaPostFalsifier = run(
   'custom pipeline MSAA inversion post falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'inversion',
@@ -2927,7 +2991,7 @@ console.log(
 const msaaLivePostArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-live-post-falsifier');
 const msaaLivePostNormal = run(
   'custom pipeline MSAA live post normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'passthrough',
@@ -2939,7 +3003,7 @@ const msaaLivePostNormal = run(
 );
 const msaaLivePostFalsifier = run(
   'custom pipeline MSAA live post falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'passthrough',
@@ -3034,7 +3098,7 @@ console.log(
 const msaaLivePostPipelineArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-live-post-pipeline-falsifier');
 const msaaLivePostPipelineNormal = run(
   'custom pipeline MSAA live post adjacent pipeline normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'passthrough',
@@ -3046,7 +3110,7 @@ const msaaLivePostPipelineNormal = run(
 );
 const msaaLivePostPipelineFalsifier = run(
   'custom pipeline MSAA live post adjacent pipeline falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'passthrough',
@@ -3147,7 +3211,7 @@ for (const pass of ['first', 'second']) {
   msaaLivePostPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA live post adjacent pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3159,7 +3223,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA live post adjacent pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3225,7 +3289,7 @@ console.log(
 const msaaLivePostResolveArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-live-post-resolve-falsifier');
 const msaaLivePostResolveNormal = run(
   'custom pipeline MSAA live post resolve normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'passthrough',
@@ -3237,7 +3301,7 @@ const msaaLivePostResolveNormal = run(
 );
 const msaaLivePostResolveFalsifier = run(
   'custom pipeline MSAA live post resolve falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'passthrough',
@@ -3332,7 +3396,7 @@ for (const pass of ['first', 'second']) {
   msaaLivePostResolveRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA live post resolve repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3344,7 +3408,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA live post resolve repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3430,7 +3494,7 @@ for (const pass of ['first', 'second']) {
   msaaLivePostDoubleResizeRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA live post double resize repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3444,7 +3508,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA live post double resize repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3569,7 +3633,7 @@ for (const pass of ['first', 'second']) {
   msaaLiveVariantRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA live variant repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3580,7 +3644,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA live variant repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -3664,7 +3728,7 @@ for (const pass of ['first', 'second']) {
   msaaLiveVariantInversionRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA live variant inversion repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -3675,7 +3739,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA live variant inversion repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -3760,7 +3824,7 @@ for (const pass of ['first', 'second']) {
   noMsaaLiveVariantInversionPipelineRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA live variant inversion adjacent pipeline repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -3771,7 +3835,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA live variant inversion adjacent pipeline repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'inversion',
@@ -3858,7 +3922,7 @@ console.log(
 
 const msaaSteadyInversionNormal = run(
   'custom pipeline MSAA steady inversion normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'inversion',
@@ -3868,7 +3932,7 @@ const msaaSteadyInversionNormal = run(
 );
 const msaaSteadyInversionFalsifier = run(
   'custom pipeline MSAA steady inversion falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'inversion',
@@ -3961,7 +4025,7 @@ console.log(
 const msaaSteadyTrueInversionArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-steady-true-inversion');
 const msaaSteadyTrueInversionNormal = run(
   'custom pipeline MSAA steady true inversion normal',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'inversion',
@@ -3971,7 +4035,7 @@ const msaaSteadyTrueInversionNormal = run(
 );
 const msaaSteadyTrueInversionFalsifier = run(
   'custom pipeline MSAA steady true inversion falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_MSAA: '1',
     FORGEAX_M3_POST: 'inversion',
@@ -4068,7 +4132,7 @@ for (const pass of ['first', 'second']) {
   msaaSteadyTrueInversionRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA steady true inversion repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -4078,7 +4142,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA steady true inversion repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -4157,7 +4221,7 @@ for (const pass of ['first', 'second']) {
   msaaSteadyTruePassthroughRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA steady true passthrough repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4167,7 +4231,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA steady true passthrough repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4248,7 +4312,7 @@ for (const pass of ['first', 'second']) {
   msaaSteadyFalsePassthroughRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA steady false passthrough repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4258,7 +4322,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA steady false passthrough repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4339,7 +4403,7 @@ for (const pass of ['first', 'second']) {
   msaaSteadyFalseInversionRepeatRuns.push({
     normal: run(
       `custom pipeline MSAA steady false inversion repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -4349,7 +4413,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA steady false inversion repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'inversion',
@@ -4428,7 +4492,7 @@ for (const pass of ['first', 'second']) {
   noMsaaLivePostResolveRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA live post resolve repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -4440,7 +4504,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA live post resolve repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -4530,7 +4594,7 @@ for (const pass of ['first', 'second']) {
   noMsaaLivePostDoubleResizeRepeatRuns.push({
     normal: run(
       `custom pipeline no-MSAA live post double resize repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -4544,7 +4608,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA live post double resize repeat ${pass} adjacent pipeline falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -4676,7 +4740,7 @@ for (const pass of ['first', 'second']) {
   noMsaaFalseVariantLivePostDoubleResizeRuns.push({
     normal: run(
       `custom pipeline no-MSAA false-variant live post double resize repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -4690,7 +4754,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline no-MSAA false-variant live post double resize repeat ${pass} adjacent pipeline falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '0',
         FORGEAX_M3_POST: 'passthrough',
@@ -4821,7 +4885,7 @@ for (const pass of ['first', 'second']) {
   msaaFalseStartLivePostDoubleResizeRuns.push({
     normal: run(
       `custom pipeline MSAA false-start live post double resize repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4835,7 +4899,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA false-start live post double resize repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4966,7 +5030,7 @@ for (const pass of ['first', 'second']) {
   msaaFalseStartLivePostPipelineDoubleResizeRuns.push({
     normal: run(
       `custom pipeline MSAA false-start live post adjacent pipeline double resize repeat ${pass} normal`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -4980,7 +5044,7 @@ for (const pass of ['first', 'second']) {
     ),
     falsifier: run(
       `custom pipeline MSAA false-start live post adjacent pipeline double resize repeat ${pass} falsifier`,
-      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
       {
         FORGEAX_M3_MSAA: '1',
         FORGEAX_M3_POST: 'passthrough',
@@ -5108,7 +5172,7 @@ console.log(
 const liveVariantArtifactRoot = resolve(customRhiArtifactRoot, 'live-variant-switch');
 const liveVariant = run(
   'custom pipeline live variant switch',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_VARIANT: 'true',
     FORGEAX_M3_SWITCH_VARIANT: '1',
@@ -5117,7 +5181,7 @@ const liveVariant = run(
 );
 const liveVariantFalsifier = run(
   'custom pipeline live variant switch falsifier',
-  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-rhi'],
   {
     FORGEAX_M3_VARIANT: 'true',
     FORGEAX_M3_SWITCH_VARIANT: '1',

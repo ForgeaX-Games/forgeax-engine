@@ -189,12 +189,11 @@ function buildMaterialAsset(pod: MaterialPod, guid: string, skinned = false): Im
     passes: [
       {
         name: 'Forward',
-        shader: skinned ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: skinned ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: pod.baseColorFactor as readonly [number, number, number, number],
       metallic: pod.metallicFactor,
       roughness: pod.roughnessFactor,

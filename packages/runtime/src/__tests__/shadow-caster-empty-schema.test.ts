@@ -9,15 +9,12 @@
 //           totalBytes=0, textureFieldNames=empty, samplerForTexture=empty,
 //           userRegionBindingEnd=0. The shadow_caster shader has zero
 //           @group(1) bindings and registers under an empty paramSchema.
-//   - §3.4 row 5: `default-shadow-caster` carries an empty paramSchema; the
-//           engine-injection appendInjection(bgl=[], kind) starts at
-//           binding 0 because userRegionBindingEnd=0 (chained from
-//           derive([]).userRegionBindingEnd).
+//   - the shadow-caster module has no authored material parameter sidecar;
+//           its empty MaterialAsset parameter list is derived at runtime.
 //
 // What this test asserts:
 //   (a) derive([]) produces all-empty / zero output -- the graceful path.
-//   (b) The shadow_caster sidecar (packages/shader/src/shadow_caster.wgsl
-//       .meta.json) declares paramSchema: [].
+//   (b) The shadow_caster source is present without a sidecar schema.
 //   (c) appendInjection over the empty user-region starts injected
 //       bindings at binding 0 (covered also in append-injection.test.ts;
 //       this test pins the empty-schema path explicitly).
@@ -50,12 +47,15 @@ describe('shadow_caster empty schema (M4 w21)', () => {
     expect(out.userRegionBindingEnd).toBe(0);
   });
 
-  it('(b) shadow_caster sidecar declares paramSchema: []', () => {
-    const sidecarPath = join(repoRoot, 'packages', 'shader', 'src', 'shadow_caster.wgsl.meta.json');
-    const raw = readFileSync(sidecarPath, 'utf8');
-    const parsed = JSON.parse(raw) as { paramSchema?: unknown };
-    expect(Array.isArray(parsed.paramSchema)).toBe(true);
-    expect((parsed.paramSchema as unknown[]).length).toBe(0);
+  it('(b) shadow_caster sidecar carries identity but no parameter schema', () => {
+    const sourcePath = join(repoRoot, 'packages', 'shader', 'src', 'shadow_caster.wgsl');
+    expect(readFileSync(sourcePath, 'utf8')).toContain('shadow_caster.wgsl');
+    const sidecar = JSON.parse(readFileSync(`${sourcePath}.meta.json`, 'utf8')) as {
+      importSettings?: { materialShaderIdentifier?: string };
+      paramSchema?: unknown;
+    };
+    expect(sidecar.importSettings?.materialShaderIdentifier).toBe('forgeax::default-shadow-caster');
+    expect(sidecar).not.toHaveProperty('paramSchema');
   });
 
   it('(c) appendInjection on empty user-region starts at binding 0', () => {
@@ -82,7 +82,7 @@ describe('shadow_caster empty schema (M4 w21)', () => {
     );
     const src = readFileSync(createRendererPath, 'utf8');
     const re =
-      /registerMaterialShader\(\s*shadowCasterIdentifier\s*,\s*\{[^}]*paramSchema\s*:\s*\[\s*\][^}]*\}\s*\)/s;
+      /installMaterialArtifact\(\s*shadowCasterIdentifier\s*,\s*\{[^}]*paramSchema\s*:\s*\[\s*\][^}]*\}\s*\)/s;
     expect(src).toMatch(re);
   });
 });

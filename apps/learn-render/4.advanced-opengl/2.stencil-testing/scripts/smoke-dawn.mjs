@@ -300,8 +300,8 @@ if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
-if (!shader.lookupMaterialShader('learn-render::outline-solid').ok) {
-  shader.registerMaterialShader('learn-render::outline-solid', {
+if (!shader.findMaterialArtifact('learn-render::outline-solid').ok) {
+  shader.installMaterialArtifact('learn-render::outline-solid', {
     source: COMPOSED_OUTLINE_WGSL,
     paramSchema: [{ name: 'baseColor', type: 'color' }],
     bindingLayout: [],
@@ -348,14 +348,14 @@ const floorMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
       renderState: {
         stencilWriteMask: 0x00,
+        tags: { LightMode: 'Forward' },
       },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.9,
@@ -369,16 +369,16 @@ const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
       renderState: {
         stencilWriteMask: 0xFF,
         stencil: { compare: 'always', passOp: 'replace' },
+        tags: { LightMode: 'Forward' },
+        stencilReference: 1,
       },
-      stencilReference: 1,
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.5,
@@ -397,17 +397,17 @@ const outlineMatHandle = world.allocSharedRef('MaterialAsset', {
       // requires LightMode=Forward to be selected; pass-name
       // 'ForwardOutline' documents intent within the multi-pass material).
       name: 'ForwardOutline',
-      shader: 'learn-render::outline-solid',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'learn-render::outline-solid' },
       renderState: {
         stencilReadMask: 0xFF,
         stencil: { compare: 'not-equal' },
         depthWriteEnabled: false,
+        tags: { LightMode: 'Forward' },
+        stencilReference: 1,
       },
-      stencilReference: 1,
     },
   ],
-  paramValues: {
+  values: {
     baseColor: OUTLINE_COLOR,
   },
 });

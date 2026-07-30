@@ -70,6 +70,14 @@ const SPRITE_SLOTS: ReadonlyArray<{
   { pos: [0.9, 0.0, 0.0], tint: [0.7, 0.7, 1.0, 1.0] },
 ];
 
+const SPRITE_LIT_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
+] as const;
+
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
   throw new Error('[sprite-lit] missing <canvas id="app"> in index.html');
@@ -234,23 +242,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [
-          {
-            name: 'Forward',
-            shader: 'forgeax::sprite-lit',
-            tags: { LightMode: 'Forward' },
-            queue: 3000,
-            // post-#520 SSOT: `renderState.blend` presence drives the LDR
-            // transparent sub-pass + premultiplied-alpha pipeline selection.
-            // Required even on opaque (alpha=1) checkerboard art because
-            // sprite-lit.wgsl fs_main encodes sRGB in-shader (matching the
-            // LDR sub-pass's non-sRGB storage view); routing through the
-            // geometry pass (sRGB view) would double-apply the transfer.
-            renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-          },
+          { name: 'Forward', program: { module: 'forgeax::sprite-lit' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
         ],
-        paramValues: {
-          // post-#520 SSOT: paramValues field names are UBO-aligned to the
-          // shader's paramSchema. sprite-lit.wgsl.meta.json mirrors sprite:
+        parameters: SPRITE_LIT_PARAMETERS,
+        values: {
+          // post-#520 SSOT: values field names are UBO-aligned to the
+          // shader's paramSchema. sprite-lit.material.json mirrors sprite:
           // colorTint / region / pivotAndSize / slicesAndMode / baseColorTexture.
           // The legacy baseColor / texture / pivot names are gone.
           colorTint: slot.tint,
@@ -272,16 +269,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       unlitMaterialHandles.push(
         world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
           kind: 'material',
-          passes: [
-            {
-              name: 'Forward',
-              shader: 'forgeax::sprite',
-              tags: { LightMode: 'Forward' },
-              queue: 3000,
-              renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-            },
-          ],
-          paramValues: {
+        passes: [
+          { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
+        ],
+        parameters: SPRITE_LIT_PARAMETERS,
+          values: {
             colorTint: slot.tint,
             baseColorTexture: textureHandle,
             sampler: samplerHandle,
@@ -307,14 +299,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const cubeMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
-        },
+        { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
       ],
-      paramValues: {
+      values: {
         baseColor: [0.7, 0.7, 0.75],
         metallic: 0.0,
         roughness: 0.8,

@@ -1,3 +1,4 @@
+#define_import_path forgeax_material::standard
 #import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
@@ -83,6 +84,11 @@
 // and tolerates RGB normal maps (b is dropped, z is recomputed --
 // equivalent for unit vectors).
 
+struct MaterialTextureCoordinates {
+  transform : vec4<f32>,
+  metadata : vec4<f32>,
+};
+
 struct Material {
   baseColor          : vec4<f32>,
   metallic           : f32,
@@ -103,23 +109,16 @@ struct Material {
   emissive           : vec3<f32>,
   emissiveIntensity  : f32,
   occlusionStrength  : f32,
-  // feat-city-glb multi-UV tiling: per-material UV-set selector. glTF
-  // `baseColorTexture.texCoord` (and the sibling MR/normal slots, which share
-  // it per material in practice) chooses which vertex UV set the textures
-  // sample. 0.0 -> set 0 (in.uv), >=0.5 -> set 1 (in.uv1). Lands at offset 68;
-  // clearcoat occupies offsets 76..84; specularTint is aligned to offset 96,
-  // while the engine-owned UV scale tail begins at byte 112.
-  uvSet              : f32,
   alphaCutoff        : f32,
   clearcoat          : f32,
   clearcoatRoughness : f32,
   specularTint       : vec3<f32>,
-  baseColorUvScale          : vec2<f32>,
-  metallicRoughnessUvScale  : vec2<f32>,
-  normalUvScale             : vec2<f32>,
-  specularTintUvScale       : vec2<f32>,
-  emissiveUvScale           : vec2<f32>,
-  occlusionUvScale          : vec2<f32>,
+  baseColorCoordinates          : MaterialTextureCoordinates,
+  metallicRoughnessCoordinates  : MaterialTextureCoordinates,
+  normalCoordinates             : MaterialTextureCoordinates,
+  specularTintCoordinates       : MaterialTextureCoordinates,
+  emissiveCoordinates           : MaterialTextureCoordinates,
+  occlusionCoordinates          : MaterialTextureCoordinates,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -206,12 +205,15 @@ struct VsIn  {
   @location(1) normal  : vec3<f32>,
   @location(2) uv      : vec2<f32>,
   @location(3) tangent : vec4<f32>,
-  // feat-city-glb multi-UV tiling: second UV set at location 6 (canonical
-  // D-4 numbering, set 0 stays at location 2). Declaring it flips naga's
-  // @location reflection to uvSetCount=2, which drives deriveVertexBufferLayout
-  // to bind set 1 (clamp-to-last aliases uv1 onto uv0 for single-UV meshes, so
-  // the interleaved stride stays 48 B and single-UV content is byte-identical).
+  // MaterialAsset per-slot texCoord: reserve the canonical UV0-UV7 inputs.
+  // Missing mesh sets are supplied by the pipeline's clamp-to-last aliases.
   @location(6) uv1     : vec2<f32>,
+  @location(7) uv2     : vec2<f32>,
+  @location(8) uv3     : vec2<f32>,
+  @location(9) uv4     : vec2<f32>,
+  @location(10) uv5    : vec2<f32>,
+  @location(11) uv6    : vec2<f32>,
+  @location(12) uv7    : vec2<f32>,
 };
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -224,6 +226,12 @@ struct VsOut {
   // previously-vacant @location(5) so @location(6)/(7) stay byte-stable with
   // the prior layout (CSM M5/w19).
   @location(5) uv1 : vec2<f32>,
+  @location(8) uv2 : vec2<f32>,
+  @location(9) uv3 : vec2<f32>,
+  @location(10) uv4 : vec2<f32>,
+  @location(11) uv5 : vec2<f32>,
+  @location(12) uv6 : vec2<f32>,
+  @location(13) uv7 : vec2<f32>,
   @location(6) ndc : vec3<f32>,  // NDC for HDRP cluster lookup (w10)
   // feat-20260609-hdrp-cluster-fragment-ggx M4.5-followup: view-space z is
   // needed by ndc_position_to_cluster (slice index uses log-z mapping that
@@ -287,6 +295,12 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   out.worldTangent = vec4<f32>(worldTangentXyz, in.tangent.w);
   out.uv = in.uv;
   out.uv1 = in.uv1;
+  out.uv2 = in.uv2;
+  out.uv3 = in.uv3;
+  out.uv4 = in.uv4;
+  out.uv5 = in.uv5;
+  out.uv6 = in.uv6;
+  out.uv7 = in.uv7;
   out.instanceIdx = idx;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w19: the per-fragment
   // light-space position varying is gone; evalDirectional computes
@@ -304,17 +318,20 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   return out;
 }
 
-// feat-city-glb multi-UV tiling: pick the vertex UV set the material's textures
-// sample. `material.uvSet` is a per-material selector (glTF baseColorTexture
-// .texCoord). 0 -> set 0, >=0.5 -> set 1. For single-UV meshes deriveVertex
-// BufferLayout aliases uv1 onto uv0, so in.uv1 == in.uv and the default
-// selector (0) is byte-identical to the pre-selector path. All texture slots
-// share the selected set: within a glTF material every textured slot uses the
-// same texCoord in practice (verified on the UE5 city_Sample asset), so a
-// single selector is sufficient. Per-slot texCoord divergence is a future
-// extension.
-fn selectUv(in : VsOut) -> vec2<f32> {
-  return select(in.uv, in.uv1, material.uvSet >= 0.5);
+fn transformedMaterialUv(coordinates : MaterialTextureCoordinates, in : VsOut) -> vec2<f32> {
+  var source = in.uv;
+  if (coordinates.metadata.x >= 1.0) { source = in.uv1; }
+  if (coordinates.metadata.x >= 2.0) { source = in.uv2; }
+  if (coordinates.metadata.x >= 3.0) { source = in.uv3; }
+  if (coordinates.metadata.x >= 4.0) { source = in.uv4; }
+  if (coordinates.metadata.x >= 5.0) { source = in.uv5; }
+  if (coordinates.metadata.x >= 6.0) { source = in.uv6; }
+  if (coordinates.metadata.x >= 7.0) { source = in.uv7; }
+  let scaled = source * coordinates.transform.zw;
+  let angle = coordinates.metadata.y;
+  let c = cos(angle);
+  let s = sin(angle);
+  return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + coordinates.transform.xy;
 }
 
 fn alphaTest(alpha : f32) {
@@ -325,8 +342,8 @@ fn alphaTest(alpha : f32) {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let uv = selectUv(in);
-  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
+  let baseUv = transformedMaterialUv(material.baseColorCoordinates, in);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorCoordinates.metadata.zw);
   alphaTest(material.baseColor.a * baseSample.a);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
@@ -335,7 +352,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // encoded by the host as 4 independent f32 selectors in the merged UBO
   // (metallicChannel/roughnessChannel/aoChannel/extraChannel). Cast to u32
   // at the pick_channel call site; values stay in {0,1,2,3}.
-  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);
+  let mrUv = transformedMaterialUv(material.metallicRoughnessCoordinates, in);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, mrUv, material.metallicRoughnessCoordinates.metadata.zw);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -353,13 +371,15 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // TBN basis composed via forgeax_pbr::tbn helpers; default fallback
   // (defaultNormalTextureView) RG=(128,128) -> tangent (0,0,1) -> world n
   // unchanged.
-  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, uv, material.normalUvScale).rg;
+  let normalUv = transformedMaterialUv(material.normalCoordinates, in);
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalCoordinates.metadata.zw).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
   let v = normalize(view.cameraPos - in.worldPos);
+  let specularUv = transformedMaterialUv(material.specularTintCoordinates, in);
   let specularTint = material.specularTint * sampleMaterialTexture(
-    specularTintTexture, specularTintSampler, uv, material.specularTintUvScale,
+    specularTintTexture, specularTintSampler, specularUv, material.specularTintCoordinates.metadata.zw,
   ).rgb;
   let f0 = mix(vec3<f32>(0.04) * specularTint, albedo, metallic);
   let coatRoughness = max(material.clearcoatRoughness, 0.04);
@@ -408,7 +428,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     skylight.rotation,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
-  let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, uv, material.occlusionUvScale);
+  let occlusionUv = transformedMaterialUv(material.occlusionCoordinates, in);
+  let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, occlusionUv, material.occlusionCoordinates.metadata.zw);
   let ao = mix(1.0, aoSample.r, material.occlusionStrength);
   // feat-20260612-hdrp-ssao M7 round-2: `var` (mutable) so the
   // CLUSTER_FORWARD_AVAILABLE branch below can `ambient *=` the SSAO
@@ -531,7 +552,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     }
   }
 #endif // CLUSTER_FORWARD_AVAILABLE
-  let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, uv, material.emissiveUvScale).rgb;
+  let emissiveUv = transformedMaterialUv(material.emissiveCoordinates, in);
+  let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, emissiveUv, material.emissiveCoordinates.metadata.zw).rgb;
   color = color + material.emissive * material.emissiveIntensity * emissiveSample;
   return vec4<f32>(color, material.baseColor.a * baseSample.a);
 }
@@ -564,26 +586,30 @@ struct GBufferOutput {
 /// multi-entry support (passKind='deferred' selects `fs_gbuffer`).
 @fragment
 fn fs_gbuffer(in : VsOut) -> GBufferOutput {
-  let uv = selectUv(in);
-  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
+  let baseUv = transformedMaterialUv(material.baseColorCoordinates, in);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorCoordinates.metadata.zw);
   alphaTest(material.baseColor.a * baseSample.a);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
-  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);
+  let mrUv = transformedMaterialUv(material.metallicRoughnessCoordinates, in);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, mrUv, material.metallicRoughnessCoordinates.metadata.zw);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
   var a = max(material.roughness, 0.04);
   a = a * roughnessTex;
 
-  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, uv, material.normalUvScale).rg;
+  let normalUv = transformedMaterialUv(material.normalCoordinates, in);
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalCoordinates.metadata.zw).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
-  let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, uv, material.emissiveUvScale).rgb;
+  let emissiveUv = transformedMaterialUv(material.emissiveCoordinates, in);
+  let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, emissiveUv, material.emissiveCoordinates.metadata.zw).rgb;
   let emissive = material.emissive * material.emissiveIntensity * emissiveSample;
 
-  let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, uv, material.occlusionUvScale);
+  let occlusionUv = transformedMaterialUv(material.occlusionCoordinates, in);
+  let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, occlusionUv, material.occlusionCoordinates.metadata.zw);
   let ao = mix(1.0, aoSample.r, material.occlusionStrength);
 
   var out : GBufferOutput;

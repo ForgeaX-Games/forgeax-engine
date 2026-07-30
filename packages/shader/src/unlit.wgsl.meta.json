@@ -12,20 +12,5 @@
       "sourceIndex": 0,
       "kind": "material-shader"
     }
-  ],
-  "paramSchema": [
-    {
-      "name": "baseColor",
-      "type": "color"
-    },
-    {
-      "name": "alphaCutoff",
-      "type": "f32",
-      "default": 0.0
-    },
-    {
-      "name": "baseColorTexture",
-      "type": "texture2d"
-    }
   ]
 }

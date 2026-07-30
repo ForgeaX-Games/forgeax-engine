@@ -19,7 +19,7 @@
 //      'audio' emits a 4-field row per `subAssets[]` of kind 'audio'
 //      with no catalog-side artifact facts (feat-20260527-audio-system M4 w32). 'font'
 //      emits a 5-field atlas texture row + a thin font row. The reserved
-//      'shader' key never reaches here (shader sidecars are `.wgsl.meta.json`
+//      'shader' key never reaches here (shader sidecars are `.material.json`
 //      consumed by vite-plugin-shader, not scanned into the pack catalog).
 //
 // The `mipmap` token mapping (`'auto'` -> `true` / `'none'` -> `false`)

@@ -126,9 +126,12 @@ describe('sceneLoader', () => {
 });
 
 describe('materialLoader', () => {
-  it('builds a material from passes + paramValues', () => {
+  it('builds a material from passes + values', () => {
     const out = materialLoader.load(
-      { passes: [{ name: 'main', shader: 'forgeax::standard' }], paramValues: { roughness: 0.5 } },
+      {
+        passes: [{ name: 'main', program: { module: 'forgeax::standard' } }],
+        values: { roughness: 0.5 },
+      },
       undefined,
       emptyCtx,
     );
@@ -137,16 +140,29 @@ describe('materialLoader', () => {
 
   it('resolves a numeric parent ref-index to a parentGuid string', () => {
     const out = materialLoader.load(
-      { passes: [{ name: 'main', shader: 'x' }], parent: 1 },
+      { passes: [{ name: 'main', program: { module: 'x' } }], parent: 1 },
       ['g0', 'g1'],
       emptyCtx,
     ) as { parentGuid?: string };
     expect(out.parentGuid).toBe('g1');
   });
 
+  it('preserves an authored parent GUID without requiring a refs index', () => {
+    const out = materialLoader.load(
+      { values: { baseColor: [1, 0, 0, 1] }, parent: '01935b00-0000-7000-8000-000000000001' },
+      undefined,
+      emptyCtx,
+    ) as { parentGuid?: string };
+    expect(out.parentGuid).toBe('01935b00-0000-7000-8000-000000000001');
+  });
+
   it('returns undefined when a parent ref-index is out of bounds', () => {
     expect(
-      materialLoader.load({ passes: [{ name: 'm', shader: 'x' }], parent: 9 }, ['g0'], emptyCtx),
+      materialLoader.load(
+        { passes: [{ name: 'm', program: { module: 'x' } }], parent: 9 },
+        ['g0'],
+        emptyCtx,
+      ),
     ).toBeUndefined();
   });
 
@@ -157,14 +173,14 @@ describe('materialLoader', () => {
     } as unknown as LoadContext;
     const out = materialLoader.load(
       {
-        passes: [{ name: 'm', shader: 'forgeax::pbr' }],
-        paramValues: { baseColorTexture: 0, roughness: 5 },
+        passes: [{ name: 'm', program: { module: 'forgeax::pbr' } }],
+        values: { baseColorTexture: 0, roughness: 5 },
       },
       ['tex-guid'],
       ctx,
-    ) as { paramValues: Record<string, unknown> };
-    expect(out.paramValues.baseColorTexture).toBe('tex-guid');
-    expect(out.paramValues.roughness).toBe(5); // non-texture int untouched
+    ) as { values: Record<string, unknown> };
+    expect(out.values.baseColorTexture).toBe('tex-guid');
+    expect(out.values.roughness).toBe(5); // non-texture int untouched
   });
 
   it('returns undefined for a passes-less, parent-less material', () => {

@@ -14,7 +14,7 @@
 //   addColorTarget('offscreenHdr', { format: 'rgba16float' })
 //   addDepthTarget('hdrDepth')
 //   addScenePass('main', { color: offscreenHdr, depth, _routeFromOpts: true })
-//   addFullscreenPass('postHdr', { shader: <per-mode>, color: 'swapchain',
+//   addFullscreenStage('postHdr', { module: <per-mode>, color: 'swapchain',
 //                                   reads: ['offscreenHdr'] })
 // They differ only in the post-process WGSL fragment registered against
 // the per-mode shader id (HDR_EXPOSURE_POSTPROCESS_ID for the LO exposure

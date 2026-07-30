@@ -151,12 +151,10 @@ function blendMat(baseColor, blend) {
     kind: 'material',
     passes: [{
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      passKind: 'forward',
-      renderState: { blend },
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { blend, tags: { LightMode: 'Forward' } },
     }],
-    paramValues: { baseColor },
+    values: { baseColor },
   };
 }
 

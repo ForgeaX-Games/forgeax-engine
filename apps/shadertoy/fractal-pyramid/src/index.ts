@@ -9,7 +9,7 @@
 //     camera transform, so the quad always covers the whole viewport.
 //   - The Shadertoy iResolution / iTime globals ride in the @group(1)@binding(0)
 //     material UBO via paramSchema [iResolution: vec2, iTime: f32]. The raf loop
-//     mutates paramValues.iTime every frame (same per-frame param mutation path
+//     mutates values.iTime every frame (same per-frame param mutation path
 //     the hello/custom-shader pulse demo uses).
 //
 // A Camera entity is spawned only so the engine runs the forward pass (with no
@@ -27,9 +27,9 @@ import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-import fractalShader from './fractal-pyramid.wgsl';
+import './fractal-pyramid.wgsl';
 
-const FRACTAL_SHADER_PATH = 'shadertoy::fractal-pyramid';
+const FRACTAL_SHADER_PATH = 'shadertoy::fractal_pyramid';
 
 // Render scale relative to CSS pixels. This raymarcher is heavily
 // fragment-bound (64 march steps x 8 fractal iterations per pixel), so cost is
@@ -94,45 +94,27 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const shader = renderer.shader;
   const assets = renderer.assets;
-  if (shader === null || assets === null) {
-    console.error('[fractal-pyramid] renderer.shader or renderer.assets is null; the fullscreen-effect demo requires a fully initialized WebGPU backend.');
+  if (assets === null) {
+    console.error('[fractal-pyramid] renderer.assets is null; the fullscreen-effect demo requires a fully initialized WebGPU backend.');
     return;
   }
   const world = new World();
 
-  // Register the custom material shader under the path identifier declared in
-  // the .wgsl `#define_import_path` header. paramSchema is the SSOT for the UBO
-  // layout: iResolution (vec2) then iTime (f32) merge into one std140 block.
-  if (!shader.lookupMaterialShader(FRACTAL_SHADER_PATH).ok) {
-    shader.registerMaterialShader(FRACTAL_SHADER_PATH, {
-      source: fractalShader.wgsl,
-      paramSchema: [
-        { name: 'iResolution', type: 'vec2' },
-        { name: 'iTime', type: 'f32' },
-      ],
-    });
-  }
-
-  const paramValues: Record<string, number | number[]> = {
+  const values: Record<string, number | number[]> = {
     iResolution: [target.width, target.height],
     iTime: 0,
   };
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: FRACTAL_SHADER_PATH,
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-        // The fullscreen quad must never be back-face culled regardless of the
-        // plane winding; the raymarch fills every pixel of the viewport.
-        renderState: { cullMode: 'none' },
-      },
+      { name: 'Forward', program: { module: FRACTAL_SHADER_PATH }, renderState: { ...{ cullMode: 'none' }, tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues,
+    parameters: [
+      { name: 'iResolution', type: 'vec2' },
+      { name: 'iTime', type: 'f32' },
+    ],
+    values,
   });
 
   const planeRes = createPlaneGeometry(1, 1);
@@ -166,14 +148,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const h = target.clientHeight || cssH;
       target.width = Math.max(1, Math.floor(w * renderScale));
       target.height = Math.max(1, Math.floor(h * renderScale));
-      paramValues.iResolution = [target.width, target.height];
+      values.iResolution = [target.width, target.height];
     });
   }
 
   const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    paramValues.iTime = (now - startTime) / 1000;
+    values.iTime = (now - startTime) / 1000;
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error('[fractal-pyramid] draw error:', r.error);
     requestAnimationFrame(frame);

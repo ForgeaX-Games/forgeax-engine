@@ -87,22 +87,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const roomMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        fragmentEntry: 'fs_main',
-        tags: { LightMode: 'Forward' },
-        passKind: 'forward',
-        renderState: { cullMode: 'none' },
-      },
-      {
-        name: 'ShadowCaster',
-        shader: 'forgeax::default-shadow-caster',
-        tags: { LightMode: 'ShadowCaster' },
-        passKind: 'shadow-caster',
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr', fragmentEntry: 'fs_main' }, renderState: { ...{ cullMode: 'none' }, tags: { LightMode: 'Forward' }, passKind: 'forward' } },
+      { name: 'ShadowCaster', program: { module: 'forgeax::default-shadow-caster' }, renderState: { tags: { LightMode: 'ShadowCaster' }, passKind: 'shadow-caster' } },
     ],
-    paramValues: {
+    values: {
       baseColor: [0.4, 0.4, 0.5, 1],
       metallic: 0,
       roughness: 0.5,

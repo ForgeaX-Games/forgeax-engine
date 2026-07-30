@@ -11,8 +11,8 @@
 //   2. Build a mock HTMLCanvasElement + offscreen GPUCanvasContext.
 //   3. createRenderer with the built shader manifest; read the composed wgsl
 //      for shadertoy::happy-blob out of the manifest.
-//   4. registerMaterialShader + spawn fullscreen quad + camera.
-//   5. For t in {0.0, 0.6, 1.3} seconds: mutate paramValues.iTime, draw N
+//   4. installMaterialArtifact + spawn fullscreen quad + camera.
+//   5. For t in {0.0, 0.6, 1.3} seconds: mutate values.iTime, draw N
 //      frames, copyTextureToBuffer + map, average the whole frame. Assert the
 //      mean brightness is non-trivial and that frames differ across t.
 //
@@ -200,8 +200,8 @@ if (shader === null || assets === null) {
   process.exit(1);
 }
 
-if (!shader.lookupMaterialShader('shadertoy::happy-blob').ok) {
-  shader.registerMaterialShader('shadertoy::happy-blob', {
+if (!shader.findMaterialArtifact('shadertoy::happy-blob').ok) {
+  shader.installMaterialArtifact('shadertoy::happy-blob', {
     source: composedWgsl,
     paramSchema: [
       { name: 'iResolution', type: 'vec2' },
@@ -211,7 +211,7 @@ if (!shader.lookupMaterialShader('shadertoy::happy-blob').ok) {
   });
 }
 
-const paramValues = {
+const values = {
   iResolution: [WIDTH, HEIGHT],
   iTime: 0,
 };
@@ -221,13 +221,11 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'shadertoy::happy-blob',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
-      renderState: { cullMode: 'none' },
+      program: { module: 'shadertoy::happy-blob' },
+      renderState: { cullMode: 'none', tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues,
+  values,
 });
 
 const planeRes = createPlaneGeometry(1, 1);
@@ -265,7 +263,7 @@ const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
 const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
 
 async function captureFrameAtT(t) {
-  paramValues.iTime = t;
+  values.iTime = t;
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);

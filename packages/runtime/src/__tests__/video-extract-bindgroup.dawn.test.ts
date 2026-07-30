@@ -1,8 +1,8 @@
 // feat-20260623-world-space-video-asset M4 / w13 — AC-06: a VideoAsset GUID
-// embedded in a MaterialAsset.paramValues texture field flows through the
+// embedded in a MaterialAsset.values texture field flows through the
 // extract layer and produces a bind group without blowing up.
 //
-// AC-06 (requirements.md): video reuses the existing paramValues texture
+// AC-06 (requirements.md): video reuses the existing values texture
 // channel (no new MaterialAsset top-level field). The extract layer's
 // resolveTexLike must recognise `payload.kind === 'video'` (D-5) and route it
 // as a video source rather than minting a TextureAsset handle (which would then
@@ -35,7 +35,7 @@ import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type {
   Handle,
   MaterialAsset,
-  MaterialPassDescriptor,
+  MaterialPass,
   MeshAsset,
   VideoAsset,
 } from '@forgeax/engine-types';
@@ -49,9 +49,9 @@ const TEXTURE_USAGE_COPY_SRC = 0x01;
 const TEXTURE_USAGE_RENDER_ATTACHMENT = 0x10;
 
 const STANDARD_PBR_SHADER = 'forgeax::default-standard-pbr';
-const FORWARD_PBR_PASS: MaterialPassDescriptor = {
+const FORWARD_PBR_PASS: MaterialPass = {
   name: 'Forward',
-  shader: STANDARD_PBR_SHADER,
+  program: { module: STANDARD_PBR_SHADER },
 };
 
 function transformData(x: number, y: number, z: number) {
@@ -92,13 +92,13 @@ function catalogVideoMaterial(
     passes: [FORWARD_PBR_PASS],
     // The video GUID occupies the baseColorTexture texture2d slot — exactly the
     // shape a static texture would (D-5 reuse of the texture2d slot).
-    paramValues: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
+    values: { baseColor: [1, 1, 1], baseColorTexture: { texture: videoGuidStr as never } },
   } as MaterialAsset;
   const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material);
   return { matHandle, videoGuid };
 }
 
-describe('AC-06 / R-7 — video GUID in paramValues is a recognised texture field (M4 / w13)', () => {
+describe('AC-06 / R-7 — video GUID in values is a recognised texture field (M4 / w13)', () => {
   it('R-7: baseColorTexture is in the standard-PBR shader textureFieldNames set', () => {
     const assets = new AssetRegistry(makeMockShaderRegistry());
     const fields = assets.materialShaderTextureFieldNames(STANDARD_PBR_SHADER);
@@ -244,7 +244,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     const materialPayload = {
       kind: 'material' as const,
       passes: [FORWARD_PBR_PASS],
-      paramValues: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
+      values: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
     };
 
     const errorCodes: string[] = [];
@@ -313,9 +313,13 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     const materialPayload = {
       kind: 'material' as const,
       passes: [
-        { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' } },
+        {
+          name: 'Forward',
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' } },
+        },
       ],
-      paramValues: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
+      values: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
     };
 
     const fired: { code: string; hint: string }[] = [];

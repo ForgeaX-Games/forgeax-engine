@@ -21,12 +21,7 @@ import {
 } from '@forgeax/engine-render/internal';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
-import type {
-  Handle,
-  MaterialAsset,
-  MaterialPassDescriptor,
-  MeshAsset,
-} from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -124,12 +119,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1] },
+      values: { baseColor: [1, 1, 1] },
     });
   }
 
@@ -358,7 +352,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //       come from parent (AC-05 core signal)
   //   (b) shoot-76-equivalent: 1 parent + 76 children — extract produces
   //       materials with inherited passes (AC-06: non-empty hull.passes)
-  //   (c) paramValues-merge: child key overrides parent, parent-only key
+  //   (c) values-merge: child key overrides parent, parent-only key
   //       retained (AC-06 shallow-merge)
   //   (d) no-parent-regression: material with no parent — extract still works
   //
@@ -369,14 +363,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   // ── Fixture constants ────────────────────────────────────────────────────────
 
-  const FORWARD_PBR_PASS: MaterialPassDescriptor = {
+  const FORWARD_PBR_PASS: MaterialPass = {
     name: 'Forward',
-    shader: 'forgeax::default-standard-pbr',
+    program: { module: 'forgeax::default-standard-pbr' },
   };
 
-  const FORWARD_UNLIT_PASS: MaterialPassDescriptor = {
+  const FORWARD_UNLIT_PASS: MaterialPass = {
     name: 'Forward',
-    shader: 'forgeax::default-unlit',
+    program: { module: 'forgeax::default-unlit' },
   };
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -416,15 +410,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   function registerMaterial(
     world: World,
     assets: AssetRegistry,
-    passes: MaterialPassDescriptor[] | undefined,
+    passes: MaterialPass[] | undefined,
     parentGuid?: AssetGuid,
-    paramValues?: Readonly<Record<string, unknown>>,
+    values?: Readonly<Record<string, unknown>>,
   ): { handle: Handle<'MaterialAsset', 'shared'>; guid: AssetGuid } {
     const asset: MaterialAsset = {
       kind: 'material',
       passes,
-      paramValues: paramValues ?? {},
-    } as MaterialAsset;
+      values: values ?? {},
+    } as unknown as MaterialAsset;
     if (parentGuid !== undefined) {
       (asset as { parent: AssetGuid }).parent = parentGuid;
     }
@@ -556,9 +550,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       }
     });
 
-    // ── (c) AC-06: paramValues shallow-merge ───────────────────────────
+    // ── (c) AC-06: values shallow-merge ───────────────────────────
 
-    it('AC-06 paramValues shallow-merge: child overrides parent, parent-only key retained', () => {
+    it('AC-06 values shallow-merge: child overrides parent, parent-only key retained', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
       const assets = new AssetRegistry(makeMockShaderRegistry());
@@ -581,7 +575,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       // RED: child's metallic should be 0.9 (child overrides), roughness
       // should be 0.7 (inherited from parent). With direct asset read,
-      // roughness comes from child's own paramValues which is { metallic: 0.9 }
+      // roughness comes from child's own values which is { metallic: 0.9 }
       // — roughness defaults to 0.5, not inherited from parent.
       const snap = frame.renderables[0]?.material;
       expect(snap).toBeDefined();
@@ -652,13 +646,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       },
     };
     const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
-    // Sprite paramSchema mirrors sprite.wgsl.meta.json post-w11. The four
+    // Sprite paramSchema mirrors sprite.material.json post-w11. The four
     // UBO entries (colorTint / region / pivotAndSize / slicesAndMode) are
     // the WGSL Material struct field names; user-facing inputs
     // (region/pivot/slices/sliceMode/flipX/flipY) are folded into these
     // entries by the sprite extract branch (D-8 flip + sliceMode fold).
     // The texture entry uses the post-w11 baseColorTexture name (D-4).
-    sr.registerMaterialShader('forgeax::sprite', {
+    sr.installMaterialArtifact('forgeax::sprite', {
       source: 'fn main() {}',
       paramSchema: [
         { name: 'colorTint', type: 'vec4', default: [1.0, 1.0, 1.0, 1.0] },
@@ -671,10 +665,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return sr;
   }
 
-  const SPRITE_PASS: MaterialPassDescriptor = {
+  const SPRITE_PASS: MaterialPass = {
     name: 'Sprite',
-    shader: 'forgeax::sprite',
-    queue: 3000,
+    program: { module: 'forgeax::sprite' },
+    renderState: { queue: 3000 },
   };
 
   function identity() {
@@ -707,7 +701,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
   }
 
-  function spawnSpriteScene(paramValues: Record<string, unknown>): {
+  function spawnSpriteScene(values: Record<string, unknown>): {
     world: World;
     assets: AssetRegistry;
   } {
@@ -717,7 +711,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [SPRITE_PASS],
-      paramValues,
+      values,
     } as MaterialAsset);
     // Spawn a camera so extract has a viewport.
     world
@@ -752,7 +746,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('render-system-extract sprite paramSnapshot slicesAndMode (M3 / w9)', () => {
-    it('(1) no slicesAndMode in paramValues -> paramSnapshot.slicesAndMode absent', () => {
+    it('(1) no slicesAndMode in values -> paramSnapshot.slicesAndMode absent', () => {
       const { world, assets } = spawnSpriteScene({});
       const frame = extractFrame(world, assets);
       // Renderable filter: post-ablation sprite carries forgeax::sprite
@@ -765,7 +759,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const snap = renderable?.material.paramSnapshot;
       expect(snap).toBeDefined();
       // w0a SSOT-collapse fix: extract stage now explicitly seeds the
-      // slicesAndMode slot with [0,0,0,0] when absent from paramValues so
+      // slicesAndMode slot with [0,0,0,0] when absent from values so
       // the record-stage UBO writer overrides the PBR baseline (which would
       // otherwise leave occlusionStrength=1 at offset 48 -> trips
       // useSlices=true in sprite.wgsl -> degenerate quad).
@@ -969,7 +963,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       },
     };
     const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
-    sr.registerMaterialShader('learn-render::5-5-parallax', {
+    sr.installMaterialArtifact('learn-render::5-5-parallax', {
       source: 'fn main() {}',
       paramSchema: [
         { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -986,9 +980,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return sr;
   }
 
-  const PARALLAX_PASS: MaterialPassDescriptor = {
+  function makeShaderRegistryWithEmptyBuiltinPbrSchema(): ShaderRegistry {
+    const sr = makeShaderRegistryWithParallax();
+    sr.installMaterialArtifact('forgeax::default-standard-pbr', {
+      source: 'fn main() {}',
+      paramSchema: [],
+    });
+    return sr;
+  }
+
+  const PARALLAX_PASS: MaterialPass = {
     name: 'Forward',
-    shader: 'learn-render::5-5-parallax',
+    program: { module: 'learn-render::5-5-parallax' },
   };
 
   function identityTx() {
@@ -1042,7 +1045,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [PARALLAX_PASS],
-        paramValues: {
+        values: {
           baseColor: [1, 1, 1, 1],
           heightScale: 0.1,
           algoMode: 0,
@@ -1101,6 +1104,63 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // The standard fields also land in the same map (single SSOT path).
       expect(snap?.textureHandles?.get('baseColorTexture')).toBe(baseColorHandle);
       expect(snap?.textureHandles?.get('normalTexture')).toBe(normalHandle);
+    });
+
+    it('keeps built-in PBR texture handles when its manifest schema is empty', () => {
+      const world = new World();
+      const assets = new AssetRegistry(makeShaderRegistryWithEmptyBuiltinPbrSchema());
+      const mesh = registerQuadMesh(world);
+      const baseColorHandle = makeTextureHandle(world);
+      const metallicRoughnessHandle = makeTextureHandle(world);
+      const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+        kind: 'material',
+        passes: [
+          {
+            name: 'Forward',
+            program: { module: 'forgeax::default-standard-pbr' },
+            renderState: { tags: { LightMode: 'Forward' } },
+          },
+        ],
+        values: {
+          baseColor: [1, 1, 1, 1],
+          baseColorTexture: baseColorHandle,
+          metallicRoughnessTexture: metallicRoughnessHandle,
+        },
+      });
+
+      world
+        .spawn(
+          { component: Transform, data: { ...identityTx(), pos: [0, 0, 5] } },
+          {
+            component: Camera,
+            data: {
+              fov: Math.PI / 4,
+              aspect: 1,
+              near: 0.1,
+              far: 100,
+              projection: 0,
+              left: -1,
+              right: 1,
+              bottom: -1,
+              top: 1,
+            },
+          },
+        )
+        .unwrap();
+      world
+        .spawn(
+          { component: Transform, data: identityTx() },
+          { component: MeshFilter, data: { assetHandle: mesh } },
+          { component: MeshRenderer, data: { materials: [material] } },
+        )
+        .unwrap();
+      propagateTransforms(world);
+
+      const snapshot = extractFrame(world, assets).renderables[0]?.material;
+      expect(snapshot?.textureHandles?.get('baseColorTexture')).toBe(baseColorHandle);
+      expect(snapshot?.textureHandles?.get('metallicRoughnessTexture')).toBe(
+        metallicRoughnessHandle,
+      );
     });
   });
 }

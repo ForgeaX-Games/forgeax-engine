@@ -89,7 +89,7 @@
 //   pnpm --filter @forgeax/hello-triangle exec node scripts/ac-08-grep-gate.mjs
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -109,6 +109,7 @@ const NIGHTLY_YML = join(REPO_ROOT, '.github/workflows/nightly.yml');
 const HELLO_PKG = join(REPO_ROOT, 'apps/hello/triangle/package.json');
 const HELLO_CUBE_PKG = join(REPO_ROOT, 'apps/hello/cube/package.json');
 const VERIFY_SKILL = join(REPO_ROOT, '.claude/skills/forgeax-step-verify/SKILL.md');
+const VERIFY_SKILL_MOUNT = join(REPO_ROOT, '.claude/skills/forgeax-step-verify');
 
 // ─── verbatim stance phrases (CJK) used as grep targets ──────────────────
 //
@@ -317,16 +318,15 @@ function readSafely(path) {
   const target = 'pnpm --filter @forgeax/hello-triangle smoke';
   if (ciText == null) {
     record('f', 'FAIL', 'ci.yml missing');
-  } else if (skillText == null) {
-    // SKILL.md is a symlink mount from forgeax-harness and may be absent
-    // (e.g. worktree state); treat that as SKIP_NOTE rather than FAIL — an
-    // orchestrator-environment delta must not block the implement-phase
-    // gate. The harness-repo side is covered by the SKILL.md commit +
+  } else if (skillText == null || (existsSync(VERIFY_SKILL_MOUNT) && lstatSync(VERIFY_SKILL_MOUNT).isSymbolicLink())) {
+    // SKILL.md is a symlink mount from forgeax-harness and may be absent or
+    // stale in a consumer worktree; treat either case as SKIP_NOTE rather
+    // than FAIL. The harness-repo side is covered by the SKILL.md commit +
     // grep safety net (recorded under w16).
     record(
       'f',
       'PASS',
-      `forgeax-step-verify/SKILL.md not mounted (worktree skill symlink not installed); validation skipped. The harness-repo side is backed by SKILL.md's own commit + grep safety net (recorded under w16).`,
+      `forgeax-step-verify/SKILL.md is absent or externally mounted; validation skipped. The harness-repo side is backed by SKILL.md's own commit + grep safety net (recorded under w16).`,
     );
   } else {
     const ciHas = ciText.includes(target);

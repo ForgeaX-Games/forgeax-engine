@@ -281,7 +281,7 @@ revisited once the path is chosen.
 ### Deep-dive conclusion (2026-06-28): the engine fix is small + well-scoped
 
 Traced the HDRP draw path end-to-end. The fix is bounded:
-- **Fragment entry is data-driven from the MaterialPassDescriptor**, NOT hardcoded per shader id.
+- **Fragment entry is data-driven from the MaterialPass**, NOT hardcoded per shader id.
   `render-system-extract.ts:2727` builds dispatch entries from the material's own `passes[]` via
   `selectPasses`, threading each pass's `fragmentEntry` + `tags.LightMode` into the dispatch entry
   (lines 2742/2738). The g-buffer pass runs `recordMainPass(ctx, {LightMode:['Deferred']})`

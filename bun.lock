@@ -2025,6 +2025,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
@@ -2275,9 +2276,12 @@
       "name": "@forgeax/hello-custom-shader",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-geometry": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-scene": "workspace:*",
@@ -2285,6 +2289,7 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -4191,6 +4196,7 @@
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
+        "@webgpu/types": "^0.1.71",
       },
       "devDependencies": {
         "@forgeax/engine-skinning": "workspace:*",
@@ -4323,17 +4329,17 @@
         "forgeax-engine-remote-gltf": "./dist/cli-gltf.mjs",
       },
       "dependencies": {
-        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-import": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
-        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@webgpu/types": "^0.1.71",
       },
       "devDependencies": {
-        "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-picking": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@types/node": "^20.14.0",
       },
@@ -4365,6 +4371,7 @@
       "devDependencies": {
         "@forgeax/engine-import": "workspace:*",
         "@types/node": "^20.14.0",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/import": {
@@ -4758,11 +4765,12 @@
         "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-shader-compiler": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-assets-runtime": "workspace:*",
-        "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@types/node": "^20.14.0",
         "ajv": "^8.20.0",
@@ -4770,7 +4778,6 @@
         "vite": "8.0.10",
       },
       "peerDependencies": {
-        "@forgeax/engine-pack": "workspace:*",
         "vite": "^7 || ^8",
       },
     },

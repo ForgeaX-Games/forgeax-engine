@@ -301,7 +301,7 @@ function stripWgslComments(source: string): string {
  *
  * This is the runtime (register-time) counterpart of the build-time superset
  * gate (`compareParamSchemaSuperset`): user shaders registered directly via
- * `ShaderRegistry.registerMaterialShader` bypass the vite-plugin-shader
+ * `ShaderRegistry.installMaterialArtifact` bypass the vite-plugin-shader
  * reflection path, so an under-declared schema would otherwise let the extract
  * stage's `validateTextureHandle` silently drop the sampled texture's handle
  * and fall back to the default white texture (charter P3 violation — the bug

@@ -313,7 +313,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
     const pack = packResult.value;
-    expect(pack.schemaVersion).toBe('1.0.0');
+    expect(pack.schemaVersion).toBe('2.0.0');
+    expect(pack.assets).toEqual([expect.objectContaining({ artifacts: {} })]);
     expect(pack.kind).toBe('internal-text-package');
     const assets = pack.assets as Array<Record<string, unknown>>;
     expect(Array.isArray(assets)).toBe(true);
@@ -334,7 +335,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
     const pack = packResult.value;
-    expect(pack.schemaVersion).toBe('1.0.0');
+    expect(pack.schemaVersion).toBe('2.0.0');
+    expect(pack.assets).toEqual([expect.objectContaining({ artifacts: {} })]);
     expect(pack.kind).toBe('internal-text-package');
     const assets = pack.assets as Array<Record<string, unknown>>;
     expect(Array.isArray(assets)).toBe(true);

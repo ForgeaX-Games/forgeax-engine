@@ -22,7 +22,8 @@ import type {
   AssetError as AssetErrorType,
   Handle,
   MaterialAsset,
-  MaterialPassDescriptor,
+  MaterialParameter,
+  MaterialPass,
 } from '@forgeax/engine-types';
 import { ASSET_ERROR_HINTS, AssetError, BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
 import { BuiltinAssetRegistry } from './builtin-asset-registry';
@@ -85,7 +86,7 @@ export function resolveAssetHandle<T extends Asset>(
 
 /**
  * Walk a MaterialAsset parent chain to produce the inherited passes +
- * shallow-merged paramValues (W-1..W-7 semantics). feat-20260614 M8 (D-19):
+ * shallow-merged values (W-1..W-7 semantics). feat-20260614 M8 (D-19):
  * the starting material is resolved from a column `handle` via
  * {@link resolveAssetHandle} (builtin / user-tier world.sharedRefs); each
  * ancestor `material.parent` is an embedded GUID (AssetGuid) resolved through
@@ -102,7 +103,11 @@ export function walkMaterialPassesOverSharedRefs(
   handle: Handle<'MaterialAsset', 'shared'>,
   registry: { lookup(guid: AssetGuid | string): Asset | undefined },
 ): Result<
-  { passes: MaterialPassDescriptor[]; paramValues: Record<string, unknown> },
+  {
+    passes: MaterialPass[];
+    parameters: MaterialParameter[];
+    values: Record<string, unknown>;
+  },
   AssetErrorType | MaterialResolvedEmptyPassesError | SharedRefStaleError | UniqueRefStaleError
 > {
   const visited = new Set<string>();
@@ -115,10 +120,23 @@ export function walkMaterialPassesOverSharedRefs(
     handle as unknown as Handle<string, 'shared'>,
   );
 
+  function mergeParameters(
+    parent: readonly MaterialParameter[],
+    child: readonly MaterialParameter[] | undefined,
+  ): MaterialParameter[] {
+    const merged = new Map(parent.map((parameter) => [parameter.name, parameter] as const));
+    for (const parameter of child ?? []) merged.set(parameter.name, parameter);
+    return [...merged.values()];
+  }
+
   function walkPayload(
     material: MaterialAsset | undefined,
     label: string,
-  ): { passes: MaterialPassDescriptor[]; paramValues: Record<string, unknown> } | null {
+  ): {
+    passes: MaterialPass[];
+    parameters: MaterialParameter[];
+    values: Record<string, unknown>;
+  } | null {
     if (visited.has(label)) {
       chainNames.push(label);
       return null;
@@ -128,11 +146,12 @@ export function walkMaterialPassesOverSharedRefs(
 
     if (material === undefined) {
       missingParent = true;
-      return { passes: [], paramValues: {} };
+      return { passes: [], parameters: [], values: {} };
     }
 
-    let parentPasses: MaterialPassDescriptor[] = [];
-    let parentParamValues: Record<string, unknown> = {};
+    let parentPasses: MaterialPass[] = [];
+    let parentParameters: MaterialParameter[] = [];
+    let parentValues: Record<string, unknown> = {};
     if (material.parent !== undefined) {
       const parentGuid = material.parent as AssetGuid;
       const parentLabel = AssetGuid.format(parentGuid).toLowerCase();
@@ -140,24 +159,29 @@ export function walkMaterialPassesOverSharedRefs(
       const parentResult = walkPayload(parentMaterial, parentLabel);
       if (parentResult === null) return null;
       parentPasses = parentResult.passes;
-      parentParamValues = parentResult.paramValues;
+      parentParameters = parentResult.parameters;
+      parentValues = parentResult.values;
     }
 
-    // W-4: child paramValues shallow-merge over parent.
-    const mergedParams: Record<string, unknown> = { ...parentParamValues };
-    if (material.paramValues) {
-      for (const [k, v] of Object.entries(material.paramValues)) {
+    // W-4: child values shallow-merge over parent.
+    const mergedParams: Record<string, unknown> = { ...parentValues };
+    if (material.values) {
+      for (const [k, v] of Object.entries(material.values)) {
         mergedParams[k] = v;
       }
     }
 
     // W-5: no passes -- full inheritance from parent.
     if (!material.passes || material.passes.length === 0) {
-      return { passes: parentPasses, paramValues: mergedParams };
+      return {
+        passes: parentPasses,
+        parameters: mergeParameters(parentParameters, material.parameters),
+        values: mergedParams,
+      };
     }
 
     // W-6: child passes override parent by name, new names append.
-    const mergedPasses: MaterialPassDescriptor[] = [];
+    const mergedPasses: MaterialPass[] = [];
     const seenNames = new Set<string>();
     for (const cp of material.passes) {
       seenNames.add(cp.name);
@@ -168,7 +192,11 @@ export function walkMaterialPassesOverSharedRefs(
         mergedPasses.push(pp);
       }
     }
-    return { passes: mergedPasses, paramValues: mergedParams };
+    return {
+      passes: mergedPasses,
+      parameters: mergeParameters(parentParameters, material.parameters),
+      values: mergedParams,
+    };
   }
 
   const rootLabel = `handle-${handleSlot(handle)}`;

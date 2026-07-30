@@ -120,12 +120,12 @@ export function shaderNotFound(args: {
 }
 
 /**
- * `material-shader-not-found`: `ShaderRegistry.lookupMaterialShader(identifier)`
+ * `material-shader-not-found`: `ShaderRegistry.findMaterialArtifact(identifier)`
  * miss. Returned by the runtime path when a `MaterialAsset.payload.materialShader`
  * `::`-routed identifier (or any registered identifier) has no matching entry
  * in the registry. AI-user recovery: the `.hint` cites the
  * `forgeax::default-standard-pbr` reservation + the
- * `registerMaterialShader(...)` API path so the caller can register the missing
+ * `installMaterialArtifact(...)` API path so the caller can register the missing
  * shader at engine boot (feat-20260523-shader-template-instance-split M5 / T05).
  *
  * feat-20260528-material-shader-registration-unification M3 / w12 +

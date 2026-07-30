@@ -39,7 +39,6 @@ describe('AssetUnion exhaustive switch covers all 15 members (feat-20260608 M0 b
       | 'animation-clip'
       | 'animation-graph'
       | 'audio'
-      | 'shader'
       | 'font'
       | 'render-pipeline'
       | 'tileset'

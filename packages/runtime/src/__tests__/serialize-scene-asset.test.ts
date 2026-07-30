@@ -95,7 +95,8 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
     if (!packResult.ok) return;
 
     const packObj = packResult.value;
-    expect(packObj.schemaVersion).toBe('1.0.0');
+    expect(packObj.schemaVersion).toBe('2.0.0');
+    expect(packObj.assets).toEqual([expect.objectContaining({ artifacts: {} })]);
     expect(packObj.kind).toBe('internal-text-package');
     const assets = packObj.assets as Array<Record<string, unknown>>;
     expect(Array.isArray(assets)).toBe(true);

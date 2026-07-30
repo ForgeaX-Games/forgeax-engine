@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Shadertoy port: 'fractal pyramid' (https://www.shadertoy.com/view/tsXBzS) reproduced as a fullscreen-quad custom material shader. A WGSL raymarcher driven by iResolution + iTime material params, registered through ShaderRegistry.registerMaterialShader('shadertoy::fractal-pyramid', ...).",
+  "description": "Shadertoy port: 'fractal pyramid' (https://www.shadertoy.com/view/tsXBzS) reproduced as a fullscreen-quad custom material shader. A WGSL raymarcher driven by iResolution + iTime material params, registered through ShaderRegistry.installMaterialArtifact('shadertoy::fractal-pyramid', ...).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SHADER_PATH = resolve(here, '..', 'parallax.wgsl');
-const META_PATH = resolve(here, '..', 'parallax.wgsl.meta.json');
+const META_PATH = resolve(here, '..', 'parallax.material.json');
 const src = readFileSync(SHADER_PATH, 'utf8');
 
 describe('parallax.wgsl source structure (LO 5.5)', () => {
@@ -52,7 +52,7 @@ describe('parallax.wgsl source structure (LO 5.5)', () => {
   });
 });
 
-describe('parallax.wgsl.meta.json paramSchema', () => {
+describe('parallax.material.json paramSchema', () => {
   const meta = JSON.parse(readFileSync(META_PATH, 'utf8')) as {
     importSettings: { materialShaderIdentifier: string };
     paramSchema: Array<{ name: string; type: string }>;

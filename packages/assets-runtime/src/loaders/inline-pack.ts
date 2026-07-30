@@ -11,7 +11,7 @@ import type {
   LoadContext,
   Loader,
   MaterialAsset,
-  MaterialPassDescriptor,
+  MaterialPass,
   ParseErrorDetail,
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
@@ -216,7 +216,7 @@ export const sceneLoader: Loader = {
  * feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
  * the legacy hardcoded texture-field allowlist Set has been removed
  * (AC-03). The materialLoader now consults `ctx.getMaterialShaderTextureFieldNames`
- * (paramSchema-derived via derive()) to know which paramValues fields carry
+ * (paramSchema-derived via derive()) to know which values fields carry
  * refs[] indices. When the shader is not yet registered (cross-worktree
  * shader-late-register path, plan R-4), the loader falls back to attempting
  * resolution on every int-typed paramValue in [0, refs.length) — M4 / w23's
@@ -233,7 +233,7 @@ function collectShaderTextureFieldNames(
   const collected = new Set<string>();
   let anyResolved = false;
   for (const pass of passesFromPayload) {
-    const shaderId = (pass as { shader?: unknown }).shader;
+    const shaderId = (pass as { program?: { module?: unknown } }).program?.module;
     if (typeof shaderId !== 'string' || shaderId.length === 0) continue;
     const fields = lookup(shaderId);
     if (fields === undefined) continue;
@@ -243,16 +243,18 @@ function collectShaderTextureFieldNames(
   return anyResolved ? collected : undefined;
 }
 
-/** material loader — passes + paramValues + parent ref-index -> parentGuid string. */
+/** material loader — passes + values + serialized parent GUID -> parentGuid. */
 export const materialLoader: Loader = {
   kind: 'material',
   load(payload, refs, ctx: LoadContext) {
     const matPayload = payload;
     const passesFromPayload = matPayload.passes;
-    const rawParamValues = (matPayload.paramValues as Record<string, unknown>) ?? {};
+    const rawParamValues = (matPayload.values as Record<string, unknown>) ?? {};
 
     let parentGuid: string | undefined;
-    if (typeof matPayload.parent === 'number') {
+    if (typeof matPayload.parent === 'string') {
+      parentGuid = matPayload.parent;
+    } else if (typeof matPayload.parent === 'number') {
       const idx = matPayload.parent;
       const refsArr = refs ?? [];
       if (idx >= 0 && idx < refsArr.length) {
@@ -266,7 +268,7 @@ export const materialLoader: Loader = {
       }
     }
 
-    // bug-20260610: paramValues fields that are typed `handle<TextureAsset>`
+    // bug-20260610: values fields that are typed `handle<TextureAsset>`
     // arrive on disk as a refs[] index (small int 0..refs.length-1). The
     // build-time gltfImporter writes these as refs indices, mirroring the
     // scene's HANDLE_FIELD_NAMES treatment.
@@ -281,13 +283,13 @@ export const materialLoader: Loader = {
     // [0, refs.length) is attempted; the M4 / w23 extract layer's paramSchema
     // validation catches misclassified scalars and falls back to
     // MISSING_TEXTURE_HANDLE.
-    const paramValues: Record<string, unknown> = { ...rawParamValues };
+    const values: Record<string, unknown> = { ...rawParamValues };
     if (refs && refs.length > 0) {
       const shaderTextureFields = collectShaderTextureFieldNames(passesFromPayload, ctx);
       const candidateFields =
-        shaderTextureFields !== undefined ? shaderTextureFields : Object.keys(paramValues);
+        shaderTextureFields !== undefined ? shaderTextureFields : Object.keys(values);
       for (const fieldName of candidateFields) {
-        const value = paramValues[fieldName];
+        const value = values[fieldName];
         if (typeof value !== 'number' || !Number.isInteger(value)) continue;
         if (value < 0 || value >= refs.length) {
           // Only emit a parse-error breadcrumb when the field is declared as
@@ -295,29 +297,29 @@ export const materialLoader: Loader = {
           // For the graceful "try every int" fallback, OOB simply means
           // "this scalar was not a refs index" — don't spam parse errors.
           if (shaderTextureFields !== undefined) {
-            delete paramValues[fieldName];
+            delete values[fieldName];
           }
           continue;
         }
         const refGuid = refs[value];
         if (typeof refGuid !== 'string') {
           if (shaderTextureFields !== undefined) {
-            delete paramValues[fieldName];
+            delete values[fieldName];
           }
           continue;
         }
         // feat-20260614 M8 (D-19): store the embedded sub-asset ref as its GUID
         // string (dash-form). The ECS/render side resolves GUID -> column handle
         // at use time via `world.allocSharedRef` -- the registry never mints.
-        paramValues[fieldName] = refGuid;
+        values[fieldName] = refGuid;
       }
     }
 
     if (Array.isArray(passesFromPayload) && passesFromPayload.length > 0) {
       return {
         kind: 'material',
-        passes: passesFromPayload as readonly MaterialPassDescriptor[],
-        paramValues,
+        passes: passesFromPayload as readonly MaterialPass[],
+        values,
         parentGuid,
       } as MaterialAsset & { parentGuid?: string };
     }
@@ -325,7 +327,7 @@ export const materialLoader: Loader = {
     if (parentGuid !== undefined) {
       return {
         kind: 'material',
-        paramValues,
+        values,
         parentGuid,
       } as unknown as MaterialAsset & { parentGuid?: string };
     }
@@ -446,7 +448,7 @@ export const animationClipLoader: Loader = {
  * field arrives as a `refs[]` index (small int); the loader resolves it back to
  * the GUID string verbatim, leaving GUID -> handle re-resolution to the ECS/use
  * time (the same "GUID at load, handle at use" contract materialLoader honours
- * for parentGuid / paramValues texture fields, asset-registry D-19). Blend/Add
+ * for parentGuid / values texture fields, asset-registry D-19). Blend/Add
  * node references + `root` are intra-graph node indices, validated against the
  * node count. A malformed payload (out-of-range refs / node index, bad node
  * shape, non-finite weight) returns `undefined` so the load-by-guid path

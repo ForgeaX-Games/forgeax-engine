@@ -112,12 +112,11 @@ function registerUnlitMaterial(world: World, rgb: readonly [number, number, numb
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [rgb[0], rgb[1], rgb[2]] },
+    values: { baseColor: [rgb[0], rgb[1], rgb[2]] },
   });
 }
 
@@ -179,6 +178,9 @@ describe('render-system-extract M2.5 dispatch/renderable slot pairing (AC-06)', 
     // (the culled green entity's dispatch push at push-site A already ran).
     expect(frame.dispatch).toHaveLength(1);
     expect(frame.dispatch[0]?.renderableIndex).toBe(0);
+    expect(frame.dispatch[0]?.tags).toEqual({ LightMode: 'Forward' });
+    expect(frame.dispatch[0]?.renderState).toBeUndefined();
+    expect(frame.renderables[0]?.material.renderState).toBeUndefined();
     expectSlotAlignment(frame, { requireBaseColorEquality: true });
     // Frustum-stat sanity: cull loop actually ran (Stage 1 aabb restore).
     expect(frame.frustumStats.total).toBeGreaterThanOrEqual(2);

@@ -2456,7 +2456,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       const world = new World();
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
+        { findMaterialArtifact: () => ({ ok: false }) } as any,
       );
 
       const matHandle = world.allocSharedRef('MaterialAsset', {
@@ -2498,7 +2498,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
+        { findMaterialArtifact: () => ({ ok: false }) } as any,
       );
 
       const meshHandle = world.allocSharedRef('MeshAsset', {
@@ -2536,7 +2536,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
+        { findMaterialArtifact: () => ({ ok: false }) } as any,
       );
 
       const matHandle = world.allocSharedRef('MaterialAsset', {

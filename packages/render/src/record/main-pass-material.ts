@@ -40,6 +40,12 @@ import {
   STANDARD_PBR_UBO_SIZE,
 } from '../render-system';
 import type { MaterialSnapshot } from '../render-system-extract';
+import type { MaterialRenderProjection } from '../renderer/material/assembly.js';
+import {
+  type MaterialPipelineMiss,
+  type MaterialPipelineReady,
+  routeMaterialPipeline,
+} from '../renderer/material/pipeline-projection.js';
 import type { BindGroupCounts } from './frame-snapshot';
 import { extractEntryResourceHandle, getOrCreatePerEntity } from './mesh-ssbo';
 
@@ -96,6 +102,22 @@ export function selectGeometryPipeline(
     return msaaActive ? pipelineState.unlitPipelineHdrMsaa : pipelineState.unlitPipelineHdr;
   }
   return msaaActive ? pipelineState.unlitPipelineMsaa : pipelineState.unlitPipeline;
+}
+
+/**
+ * Resolve a cooked material projection for record. The record stage receives
+ * the already-resolved projection and an immutable artifact lookup; it never
+ * follows parent GUIDs, reads authored material state, or invokes a compiler.
+ * A missing or mismatched artifact is an explicit route miss so callers cannot
+ * silently substitute a default shader.
+ */
+export function selectCookedMaterialPipelineForRender(args: {
+  readonly projection: MaterialRenderProjection;
+  readonly lookupArtifact: (
+    key: string,
+  ) => import('@forgeax/engine-shader').MaterialRuntimeArtifact | undefined;
+}): MaterialPipelineReady | MaterialPipelineMiss {
+  return routeMaterialPipeline(args);
 }
 
 /**
@@ -347,7 +369,7 @@ export const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
 ];
 
 const LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET = 80;
-const STANDARD_PBR_TEXTURE_SCALE_OFFSET = 112;
+const STANDARD_PBR_TEXTURE_SCALE_OFFSET = 96;
 const MATERIAL_TEXTURE_SCALE_FIELDS = [
   'baseColorTexture',
   'metallicRoughnessTexture',
@@ -363,6 +385,8 @@ const LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS = [
   'emissiveTexture',
   'occlusionTexture',
 ] as const;
+const STANDARD_PBR_TEXTURE_COORDINATE_OFFSET = 96;
+const STANDARD_PBR_TEXTURE_COORDINATE_STRIDE = 8;
 
 /** Derives the logical-content UV scale for an uploaded material texture. */
 export function materialTextureUvScale(
@@ -413,9 +437,24 @@ export function applyMaterialTextureUvScales(
       handle === undefined ? undefined : resolveAssetHandle<TextureAsset>(world, handle);
     const texture = resolved?.ok === true ? resolved.value : undefined;
     const [u, v] = materialTextureUvScale(texture);
-    const offset = textureScaleOffset / 4 + index * 2;
-    f32[offset] = u;
-    f32[offset + 1] = v;
+    if (isStandardPbr) {
+      const coordinates = material.textureCoordinates?.get(field);
+      const transform = coordinates?.transform;
+      const offset =
+        STANDARD_PBR_TEXTURE_COORDINATE_OFFSET / 4 + index * STANDARD_PBR_TEXTURE_COORDINATE_STRIDE;
+      f32[offset] = transform?.offset?.[0] ?? 0;
+      f32[offset + 1] = transform?.offset?.[1] ?? 0;
+      f32[offset + 2] = transform?.scale?.[0] ?? 1;
+      f32[offset + 3] = transform?.scale?.[1] ?? 1;
+      f32[offset + 4] = coordinates?.set ?? 0;
+      f32[offset + 5] = transform?.rotation ?? 0;
+      f32[offset + 6] = u;
+      f32[offset + 7] = v;
+    } else {
+      const offset = textureScaleOffset / 4 + index * 2;
+      f32[offset] = u;
+      f32[offset + 1] = v;
+    }
   }
 }
 
@@ -429,8 +468,9 @@ export function applyMaterialTextureUvScales(
 export function userRegionTextureFieldOrder(
   schema: Parameters<typeof derive>[0] | undefined,
 ): readonly string[] {
-  if (schema === undefined) return BUILTIN_USER_REGION_TEXTURE_FIELDS;
-  return [...derive(schema).textureFieldNames];
+  if (schema === undefined || schema.length === 0) return BUILTIN_USER_REGION_TEXTURE_FIELDS;
+  const fields = [...derive(schema).textureFieldNames];
+  return fields.length === 0 ? BUILTIN_USER_REGION_TEXTURE_FIELDS : fields;
 }
 
 /**
@@ -520,14 +560,12 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuf
   //   f32[12..14] emissive           (offset 48,  vec3)
   //   f32[15]     emissiveIntensity  (offset 60)
   //   f32[16]     occlusionStrength  (offset 64)
-  //   f32[17]     uvSet              (offset 68)
-  //   f32[18]     alphaCutoff        (offset 72)
-  //   f32[19]     clearcoat          (offset 76)
-  //   f32[20]     clearcoatRoughness (offset 80)
-  //                                  (offset 84..87 alignment pad)
-  //   f32[24..26] specularTint      (offset 96, vec3)
-  //   f32[28..]   engine-owned texture UV scales (offset 112)
-  // Total bind window = 160 B; dynamic stride remains 256 B.
+  //   f32[17]     alphaCutoff        (offset 68)
+  //   f32[18]     clearcoat          (offset 72)
+  //   f32[19]     clearcoatRoughness (offset 76)
+  //   f32[20..22] specularTint       (offset 80, vec3)
+  //                                  (offset 92..95 alignment pad)
+  //   f32[24..]   engine-owned texture coordinate records (offset 96)
   f32[0] = material.baseColor[0] ?? 0;
   f32[1] = material.baseColor[1] ?? 0;
   f32[2] = material.baseColor[2] ?? 0;
@@ -549,14 +587,13 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuf
   f32[15] = material.emissiveIntensity ?? 0;
   // occlusionStrength (offset 64)
   f32[16] = material.occlusionStrength ?? 1;
-  // uvSet (offset 68) and alphaCutoff (offset 72).
+  // alphaCutoff (offset 68).
   f32[17] = 0;
-  f32[18] = 0;
-  f32[19] = material.clearcoat ?? 0;
-  f32[20] = material.clearcoatRoughness ?? 0.5;
-  f32[24] = 1;
-  f32[25] = 1;
-  f32[26] = 1;
+  f32[18] = material.clearcoat ?? 0;
+  f32[19] = material.clearcoatRoughness ?? 0.5;
+  f32[20] = 1;
+  f32[21] = 1;
+  f32[22] = 1;
   // Schema-driven paramSnapshot overlay (feat-20260523 M9-T05, AC-14):
   // for user-shaders with a paramSnapshot, project the first vec4/color
   // entry onto slot 0 and the first two f32 entries onto slot 1's first
@@ -673,7 +710,7 @@ export function applyParamSnapshotToUbo(
  * call the identical layout.
  *
  * feat-city-glb Bug 5 (per-submesh transparency): a transparent PBR submesh
- * binds the identical metallic/roughness/normal/emissive/occlusion + uvSet +
+ * binds the identical metallic/roughness/normal/emissive/occlusion +
  * Skylight layout the geometry pass uses (the sub-pass previously bound a
  * sprite-only BG, which cannot render a PBR decal). The per-frame closure state
  * (runtime / pipelineState / world / store / skylightResources / the shared
@@ -714,7 +751,9 @@ export function buildPerSubmeshMaterialBg(
   const smShaderId = submeshMaterial.materialShaderId;
   const smPerShaderBgl =
     smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
-  const smSchema = smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined;
+  const smSchema =
+    submeshMaterial.materialParamSchema ??
+    (smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined);
   const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
   const smBaseEntries: BindGroupEntry[] = [
     {

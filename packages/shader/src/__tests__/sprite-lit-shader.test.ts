@@ -14,6 +14,7 @@
 //   - research.md F-4 (LDR clamp / HDR pass-through)
 
 import { describe, expect, it } from 'vitest';
+import { createBuiltinMaterialAsset } from '../index.js';
 
 // Dynamic node:fs / node:module import via string ids — keeps the
 // engine-shader package free of static `import 'node:fs'` (which
@@ -67,21 +68,6 @@ async function spriteLitWgslExists(): Promise<boolean> {
   const fs = await loadFs();
   const srcDir = await resolveSrcDir();
   return fs.existsSync(`${srcDir}/sprite-lit.wgsl`);
-}
-
-async function readSpriteLitMeta(): Promise<{
-  readonly importSettings: { readonly materialShaderIdentifier: string };
-  readonly paramSchema: ReadonlyArray<{ readonly name: string; readonly type: string }>;
-}> {
-  const fs = await loadFs();
-  const srcDir = await resolveSrcDir();
-  return JSON.parse(fs.readFileSync(`${srcDir}/sprite-lit.wgsl.meta.json`, 'utf8'));
-}
-
-async function spriteLitMetaExists(): Promise<boolean> {
-  const fs = await loadFs();
-  const srcDir = await resolveSrcDir();
-  return fs.existsSync(`${srcDir}/sprite-lit.wgsl.meta.json`);
 }
 
 describe('sprite-lit shader (flat 2D lighting, tweak-20260701 M1)', () => {
@@ -226,29 +212,11 @@ describe('sprite-lit shader (flat 2D lighting, tweak-20260701 M1)', () => {
     });
   });
 
-  describe('sprite-lit.wgsl.meta.json (paramSchema + materialShaderIdentifier)', () => {
-    it('meta file exists with materialShaderIdentifier = "forgeax::sprite-lit"', async () => {
-      expect(await spriteLitMetaExists()).toBe(true);
-      const meta = await readSpriteLitMeta();
-      expect(meta.importSettings.materialShaderIdentifier).toBe('forgeax::sprite-lit');
-    });
-
-    it('paramSchema mirrors sprite.wgsl.meta.json (5 fields byte-identical, no normalTexture / normalStrength)', async () => {
-      const meta = await readSpriteLitMeta();
-      const names = meta.paramSchema.map((p) => p.name);
-      // Negative gate: no normal map fields.
-      expect(names.includes('normalTexture')).toBe(false);
-      expect(names.includes('normalStrength')).toBe(false);
-      // Positive gate: 5 fields strictly aligned with sprite.wgsl.meta.json
-      // (colorTint / region / pivotAndSize / slicesAndMode / baseColorTexture).
-      // Field-set congruence drives BGL byte-identical.
-      expect(names).toEqual([
-        'colorTint',
-        'region',
-        'pivotAndSize',
-        'slicesAndMode',
-        'baseColorTexture',
-      ]);
+  describe('sprite-lit authored material contract', () => {
+    it('uses the built-in source catalog instead of a sidecar schema', () => {
+      const material = createBuiltinMaterialAsset('sprite');
+      expect(material.passes?.[0]?.program.module).toBe('forgeax_material::sprite');
+      expect(material.values).toBeDefined();
     });
   });
 

@@ -124,7 +124,6 @@ const DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0 },
   { name: 'occlusionStrength', type: 'f32', default: 1 },
-  { name: 'uvSet', type: 'f32', default: 0 },
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'clearcoat', type: 'f32', default: 0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },

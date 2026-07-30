@@ -3,19 +3,12 @@
 //
 // One custom material shader (parallax.wgsl) carries all three LO 5.5
 // algorithms; the active path + height scale + texture set are switched at
-// runtime by mutating the MaterialAsset.paramValues object BY REFERENCE in a
+// runtime by mutating the MaterialAsset.values object BY REFERENCE in a
 // keydown handler (D-7) — extract/record pick up the change next frame, no
 // recompile.
 //
-// Per-shader-derived BGL (feat-20260621): the parallax shader's paramSchema
-// declares THREE texture fields (baseColor / normal / HEIGHT). The engine
-// derives the @group(1) material BGL from that schema, so the height-map slot
-// exists end-to-end without any engine edit — that is the structural win this
-// demo dogfoods.
-//
-// Custom shader path (charter F1 grep gate):
-//   grep `registerMaterialShader` -> finds this file
-//   grep `learn-render::5-5-parallax` -> finds WGSL + index.ts + meta.json
+// The manifest's cooked material record derives the material bind group from
+// the shader's declared texture fields, including the height-map slot.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -30,12 +23,12 @@ import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
-import parallaxShader from './parallax.wgsl';
+import './parallax.wgsl';
 
 const PARALLAX_SHADER_ID = 'learn-render::5-5-parallax' as const;
 
@@ -108,31 +101,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   assets.configurePackIndex(PACK_INDEX_URL);
 
-  // Register the parallax custom material shader. The paramSchema mirrors the
-  // .meta.json sidecar (the build path's SSOT); this runtime registration is
-  // the dawn-node / non-Vite fallback.
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[learn-render 5.5 parallax-mapping] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(PARALLAX_SHADER_ID).ok) {
-    shader.registerMaterialShader(PARALLAX_SHADER_ID, {
-      source: parallaxShader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-        { name: 'heightScale', type: 'f32', default: HEIGHT_SCALE_DEFAULT },
-        { name: 'algoMode', type: 'f32', default: 0.0 },
-        { name: 'baseColorTexture', type: 'texture2d' },
-        { name: 'normalTexture', type: 'texture2d' },
-        { name: 'heightTexture', type: 'texture2d' },
-      ],
-    });
-  }
-
-  // Load both texture sets up front so set-switching is a paramValues swap
+  // Load both texture sets up front so set-switching is a values swap
   // (no async on keypress). Each loaded TextureAsset is wrapped into a column
-  // handle once; the handle ints are what paramValues carries.
+  // handle once; the handle ints are what values carries.
   const loadSet = async (
     set: (typeof TEXTURE_SETS)[keyof typeof TEXTURE_SETS],
   ): Promise<{ diffuse: number; normal: number; height: number } | null> => {
@@ -162,10 +133,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const toyBoxHandles = await loadSet(TEXTURE_SETS.toyBox);
   if (bricksHandles === null || toyBoxHandles === null) return;
 
-  // Construct the MaterialAsset POJO. We keep a live reference to paramValues
+  // Construct the MaterialAsset POJO. We keep a live reference to values
   // so the keydown handler can mutate algoMode / heightScale / texture handles
   // in place — extract reads the same object next frame (D-7).
-  const paramValues: Record<string, number | number[]> = {
+  const values: Record<string, MaterialValue | null> = {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     heightScale: HEIGHT_SCALE_DEFAULT,
     algoMode: 0.0,
@@ -175,8 +146,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
   const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: PARALLAX_SHADER_ID, tags: { LightMode: 'Forward' } }],
-    paramValues: paramValues as Readonly<Record<string, unknown>>,
+    passes: [{ name: 'Forward', program: { module: PARALLAX_SHADER_ID }, renderState: { tags: { LightMode: 'Forward' } } }],
+    values,
   });
 
   // Wall quad facing +Z (HANDLE_QUAD = createPlaneGeometry(1,1) with tangents
@@ -206,17 +177,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   // HUD + keyboard switching. algoMode/heightScale/texture-set are discrete
-  // events: mutate paramValues by reference; the next extract picks it up.
+  // events: mutate values by reference; the next extract picks it up.
   const hud = document.querySelector<HTMLPreElement>('#hud');
   let activeSet: 'bricks2' | 'toyBox' = 'bricks2';
   const renderHud = (): void => {
     if (hud === null) return;
-    const algo = ALGO_LABELS[Math.round(paramValues.algoMode as number)] ?? '?';
+    const algo = ALGO_LABELS[Math.round(values.algoMode as number)] ?? '?';
     const setLabel = activeSet === 'bricks2' ? 'bricks2' : 'toy_box';
     hud.textContent = [
       'LearnOpenGL 5.5 — Parallax Mapping',
       `algorithm : ${algo}   [1 basic] [2 steep] [3 POM]`,
-      `heightScale: ${(paramValues.heightScale as number).toFixed(2)}   [-]/[=] adjust`,
+      `heightScale: ${(values.heightScale as number).toFixed(2)}   [-]/[=] adjust`,
       `texture   : ${setLabel}   [T] toggle`,
       'camera    : WASD + mouse drag, scroll = zoom',
     ].join('\n');
@@ -226,35 +197,35 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   window.addEventListener('keydown', (ev) => {
     switch (ev.key) {
       case '1':
-        paramValues.algoMode = 0.0;
+        values.algoMode = 0.0;
         break;
       case '2':
-        paramValues.algoMode = 1.0;
+        values.algoMode = 1.0;
         break;
       case '3':
-        paramValues.algoMode = 2.0;
+        values.algoMode = 2.0;
         break;
       case '-':
       case '_':
-        paramValues.heightScale = Math.max(
+        values.heightScale = Math.max(
           HEIGHT_SCALE_MIN,
-          (paramValues.heightScale as number) - HEIGHT_SCALE_STEP,
+          (values.heightScale as number) - HEIGHT_SCALE_STEP,
         );
         break;
       case '=':
       case '+':
-        paramValues.heightScale = Math.min(
+        values.heightScale = Math.min(
           HEIGHT_SCALE_MAX,
-          (paramValues.heightScale as number) + HEIGHT_SCALE_STEP,
+          (values.heightScale as number) + HEIGHT_SCALE_STEP,
         );
         break;
       case 't':
       case 'T': {
         activeSet = activeSet === 'bricks2' ? 'toyBox' : 'bricks2';
         const h = activeSet === 'bricks2' ? bricksHandles : toyBoxHandles;
-        paramValues.baseColorTexture = h.diffuse;
-        paramValues.normalTexture = h.normal;
-        paramValues.heightTexture = h.height;
+        values.baseColorTexture = h.diffuse;
+        values.normalTexture = h.normal;
+        values.heightTexture = h.height;
         break;
       }
       default:

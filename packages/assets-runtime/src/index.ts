@@ -75,6 +75,21 @@ export {
   PACK_ARTIFACT_LOADERS,
   textureLoader,
 } from './loaders/pack-artifact';
+export { MaterialDependencyGraph } from './material/dependency-graph';
+export {
+  type MaterialCachedArtifact,
+  MaterialGenerationCache,
+  type MaterialGenerationVector,
+  type MaterialStaleGenerationError,
+} from './material/generation-cache';
+export { inspectMaterialRuntime, type MaterialRuntimeInfo } from './material/inspection';
+export {
+  createMaterialLoader,
+  type MaterialLoadError,
+  type MaterialLoaderOptions,
+  type MaterialLoadRequest,
+  type MaterialReady,
+} from './material/loader';
 // ─── Mesh binary container decode ───────────────────────────────────────────
 export { unpackMeshBin } from './mesh-bin';
 // ─── Mipmap generation helpers ──────────────────────────────────────────────

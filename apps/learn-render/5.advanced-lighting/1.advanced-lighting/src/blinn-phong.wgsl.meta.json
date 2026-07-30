@@ -4,7 +4,7 @@
   "importer": "shader",
   "source": "blinn-phong.wgsl",
   "importSettings": {
-    "materialShaderIdentifier": "learn-render::5-1-blinn-phong"
+    "materialShaderIdentifier": "learn_render::5_1_blinn_phong"
   },
   "subAssets": [
     {

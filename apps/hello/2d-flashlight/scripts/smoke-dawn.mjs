@@ -43,6 +43,13 @@ const AC1_WEDGE_MIN = Number.parseFloat(process.env.SMOKE_AC1_MIN ?? '0.5');
 const AC2_CENTER_MIN = Number.parseFloat(process.env.SMOKE_AC2_CENTER_MIN ?? '0.7');
 const AC2_EDGE_MAX = Number.parseFloat(process.env.SMOKE_AC2_EDGE_MAX ?? '0.1');
 const CLEAR_RGBA = [0.01, 0.01, 0.02, 1.0];
+const SPRITE_LIT_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
+];
 
 // --- 1. dawn.node setup --------------------------------------------------
 
@@ -241,15 +248,14 @@ function allocMaterial(world, tint, texHandle, samplerHandle) {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::sprite-lit',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        program: { module: 'forgeax::sprite-lit' },
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 },
       },
     ],
-    // paramValues field names align with sprite-lit.wgsl.meta.json paramSchema
+    parameters: SPRITE_LIT_PARAMETERS,
+    // values field names align with sprite-lit.material.json paramSchema
     // (colorTint / region / pivotAndSize / baseColorTexture; post-#520 SSOT).
-    paramValues: {
+    values: {
       colorTint: tint,
       baseColorTexture: texHandle,
       sampler: samplerHandle,

@@ -1,9 +1,7 @@
 // multi-uv-pbr-compose-regression.unit.test.ts
 // feat-20260629-multi-uv-set-support — implement-review round 1 F-3 + F-7.
-// UPDATED by feat-city-glb Bug 4 (multi-UV tiling): the feat-20260629 single-UV
-// product decision was reversed on explicit user authorization — the built-in
-// PBR now declares @location(6) uv1 + a per-material `uvSet` selector so it
-// samples the glTF baseColorTexture.texCoord UV set.
+// The built-in PBR reserves UV0-UV7 and uses each material slot's texCoord
+// selector to sample the corresponding glTF texture coordinate set.
 //
 // Regression guard for two distinct concerns, running on the SAME composer the
 // vite-plugin-shader build path wraps (compileShader -> naga_oil compose ->
@@ -17,13 +15,9 @@
 //        (vec2) -- a WGSL type error naga surfaced as the opaque "Entry point
 //        fs_main at Fragment is invalid". If that (or any other validation-
 //        breaking edit) returns, compileShader fails here.
-//   Bug 4: the built-in standard-PBR + skin DECLARE a second UV set
-//        (@location(6) uv1), so naga reflection derives uvSetCount=2. The
-//        fragment resolves its UV set via `selectUv(in)` (select uv0/uv1 on
-//        `material.uvSet`), keeping single-UV content byte-identical via
-//        clamp-to-last (uv1 aliases uv0, selector defaults to 0). A custom
-//        2-UV-set fixture below pins that a shader declaring @location(6+) also
-//        reflects uvSetCount=2, so the multi-UV data pathway keeps its value.
+//   Built-in multi-UV: standard-PBR + skin reserve all eight supported sets.
+//        Missing mesh sets remain byte-stable through clamp-to-last aliases. A
+//        custom 2-UV-set fixture below still pins the opt-in reflection path.
 
 import { compileShader } from '@forgeax/engine-shader-compiler';
 import { readFileSync } from 'node:fs';
@@ -103,24 +97,21 @@ describe('built-in standard-PBR single-UV + multi-UV pathway regression (F-3 + F
     expect(r.ok, r.ok ? '' : `compileShader failed: ${r.error.message}`).toBe(true);
   });
 
-  it('built-in PBR reflects uvSetCount=2: multi-UV after the feat-city-glb tiling fix (Bug 4)', async () => {
+  it('built-in PBR reflects all eight supported UV sets for per-slot texCoord', async () => {
     const r = await composePbr('default-standard-pbr.wgsl');
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    // feat-city-glb Bug 4 (multi-UV tiling) REVERSED the feat-20260629 single-UV
-    // product decision (on explicit user authorization): the built-in PBR now
-    // declares @location(6) uv1 and honors a per-material `uvSet` selector so it
-    // can sample the glTF baseColorTexture.texCoord UV set (433/452 city_Sample
-    // materials use set 1). Reflection therefore derives uvSetCount=2. Single-UV
-    // meshes stay byte-identical via clamp-to-last (uv1 aliases uv0).
-    expect(r.value.uvSetCount).toBe(2);
+    // The built-in PBR reserves every supported set so each texture slot can
+    // select its glTF texCoord. Single-UV meshes stay byte-identical through
+    // clamp-to-last aliases.
+    expect(r.value.uvSetCount).toBe(8);
   });
 
-  it('built-in PBR skin reflects uvSetCount=2 (Bug 4)', async () => {
+  it('built-in PBR skin reflects all eight supported UV sets', async () => {
     const r = await composePbr('default-standard-pbr-skin.wgsl');
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.uvSetCount).toBe(2);
+    expect(r.value.uvSetCount).toBe(8);
   });
 
   it('a custom shader declaring @location(6) uv1 still reflects uvSetCount=2 (multi-UV pathway preserved)', async () => {
@@ -134,9 +125,9 @@ describe('built-in standard-PBR single-UV + multi-UV pathway regression (F-3 + F
     expect(r.value.uvSetCount).toBe(2);
   });
 
-  it('built-in PBR fragment selects the UV set via selectUv (feat-city-glb Bug 4 multi-UV)', async () => {
+  it('built-in PBR fragment resolves each texture through the material UV transform (feat-city-glb Bug 4 multi-UV)', async () => {
     // feat-city-glb Bug 4: the fragment now picks its UV set per-material via
-    // `selectUv(in)` = select(in.uv, in.uv1, material.uvSet >= 0.5). It samples
+    // `selectUv(in)` = select(in.uv, in.uv1, material.coordinatesSet >= 0.5). It samples
     // `uv` (the selected set), not `in.uv` directly, so texCoord=1 materials get
     // UV set 1. Single-UV content is byte-identical (selector defaults to 0 and
     // clamp-to-last aliases uv1 onto uv0). This replaces the pre-revert
@@ -155,10 +146,9 @@ describe('built-in standard-PBR single-UV + multi-UV pathway regression (F-3 + F
     expect(fragmentStart).toBeGreaterThan(0);
     expect(fragmentEnd).toBeGreaterThan(fragmentStart);
     const fragmentBody = source.slice(fragmentStart, fragmentEnd);
-    // The fragment resolves the UV set through the selector helper (which reads
-    // both in.uv and in.uv1) rather than hardcoding in.uv at every sample site.
-    expect(fragmentBody).toMatch(/selectUv\s*\(\s*in\s*\)/);
-    // And the selectUv helper itself is the single place that references uv1.
-    expect(source).toMatch(/fn selectUv[\s\S]*in\.uv1/);
+    // The authored material now carries one UV transform per texture slot;
+    // the composed shader resolves each slot through that shared helper.
+    expect(fragmentBody).toMatch(/transformedMaterialUv\s*\(\s*material\.baseColorCoordinates\s*,\s*in\s*\)/);
+    expect(fragmentBody).toMatch(/transformedMaterialUv\s*\(\s*material\.normalCoordinates\s*,\s*in\s*\)/);
   });
 });

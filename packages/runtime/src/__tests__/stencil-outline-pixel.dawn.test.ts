@@ -184,17 +184,19 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: RenderQueue.Geometry as number,
+          program: { module: 'forgeax::default-unlit' },
           renderState: {
-            stencilWriteMask: 0xff,
-            stencil: { compare: 'always', passOp: 'replace' },
+            ...{
+              stencilWriteMask: 0xff,
+              stencil: { compare: 'always', passOp: 'replace' },
+            },
+            tags: { LightMode: 'Forward' },
+            queue: RenderQueue.Geometry as number,
+            stencilReference: 1,
           },
-          stencilReference: 1,
         },
       ],
-      paramValues: {
+      values: {
         baseColor: [0.5, 0.5, 0.5, 1.0],
       },
     } as MaterialAsset);
@@ -207,18 +209,20 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       passes: [
         {
           name: 'ForwardOutline',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: (RenderQueue.Geometry as number) + 1,
+          program: { module: 'forgeax::default-unlit' },
           renderState: {
-            stencilReadMask: 0xff,
-            stencil: { compare: 'not-equal' },
-            depthWriteEnabled: false,
+            ...{
+              stencilReadMask: 0xff,
+              stencil: { compare: 'not-equal' },
+              depthWriteEnabled: false,
+            },
+            tags: { LightMode: 'Forward' },
+            queue: (RenderQueue.Geometry as number) + 1,
+            stencilReference: 1,
           },
-          stencilReference: 1,
         },
       ],
-      paramValues: {
+      values: {
         baseColor: OUTLINE_COLOR as readonly number[],
       },
     } as MaterialAsset);

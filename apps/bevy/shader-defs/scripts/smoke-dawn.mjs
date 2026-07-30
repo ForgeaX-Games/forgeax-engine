@@ -111,8 +111,8 @@ if (shader === null || shaderEntry === undefined) {
   console.error('[smoke] FAIL - shader registry or bevy::shader_defs manifest entry missing');
   process.exit(1);
 }
-if (!shader.lookupMaterialShader(shaderId).ok) {
-  shader.registerMaterialShader(shaderId, {
+if (!shader.findMaterialArtifact(shaderId).ok) {
+  shader.installMaterialArtifact(shaderId, {
     source: shaderEntry.composedWgsl,
     paramSchema: JSON.parse(shaderEntry.paramSchema),
   });
@@ -143,12 +143,17 @@ const makeMaterial = (baseColor, isRed) => world.allocSharedRef('MaterialAsset',
   kind: 'material',
   passes: [{
     name: 'Forward',
-    shader: shaderId,
-    tags: { LightMode: 'Forward' },
-    queue: 2000,
-    defines: { IS_RED: String(isRed) },
+    program: { module: shaderId, moduleSlots: { IS_RED: String(isRed) } },
+    renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
   }],
-  paramValues: { baseColor, time: 0, speed: 1, baseColorTexture: texture },
+  parameters: [
+    { name: 'baseColor', type: 'color' },
+    { name: 'time', type: 'f32' },
+    { name: 'speed', type: 'f32' },
+    { name: 'baseColorTexture', type: 'texture' },
+    { name: 'IS_RED', type: 'bool', static: true },
+  ],
+  values: { baseColor, time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
 });
 const blue = makeMaterial([0.05, 0.25, 1], false);
 const greenWithRedDefine = makeMaterial([0.05, 1, 0.1], true);

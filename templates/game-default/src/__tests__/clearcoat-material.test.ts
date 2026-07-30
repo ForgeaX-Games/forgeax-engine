@@ -1,25 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import type { MaterialAsset } from '@forgeax/engine-types';
 import { CLEARCOAT_ROUGHNESS, CLEARCOAT_STRENGTH, withClearcoat } from '../clearcoat-material';
 
 describe('withClearcoat', () => {
   it('preserves authored passes and adds normalized PBR coat parameters', () => {
-    const source = {
+    const sourceValues = { baseColor: [0.8, 0.2, 0.1, 1], roughness: 0.4 };
+    const source: MaterialAsset = {
       kind: 'material' as const,
-      passes: [{ name: 'Forward', shader: 'forgeax::default-standard-pbr' }],
-      paramValues: { baseColor: [0.8, 0.2, 0.1, 1], roughness: 0.4 },
+      passes: [{ name: 'Forward', program: { module: 'forgeax::default-standard-pbr' } }],
+      values: sourceValues,
     };
     const coated = withClearcoat(source);
     expect(coated?.passes).toBe(source.passes);
-    expect(coated?.paramValues).toEqual({
-      baseColor: source.paramValues.baseColor,
+    expect(coated?.values).toEqual({
+      baseColor: sourceValues.baseColor,
       roughness: 0.4,
       clearcoat: CLEARCOAT_STRENGTH,
       clearcoatRoughness: CLEARCOAT_ROUGHNESS,
     });
-    expect(source.paramValues).not.toHaveProperty('clearcoat');
+    expect(source.values).not.toHaveProperty('clearcoat');
   });
 
   it('leaves non-PBR authored materials untouched', () => {
-    expect(withClearcoat({ kind: 'material', passes: [{ name: 'Forward', shader: 'forgeax::default-unlit' }] })).toBeUndefined();
+    const source: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' } }],
+    };
+    expect(withClearcoat(source)).toBeUndefined();
   });
 });

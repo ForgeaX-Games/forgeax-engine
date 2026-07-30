@@ -5,12 +5,12 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import parallaxShader from './parallax.wgsl';
+import './parallax.wgsl';
 
-const SHADER_ID = 'bevy::parallax-mapping';
+const SHADER_ID = 'bevy::parallax_mapping';
 const TEXTURE_GUIDS = {
   diffuse: '019e3969-1d45-744f-8269-e1b1c6e6a8cf',
   normal: '019e3969-1d45-7020-8756-675a0f885532',
@@ -35,31 +35,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const app = appResult.value;
   const renderer = app.renderer;
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[bevy-parallax-mapping] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(SHADER_ID).ok) {
-    shader.registerMaterialShader(SHADER_ID, {
-      source: parallaxShader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
-        { name: 'heightScale', type: 'f32', default: 0.1 },
-        { name: 'algoMode', type: 'f32', default: 0 },
-        { name: 'baseColorTexture', type: 'texture2d' },
-        { name: 'normalTexture', type: 'texture2d' },
-        { name: 'heightTexture', type: 'texture2d' },
-      ],
-    });
-  }
 
   renderer.assets.configurePackIndex('/pack-index.json');
   const textureHandles = await loadTextures(app.world, renderer.assets);
   if (textureHandles === null) return;
 
   const materials = [0, 1, 2].map((algoMode) => {
-    const paramValues: Record<string, unknown> = {
+    const values: Record<string, MaterialValue> = {
       baseColor: [1, 1, 1, 1],
       heightScale: 0.1,
       algoMode,
@@ -69,8 +51,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     };
     return app.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
-      passes: [{ name: 'Forward', shader: SHADER_ID, tags: { LightMode: 'Forward' } }],
-      paramValues,
+      passes: [{ name: 'Forward', program: { module: SHADER_ID }, renderState: { tags: { LightMode: 'Forward' } } }],
+      parameters: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'heightScale', type: 'f32' },
+        { name: 'algoMode', type: 'f32' },
+        { name: 'baseColorTexture', type: 'texture' },
+        { name: 'normalTexture', type: 'texture' },
+        { name: 'heightTexture', type: 'texture' },
+      ],
+      values,
     });
   });
 

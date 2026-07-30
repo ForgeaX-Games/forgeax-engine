@@ -113,7 +113,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     const phys = attachScenePhysics({ world }, loaded);
     walkBlockers.push(...phys.walkBlockers);
     flashables.push(...phys.props);
-    if (phys.animatedMaterial) animatedMaterial = createAnimatedMaterialTarget(world, phys.animatedMaterial, 52, ctx?.renderer);
+    if (phys.animatedMaterial) animatedMaterial = createAnimatedMaterialTarget(world, phys.animatedMaterial, 52);
     const playerNode = loaded.nodes.find((n) => (n.components.Name as { value?: string } | undefined)?.value === 'Player');
     if (playerNode) {
       const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
@@ -496,7 +496,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const projectileMaterial = customProjectile?.materialHandle ?? bulletMat;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
-  const flashMat = createHitFlashMaterial(world, ctx?.renderer);
+  const flashMat = createHitFlashMaterial(world);
   const flashUntil = new Map<EntityHandle, number>();    // entity → remaining flash seconds
   const triggerFlash = (entity?: EntityHandle): void => {
     const target = entity === undefined ? flashables[0]?.e : entity;
@@ -911,7 +911,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         if (target === undefined) return null;
         const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(target.mat);
         if (!material.ok) return null;
-        const values = material.value.paramValues as Record<string, unknown> | undefined;
+        const values = material.value.values as Record<string, unknown> | undefined;
         const strength = Number(values?.clearcoat ?? 0);
         const roughness = Number(values?.clearcoatRoughness ?? 0);
         return { enabled: strength > 0, strength, roughness };

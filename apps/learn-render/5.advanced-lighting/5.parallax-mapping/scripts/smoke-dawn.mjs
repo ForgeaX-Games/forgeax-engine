@@ -7,7 +7,7 @@
 // displacement-visible + algo-switch diff) lives in scripts/smoke-browser.mjs.
 //
 // The custom parallax shader declares THREE textures (baseColor / normal /
-// HEIGHT). registerMaterialShader needs the post-naga_oil COMPOSED WGSL, which
+// HEIGHT). installMaterialArtifact needs the post-naga_oil COMPOSED WGSL, which
 // only the build produces -> this smoke reads dist/shaders/manifest.json (build
 // the demo first: `pnpm -F <pkg> build`).
 //
@@ -214,8 +214,8 @@ if (!parallaxEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing learn-render::5-5-parallax entry');
   process.exit(1);
 }
-if (!shader.lookupMaterialShader('learn-render::5-5-parallax').ok) {
-  shader.registerMaterialShader('learn-render::5-5-parallax', {
+if (!shader.findMaterialArtifact('learn-render::5-5-parallax').ok) {
+  shader.installMaterialArtifact('learn-render::5-5-parallax', {
     source: parallaxEntry.composedWgsl,
     paramSchema: JSON.parse(parallaxEntry.paramSchema),
   });
@@ -257,8 +257,8 @@ console.log(`[learn-render-5-5-parallax] registered bricks2 handle id=${diffuseH
 
 const matHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'learn-render::5-5-parallax', tags: { LightMode: 'Forward' } }],
-  paramValues: {
+  passes: [{ name: 'Forward', program: { module: 'learn-render::5-5-parallax' }, renderState: { tags: { LightMode: 'Forward' } } }],
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     heightScale: 0.1,
     // POM (2.0) -> exercises the deepest march path so the structural smoke

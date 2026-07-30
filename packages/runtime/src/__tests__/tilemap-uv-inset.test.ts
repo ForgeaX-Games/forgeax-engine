@@ -126,7 +126,7 @@ function readDerivedMaterialRegions(world: World): number[][] {
         toShared<'MaterialAsset'>(handleRaw as unknown as number),
       );
       if (!matRes.ok) continue;
-      const region = matRes.value.paramValues?.region as readonly number[] | undefined;
+      const region = matRes.value.values?.region as readonly number[] | undefined;
       if (region === undefined) continue;
       out.push([...region]);
     }

@@ -145,7 +145,13 @@ const { createSphereGeometry } = await import('@forgeax/engine-geometry');
 const {
   createRenderer,
 } = enginePkg;
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+  TONEMAP_REINHARD_EXTENDED,
+} = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -186,13 +192,12 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
-    baseColor: [0.7, 0.7, 0.7],
+  values: {
+    baseColor: [0.7, 0.7, 0.7, 1],
     metallic: 0.0,
     roughness: 0.4,
   },

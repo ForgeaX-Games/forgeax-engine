@@ -154,12 +154,12 @@ if (shader === null || assets === null) {
 }
 
 const CUTOUT_SHADER_PATH = 'shadow_opt_out::cutout_shadow';
-const cutoutEntry = shader.lookupMaterialShader(CUTOUT_SHADER_PATH);
+const cutoutEntry = shader.findMaterialArtifact(CUTOUT_SHADER_PATH);
 if (!cutoutEntry.ok) {
   // Register from manifest entries (populated by vite-plugin-shader at build time)
   for (const entry of shader.materialShaderManifestEntries()) {
     if (entry.identifier === CUTOUT_SHADER_PATH) {
-      shader.registerMaterialShader(CUTOUT_SHADER_PATH, {
+      shader.installMaterialArtifact(CUTOUT_SHADER_PATH, {
         source: entry.composedWgsl,
         paramSchema: [{ name: 'baseColor', type: 'color' }],
         bindingLayout: [],
@@ -167,7 +167,7 @@ if (!cutoutEntry.ok) {
       break;
     }
   }
-  const check2 = shader.lookupMaterialShader(CUTOUT_SHADER_PATH);
+  const check2 = shader.findMaterialArtifact(CUTOUT_SHADER_PATH);
   if (!check2.ok) {
     console.error(`[smoke] FAIL - cutout shader not found in manifest`);
     process.exit(1);
@@ -243,10 +243,10 @@ world.spawn(
 const matC = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
-    { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
-    { name: 'ShadowCaster', shader: CUTOUT_SHADER_PATH, tags: { LightMode: 'ShadowCaster' } },
+    { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 },
+    { name: 'ShadowCaster', program: { module: CUTOUT_SHADER_PATH }, renderState: { tags: { LightMode: 'ShadowCaster' } } },
   ],
-  paramValues: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
+  values: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
 });
 world.spawn(
   {

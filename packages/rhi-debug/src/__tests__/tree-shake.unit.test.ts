@@ -22,7 +22,7 @@ function findDistMjsFiles(rootDir: string): string[] {
     for (const e of entries) {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
-        if (e.name === 'node_modules') continue;
+        if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
         walk(full);
       } else if (e.name.endsWith('.mjs') && full.includes('/dist/assets/')) {
         results.push(full);
@@ -42,7 +42,7 @@ function findDistMjsFiles(rootDir: string): string[] {
 // frame-falsely-pass-smoke same anti-pattern).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENGINE_ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..');
+const ENGINE_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 const DIST_FILES = findDistMjsFiles(ENGINE_ROOT);
 
 describe('tree-shake grep gate (AC-03)', () => {

@@ -12,8 +12,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { Handle, MaterialAsset, ParamSchemaEntry, SceneAsset } from '@forgeax/engine-types';
+import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
 import type { GltfDoc, GltfMaterialIr, GltfMeshIr } from '../parse-gltf.js';
@@ -29,34 +28,12 @@ function fakeMaterialHandle(id: number): Handle<'MaterialAsset', 'shared'> {
 const FAKE_TEXTURE_HANDLE = 1 as unknown as Handle<'TextureAsset', 'shared'>;
 const FAKE_SAMPLER_HANDLE = 2 as unknown as Handle<'SamplerAsset', 'shared'>;
 
-const PBR_FORWARD_SCHEMA: ParamSchemaEntry[] = [
-  { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-  { name: 'metallic', type: 'f32', default: 0.0 },
-  { name: 'roughness', type: 'f32', default: 0.5 },
-  { name: 'baseColorTexture', type: 'texture2d' },
-  { name: 'sampler', type: 'sampler' },
-];
-
-function makeBridgeTestShaderRegistry() {
-  return {
-    lookupMaterialShader(identifier: string) {
-      if (identifier === 'forgeax::default-standard-pbr') {
-        return {
-          ok: true as const,
-          value: { source: '', paramSchema: PBR_FORWARD_SCHEMA },
-        };
-      }
-      return { ok: false as const, error: { code: 'shader-not-found' } };
-    },
-  };
-}
-
 const STANDARD_MATERIAL: GltfMaterialIr = {
   name: 'TestMat',
   baseColorFactor: [0.8, 0.2, 0.1, 1.0],
   metallicFactor: 0.5,
   roughnessFactor: 0.7,
-  baseColorTexture: 0,
+  baseColorTexture: { texture: 0 },
 };
 
 {
@@ -371,12 +348,11 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
 
         expect(asset.kind).toBe('material');
         expect(asset.passes).toBeDefined();
-        expect(asset.passes?.[0]?.shader).toBe('forgeax::default-standard-pbr');
+        expect(asset.passes?.[0]?.program.module).toBe('forgeax::default-standard-pbr');
         expect(asset.passes?.[0]?.name).toBe('Forward');
-        expect(asset.paramValues?.baseColorTexture).toBe(FAKE_TEXTURE_HANDLE);
-        expect(asset.paramValues?.sampler).toBe(FAKE_SAMPLER_HANDLE);
-        expect(asset.paramValues?.metallic).toBe(0.5);
-        expect(asset.paramValues?.roughness).toBe(0.7);
+        expect(asset.values?.baseColorTexture).toMatchObject({ texture: FAKE_TEXTURE_HANDLE });
+        expect(asset.values?.metallic).toBe(0.5);
+        expect(asset.values?.roughness).toBe(0.7);
       });
 
       it('maps glTF emissiveFactor and emissiveTexture', () => {
@@ -386,18 +362,18 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           metallicFactor: 0,
           roughnessFactor: 0.5,
           emissiveFactor: [0.8, 0.4, 0.1],
-          emissiveTexture: 1,
+          emissiveTexture: { texture: 1 },
         };
         const asset = toMaterialAsset(mat, {
           textureHandles: new Map([[1, FAKE_TEXTURE_HANDLE]]),
         });
 
-        expect(asset.paramValues?.emissive).toEqual([0.8, 0.4, 0.1]);
-        expect(asset.paramValues?.emissiveIntensity).toBe(1);
-        expect(asset.paramValues?.emissiveTexture).toBe(FAKE_TEXTURE_HANDLE);
+        expect(asset.values?.emissive).toEqual([0.8, 0.4, 0.1]);
+        expect(asset.values?.emissiveIntensity).toBe(1);
+        expect(asset.values?.emissiveTexture).toMatchObject({ texture: FAKE_TEXTURE_HANDLE });
       });
 
-      it('standard material without textures produces paramValues with null-defaulted texture params', () => {
+      it('standard material without textures omits texture values', () => {
         const { baseColorTexture: _, ...rest } = STANDARD_MATERIAL;
         const mat: GltfMaterialIr = rest;
         const samplerHandles = new Map([[0, FAKE_SAMPLER_HANDLE]]);
@@ -407,30 +383,17 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           samplerHandles,
         });
 
-        expect(asset.paramValues?.baseColorTexture).toBeUndefined();
-        expect(asset.paramValues?.sampler).toBe(FAKE_SAMPLER_HANDLE);
+        expect(asset.values?.baseColorTexture).toBeUndefined();
+        expect(asset.values?.sampler).toBeUndefined();
       });
 
-      it('PBR material validates via catalog with pass-based shape', () => {
-        const reg = new AssetRegistry(
-          // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry with only lookupMaterialShader
-          makeBridgeTestShaderRegistry() as any,
-        );
-
+      it('PBR material exposes a standard-root program and values', () => {
         const asset = toMaterialAsset(STANDARD_MATERIAL, {
           textureHandles: new Map(),
           samplerHandles: new Map([[0, FAKE_SAMPLER_HANDLE]]),
         });
-        // feat-20260614 M8 (D-17): register() deleted; catalog(guid, asset)
-        // runs the same MaterialAsset pass/shader validation.
-        const result = reg.catalog<MaterialAsset>(
-          reg.parseGuid('00000000-0000-4000-8000-000000000a02'),
-          asset,
-        );
-
-        if (!result.ok) {
-          expect.fail(`catalog failed: ${result.error.expected} — ${result.error.hint}`);
-        }
+        expect(asset.passes?.[0]?.program.module).toBe('forgeax::default-standard-pbr');
+        expect(asset.values?.baseColor).toEqual([0.8, 0.2, 0.1, 1]);
       });
 
       it('PBR material preserves RGBA baseColor, including blend opacity', () => {
@@ -440,7 +403,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           samplerHandles,
         });
 
-        const baseColor = asset.paramValues?.baseColor as number[];
+        const baseColor = asset.values?.baseColor as number[];
         expect(baseColor).toHaveLength(4);
         expect(baseColor).toEqual([0.8, 0.2, 0.1, 1]);
       });
@@ -456,50 +419,51 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           samplerHandles: new Map(),
         });
 
-        expect(asset.paramValues?.baseColor).toEqual([0.041667, 0.041667, 0.041667, 0.5]);
+        expect(asset.values?.baseColor).toEqual([0.041667, 0.041667, 0.041667, 0.5]);
       });
 
-      // feat-city-glb multi-UV tiling: baseColorTexture.texCoord -> uvSet param.
-      it('emits no uvSet param when texCoord is absent (default set 0)', () => {
+      it('omits coordinates when texCoord is absent', () => {
         const asset = toMaterialAsset(STANDARD_MATERIAL, {
           textureHandles: new Map(),
           samplerHandles: new Map(),
         });
-        expect(asset.paramValues?.uvSet).toBeUndefined();
+        expect(asset.values?.baseColorTexture).toBeUndefined();
       });
 
-      it('emits no uvSet param when texCoord is 0 (byte-identical to prior path)', () => {
-        const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, baseColorTexCoord: 0 };
+      it('keeps texCoord on the individual texture slot', () => {
+        const mat: GltfMaterialIr = {
+          ...STANDARD_MATERIAL,
+          baseColorTexture: { texture: 0, texCoord: 0 },
+        };
         const asset = toMaterialAsset(mat, {
-          textureHandles: new Map(),
+          textureHandles: new Map([[0, FAKE_TEXTURE_HANDLE]]),
           samplerHandles: new Map(),
         });
-        expect(asset.paramValues?.uvSet).toBeUndefined();
+        expect(asset.values?.baseColorTexture).toMatchObject({ coordinates: { set: 0 } });
       });
 
-      it('emits uvSet=1 when baseColorTexture.texCoord is 1 (UE5 city_Sample case)', () => {
-        const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, baseColorTexCoord: 1 };
+      it('keeps a nonzero texCoord on the individual texture slot', () => {
+        const mat: GltfMaterialIr = {
+          ...STANDARD_MATERIAL,
+          baseColorTexture: { texture: 0, texCoord: 1 },
+        };
         const asset = toMaterialAsset(mat, {
-          textureHandles: new Map(),
+          textureHandles: new Map([[0, FAKE_TEXTURE_HANDLE]]),
           samplerHandles: new Map(),
         });
-        expect(asset.paramValues?.uvSet).toBe(1);
+        expect(asset.values?.baseColorTexture).toMatchObject({ coordinates: { set: 1 } });
       });
 
-      // feat-city-glb Bug 5: alphaMode BLEND -> renderState.blend + Transparent
-      // queue + depthWriteEnabled=false (transparent decals read but do not
-      // write depth so coplanar decals do not z-fight the surface they overlay).
-      it('OPAQUE material has no renderState.blend and stays in the Geometry queue', () => {
+      it('OPAQUE material has no renderState.blend', () => {
         const asset = toMaterialAsset(STANDARD_MATERIAL, {
           textureHandles: new Map(),
           samplerHandles: new Map(),
         });
         const pass = asset.passes?.[0];
         expect(pass?.renderState?.blend).toBeUndefined();
-        expect(pass?.queue).toBe(2000);
       });
 
-      it('BLEND material sets renderState.blend, Transparent queue, depthWriteEnabled=false', () => {
+      it('BLEND material sets renderState.blend and depthWriteEnabled=false', () => {
         const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, alphaMode: 'BLEND' };
         const asset = toMaterialAsset(mat, {
           textureHandles: new Map(),
@@ -508,7 +472,6 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         const pass = asset.passes?.[0];
         expect(pass?.renderState?.blend).toBeDefined();
         expect(pass?.renderState?.depthWriteEnabled).toBe(false);
-        expect(pass?.queue).toBe(3000);
       });
 
       it('double-sided material disables face culling without changing its queue', () => {
@@ -518,7 +481,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           samplerHandles: new Map(),
         });
         const pass = asset.passes?.[0];
-        expect(pass?.queue).toBe(2000);
+        expect(pass?.renderState?.queue).toBe(2000);
         expect(pass?.renderState?.cullMode).toBe('none');
         expect(pass?.renderState?.blend).toBeUndefined();
       });

@@ -7,7 +7,7 @@
 //     `materialShaderId` cache miss; the cache (M9-T03) is owned by the
 //     record stage, not this helper.
 //   - requirements AC-08: record on cache miss correctly constructs pipeline.
-//   - requirements AC-14: the visible-pulse demo's per-frame paramValues.time
+//   - requirements AC-14: the visible-pulse demo's per-frame values.time
 //     mutation depends on a real GPU pipeline being built for the user
 //     shader (`my-game::pulse-material`).
 //   - plan-strategy R-H: pipeline construction must reuse the existing
@@ -19,7 +19,7 @@
 // The helper is intentionally **pure**: it does not cache, does not look up
 // the registry, does not maintain state. The caller (render-system-record's
 // per-MaterialShader pipeline cache, M9-T03) is responsible for both the
-// `ShaderRegistry.lookupMaterialShader(id)` call and the
+// `ShaderRegistry.findMaterialArtifact(id)` call and the
 // `Map<materialShaderId, RenderPipeline>` cache. Splitting the concerns
 // keeps the helper trivially mockable (M9-T02 covers it with vi.fn-based
 // mocks; no real device required).
@@ -166,7 +166,7 @@ export interface PipelineBuilderContext {
  * ```ts
  * let pipeline = pipelineCache.get(materialShaderId);
  * if (pipeline === undefined) {
- *   const lookup = registry.lookupMaterialShader(materialShaderId);
+ *   const lookup = registry.findMaterialArtifact(materialShaderId);
  *   if (!lookup.ok) {
  *     // fallback to default-standard-pbr pipelineState.standardPipeline
  *   } else {

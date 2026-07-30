@@ -76,12 +76,11 @@ function makeScene(): Scene {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [1, 1, 1] },
+    values: { baseColor: [1, 1, 1] },
   });
   if (!matResult.ok) throw new Error('material catalog failed');
   const material = world.allocSharedRef('MaterialAsset', matResult.value);

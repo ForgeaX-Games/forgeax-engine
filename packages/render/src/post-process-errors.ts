@@ -5,7 +5,7 @@
 //
 // Closed 7-member PostProcessErrorCode union + PostProcessError discriminated-union class.
 //   - 'post-process-already-registered' (programmer error) -> postProcess.register THROWS a
-//     PostProcessError, mirroring ShaderRegistry.registerMaterialShader's Map.has -> throw
+//     PostProcessError, mirroring ShaderRegistry.installMaterialArtifact's Map.has -> throw
 //     fail-fast (research Finding M2-4). A second register under the same id is a coding
 //     mistake that must surface immediately.
 //   - 'post-process-not-found' (runtime path) -> addFullscreenPass returns Result.err with
@@ -25,7 +25,7 @@
 // shadow domain; a separate union keeps the post-process error surface cohesive and
 // additively evolvable (mirrors pipeline-errors.ts D-1 reasoning verbatim).
 //
-// Also per D-4: the postProcess.register channel is parallel to registerMaterialShader;
+// Also per D-4: the postProcess.register channel is parallel to installMaterialArtifact;
 // material shader errors carry 4-BGL / 12-float-vertex / depth / triangle-list semantics,
 // while post-process errors carry 0-vertex-buffer / no-depth / input-texture-BGL semantics.
 // Mixing the two error spaces would confuse AI users who branch on code for diagnostics.

@@ -424,20 +424,15 @@ describe('Asset discriminated union - .kind discriminator', () => {
     const mat: MaterialAsset = {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: RenderQueue.Geometry,
-        },
+        { name: 'Forward', program: { module: 'forgeax_material::standard' }, renderState: { tags: { LightMode: 'Forward' }, queue: RenderQueue.Geometry } },
       ],
-      paramValues: { baseColor: [1, 0.5, 0.3, 1] },
+      values: { baseColor: [1, 0.5, 0.3, 1] },
     };
     expect(mat.kind).toBe('material');
     expect(mat.passes).toHaveLength(1);
     expect(mat.passes?.[0]?.name).toBe('Forward');
-    expect(mat.passes?.[0]?.shader).toBe('forgeax::default-standard-pbr');
-    expect(mat.passes?.[0]?.tags).toEqual({ LightMode: 'Forward' });
+    expect(mat.passes?.[0]?.program.module).toBe('forgeax_material::standard');
+    expect(mat.passes?.[0]?.renderState.tags).toEqual({ LightMode: 'Forward' });
   });
 
   it('Asset union resolves to 13 .kind variants; exhaustive switch compiles without default', () => {
@@ -495,18 +490,13 @@ describe('Asset discriminated union - .kind discriminator', () => {
     const mat: MaterialAsset = {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: RenderQueue.Geometry,
-        },
+        { name: 'Forward', program: { module: 'forgeax_material::unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: RenderQueue.Geometry } },
       ],
-      paramValues: { baseColor: [1, 1, 1, 1] },
+      values: { baseColor: [1, 1, 1, 1] },
     };
     expect(mat.kind).toBe('material');
     expect(mat.passes).toBeDefined();
-    expect(mat.passes?.[0]?.shader).toBe('forgeax::default-unlit');
+    expect(mat.passes?.[0]?.program.module).toBe('forgeax_material::unlit');
   });
 });
 

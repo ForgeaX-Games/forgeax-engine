@@ -14,7 +14,7 @@
 //
 // AcceptanceCheck: pnpm test:unit -t 'hdrp.*execute.*filter|hdrp.*pass.*filter'
 
-import type { MaterialPassDescriptor, PassKind } from '@forgeax/engine-types';
+import type { MaterialPass, PassKind } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 // ── Types under test (exported by w16) ─────────────────────────────────────
@@ -22,9 +22,9 @@ import { describe, expect, it } from 'vitest';
 /** Result of partitioning pass descriptors by passKind for HDRP execute. */
 interface FilterPassesResult {
   /** Passes whose passKind === 'deferred'. Opaque geometry writes to g-buffer. */
-  readonly deferred: readonly MaterialPassDescriptor[];
+  readonly deferred: readonly MaterialPass[];
   /** Passes whose passKind === 'forward'. Transparent geometry writes hdrColor. */
-  readonly forward: readonly MaterialPassDescriptor[];
+  readonly forward: readonly MaterialPass[];
 }
 
 /**
@@ -39,12 +39,12 @@ interface FilterPassesResult {
  *
  * Stub — w16 fills the real implementation in hdrp-pipeline.ts.
  */
-function filterPassesByKind(passes: readonly MaterialPassDescriptor[]): FilterPassesResult {
-  const deferred: MaterialPassDescriptor[] = [];
-  const forward: MaterialPassDescriptor[] = [];
+function filterPassesByKind(passes: readonly MaterialPass[]): FilterPassesResult {
+  const deferred: MaterialPass[] = [];
+  const forward: MaterialPass[] = [];
 
   for (const p of passes) {
-    const pk = p.passKind ?? 'forward';
+    const pk = p.name.toLowerCase() === 'gbuffer' ? 'deferred' : p.name.toLowerCase();
     switch (pk) {
       case 'deferred':
         // Opaque material: deferred pass has no blend → opaque by definition
@@ -68,8 +68,8 @@ function filterPassesByKind(passes: readonly MaterialPassDescriptor[]): FilterPa
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /** Create a minimal pass descriptor with given passKind. */
-function pass(kind: PassKind, opts?: { blend?: boolean; shader?: string }): MaterialPassDescriptor {
-  const shader = opts?.shader ?? 'forgeax::default-standard-pbr';
+function pass(kind: PassKind, opts?: { blend?: boolean; module?: string }): MaterialPass {
+  const module = opts?.module ?? 'forgeax_material::standard';
   const name =
     kind === 'deferred'
       ? 'GBuffer'
@@ -80,8 +80,10 @@ function pass(kind: PassKind, opts?: { blend?: boolean; shader?: string }): Mate
           : 'ShadowCaster';
   return {
     name,
-    shader,
-    passKind: kind,
+    program: {
+      module,
+      fragmentEntry: kind === 'deferred' ? 'fs_gbuffer' : 'fs_main',
+    },
     ...(opts?.blend
       ? {
           renderState: {
@@ -92,7 +94,6 @@ function pass(kind: PassKind, opts?: { blend?: boolean; shader?: string }): Mate
           },
         }
       : {}),
-    fragmentEntry: kind === 'deferred' ? 'fs_gbuffer' : 'fs_main',
   };
 }
 
@@ -103,16 +104,16 @@ describe('HDRP execute passKind filter (w13)', () => {
     it('routes opaque deferred pass to deferred bucket', () => {
       const result = filterPassesByKind([pass('deferred'), pass('forward', { blend: true })]);
       expect(result.deferred).toHaveLength(1);
-      expect(result.deferred[0]?.passKind).toBe('deferred');
+      expect(result.deferred[0]?.name).toBe('GBuffer');
       expect(result.forward).toHaveLength(1);
-      expect(result.forward[0]?.passKind).toBe('forward');
+      expect(result.forward[0]?.name).toBe('Forward');
     });
 
     it('routes transparent forward pass to forward bucket', () => {
       const result = filterPassesByKind([pass('forward', { blend: true })]);
       expect(result.deferred).toHaveLength(0);
       expect(result.forward).toHaveLength(1);
-      expect(result.forward[0]?.passKind).toBe('forward');
+      expect(result.forward[0]?.name).toBe('Forward');
     });
 
     it('excludes lighting pass from draw-pass buckets', () => {
@@ -162,41 +163,38 @@ describe('HDRP execute passKind filter (w13)', () => {
     });
 
     it('defaults to forward when passKind is undefined', () => {
-      const p: MaterialPassDescriptor = {
-        name: 'Forward',
-        shader: 'forgeax::default-unlit',
-      };
+      const p: MaterialPass = { name: 'Forward', program: { module: 'forgeax_material::unlit' } };
       const result = filterPassesByKind([p]);
       expect(result.forward).toHaveLength(1);
-      expect(result.forward[0]?.passKind).toBeUndefined();
+      expect(result.forward[0]?.name).toBe('Forward');
       expect(result.deferred).toHaveLength(0);
     });
   });
 
   describe('mixed pass set — standard PBR material shape', () => {
     it('three-pass standard PBR material splits correctly', () => {
-      const passes: MaterialPassDescriptor[] = [
-        pass('deferred', { shader: 'forgeax::default-standard-pbr' }),
-        pass('forward', { shader: 'forgeax::default-standard-pbr', blend: true }),
-        pass('shadow-caster', { shader: 'forgeax::default-shadow-caster' }),
+      const passes: MaterialPass[] = [
+        pass('deferred', { module: 'forgeax_material::standard' }),
+        pass('forward', { module: 'forgeax_material::standard', blend: true }),
+        pass('shadow-caster', { module: 'forgeax_material::standard' }),
       ];
       const result = filterPassesByKind(passes);
       expect(result.deferred).toHaveLength(1);
-      expect(result.deferred[0]?.shader).toBe('forgeax::default-standard-pbr');
+      expect(result.deferred[0]?.program.module).toBe('forgeax_material::standard');
       expect(result.forward).toHaveLength(1);
-      expect(result.forward[0]?.shader).toBe('forgeax::default-standard-pbr');
+      expect(result.forward[0]?.program.module).toBe('forgeax_material::standard');
       // shadow-caster excluded
     });
 
     it('unlit material (forward-only) routes to forward', () => {
-      const passes: MaterialPassDescriptor[] = [
-        pass('forward', { shader: 'forgeax::default-unlit' }),
-        pass('shadow-caster', { shader: 'forgeax::default-shadow-caster' }),
+      const passes: MaterialPass[] = [
+        pass('forward', { module: 'forgeax_material::unlit' }),
+        pass('shadow-caster', { module: 'forgeax_material::unlit' }),
       ];
       const result = filterPassesByKind(passes);
       expect(result.deferred).toHaveLength(0);
       expect(result.forward).toHaveLength(1);
-      expect(result.forward[0]?.shader).toBe('forgeax::default-unlit');
+      expect(result.forward[0]?.program.module).toBe('forgeax_material::unlit');
     });
   });
 });

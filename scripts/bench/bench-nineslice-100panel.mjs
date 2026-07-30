@@ -413,9 +413,14 @@ async function main() {
   const matRes = assets.register({
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+      {
+        name: 'Forward',
+        program: { module: 'forgeax::sprite' },
+        tags: { LightMode: 'Forward' },
+        queue: 3000,
+      },
     ],
-    paramValues: {
+    values: {
       baseColor: [1, 1, 1, 1],
       texture: texHandleRes.value,
       sampler: samplerHandleRes.value,

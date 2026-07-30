@@ -197,9 +197,9 @@ if (!stdMatGuid.ok) {
 const stdMatPayload = {
   kind: 'material',
   passes: [
-    { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
+    { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 },
   ],
-  paramValues: { baseColor: [0.2, 0.3, 0.9], metallic: 0, roughness: 0.5 },
+  values: { baseColor: [0.2, 0.3, 0.9], metallic: 0, roughness: 0.5 },
 };
 assets.catalog(stdMatGuid.value, stdMatPayload);
 const stdMatHandle = world.allocSharedRef('MaterialAsset', stdMatPayload);
@@ -268,8 +268,8 @@ world.spawn({
 // feat-20260614 M8: register -> world.allocSharedRef (bare handle, not Result).
 const playerMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [0.9, 0.2, 0.2] },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: { baseColor: [0.9, 0.2, 0.2] },
 });
 world.spawn(
   { component: Transform, data: { pos: [0, 1.2, 1.5], quat: [0, 0, 0, 1], scale: [0.8, 0.8, 0.8]} },

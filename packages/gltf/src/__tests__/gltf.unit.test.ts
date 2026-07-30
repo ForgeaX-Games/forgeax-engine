@@ -1182,11 +1182,11 @@ import {
         expect(mat?.refs.map((r) => r.guid)).toContain(TEX_GUID);
         expect(mat?.refs.at(-1)?.sourceField?.fieldName).toBe('emissiveTexture');
         const materialPayload = mat?.payload as {
-          readonly paramValues?: Readonly<Record<string, unknown>>;
+          readonly values?: Readonly<Record<string, unknown>>;
         };
-        expect(materialPayload.paramValues?.emissive).toEqual([0.8, 0.4, 0.1]);
-        expect(materialPayload.paramValues?.emissiveIntensity).toBe(1);
-        expect(materialPayload.paramValues?.emissiveTexture).toBe(1);
+        expect(materialPayload.values?.emissive).toEqual([0.8, 0.4, 0.1]);
+        expect(materialPayload.values?.emissiveIntensity).toBe(1);
+        expect(materialPayload.values?.emissiveTexture).toMatchObject({ texture: 1 });
       });
     });
   });
@@ -1331,6 +1331,7 @@ import {
     bytes: Uint8Array;
     subAssets: readonly ImportSubAsset[];
     decodeCalls: GlbDecodeCall[];
+    importSettings?: Readonly<Record<string, unknown>>;
   }): ImportContext {
     return {
       source: opts.source,
@@ -1361,7 +1362,7 @@ import {
         };
       },
       subAssets: opts.subAssets,
-      importSettings: {},
+      importSettings: opts.importSettings ?? {},
     };
   }
 
@@ -1491,7 +1492,7 @@ import {
       expect(texRef?.sceneEntityId).toBeUndefined();
     });
 
-    it('(d) material parent edge for material without parent', async () => {
+    it('(d) material parent edge points at the injected standard root', async () => {
       const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
       const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
       const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
@@ -1507,12 +1508,13 @@ import {
           { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
         ],
         decodeCalls: [],
+        importSettings: { standardMaterialGuid: '019e2cc6-0c86-79da-aa76-b0984c86d4ff' },
       });
       const produced = unwrap(await gltfImporter.import(ctx));
       const mat = produced.find((p) => p.guid === MAT_GUID);
       expect(mat).toBeDefined();
       const parentRefs = mat?.refs.filter((r) => r.sourceField?.fieldName === 'parent');
-      expect(parentRefs?.length).toBe(0);
+      expect(parentRefs?.map((ref) => ref.guid)).toEqual(['019e2cc6-0c86-79da-aa76-b0984c86d4ff']);
     });
 
     it('(e) material refs texture edges: sourceField.componentName="<material>" and fieldName is texture slot', async () => {
@@ -1973,11 +1975,11 @@ import {
         expect(mat).toBeDefined();
         if (!mat) throw new Error('expected material[0]');
         expect(mat.baseColorFactor).toEqual([0.8, 0.6, 0.4, 1.0]);
-        expect(mat.baseColorTexture).toBe(0);
+        expect(mat.baseColorTexture).toMatchObject({ texture: 0 });
         expect(mat.metallicFactor).toBe(0.25);
         expect(mat.roughnessFactor).toBe(0.75);
-        expect(mat.metallicRoughnessTexture).toBe(1);
-        expect(mat.normalTexture).toBe(2);
+        expect(mat.metallicRoughnessTexture).toMatchObject({ texture: 1 });
+        expect(mat.normalTexture).toMatchObject({ texture: 2 });
         expect(mat.doubleSided).toBe(true);
         expect(doc.textures).toBeDefined();
         const texs = doc.textures;
@@ -2037,7 +2039,7 @@ import {
         if (!result.ok) throw new Error('expected ok');
         const mat = result.value.materials[0];
         expect(mat?.emissiveFactor).toEqual([0.8, 0.4, 0.1]);
-        expect(mat?.emissiveTexture).toBe(0);
+        expect(mat?.emissiveTexture).toMatchObject({ texture: 0 });
       });
 
       it('resolves texture.index -> textures[ti] -> source two-level hop', async () => {
@@ -2076,7 +2078,7 @@ import {
         const mat = doc.materials[0];
         expect(mat).toBeDefined();
         if (!mat) throw new Error('expected material[0]');
-        expect(mat.baseColorTexture).toBe(1);
+        expect(mat.baseColorTexture).toMatchObject({ texture: 1 });
         const texs2 = doc.textures;
         if (!texs2) throw new Error('expected textures');
         expect(texs2[1]?.source ?? -1).toBe(5);

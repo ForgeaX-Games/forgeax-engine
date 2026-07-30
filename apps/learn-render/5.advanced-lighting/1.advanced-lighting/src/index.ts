@@ -2,9 +2,7 @@
 // LearnOpenGL section 5.1 - Blinn-Phong.
 // Per-fragment Blinn-Phong shading via custom WGSL shader.
 //
-// Custom shader path (charter F1 grep gate):
-//   grep `registerMaterialShader` -> finds this file
-//   grep `learn-render::5-1-blinn-phong` -> finds WGSL + index.ts + meta.json
+// Custom shader path: the manifest registers the WGSL module at boot.
 //
 // MaterialAsset is constructed as a POJO directly (no Materials.standard())
 // to demonstrate the raw asset shape for AI users.
@@ -27,9 +25,9 @@ import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
-import blinnPhongShader from './blinn-phong.wgsl';
+import './blinn-phong.wgsl';
 
-const BLINN_PHONG_SHADER_ID = 'learn-render::5-1-blinn-phong' as const;
+const BLINN_PHONG_SHADER_ID = 'learn_render::5_1_blinn_phong' as const;
 
 // 2. example glue
 
@@ -98,23 +96,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);
 
-  // Register the Blinn-Phong custom material shader. paramSchema is empty
-  // because the WGSL inlines the LO 5.1 constants (no extra UBO required).
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[learn-render 5.1 blinn-phong] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(BLINN_PHONG_SHADER_ID).ok) {
-    shader.registerMaterialShader(BLINN_PHONG_SHADER_ID, {
-      source: blinnPhongShader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-        { name: 'baseColorTexture', type: 'texture2d' },
-      ],
-    });
-  }
-
   // Parse texture GUID.
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
   if (!woodGuidRes.ok) {
@@ -136,13 +117,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: BLINN_PHONG_SHADER_ID,
-        tags: { LightMode: 'Forward' },
-      },
+      { name: 'Forward', program: { module: BLINN_PHONG_SHADER_ID }, renderState: { tags: { LightMode: 'Forward' } } },
     ],
-    paramValues: {
+    values: {
       baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', woodTex)),
     },
   });

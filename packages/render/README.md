@@ -1,6 +1,15 @@
 # `@forgeax/engine-render`
 
 > [!IMPORTANT]
+> Render consumes the effective MaterialAsset snapshot produced by extract. Each texture slot carries its own coordinate set and transform into the built-in PBR binding layout; render records do not reinterpret authoring fields or manufacture shader artifacts. The effective `passes` are already validated.
+
+## MaterialAsset render contract
+
+The effective `passes` are validated before the render snapshot is produced.
+
+The render path is `MaterialAsset` -> extract snapshot -> prepare resources -> record the per-slot `coordinates` and values. The effective `parent` is already resolved before extract. If a material contract or reflection binding fails, preserve the structured error and repair the source contract or cooked module before drawing again; that is the recovery route. The render package owns consumption, not material import or cook policy.
+
+> [!IMPORTANT]
 > Owner: render vocabulary and the extract → prepare → record frame boundary. Runtime selects concrete services and calls this package; it does not re-own these tokens.
 
 ```ts

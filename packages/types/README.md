@@ -1,8 +1,15 @@
 # @forgeax/engine-types
 
+> [!IMPORTANT]
+> MaterialAsset is the one authored material entry point. Author `passes`, `parameters`, `values`, `parent`, and structured texture `coordinates`; the build cooks the resolved contract and runtime loads that record by GUID. Shader source identity, pack identity, and runtime handles remain derived or injected facts.
+
+## MaterialAsset route
+
+Use [`MaterialAsset`](./src/index.ts) for both built-in and custom materials. A root declares `passes` and the effective parameter contract; a child changes only the values it owns through `parent`. `MaterialTextureValue.coordinates` carries the glTF texture set and transform per slot. The recovery route is: validate the payload, cook the specialization, publish the record and artifact, then call `loadByGuid` and allocate a World handle from the loaded payload.
+
 > **Single source of truth for pure literal types and enums shared across RHI / shader / future render packages.** POD types / zero runtime constants / single-source strategy -- `export type` only, never redefine `@webgpu/types` runtime constant values (decision S-6 / research F-2 option (b)).
 
-> **Material types: `ParamSchemaEntry` + `MaterialAsset`.** feat-20260527-material-registration-unification unified material registration to a single `register<MaterialAsset>` entry point. `MaterialAsset` carries `passes[]` (array of `MaterialPassDescriptor` with per-pass `shader` routing) + `paramValues` (flat parameter record validated at register-time against the union of per-pass `ShaderRegistry` paramSchema entries). See the MaterialAsset section below for full field details; see [`packages/shader/README.md`](../shader/README.md) for the ShaderRegistry catalog and param type reference; see [`packages/pack/README.md`](../pack/README.md) for the .pack.json MaterialAsset shape.
+> **Material types: `MaterialAsset` only.** Author a root contract in `parameters` and `passes[].program.module`; a child keeps only `parent` and changed `values`. The build validates and cooks this payload, while runtime loads the cooked record by GUID. See [`packages/shader/README.md`](../shader/README.md) for module composition and [`packages/pack/README.md`](../pack/README.md) for the pack shape.
 
 ## AssetEvidence schema
 
@@ -13,7 +20,7 @@ Use the explicit states when presenting diagnostics: `notRequired`, `notCooked`,
 The schema is the SSOT in [`src/asset-evidence.ts`](./src/asset-evidence.ts). Producers and consumers should link to it instead of copying member tables. Offline callers can exercise the same chain with `lookup/verify --guid --project --catalog --json` through `forgeax-engine-remote-asset`.
 
 > [!CAUTION]
-> **shadingModel proposition (feat-20260518-pbr-direct-lighting-mvp / AC-17)** -- legacy `MaterialAsset.shadingModel:'standard'` routes through GGX direct lighting, **0 DirectionalLight produces physically-correct black output**; `'unlit'` is the "ignore lights" entry point (`baseColor x baseColorTexture` direct output). New demos choosing `'standard'` must spawn a `DirectionalLight` in sync. See [`packages/runtime/README.md` Common pitfalls](../runtime/README.md#common-pitfalls) + [AGENTS.md Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-18 row. For pass-based materials (feat-20260527+), use `register<MaterialAsset>` with `passes[]` / `paramValues` — see `AssetRegistry.register` in [`packages/runtime/README.md`](../runtime/README.md).
+> The built-in standard module is selected by the cooked `program.module`. Runtime lighting remains a render concern; it is not a second material discriminant.
 
 ## Shape invariants
 
@@ -37,7 +44,7 @@ The schema is the SSOT in [`src/asset-evidence.ts`](./src/asset-evidence.ts). Pr
 |:--|:--|:--|
 | GPUFlagsConstant alias | `BufferUsageFlags` / `TextureUsageFlags` / `MapModeFlags` / `ShaderStageFlags` / `ColorWriteFlags` | TS side collapses to `number`; runtime values provided by `@webgpu/types` injected globals |
 | Enum alias pass-through | `TextureFormat` / `AddressMode` / `FilterMode` / `CompareFunction` / `PrimitiveTopology` / others | `@webgpu/types` namespace literal union pass-through |
-| Pass-based material types | `ParamSchemaEntry` / `MaterialAsset` / `MaterialPassDescriptor` | ParamSchema entry shape + MaterialAsset with passes[] + pass descriptor; see MaterialAsset section below |
+| Pass-based material types | `ParamSchemaEntry` / `MaterialAsset` / `MaterialPass` | ParamSchema entry shape + MaterialAsset with passes[] + pass descriptor; see MaterialAsset section below |
 | Asset register contracts | `register<MaterialAsset>()` / `registerWithGuid<MaterialAsset>()` / `lookupMaterialShader()` | Runtime factory functions + validation; detail in `packages/runtime/README.md` |
 | Remote error model | `RemoteErrorCode` / `RemoteError` | 4-member closed union (script-syntax-error / script-runtime-error / server-startup-failed / server-not-running) + structural interface; runtime class lives in `@forgeax/engine-remote/errors` (`implements RemoteError`); see [`@forgeax/engine-remote` README](../remote/README.md) for the full error model |
 
@@ -182,14 +189,16 @@ Convenience aliases:
 | `'skeleton'` | `'SkeletonAsset'` |
 | `'animation-clip'` | `'AnimationClip'` |
 | `'animation-graph'` | `'AnimationGraph'` |
-| `'shader'` | `'ShaderAsset'` |
+| `'shader'` | `'MaterialShader'` |
 | `'font'` | `'FontAsset'` |
 | `'render-pipeline'` | `'RenderPipelineAsset'` |
 | `'tileset'` | `'TilesetAsset'` |
 | `'video'` | `'VideoAsset'` |
 | `'particle-effect'` | `'ParticleEffectAsset'` |
 
-`MaterialAsset` is a 3-variant sub-union (`UnlitMaterialAsset | SchemaDrivenMaterialAsset | SpriteMaterialAsset`), all branches `kind: 'material'`, so `TagOf<MaterialAsset>` distributive evaluation collapses all three branches to `'MaterialAsset'` (research Finding 2).
+`MaterialAsset` is the closed material payload used by built-in and custom
+passes. `TagOf<MaterialAsset>` is `'MaterialAsset'`; module identity and cook
+facts are separate derived records, not authored asset variants.
 
 Adding a 6th `Asset` closed-union member without syncing this table -> `TagOf<NewAsset>` resolves to `never`, downstream `register<NewAsset>` static failure surfaces the missing entry (charter P3 explicit failure).
 
@@ -261,54 +270,43 @@ Same precedent as `LocalEntityId` / `SceneInstanceId`:
 
 ## MaterialAsset
 
-> feat-20260527-material-registration-unification -- `MaterialAsset` is a single pass-based shape: `kind: 'material'` + `passes[]` array of `MaterialPassDescriptor` (each with `shader` identifier for per-pass ShaderRegistry routing) + `paramValues` (validated at register-time against the union of all pass-shader paramSchema entries). Full field definitions at [`src/index.ts`](./src/index.ts).
-
-### Pass-based variant
-
-The single path (feat-20260527-material-registration-unification M3): carries `passes[]` + `paramValues`.
+`MaterialAsset` is the only authored material shape. Its fields are defined in
+[`src/material/asset.ts`](./src/material/asset.ts) and mirrored by
+[`schema/material.schema.json`](./schema/material.schema.json).
 
 ```ts
-interface MaterialAsset {
-  readonly kind: 'material';
-  readonly passes?: readonly MaterialPassDescriptor[];
-  readonly parent?: Handle<'MaterialAsset', 'shared'>;
-  readonly paramValues?: Readonly<Record<string, unknown>>;
-}
+const child = {
+  kind: 'material',
+  parent: parentGuid,
+  values: { baseColor: [0.2, 0.55, 0.95, 1] },
+} satisfies MaterialAsset;
 ```
+
+`parent` is an `AssetGuid`, never a runtime handle. A root owns the complete
+`parameters` contract and its `passes[].program.module`; a child overrides
+whole named values or whole named passes. Texture coordinates stay with each
+texture value. The build resolves and cooks this graph; runtime only loads the
+result by GUID and allocates a World handle from the loaded payload.
 
 | Field | Type | Description |
 |:--|:--|:--|
-| `passes` | `readonly MaterialPassDescriptor[]` | Array of pass descriptors; each `pass.shader` routes to `ShaderRegistry.lookupMaterialShader` for paramSchema validation at register-time. |
-| `paramValues` | `Readonly<Record<string, unknown>>` | Instantiated parameter values; validated at register-time via `_validateMaterialPasses` (union paramSchema, extra-key ignore, missing-required error). |
-| `parent` | `Handle<'MaterialAsset', 'shared'>` | Inheritance chain parent for lazy-resolve merging. |
+| `passes` | `MaterialPassList` | Root pass contract; each pass names a `program.module`. |
+| `parameters` | `readonly MaterialParameter[]` | Root parameter contract and defaults. |
+| `values` | `Record<string, MaterialValue \| null>` | Child-owned values; `null` explicitly clears an inherited value. |
+| `parent` | `AssetGuid` | One serialized parent edge. |
 
-`ParamSchemaEntry` shape (from `@forgeax/engine-types`):
+### MaterialPass fields
 
-```ts
-interface ParamSchemaEntry {
-  readonly name: string;
-  readonly type: string;   // must be in MATERIAL_PARAM_TYPES_V1
-  readonly default?: unknown;
-}
-```
-
-Registered via `assets.register<MaterialAsset>(asset)` or `assets.registerWithGuid<MaterialAsset>(guid, asset)` -- the unified entry point.
-
-### MaterialPassDescriptor fields
-
-Each entry in `MaterialAsset.passes[]` is a `MaterialPassDescriptor` (all optional except `name` + `shader`).
+Each entry in `MaterialAsset.passes[]` is a `MaterialPass` with a named `program.module`.
 
 | Field | Type | Default | Description |
 |:--|:--|:--|:--|
 | `name` | `string` | required | Pass identifier for by-name inheritance override |
-| `shader` | `string` | required | Shader registry entry id (e.g. `'forgeax::default-standard-pbr'`) |
-| `vertexEntry` | `string` | `'vs_main'` | Vertex shader entry-point function name |
-| `fragmentEntry` | `string` | `'fs_main'` | Fragment shader entry-point function name |
-| `defines` | `Record<string, string>` | `{}` | Per-pass preprocessor defines |
-| `tags` | `Record<string, string>` | `{}` | Free key-value tags for `PassSelector` routing |
-| `renderState` | `MaterialRenderState` | engine defaults | Per-pass GPU pipeline render state overrides |
-| `queue` | `number` | `2000` (`RenderQueue.Geometry`) | Sort key for the single dispatch list |
-| `stencilReference` | `number` | `0` | Stencil reference value set via `setStencilReference` per draw (draw-call dynamic state) |
+| `program.module` | `string` | required | Build-time module identity selected by the cooked material |
+| `program.vertexEntry` | `string` | `'vs_main'` | Optional vertex entry point |
+| `program.fragmentEntry` | `string` | `'fs_main'` | Optional fragment entry point |
+| `program.moduleSlots` | `Record<string, string>` | `{}` | Optional module-slot assignments |
+| `renderState` | `Record<string, unknown>` | `{}` | Optional cooked pipeline state |
 
 ### MaterialRenderState fields
 
@@ -331,7 +329,7 @@ Each entry in `MaterialAsset.passes[]` is a `MaterialPassDescriptor` (all option
 
 `MaterialStencilState` (for the `stencil` field): `compare` / `failOp` / `depthFailOp` / `passOp` apply per-face (`stencilFront` / `stencilBack`). The mask fields are NOT on `StencilFaceState` -- they are top-level on `MaterialRenderState`.
 
-Full interface source (SSOT): [`src/index.ts`](./src/index.ts) `MaterialRenderState` + `MaterialPassDescriptor`.
+Full interface source (SSOT): [`src/material/asset.ts`](./src/material/asset.ts).
 
 ### Legacy `channelMap` field (StandardMaterialAsset -- pre-feat-20260523)
 
@@ -390,12 +388,12 @@ The unqualified word "name" appears at three different semantic layers. Confusin
 |:--|:--|:--|:--|:--|
 | **Asset identity `name`** | The human-readable segment in `<packagePath>.<name>` -- a derived identity from the `Package` the asset belongs to, never stored on the POD | `AssetRegistry.resolveName(guid)` calls `deriveAssetName` pure function; the XOR rule (single-asset package -> basename(path), multi-asset -> `.pack.json assets[].name`, no-package -> empty string or stored self-name) is SSOT | `reg.resolveName(guid)` | Inspector display, error messages, debug logs -- anywhere a human (or AI) needs to identify an asset |
 | **Entity `Name` component** | An ECS component (`{ value: string }`) attached to spawned entities | ECS world storage (`world.get(entity, Name)`) | `world.get(e, Name).value` | Scene-graph debugging, joint-path resolution in skinning -- anything keyed off an entity's glTF node name. Unchanged by this feat (OOS-5) |
-| **`ShaderAsset.name`** | Registration identifier of a material shader (e.g. `'forgeax::default-standard-pbr'`) | `ShaderAsset.name` field on the POD -- the only `name` field on any Asset POD that is NOT OOS-2 | `(asset as ShaderAsset).name` in ShaderRegistry code paths; not exposed through `resolveName` | `MaterialPassDescriptor.shader` routing, `ShaderRegistry.lookupMaterialShader` -- the shader-authoring contract between material and pipeline |
+| **material module id** | Published identifier of a material shader (e.g. `'forgeax::default-standard-pbr'`) | Derived from the cooked pass program; not an authored asset field | `MaterialAsset.passes[].program.module` | Shader module lookup and pipeline selection |
 
 > [!TIP]
-> **How to choose**: when displaying an asset to a human, use `resolveName(guid)` (layer 1). When reading a spawned entity's original node name from glTF/FBX, use the `Name` ECS component (layer 2). When registering a custom material shader and binding it to a `MaterialPassDescriptor`, use `ShaderAsset.name` (layer 3). The three layers coexist and do not conflict -- an asset's entity may carry a `Name` component that differs from the asset's resolved identity name.
+> **How to choose**: when displaying an asset to a human, use `resolveName(guid)` (layer 1). When reading a spawned entity's original node name from glTF/FBX, use the `Name` ECS component (layer 2). When binding a custom material pass, use its cooked `program.module` identifier (layer 3).
 
-**Example**: A `Hero.glb` file imports as a single-asset package (path `'hero.glb'`, 1 mesh asset). `resolveName(meshGuid)` returns `'hero.glb'` (basename of the package path; the extension is kept). Entity `Name` components on nodes inside the scene read `'Helmet'`, `'Sword'`, etc. from the glTF node hierarchy. A custom PBR shader registered as `ShaderAsset { name: 'forgeax::custom-stylized-pbr' }` routes through `shader` lookup, not through `resolveName`.
+**Example**: A `Hero.glb` file imports as a single-asset package (path `'hero.glb'`, 1 mesh asset). `resolveName(meshGuid)` returns `'hero.glb'` (basename of the package path; the extension is kept). Entity `Name` components on nodes inside the scene read `'Helmet'`, `'Sword'`, etc. from the glTF node hierarchy. A custom PBR module published as `'forgeax::custom-stylized-pbr'` routes through the cooked pass, not through `resolveName`.
 
 **Identity types** (new in feat-20260618): `Package` (`{ path, assetGuids, assetCount }`), `PackIndexEntry.name?` (add-only optional, build-time resolved), `InspectEntry.name` (non-optional string, runtime resolved). All discoverable via `@forgeax/engine-types` IDE autocomplete. See [`skills/forgeax-engine-assets/SKILL.md`](../../skills/forgeax-engine-assets/SKILL.md) for the full identity model.
 

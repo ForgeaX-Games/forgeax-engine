@@ -257,12 +257,11 @@ const reflectiveMatPayload = {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [0.8, 0.8, 0.8, 1.0],
     metallic: 1.0,
     roughness: 0.0,
@@ -274,12 +273,11 @@ const nonReflectiveMatPayload = {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [0.8, 0.8, 0.8, 1.0],
     metallic: 0.0,
     roughness: 0.5,

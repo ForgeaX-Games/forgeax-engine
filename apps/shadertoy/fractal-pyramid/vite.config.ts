@@ -8,10 +8,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
 // The forgeaxShader plugin compiles fractal-pyramid.wgsl at transform time;
-// the sidecar fractal-pyramid.wgsl.meta.json (subAssets[].kind='material-shader'
+// the sidecar fractal-pyramid.material.json (subAssets[].kind='material-shader'
 // + paramSchema) routes the file through the material-shader compose path and
 // lands the composed WGSL + paramSchema in the shader manifest, ready for
-// ShaderRegistry.registerMaterialShader at engine boot.
+// ShaderRegistry.installMaterialArtifact at engine boot.
 export default defineConfig({
   plugins: [forgeaxShader() as never],
   server: {

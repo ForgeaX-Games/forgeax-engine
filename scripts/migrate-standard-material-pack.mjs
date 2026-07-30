@@ -8,7 +8,7 @@
 //   payload = {
 //     materialShader: 'forgeax::default-standard-pbr',
 //     paramSchema: <8-entry SSOT from packages/shader/src/default-standard-pbr.schema.json>,
-//     paramValues: { ...mapped from legacy fields... }
+//     values: { ...mapped from legacy fields... }
 //   }
 //
 // Decision anchors:
@@ -17,7 +17,7 @@
 //     (architecture principle #6).
 //   - plan-strategy D-DefaultStandardPbr-Identifier: the literal
 //     'forgeax::default-standard-pbr' (with `::` prefix) routes through
-//     ShaderRegistry.lookupMaterialShader at runtime; not a GUID.
+//     ShaderRegistry.findMaterialArtifact at runtime; not a GUID.
 //   - requirements AC-10: 1:1 data migration; legacy fields drop without
 //     loss because they map directly to the 8-entry paramSchema.
 //   - requirements AC-06: pixel parity (epsilon <= 0.05) post-migration is
@@ -25,7 +25,7 @@
 //     to what AssetRegistry would have stored under the StandardMaterialAsset
 //     path.
 //
-// Field map (legacy -> paramValues key/type):
+// Field map (legacy -> values key/type):
 //   baseColor                   -> baseColor                  (color, [r,g,b,a])
 //   metallic                    -> metallic                   (f32)
 //   roughness                   -> roughness                  (f32)
@@ -131,40 +131,40 @@ export function migratePayload(payload, paramSchema) {
   if (payload === undefined || payload === null || typeof payload !== 'object') return null;
   if (payload.shadingModel !== 'standard') return null;
 
-  const paramValues = {};
+  const values = {};
   if (Array.isArray(payload.baseColor)) {
     // Legacy stored RGBA quartet; preserve verbatim (schema entry type 'color').
-    paramValues.baseColor = [...payload.baseColor];
+    values.baseColor = [...payload.baseColor];
   }
   if (typeof payload.metallic === 'number') {
-    paramValues.metallic = payload.metallic;
+    values.metallic = payload.metallic;
   }
   if (typeof payload.roughness === 'number') {
-    paramValues.roughness = payload.roughness;
+    values.roughness = payload.roughness;
   }
   if (typeof payload.baseColorTexture === 'string') {
-    paramValues.baseColorTexture = payload.baseColorTexture;
+    values.baseColorTexture = payload.baseColorTexture;
   }
   if (typeof payload.metallicRoughnessTexture === 'string') {
-    paramValues.metallicRoughnessTexture = payload.metallicRoughnessTexture;
+    values.metallicRoughnessTexture = payload.metallicRoughnessTexture;
   }
   if (typeof payload.normalTexture === 'string') {
-    paramValues.normalTexture = payload.normalTexture;
+    values.normalTexture = payload.normalTexture;
   }
   if (typeof payload.sampler === 'string') {
-    paramValues.sampler = payload.sampler;
+    values.sampler = payload.sampler;
   }
   if (payload.channelMap !== undefined && payload.channelMap !== null) {
     const encoded = encodeChannelMap(payload.channelMap);
     if (encoded !== undefined) {
-      paramValues.channelMap = encoded;
+      values.channelMap = encoded;
     }
   }
 
   return {
     materialShader: 'forgeax::default-standard-pbr',
     paramSchema: paramSchema.map((entry) => ({ ...entry })),
-    paramValues,
+    values,
   };
 }
 

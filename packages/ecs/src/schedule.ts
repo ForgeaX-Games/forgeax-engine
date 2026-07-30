@@ -1070,7 +1070,7 @@ export function runSchedule(
       queryResults.push(bundles);
     }
 
-    const paramValues = (record.descriptor.params ?? []).map((param, index) => {
+    const values = (record.descriptor.params ?? []).map((param, index) => {
       const paramResults: ColumnBundle[][] = [];
       for (const qs of record.paramQueryStates?.[index] ?? []) {
         const bundles: ColumnBundle[] = [];
@@ -1089,7 +1089,7 @@ export function runSchedule(
       world,
       queryResults as Parameters<typeof record.descriptor.fn>[1],
       commands,
-      paramValues as unknown as Parameters<typeof record.descriptor.fn>[3],
+      values as unknown as Parameters<typeof record.descriptor.fn>[3],
     );
 
     // If system fn returns a Result with err, invoke ErrorHandler

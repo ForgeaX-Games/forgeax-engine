@@ -155,7 +155,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     selector !== undefined ? buildMatchedRenderableIndices(dispatch, selector) : null;
 
   if (validatedOrdered.length > 0) {
-    const MATERIAL_PER_ENTITY_STRIDE = 256;
+    const MATERIAL_PER_ENTITY_STRIDE = 512;
     // feat-20260518-pbr-direct-lighting-mvp M5 / w22.10 (D-4 + D-9 +
     // AC-07 std140): per-entity material slice grew from 32 B (legacy
     // baseColor:vec4 + metallic + roughness + 8B padding) to 48 B
@@ -339,7 +339,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // feat-city-glb Bug 5 (per-submesh transparency): shared per-submesh
     // material bind-group assembly, called by BOTH the geometry pass and the
     // LDR blend sub-pass so a transparent PBR submesh binds the identical
-    // metallic/roughness/normal/emissive/occlusion + uvSet + Skylight layout
+    // metallic/roughness/normal/emissive/occlusion + Skylight layout
     // the geometry pass uses (the sub-pass previously bound a sprite-only BG,
     // which cannot render a PBR decal). Captures only frame-stable closure
     // state; the caller passes the per-submesh material snapshot + entityKey
@@ -392,10 +392,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // helper snapshot-only, no asset get.
         const materialShaderId = mat.materialShaderId;
         const schema =
-          materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined;
+          mat.materialParamSchema ??
+          (materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined);
         applyParamSnapshotToUbo(slotPayload, schema, mat.paramSnapshot);
         applyMaterialTextureUvScales(slotPayload, mat, world);
-
         // Missing-texture detection: structural debug-pink fallback overrides
         // the baseColor/colorTint slot when a bound baseColorTexture handle
         // resolves to no GPU view. Runs for every textured material path

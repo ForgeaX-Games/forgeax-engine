@@ -42,6 +42,15 @@ import { dedupeFinalizedUiEntries, finalizeUiArtifact } from './ui-pack-finalize
 
 export { CATALOG_DELTA_EVENT, createCatalogClient, reloadAssetHost } from './catalog-client.js';
 export { ASSET_CHANGED_EVENT, type AssetChangedPayload } from './dev/events.js';
+export {
+  createMaterialCookFinalizer,
+  type MaterialArtifactSink,
+  type MaterialCookCatalogEntry,
+  type MaterialCookFinalizerOptions,
+  type MaterialCookRequest,
+  type MaterialCookResult,
+  writeMaterialCookResult,
+} from './material/index.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

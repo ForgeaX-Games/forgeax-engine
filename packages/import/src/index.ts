@@ -26,6 +26,15 @@ export {
   type ImportTransport,
 } from '@forgeax/engine-types';
 export {
+  createMaterialImportProduct,
+  type MaterialImportProduct,
+  type MaterialImportProductError,
+  type MaterialImportProductInput,
+  type MaterialImportRefs,
+  type MaterialSourceEvidence,
+  materialImportProductReady,
+} from './import-product.js';
+export {
   type DdcPack,
   type ImportRunnerFs,
   normaliseForPack,

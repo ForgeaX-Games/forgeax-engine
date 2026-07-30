@@ -271,12 +271,11 @@ const materialAsset = {
   passes: [
     {
       name: 'Forward',
-      shader: DEMO_MATERIAL_SHADER_PATH,
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: DEMO_MATERIAL_SHADER_PATH },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [0.7, 0.7, 0.7],
     baseColorTexture: baseColorTextureHandle,
     detailTexture: detailTextureHandle,
@@ -403,8 +402,8 @@ if (!ready.ok) {
 // PBR is NOT used here (it stays single-UV byte-identical, AC-11/AC-12). The
 // materialAsset minted above references this shader by path; registering the
 // path here resolves the material's pass to a real pipeline.
-if (!renderer.shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
-  renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
+if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
+  renderer.shader.installMaterialArtifact(DEMO_MATERIAL_SHADER_PATH, {
     source: demoComposedWgsl,
     paramSchema: [
       { name: 'baseColor', type: 'color' },

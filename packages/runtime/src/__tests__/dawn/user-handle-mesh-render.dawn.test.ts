@@ -192,12 +192,11 @@ describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () =
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 0, 0, 1] },
+      values: { baseColor: [1, 0, 0, 1] },
     });
 
     // 3. Spawn cube + camera (axis-aligned, camera 3 units in front).

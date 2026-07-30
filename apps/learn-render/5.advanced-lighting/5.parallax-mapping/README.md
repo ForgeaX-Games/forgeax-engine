@@ -6,7 +6,7 @@
 > **Engine surface**: a user-authored **custom material shader** (`parallax.wgsl`) whose `paramSchema` declares **three** sampled textures — `baseColorTexture`, `normalTexture`, **`heightTexture`**. The engine derives the `@group(1)` material bind-group layout straight from that schema, so the height-map slot exists end-to-end with **no engine edit**. This demo is the dogfood for `feat-20260621` per-shader-derived material BGL.
 
 > [!IMPORTANT]
-> **One shader, three algorithms.** `parallax.wgsl` carries all three LO 5.5 variants — **basic** parallax (offset-limited), **steep** parallax, and **parallax occlusion mapping (POM)** — selected at runtime by `material.algoMode` (an f32-encoded discriminant). Switching is a `paramValues` mutation, not a recompile. Press `1` / `2` / `3` to switch.
+> **One shader, three algorithms.** `parallax.wgsl` carries all three LO 5.5 variants — **basic** parallax (offset-limited), **steep** parallax, and **parallax occlusion mapping (POM)** — selected at runtime by `material.algoMode` (an f32-encoded discriminant). Switching is a `values` mutation, not a recompile. Press `1` / `2` / `3` to switch.
 
 ## Run
 
@@ -49,7 +49,7 @@ The reason this is a *5.advanced-lighting* milestone and not just a shader port:
 
 - Declare `heightTexture` (type `texture2d`) in the `.wgsl.meta.json` `paramSchema`.
 - The engine's `derive(paramSchema)` emits a `@group(1)` BGL with a sampler+texture pair per declared texture, in declaration order, **sampler-first**.
-- `extract` and `record` iterate `derive(paramSchema).textureFieldNames` — the height handle flows from `MaterialAsset.paramValues.heightTexture` to the GPU bind group with **no per-texture hardcoding**.
+- `extract` and `record` iterate `derive(paramSchema).textureFieldNames` — the height handle flows from `MaterialAsset.values.heightTexture` to the GPU bind group with **no per-texture hardcoding**.
 
 A custom shader can declare *any* number of textures and they bind end-to-end. Built-in material BGL behaviour is unchanged.
 
@@ -76,7 +76,7 @@ struct ParallaxMaterial { baseColor: vec4<f32>, heightScale: f32, algoMode: f32 
 ```
 
 ```ts
-// index.ts — register the shader, then mutate paramValues by reference on keydown.
+// index.ts — register the shader, then mutate values by reference on keydown.
 shader.registerMaterialShader('learn-render::5-5-parallax', {
   source: parallaxShader.wgsl,
   paramSchema: [
@@ -89,10 +89,10 @@ shader.registerMaterialShader('learn-render::5-5-parallax', {
   ],
 });
 
-// Switching is a discrete event: mutate the live paramValues ref; the next
+// Switching is a discrete event: mutate the live values ref; the next
 // extract -> record cycle picks it up (no recompile, no re-register).
 window.addEventListener('keydown', (ev) => {
-  if (ev.key === '3') paramValues.algoMode = 2.0; // -> POM next frame
+  if (ev.key === '3') values.algoMode = 2.0; // -> POM next frame
 });
 ```
 

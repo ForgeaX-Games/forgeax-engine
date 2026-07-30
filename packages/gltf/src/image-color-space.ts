@@ -27,13 +27,15 @@
 
 export type ImageColorSpaceSrgbOrLinear = 'srgb' | 'linear';
 
+type TextureBinding = number | { readonly texture: number };
+
 /** Slim view of a parsed material the classifier reads (subset of MaterialIr). */
 export interface MaterialColorSpaceInput {
-  readonly baseColorTexture?: number;
-  readonly metallicRoughnessTexture?: number;
-  readonly normalTexture?: number;
-  readonly emissiveTexture?: number;
-  readonly occlusionTexture?: number;
+  readonly baseColorTexture?: TextureBinding;
+  readonly metallicRoughnessTexture?: TextureBinding;
+  readonly normalTexture?: TextureBinding;
+  readonly emissiveTexture?: TextureBinding;
+  readonly occlusionTexture?: TextureBinding;
 }
 
 /** Slim view of a parsed `textures[]` row. */
@@ -64,8 +66,9 @@ export function deriveTextureColorSpace(
   const result = new Map<number, ImageColorSpaceSrgbOrLinear>();
   const textures = input.textures ?? [];
 
-  function imageOfTexture(textureIndex: number | undefined): number | undefined {
-    if (textureIndex === undefined) return undefined;
+  function imageOfTexture(binding: TextureBinding | undefined): number | undefined {
+    if (binding === undefined) return undefined;
+    const textureIndex = typeof binding === 'number' ? binding : binding.texture;
     const tex = textures[textureIndex];
     if (tex === undefined) return undefined;
     return tex.source;

@@ -10,7 +10,7 @@
 // - Reads input texture, writes to declared color target with fullscreen 3-vertex draw
 //
 // Registered via renderer.postProcess.register(id, {source, params, reads?}) — a parallel
-// channel to registerMaterialShader (D-4: material shader = 4-BGL / 12-float vertex / depth /
+// channel to installMaterialArtifact (D-4: material shader = 4-BGL / 12-float vertex / depth /
 // triangle-list; fullscreen post-process = 0 vertex buffer / no depth / input-texture BGL).
 
 import type {

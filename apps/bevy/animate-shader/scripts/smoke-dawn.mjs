@@ -84,8 +84,8 @@ const shaderId = 'bevy::animate_shader';
 const shaderEntry = (manifest.materialShaders ?? []).find((entry) => entry?.identifier === shaderId);
 const shaderRegistry = renderer.shader;
 if (shaderRegistry === null || shaderEntry === undefined) throw new Error('animate shader manifest entry missing');
-if (!shaderRegistry.lookupMaterialShader(shaderId).ok) {
-  shaderRegistry.registerMaterialShader(shaderId, {
+if (!shaderRegistry.findMaterialArtifact(shaderId).ok) {
+  shaderRegistry.installMaterialArtifact(shaderId, {
     source: shaderEntry.composedWgsl,
     paramSchema: JSON.parse(shaderEntry.paramSchema),
   });
@@ -95,11 +95,11 @@ const geometry = createBoxGeometry(1, 1, 1);
 if (!geometry.ok) throw new Error(`${geometry.error.code}: ${geometry.error.hint}`);
 const world = new World();
 const mesh = world.allocSharedRef('MeshAsset', geometry.value);
-const paramValues = { time: 0 };
+const values = { time: 0 };
 const material = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: shaderId, tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues,
+  passes: [{ name: 'Forward', program: { module: shaderId }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values,
 });
 world.spawn(
   { component: Transform, data: { pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
@@ -141,7 +141,7 @@ async function capture(label) {
 }
 
 for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
-  paramValues.time = frame / 60;
+  values.time = frame / 60;
   const draw = renderer.draw([world], { owner: 0 });
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
   await delay(0);

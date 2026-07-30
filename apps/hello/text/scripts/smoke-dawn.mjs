@@ -210,8 +210,8 @@ const textEntities = spawnTextScenes(world, fontHandle).map((e) => e);
 // Occluder cube (AC-11) + light + camera mirror the demo.
 const cubeMat = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [0.6, 0.6, 0.6], metallic: 0, roughness: 0.5 },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: { baseColor: [0.6, 0.6, 0.6], metallic: 0, roughness: 0.5 },
 });
 world.spawn(
   { component: Transform, data: { pos: [2.2, -1.0, 1.5], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5]} },

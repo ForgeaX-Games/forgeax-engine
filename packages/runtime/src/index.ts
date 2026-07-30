@@ -181,7 +181,7 @@ export {
   type Handle,
   MATERIAL_PARAM_TYPES,
   type MaterialAsset,
-  type MaterialPassDescriptor,
+  type MaterialPass,
   type ParamSchemaEntry,
   type RenderQueue,
   type SamplerAsset,

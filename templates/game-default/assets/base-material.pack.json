@@ -9,19 +9,35 @@
         "passes": [
           {
             "name": "Forward",
-            "shader": "forgeax::default-unlit",
-            "tags": { "LightMode": "Forward" },
-            "queue": 2000
+            "program": {
+              "module": "forgeax::default-unlit"
+            },
+            "renderState": {
+              "tags": {
+                "LightMode": "Forward"
+              },
+              "queue": 2000
+            }
           },
           {
             "name": "ShadowCaster",
-            "shader": "forgeax::default-shadow-caster",
-            "tags": { "LightMode": "ShadowCaster" },
-            "passKind": "shadow-caster"
+            "program": {
+              "module": "forgeax::default-shadow-caster"
+            },
+            "renderState": {
+              "tags": {
+                "LightMode": "ShadowCaster"
+              }
+            }
           }
         ],
-        "paramValues": {
-          "baseColor": [0.6, 0.6, 0.6, 1]
+        "values": {
+          "baseColor": [
+            0.6,
+            0.6,
+            0.6,
+            1
+          ]
         }
       },
       "refs": [],

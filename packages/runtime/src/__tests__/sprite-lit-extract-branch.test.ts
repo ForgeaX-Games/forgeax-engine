@@ -59,16 +59,16 @@ describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
   describe('sprite-lit snapshot shape (D-9 remap, AC-02 SSOT)', () => {
     it('firstPassShader = "forgeax::sprite-lit" produces materialShaderId + transparent=true', () => {
       // TS port of the expected extract-stage result for a sprite-lit
-      // material with `renderState.blend` set (sprite-lit.wgsl.meta.json
+      // material with `renderState.blend` set (sprite-lit.material.json
       // mirrors sprite blend declaration after t4 lands). transparent is
       // derived from `renderState.blend !== undefined` per the post-#520
-      // SSOT (no longer carried on MaterialPassDescriptor.transparent).
+      // SSOT (no longer carried on MaterialPass.transparent).
       const fakeFirstPass = {
-        shader: 'forgeax::sprite-lit',
+        program: { module: 'forgeax::sprite-lit' },
         renderState: { blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } },
       } as const;
       const snapshot = {
-        materialShaderId: fakeFirstPass.shader,
+        materialShaderId: fakeFirstPass.program.module,
         transparent: fakeFirstPass.renderState.blend !== undefined,
       };
       expect(snapshot.materialShaderId).toBe('forgeax::sprite-lit');

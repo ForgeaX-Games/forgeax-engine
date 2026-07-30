@@ -92,7 +92,7 @@ export const HANDLE_CYLINDER: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsse
  * Builtin 9-slice quad mesh handle — 4×4 grid (16 vertices, 9 sub-quads,
  * 54 indices) on the XY plane facing +Z. Pair with `MeshFilter` and a
  * `MaterialAsset` whose first pass shader is `'forgeax::sprite'` and whose
- * `paramValues.slices` is non-zero to render a 9-sliced UI panel
+ * `values.slices` is non-zero to render a 9-sliced UI panel
  * (feat-20260527-sprite-nineslice / M2 / w9).
  *
  * @derives Same-shape sibling of {@link HANDLE_QUAD}: synthesised from

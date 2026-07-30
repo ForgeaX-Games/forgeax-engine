@@ -191,8 +191,8 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     // 2. Build material referencing the wood handle.
     const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
-      passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-      paramValues: { baseColor: [1, 1, 1, 1], baseColorTexture: unwrapHandle(woodHandle) },
+      passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+      values: { baseColor: [1, 1, 1, 1], baseColorTexture: unwrapHandle(woodHandle) },
     });
 
     // 3. Spawn cube + camera (axis-aligned, no rotation -- AC-08f / g

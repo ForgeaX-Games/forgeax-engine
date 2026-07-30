@@ -61,9 +61,9 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   const stdMatPayload: MaterialAsset = {
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: { baseColor: [0.2, 0.3, 0.9], metallic: 0, roughness: 0.5 },
+    values: { baseColor: [0.2, 0.3, 0.9], metallic: 0, roughness: 0.5 },
   };
   const stdMatGuid = AssetGuid.parse('f6af7007-158f-4d92-9e47-93bf2f213e1f');
   if (!stdMatGuid.ok) throw new Error('standard material GUID parse failed');
@@ -74,9 +74,9 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   const playerMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 },
+      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: { baseColor: [0.9, 0.2, 0.2] },
+    values: { baseColor: [0.9, 0.2, 0.2] },
   });
 
   // Load scene assets via GUID. The two scenes are registered inline as

@@ -1,11 +1,11 @@
 // M3 / w19: PassSelector matching logic
 // (feat-20260526-material-asset-multipass-renderstate)
 //
-// Pure-function helpers for matching MaterialPassDescriptor tags against
+// Pure-function helpers for matching MaterialPass tags against
 // a PassSelector. Plan-strategy D-4: Tags free Record + PassSelector
 // Record<string, string[]>. Requirements AC-05.
 
-import type { MaterialPassDescriptor, PassSelector } from '@forgeax/engine-types';
+import type { MaterialPass, PassSelector } from '@forgeax/engine-types';
 
 /**
  * Test whether a pass's tags match a {@link PassSelector}.
@@ -39,9 +39,11 @@ export function matchPass(tags: Record<string, string>, selector: PassSelector):
  * @returns Filtered array of matching passes
  */
 export function selectPasses(
-  passes: readonly MaterialPassDescriptor[],
+  passes: readonly MaterialPass[],
   selector: PassSelector,
-): readonly MaterialPassDescriptor[] {
+): readonly MaterialPass[] {
   if (Object.keys(selector).length === 0) return passes;
-  return passes.filter((p) => matchPass(p.tags ?? {}, selector));
+  return passes.filter((p) =>
+    matchPass((p.renderState?.tags as Record<string, string> | undefined) ?? {}, selector),
+  );
 }

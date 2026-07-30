@@ -1,5 +1,17 @@
 # @forgeax/engine-gltf
 
+> [!IMPORTANT]
+> glTF material output is a MaterialAsset payload. The bridge writes `passes`, `values`, and one structured texture value per slot, including `coordinates.set` and `coordinates.transform`; an optional `parent` is preserved, and the package cook then preserves those facts in the runtime-ready record. Consumers load the material by GUID with the scene graph.
+
+The importer receives the built-in standard root through the source declaration's
+`importSettings.standardMaterialGuid`. It writes that GUID as `MaterialAsset.parent`
+and adds the same GUID to the material `refs[]` edge; no runtime handle or shader
+identifier is invented by the glTF bridge.
+
+## MaterialAsset bridge recovery
+
+If a source requests a UV set that the primitive does not provide, handle `gltf-material-uv-set-missing` using its material, primitive, slot, requested set, and available sets. Add the source UV set and re-import; do not substitute a custom mesh or discard the slot transform.
+
 > Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` consumed by build-time CLI plugin bin `forgeax-engine-remote-gltf` (resolved via PATH-prefix scan for `forgeax-engine-remote-`) writing `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
 
 ## Evidence and recovery

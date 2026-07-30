@@ -332,12 +332,11 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [0.1, 0.9, 1.0],
   },
 });

@@ -29,6 +29,7 @@ import type {
   TextureView,
 } from '@forgeax/engine-rhi';
 import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
+import type { MaterialRuntimeArtifact } from '@forgeax/engine-shader';
 import {
   derive,
   type MaterialRenderState,
@@ -81,6 +82,7 @@ import type { RenderPipelineContext } from './render-pipeline-context';
 import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render-system-extract';
 import { extractFrames } from './render-system-extract';
 import { type DrawOwnerOptions, resolveDrawOwners } from './renderer';
+import type { MaterialRenderProjection } from './renderer/material/assembly';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 import {
   getTransparentSortConfig,
@@ -226,7 +228,7 @@ function sortTransparentDispatch(
  * slots whose only purpose was to make `derive(...).totalBytes` return
  * 80) is gone — the sidecar paramSchema is the only SSOT for the layout.
  *
- * The schema below mirrors `default-standard-pbr.wgsl.meta.json` field-
+ * The schema below mirrors `default-standard-pbr.material.json` field-
  * for-field; trailing texture entries do not affect uboLayout.totalBytes
  * (only numeric entries occupy UBO bytes). std140 produces:
  *   baseColor          : vec4<f32>     0..16
@@ -240,16 +242,12 @@ function sortTransparentDispatch(
  *   emissive           : vec3<f32>    48..60
  *   emissiveIntensity  : f32          60..64
  *   occlusionStrength  : f32          64..68
- *   uvSet              : f32          68..72
- *   alphaCutoff        : f32          72..76
- *   clearcoat          : f32          76..80
- *   clearcoatRoughness : f32          80..84
- *   (vec3 align=16 inserts implicit pad to 96)
- *   specularTint       : vec3<f32>    96..108
- *                                     = alignUp(108, 16) = 112
- * The engine-owned texture UV scale tail begins at byte 112 in the shader
- * struct; the bind window is 160 B and the dynamic-offset stride remains
- * `PER_ENTITY_STRIDE = 256` (D-P9).
+ *   alphaCutoff        : f32          68..72
+ *   clearcoat          : f32          72..76
+ *   clearcoatRoughness : f32          76..80
+ *   specularTint       : vec3<f32>    80..92
+ *                                     = alignUp(92, 16) = 96
+ * The engine-owned texture-coordinate records begin at byte 96.
  */
 const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color' },
@@ -262,7 +260,6 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3' },
   { name: 'emissiveIntensity', type: 'f32' },
   { name: 'occlusionStrength', type: 'f32' },
-  { name: 'uvSet', type: 'f32' },
   { name: 'alphaCutoff', type: 'f32' },
   { name: 'clearcoat', type: 'f32' },
   { name: 'clearcoatRoughness', type: 'f32' },
@@ -271,12 +268,12 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
 
 /**
  * Per-entity material slice size. The authored parameter schema owns the
- * leading 112-byte material payload; the engine-owned texture UV scales begin
- * at byte 112 in the shader and the full bind window is 160 bytes.
+ * leading 96-byte material payload; engine-owned per-slot coordinate records
+ * begin at byte 96 and occupy 192 bytes (six 32-byte records).
  */
 export const STANDARD_PBR_UBO_SIZE = Math.max(
   derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes,
-  160,
+  288,
 );
 
 /**
@@ -351,7 +348,7 @@ export interface RenderSystem {
    * feat-20260601-customizable-render-pipeline-seam M1 / w7: register a render-pipeline
    * logic under `id`. Same-id re-register THROWS a PipelineError
    * (`'pipeline-already-registered'`) - programmer-error fail-fast, mirroring
-   * ShaderRegistry.registerMaterialShader. Engine builtins use the `forgeax::` prefix.
+   * ShaderRegistry.installMaterialArtifact. Engine builtins use the `forgeax::` prefix.
    */
   registerPipeline(id: string, impl: RenderPipelineDef): void;
   /**
@@ -365,7 +362,7 @@ export interface RenderSystem {
   installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError>;
   /**
    * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
-   * fullscreen post-process shader registry, parallel to ShaderRegistry.registerMaterialShader
+   * fullscreen post-process shader registry, parallel to ShaderRegistry.installMaterialArtifact
    * (D-4: material shader handles 4-BGL / 12-float-vertex / depth / triangle-list, while
    * fullscreen post-process uses 0-vertex-buffer / no-depth / input-texture-BGL).
    * Same-id re-register THROWS PostProcessError ('post-process-already-registered').
@@ -425,10 +422,17 @@ export interface RenderSystemRuntime {
    * when surface reconfigure+retry both fail (A-IN-2).
    */
   readonly healthRegistry: import('./lifecycle').HealthListenerRegistry;
+  /**
+   * Cooked material consumption boundary. Runtime record code may obtain a
+   * projection and content-addressed artifact here; it must not resolve an
+   * authored parent chain or compile a missing specialization.
+   */
+  readonly getMaterialProjection?: (materialGuid: string) => MaterialRenderProjection | undefined;
+  readonly getMaterialArtifact?: (specializationKey: string) => MaterialRuntimeArtifact | undefined;
   // feat-20260523-shader-template-instance-split M9-T03 (D-PipelineBuilder):
   // per-MaterialShader pipeline cache lookup. Returns the cached pipeline
   // for `materialShaderId`, lazily building on first miss via
-  // ShaderRegistry.lookupMaterialShader -> buildPipelineForMaterialShader.
+  // ShaderRegistry.findMaterialArtifact -> buildPipelineForMaterialShader.
   // Returns `null` when:
   //   - the id is not registered in ShaderRegistry (caller falls back to
   //     pipelineState.standardPipeline / standardPipelineHdr)
@@ -949,7 +953,7 @@ export interface PipelineState {
   readonly skinPaletteAllocator: SkinPaletteAllocator | null;
   // 1x1 white texture view (feat-20260518 M3 / w13 + AC-06): seeds the
   // baseColorTexture (binding 2) and metallicRoughnessTexture (binding 4)
-  // entries when the schema-driven MaterialAsset paramValues omit the optional textures.
+  // entries when the schema-driven MaterialAsset values omit the optional textures.
   // Reuses the same sampling-friendly default as `fallbackTextureView`
   // (above); the alias keeps the new MVP code path declarative without
   // renaming the existing field. Note: normalTexture (binding 6) does
@@ -1573,7 +1577,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // perFrameGraph was last built for. Both live in the createRenderSystem closure
   // (plan-strategy D-D: all real logic on the RenderSystem layer; the Renderer facade
   // only forwards). The registry dedups same-id register (Map.has -> throw), mirroring
-  // ShaderRegistry.registerMaterialShader.
+  // ShaderRegistry.installMaterialArtifact.
   const pipelineRegistry = new Map<string, RenderPipelineDef>();
   let lastBuiltPipelineHandle = 0;
   // Monotonic install epoch: bumped on every installPipeline call to brand the
@@ -1583,7 +1587,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   let installEpoch = 0;
   // feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
   // post-process shader registry (id -> PostProcessShaderEntry), parallel to pipelineRegistry.
-  // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.registerMaterialShader.
+  // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.installMaterialArtifact.
   const postProcessRegistry = new Map<string, PostProcessShaderEntry>();
   // D-3 / D-8: per-shader params UBO resource table (id -> GPU Buffer).
   // Eager-created at register time when entry.params is present (byteSize >= 16,

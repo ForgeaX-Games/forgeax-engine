@@ -37,15 +37,16 @@ function spriteMaterial(texture: number, sampler: number, flipX = 0, flipY = 0):
   return {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1], flipX, flipY },
+    parameters: [
+      { name: 'colorTint', type: 'vec4' },
+      { name: 'region', type: 'vec4', optional: true },
+      { name: 'pivotAndSize', type: 'vec4' },
+      { name: 'slicesAndMode', type: 'vec4', optional: true },
+      { name: 'baseColorTexture', type: 'texture' },
+    ],
+    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1], flipX, flipY },
   };
 }
 

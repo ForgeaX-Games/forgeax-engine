@@ -112,7 +112,7 @@ export function spriteInstancesCacheHit(
  * unorm). Triggered by any validated dispatch entry carrying
  * `material.transparent === true` — derived by the extract stage from
  * `passes[0].renderState.blend !== undefined` (post-feat-20260626-collapse
- * SSOT, plan-strategy D-3; MaterialPassDescriptor no longer carries a
+ * SSOT, plan-strategy D-3; MaterialPass no longer carries a
  * dedicated `transparent` field).
  *
  * feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13: the M2 union

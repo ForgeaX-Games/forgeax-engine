@@ -87,14 +87,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: {
+    values: {
       baseColor: [0.7, 0.7, 0.7],
       metallic: 0.0,
       roughness: 0.4,

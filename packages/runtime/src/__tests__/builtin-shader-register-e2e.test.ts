@@ -14,7 +14,7 @@
 //   - shadow-caster (empty)    : userRegionBindingEnd === 0
 //
 // The fixtures mirror the engine sidecar files exactly — any drift between
-// this test and packages/shader/src/*.wgsl.meta.json surfaces immediately
+// this test and packages/shader/src/*.material.json surfaces immediately
 // (charter F2: structural, falsifiable).
 
 import { appendInjection } from '@forgeax/engine-render/internal';
@@ -34,7 +34,6 @@ const STANDARD_PBR_SIDECAR: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0.0, 0.0, 0.0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0.0 },
   { name: 'occlusionStrength', type: 'f32', default: 1.0 },
-  { name: 'uvSet', type: 'f32', default: 0.0 },
   { name: 'alphaCutoff', type: 'f32', default: 0.0 },
   { name: 'clearcoat', type: 'f32', default: 0.0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },

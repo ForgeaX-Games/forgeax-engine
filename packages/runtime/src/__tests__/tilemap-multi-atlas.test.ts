@@ -102,7 +102,7 @@ function readMaterialTextureHandle(world: World, materialHandle: number): number
   if (!res.ok) return 0;
   const asset = res.value;
   if (asset.kind !== 'material') return 0;
-  const pv = asset.paramValues as Readonly<Record<string, number | number[] | string | undefined>>;
+  const pv = asset.values as Readonly<Record<string, number | number[] | string | undefined>>;
   const tex = pv.baseColorTexture;
   return typeof tex === 'number' ? tex : 0;
 }

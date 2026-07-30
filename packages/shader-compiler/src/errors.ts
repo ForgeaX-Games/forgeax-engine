@@ -25,3 +25,47 @@ export {
   type ShaderErrorDetail,
   shaderNotFound,
 } from '@forgeax/engine-naga';
+
+import {
+  createMaterialError,
+  type MaterialErrorFor,
+  type Result as MaterialResult,
+  err as materialErr,
+} from '@forgeax/engine-types';
+
+export interface MaterialReflectionSourceSpan {
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface MaterialReflectionBindingMismatchDetail {
+  readonly code: 'material-reflection-binding-mismatch';
+  readonly material: string;
+  readonly pass: string;
+  readonly parameter: string;
+  readonly expected: string;
+  readonly actual: string;
+  readonly sourceSpan: MaterialReflectionSourceSpan;
+  readonly context: string;
+}
+
+export type MaterialReflectionError = Omit<
+  MaterialErrorFor<'material-reflection-binding-mismatch'>,
+  'detail'
+> & { readonly detail: MaterialReflectionBindingMismatchDetail };
+
+export function materialReflectionMismatch(
+  detail: MaterialReflectionBindingMismatchDetail,
+): MaterialReflectionError {
+  const base = createMaterialError('material-reflection-binding-mismatch', {
+    code: detail.code,
+    material: detail.material,
+    pass: detail.pass,
+    parameter: detail.parameter,
+    expected: detail.expected,
+    actual: detail.actual,
+  });
+  return { ...base, detail };
+}
+
+export { type MaterialResult, materialErr };

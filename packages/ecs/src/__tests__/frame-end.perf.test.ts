@@ -3,7 +3,9 @@ import { FrameEnd, type ScheduleToken, Update } from '../schedule-token';
 import { World } from '../world';
 
 const WARMUP_ROUNDS = 3;
-const SAMPLE_ROUNDS = 15;
+// More rounds make the tail statistic resilient to one scheduler/GC pause on
+// the shared self-hosted runner while keeping this sub-second perf gate cheap.
+const SAMPLE_ROUNDS = 31;
 // Keep each timed batch long enough to amortize sub-millisecond timer and
 // scheduler noise; the ratio gate remains unchanged.
 const INNER_REPEATS = 50_000;

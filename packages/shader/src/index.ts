@@ -21,6 +21,9 @@
 // - ManifestEntry — re-exported from `@forgeax/engine-types` (manifest schema SSOT)
 
 export type { ManifestEntry, ParamSchemaEntry } from '@forgeax/engine-types';
+
+import type { MaterialAsset, MaterialParameter, MaterialValue } from '@forgeax/engine-types';
+
 export { MATERIAL_PARAM_TYPES } from '@forgeax/engine-types';
 export {
   err,
@@ -35,6 +38,16 @@ export {
   type ShaderErrorDetail,
   shaderNotFound,
 } from './errors.js';
+export {
+  type MaterialArtifactConflictError,
+  type MaterialArtifactInspection,
+  MaterialArtifactRegistry,
+  type MaterialRuntimeArtifact,
+} from './material/artifact-registry.js';
+export {
+  isMaterialShaderArtifact,
+  type MaterialShaderArtifact,
+} from './material/artifact-types.js';
 export {
   registerDefaultSpriteLit,
   type SpriteLitCaps,
@@ -55,6 +68,41 @@ export {
 
 /** Package-level version number (debug label). */
 export const SHADER_PACKAGE_VERSION = '0.0.0';
+
+export const BUILTIN_MATERIAL_MODULES = {
+  standard: 'forgeax_material::standard',
+  unlit: 'forgeax_material::unlit',
+  sprite: 'forgeax_material::sprite',
+} as const;
+
+export type BuiltinMaterialKind = keyof typeof BUILTIN_MATERIAL_MODULES;
+
+const BUILTIN_PARAMETERS: Readonly<Record<BuiltinMaterialKind, readonly MaterialParameter[]>> = {
+  standard: [
+    { name: 'baseColor', type: 'color' },
+    { name: 'metallic', type: 'f32' },
+    { name: 'roughness', type: 'f32' },
+  ],
+  unlit: [{ name: 'baseColor', type: 'color' }],
+  sprite: [{ name: 'colorTint', type: 'vec4' }],
+};
+
+const BUILTIN_VALUES: Readonly<
+  Record<BuiltinMaterialKind, Readonly<Record<string, MaterialValue>>>
+> = {
+  standard: { baseColor: [1, 1, 1, 1], metallic: 0, roughness: 0.5 },
+  unlit: { baseColor: [1, 1, 1, 1] },
+  sprite: { colorTint: [1, 1, 1, 1] },
+};
+
+export function createBuiltinMaterialAsset(kind: BuiltinMaterialKind): MaterialAsset {
+  return {
+    kind: 'material',
+    passes: [{ name: 'forward', program: { module: BUILTIN_MATERIAL_MODULES[kind] } }],
+    parameters: BUILTIN_PARAMETERS[kind],
+    values: BUILTIN_VALUES[kind],
+  };
+}
 
 /**
  * Shared luminance epsilon floor for the extended Reinhard tone-map

@@ -227,7 +227,7 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
 
     // Entity A: schema-driven (PBR) material with bright-green chequer
     // texture. If the texture leaks onto B, B's white pixels turn
-    // greenish. feat-20260614 M8: paramValues.baseColorTexture carries the
+    // greenish. feat-20260614 M8: values.baseColorTexture carries the
     // GUID; the extract stage resolves it via assets.lookup(guid) then mints a
     // user-tier column handle via world.allocSharedRef.
     const texGreenGuid = AssetGuid.random();
@@ -237,16 +237,15 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: {
+      values: {
         baseColor: [1, 1, 1],
         metallic: 0,
         roughness: 0.5,
-        baseColorTexture: AssetGuid.format(texGreenGuid),
+        baseColorTexture: { texture: AssetGuid.format(texGreenGuid) as never },
       },
     });
 
@@ -256,12 +255,11 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1, 1] },
+      values: { baseColor: [1, 1, 1, 1] },
     });
 
     const cubeRes = createBoxGeometry(1, 1, 1);
@@ -445,16 +443,15 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: {
+      values: {
         baseColor: [1, 1, 1],
         metallic: 0,
         roughness: 0.5,
-        baseColorTexture: AssetGuid.format(texGreenGuid2),
+        baseColorTexture: { texture: AssetGuid.format(texGreenGuid2) as never },
       },
     });
 
@@ -463,12 +460,11 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1, 1] },
+      values: { baseColor: [1, 1, 1, 1] },
     });
 
     const cubeRes = createBoxGeometry(1, 1, 1);

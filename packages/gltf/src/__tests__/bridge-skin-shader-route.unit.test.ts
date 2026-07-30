@@ -25,18 +25,18 @@ describe('toMaterialAsset shader routing (w17-a)', () => {
   it('skinned: true -> passes[0].shader === forgeax::pbr-skin', () => {
     const mat = makeMatIr();
     const asset = toMaterialAsset(mat, { skinned: true });
-    expect(asset.passes?.[0]?.shader).toBe('forgeax::pbr-skin');
+    expect(asset.passes?.[0]?.program.module).toBe('forgeax::pbr-skin');
   });
 
   it('skinned: false -> passes[0].shader === forgeax::default-standard-pbr', () => {
     const mat = makeMatIr();
     const asset = toMaterialAsset(mat, { skinned: false });
-    expect(asset.passes?.[0]?.shader).toBe('forgeax::default-standard-pbr');
+    expect(asset.passes?.[0]?.program.module).toBe('forgeax::default-standard-pbr');
   });
 
   it('no flag (back-compat) -> passes[0].shader === forgeax::default-standard-pbr', () => {
     const mat = makeMatIr();
     const asset = toMaterialAsset(mat);
-    expect(asset.passes?.[0]?.shader).toBe('forgeax::default-standard-pbr');
+    expect(asset.passes?.[0]?.program.module).toBe('forgeax::default-standard-pbr');
   });
 });

@@ -31,14 +31,8 @@ function blendMaterial(
 ): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{
-      name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      passKind: 'forward' as const,
-      renderState: { blend },
-    }],
-    paramValues: { baseColor },
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { ...{ blend }, tags: { LightMode: 'Forward' }, passKind: 'forward' as const } }],
+    values: { baseColor },
   };
 }
 

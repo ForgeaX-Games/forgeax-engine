@@ -270,8 +270,8 @@ assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 
 const litMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
 });
 void specularHandle;
 // LO 2.6 10 lit cubes (same array as LO 1.6 / 2.5).
@@ -305,8 +305,8 @@ for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
   const plColor = POINT_LIGHT_COLORS[i];
   const lampMat = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: { baseColor: [plColor[0], plColor[1], plColor[2], 1.0] },
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+    values: { baseColor: [plColor[0], plColor[1], plColor[2], 1.0] },
   });
   world.spawn(
     {

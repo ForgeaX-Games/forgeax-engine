@@ -4,8 +4,8 @@ import { Update } from '@forgeax/engine-ecs';
 //
 // What this demo exercises end-to-end (charter F1 progressive disclosure):
 //   - sprite material via pass-based MaterialAsset (feat-20260524 OOS-7
-//     in-main migration) -- `passes: [{ shader: 'forgeax::sprite' }]`
-//     + `paramValues: { texture, sampler, baseColor, region?, pivot?,
+//     in-main migration) -- `passes: [{ program: { module: 'forgeax::sprite' } }]`
+//     + `values: { texture, sampler, baseColor, region?, pivot?,
 //     flipX?, flipY?, slices?, sliceMode? }`. No sibling type.
 //   - HANDLE_QUAD (M-1 / w06) -- the 3rd builtin mesh handle (12-float
 //     interleaved layout, same as HANDLE_CUBE / HANDLE_TRIANGLE).
@@ -71,7 +71,7 @@ import { Update } from '@forgeax/engine-ecs';
 //     `SPRITE_PREMULTIPLIED_ALPHA_BLEND` named constant re-exported
 //     from `@forgeax/engine-runtime`. Passes that omit `renderState`
 //     render through the opaque geometry pass.
-//   - paramValues field names are UBO-aligned to sprite.wgsl.meta.json
+//   - values field names are UBO-aligned to sprite.material.json
 //     paramSchema 1:1 (D-4): colorTint (was baseColor),
 //     baseColorTexture (was texture), pivotAndSize vec4 (was pivot +
 //     size split), slicesAndMode vec4 (was slices + sliceMode split;
@@ -127,6 +127,14 @@ const SPRITE_COLOR_TINTS = [
   [1.0, 0.4, 0.4, 1.0], // sprite-0: warm red
   [0.4, 1.0, 0.4, 1.0], // sprite-1: fresh green
   [0.4, 0.4, 1.0, 1.0], // sprite-2: cool blue
+] as const;
+
+const SPRITE_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
 ] as const;
 
 // scene-A: 3 sprites at distinct Layer values along Z; pivot=[0.5, 0.5]
@@ -430,7 +438,7 @@ function buildSpriteMaterial(args: {
   // preset; post-collapse the demo declares the
   // `SPRITE_PREMULTIPLIED_ALPHA_BLEND` constant directly.
   //
-  // paramValues uses UBO-aligned field names that match sprite.wgsl.meta.
+  // values uses UBO-aligned field names that match sprite.wgsl.meta.
   // json paramSchema 1:1 (M3 / w11, D-4): colorTint (was baseColor),
   // baseColorTexture (was texture). region/pivot are folded into
   // pivotAndSize via the extract-stage compat path; here we declare
@@ -439,15 +447,10 @@ function buildSpriteMaterial(args: {
   return {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: {
+    parameters: SPRITE_PARAMETERS,
+    values: {
       colorTint: args.colorTint,
       baseColorTexture: texture,
       sampler: args.sampler,
@@ -483,7 +486,7 @@ function buildSpriteMaterial(args: {
 // math + Transform.scale, not on the texture's visual identity
 // (AC-15 panel-corners-preserved).
 //
-// D-1: paramValues literal carries `slices` + `sliceMode` directly;
+// D-1: values literal carries `slices` + `sliceMode` directly;
 // the demo never imports a sprite-specific asset variant (a grep gate
 // in w19 acceptanceCheck enforces zero hits in this file).
 function setupNineSliceSection(
@@ -501,22 +504,17 @@ function setupNineSliceSection(
   // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
   //   - first-pass `renderState.blend` drives LDR split + blend pipeline
   //     (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
-  //   - paramValues UBO-aligned: colorTint / baseColorTexture (was
+  //   - values UBO-aligned: colorTint / baseColorTexture (was
   //     baseColor / texture), pivotAndSize vec4 (was pivot + size split),
   //     slicesAndMode vec4 (was slices + sliceMode split). Tile mode is
   //     sentinel-encoded on .w (negative = tile).
   const panelMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: {
+    parameters: SPRITE_PARAMETERS,
+    values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: texture,
       sampler: samplerHandle,
@@ -536,15 +534,10 @@ function setupNineSliceSection(
   const tileMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: {
+    parameters: SPRITE_PARAMETERS,
+    values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: texture,
       sampler: samplerHandle,

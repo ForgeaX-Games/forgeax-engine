@@ -172,11 +172,11 @@ export function buildSceneAssetValidator(
 //   {
 //     materialShader: string,
 //     paramSchema: ParamSchemaEntry[],
-//     paramValues: object
+//     values: object
 //   }
 // Each ParamSchemaEntry.type must be in the whitelist (D-ParamTypeWhitelist).
 // `additionalProperties: false` at top level so ajv rejects unknown fields.
-// paramValues is free-form (object) — the runtime layer does deeper validation.
+// values is free-form (object) — the runtime layer does deeper validation.
 //
 // Uses a separate ajv instance per call so different whitelists across
 // test fixtures do not pollute the module-top-level validators.
@@ -201,14 +201,14 @@ export function buildMaterialAssetValidator(
   const materialSchema = {
     type: 'object',
     additionalProperties: false,
-    required: ['materialShader', 'paramSchema', 'paramValues'],
+    required: ['materialShader', 'paramSchema', 'values'],
     properties: {
       materialShader: { type: 'string', minLength: 1 },
       paramSchema: {
         type: 'array',
         items: paramSchemaEntry,
       },
-      paramValues: { type: 'object' },
+      values: { type: 'object' },
     },
   };
 

@@ -64,14 +64,14 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     });
     const out = materialLoader.load(
       {
-        passes: [{ shader: 'forgeax::default-standard-pbr' }],
-        paramValues: { baseColorTexture: 0, metallic: 0.5 },
+        passes: [{ program: { module: 'forgeax::default-standard-pbr' } }],
+        values: { baseColorTexture: 0, metallic: 0.5 },
       },
       ['tex-bc-guid'],
       ctx,
     );
     expect(out).toMatchObject({ kind: 'material' });
-    const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
+    const pv = (out as { values: Record<string, unknown> }).values;
     // D-19: texture field rewritten to the refs[] GUID string (not a handle).
     expect(pv.baseColorTexture).toBe('tex-bc-guid');
     // Scalar field unchanged.
@@ -86,15 +86,15 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     });
     const out = materialLoader.load(
       {
-        passes: [{ shader: 'forgeax::default-standard-pbr' }],
+        passes: [{ program: { module: 'forgeax::default-standard-pbr' } }],
         // index 5 is out of range for refs.length=1 -> dropped.
-        paramValues: { baseColorTexture: 5 },
+        values: { baseColorTexture: 5 },
       },
       ['tex-bc-guid'],
       ctx,
     );
     expect(out).toMatchObject({ kind: 'material' });
-    const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
+    const pv = (out as { values: Record<string, unknown> }).values;
     // Loader drops the field; record stage falls back to MISSING_TEXTURE_HANDLE.
     expect('baseColorTexture' in pv).toBe(false);
   });
@@ -107,14 +107,14 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     });
     const out = materialLoader.load(
       {
-        passes: [{ shader: 'forgeax::user-defined' }],
-        paramValues: { customTexture: 0 },
+        passes: [{ program: { module: 'forgeax::user-defined' } }],
+        values: { customTexture: 0 },
       },
       ['tex-guid'],
       ctx,
     );
     expect(out).toMatchObject({ kind: 'material' });
-    const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
+    const pv = (out as { values: Record<string, unknown> }).values;
     // Graceful fallback resolves any in-range int to its refs[] GUID string.
     expect(pv.customTexture).toBe('tex-guid');
   });
@@ -127,17 +127,17 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     });
     const out = materialLoader.load(
       {
-        passes: [{ shader: 'forgeax::default-standard-pbr' }],
+        passes: [{ program: { module: 'forgeax::default-standard-pbr' } }],
         // metallic = 0 is an int in [0, refs.length=1) — would misclassify
         // under a naive "try every int" loader. paramSchema-aware path
         // declares metallic as 'f32', so it skips resolution.
-        paramValues: { baseColorTexture: 0, metallic: 0 },
+        values: { baseColorTexture: 0, metallic: 0 },
       },
       ['tex-bc-guid'],
       ctx,
     );
     expect(out).toMatchObject({ kind: 'material' });
-    const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
+    const pv = (out as { values: Record<string, unknown> }).values;
     // Texture field still resolves to the refs[] GUID string.
     expect(pv.baseColorTexture).toBe('tex-bc-guid');
     // Scalar field unchanged: metallic stays 0.

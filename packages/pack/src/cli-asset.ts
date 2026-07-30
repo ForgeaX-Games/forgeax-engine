@@ -243,74 +243,8 @@ async function runVerify(rest: string[], ctx: AssetCtx): Promise<number> {
   const result = await scanEntries([cwd], ctx);
   if (!result.ok) return 1;
 
-  // Shader sidecar type-specific validation (feat-20260528-material-shader-registration-unification M1 / w5).
-  // For each .meta.json with importer 'shader' (feat-20260603-asset-import-loader-injection
-  // M2: the reserved shader importer key, replacing the former assetType 'shader'),
-  // validate paramSchema shape:
-  //   - must exist and be a non-empty array
-  //   - each entry must have name + type (string) fields
-  //   - type must be in PARAM_SCHEMA_TYPE_ALLOWLIST
-  const PARAM_SCHEMA_TYPE_ALLOWLIST = new Set([
-    'f32',
-    'i32',
-    'u32',
-    'vec2',
-    'vec3',
-    'vec4',
-    'color',
-    'texture2d',
-    'sampler',
-  ]);
-  const metaPaths = await (async () => {
-    const { scan: scanFn } = await import('./scanner.js');
-    const scanResult = await scanFn([cwd]);
-    if (!scanResult.ok) return [] as string[];
-    return scanResult.value.filter((p: string) => p.endsWith('.meta.json'));
-  })();
-  for (const metaPath of metaPaths) {
-    let parsed: unknown;
-    try {
-      const raw = await readFile(metaPath, 'utf-8');
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    const metaObj = parsed as { importer?: unknown; paramSchema?: unknown };
-    if (metaObj.importer !== 'shader') continue;
-    if (!Array.isArray(metaObj.paramSchema) || metaObj.paramSchema.length === 0) {
-      return emitError(ctx, {
-        code: 'pack-malformed-meta',
-        expected: 'shader sidecar must have non-empty paramSchema array',
-        hint: `add a paramSchema field to ${metaPath} with at least one {name, type} entry`,
-        detail: { path: metaPath, reason: 'paramSchema missing or empty' },
-      });
-    }
-    for (let i = 0; i < metaObj.paramSchema.length; i++) {
-      const entry = metaObj.paramSchema[i] as { name?: unknown; type?: unknown };
-      if (typeof entry.name !== 'string' || typeof entry.type !== 'string') {
-        return emitError(ctx, {
-          code: 'pack-malformed-meta',
-          expected: 'paramSchema entry must have name (string) and type (string) fields',
-          hint: `fix paramSchema[${i}] in ${metaPath}: each entry needs {name: string, type: string}`,
-          detail: { path: metaPath, index: i, entry },
-        });
-      }
-      if (!PARAM_SCHEMA_TYPE_ALLOWLIST.has(entry.type)) {
-        const allowed = [...PARAM_SCHEMA_TYPE_ALLOWLIST].join(', ');
-        return emitError(ctx, {
-          code: 'pack-malformed-meta',
-          expected: `paramSchema type must be one of: ${allowed}`,
-          hint: `paramSchema[${i}].type '${entry.type}' in ${metaPath} is not in the allowed set`,
-          detail: { path: metaPath, index: i, type: entry.type, allowed },
-        });
-      }
-    }
-  }
-
   const materialCount = result.value.filter((e) => e.kind === 'material').length;
-  const shaderCount = result.value.filter((e) => e.kind === 'material-shader').length;
   ctx.stdoutWrite(`material-validated: ${materialCount}`);
-  ctx.stdoutWrite(`shader-validated: ${shaderCount}`);
   return 0;
 }
 

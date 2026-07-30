@@ -12,7 +12,14 @@
 // Result<T, E> + ok / err live in `@forgeax/engine-types` (tweak-20260612-result-
 // into-types) and are re-exported for ergonomic single-import from this module.
 
-export { err, ok, type Result } from '@forgeax/engine-types';
+export {
+  createMaterialError,
+  err,
+  type GltfMaterialUvSetMissingDetail,
+  type MaterialError,
+  ok,
+  type Result,
+} from '@forgeax/engine-types';
 
 // === GltfErrorCode — closed union SSOT (15 members) ===
 

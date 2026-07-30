@@ -261,14 +261,14 @@ assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 // dawn-node deferred-upload falls back to a 1x1 white view.
 const cubeMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
 });
 // Lamp marker material (white emissive proxy).
 const lampMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0] },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0] },
 });
 
 void specularHandle;

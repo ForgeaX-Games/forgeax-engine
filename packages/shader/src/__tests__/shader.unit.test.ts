@@ -388,7 +388,7 @@ import {
   // register-material-shader.test.ts -- feat-20260523-shader-template-instance-split
   // M5 / T06.
   //
-  // Tests for the new ShaderRegistry.registerMaterialShader / lookupMaterialShader
+  // Tests for the new ShaderRegistry.installMaterialArtifact / findMaterialArtifact
   // surface (M5-T05 + plan-strategy D-DefaultStandardPbr-Identifier).
   //
   // 5 cases per plan acceptanceCheck:
@@ -462,9 +462,9 @@ import {
       const registry = makeRegistry();
       const entry = makeDefaultEntry();
       const id = `${FORGEAX_RESERVED_PATH_PREFIX}default-standard-pbr`;
-      registry.registerMaterialShader(id, entry);
+      registry.installMaterialArtifact(id, entry);
 
-      const r = registry.lookupMaterialShader(id);
+      const r = registry.findMaterialArtifact(id);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       expect(r.value.source).toBe(STUB_SOURCE_DEFAULT);
@@ -478,11 +478,11 @@ import {
       const registry = makeRegistry();
       const entry = makeDefaultEntry();
       const id = `${FORGEAX_RESERVED_PATH_PREFIX}default-standard-pbr`;
-      registry.registerMaterialShader(id, entry);
+      registry.installMaterialArtifact(id, entry);
 
-      expect(() => registry.registerMaterialShader(id, entry)).toThrow(/already registered/);
+      expect(() => registry.installMaterialArtifact(id, entry)).toThrow(/already registered/);
       // Original entry stays intact -- duplicate register did not perturb storage.
-      const lookup = registry.lookupMaterialShader(id);
+      const lookup = registry.findMaterialArtifact(id);
       expect(lookup.ok).toBe(true);
       if (lookup.ok) {
         expect(lookup.value.source).toBe(STUB_SOURCE_DEFAULT);
@@ -492,10 +492,10 @@ import {
     it('does not allow overwrite even when entry shape differs', () => {
       const registry = makeRegistry();
       const id = `${FORGEAX_RESERVED_PATH_PREFIX}default-standard-pbr`;
-      registry.registerMaterialShader(id, makeDefaultEntry());
+      registry.installMaterialArtifact(id, makeDefaultEntry());
       // Attempt a "drift" overwrite with a different source body.
       expect(() =>
-        registry.registerMaterialShader(id, {
+        registry.installMaterialArtifact(id, {
           source: '// drifted source\n',
           paramSchema: [],
         }),
@@ -507,16 +507,16 @@ import {
     it('accepts a user-namespaced path identifier', () => {
       const registry = makeRegistry();
       const userId = 'my-game::pulse-material';
-      registry.registerMaterialShader(userId, makeUserEntry());
-      const r = registry.lookupMaterialShader(userId);
+      registry.installMaterialArtifact(userId, makeUserEntry());
+      const r = registry.findMaterialArtifact(userId);
       expect(r.ok).toBe(true);
     });
 
     it('accepts a GUID-shaped identifier', () => {
       const registry = makeRegistry();
       const guidId = '01923a4b-7d8c-7c4e-9f12-345678901234';
-      registry.registerMaterialShader(guidId, makeUserEntry());
-      const r = registry.lookupMaterialShader(guidId);
+      registry.installMaterialArtifact(guidId, makeUserEntry());
+      const r = registry.findMaterialArtifact(guidId);
       expect(r.ok).toBe(true);
     });
   });
@@ -534,7 +534,7 @@ import {
     it('throws when a user shader samples baseColorTexture absent from paramSchema', () => {
       const registry = makeRegistry();
       expect(() =>
-        registry.registerMaterialShader('learn-render::alpha-test', {
+        registry.installMaterialArtifact('learn-render::alpha-test', {
           source: wgslSamplingBaseColor,
           paramSchema: [{ name: 'baseColor', type: 'color' }],
         }),
@@ -544,7 +544,7 @@ import {
     it('accepts the same shader once baseColorTexture is declared', () => {
       const registry = makeRegistry();
       expect(() =>
-        registry.registerMaterialShader('learn-render::alpha-test', {
+        registry.installMaterialArtifact('learn-render::alpha-test', {
           source: wgslSamplingBaseColor,
           paramSchema: [
             { name: 'baseColor', type: 'color' },
@@ -562,7 +562,7 @@ import {
       const wgslEngineInjected =
         '@fragment fn fs() { let e = textureSample(emissiveTexture, smp, in.uv); }';
       expect(() =>
-        registry.registerMaterialShader(`${FORGEAX_RESERVED_PATH_PREFIX}custom`, {
+        registry.installMaterialArtifact(`${FORGEAX_RESERVED_PATH_PREFIX}custom`, {
           source: wgslEngineInjected,
           paramSchema: [{ name: 'baseColor', type: 'color' }],
         }),
@@ -573,11 +573,11 @@ import {
   describe('M5-T06 (d) -- lookup non-existent returns material-shader-not-found', () => {
     it('returns Result.err with the structured error code', () => {
       const registry = makeRegistry();
-      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      const r = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('material-shader-not-found');
-      expect(r.error.hint).toMatch(/registerMaterialShader/);
+      expect(r.error.hint).toMatch(/installMaterialArtifact/);
       expect(r.error.message).toContain('forgeax::no-such-shader');
     });
   });
@@ -591,7 +591,7 @@ import {
         'my-game::wave-material',
       ] as const;
       for (const id of ids) {
-        registry.registerMaterialShader(id, makeUserEntry());
+        registry.installMaterialArtifact(id, makeUserEntry());
       }
       const seen = Array.from(registry.materialShaderIdentifiers());
       expect(seen).toEqual(ids);
@@ -621,9 +621,9 @@ import {
         'my-game::wave-material',
       ] as const;
       for (const id of ids) {
-        registry.registerMaterialShader(id, makeUserEntry());
+        registry.installMaterialArtifact(id, makeUserEntry());
       }
-      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      const r = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('material-shader-not-found');
@@ -635,7 +635,7 @@ import {
 
     it('(b) lookup miss on empty registry -> err.expected is empty', () => {
       const registry = makeRegistry();
-      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      const r = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('material-shader-not-found');
@@ -644,18 +644,18 @@ import {
 
     it('(c) register + miss, add more, miss again -> err.expected updates', () => {
       const registry = makeRegistry();
-      registry.registerMaterialShader(
+      registry.installMaterialArtifact(
         `${FORGEAX_RESERVED_PATH_PREFIX}default-standard-pbr`,
         makeUserEntry(),
       );
-      const r1 = registry.lookupMaterialShader('forgeax::no-such-shader');
+      const r1 = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r1.ok).toBe(false);
       if (r1.ok) return;
       expect(r1.error.expected).toContain('forgeax::');
 
-      registry.registerMaterialShader('my-game::pulse-material', makeUserEntry());
-      registry.registerMaterialShader('my-game::wave-material', makeUserEntry());
-      const r2 = registry.lookupMaterialShader('different-miss');
+      registry.installMaterialArtifact('my-game::pulse-material', makeUserEntry());
+      registry.installMaterialArtifact('my-game::wave-material', makeUserEntry());
+      const r2 = registry.findMaterialArtifact('different-miss');
       expect(r2.ok).toBe(false);
       if (r2.ok) return;
       expect(r2.error.expected).toContain('forgeax::');
@@ -675,9 +675,9 @@ import {
         'my-game::wave-material',
       ] as const;
       for (const id of ids) {
-        registry.registerMaterialShader(id, makeUserEntry());
+        registry.installMaterialArtifact(id, makeUserEntry());
       }
-      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      const r = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('material-shader-not-found');
@@ -689,7 +689,7 @@ import {
 
     it('(e) empty-registry miss -> err.detail.registeredShaderIds is empty array (not undefined)', () => {
       const registry = makeRegistry();
-      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      const r = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       const registered = r.error.detail?.registeredShaderIds;
@@ -893,7 +893,7 @@ import {
   //   - plan-strategy section 5.3 critical test point register
 
   // Inline summary of the paramSchema fields for verification — mirrors
-  // default-standard-pbr.wgsl.meta.json paramSchema[] field-for-field.
+  // default-standard-pbr.material.json paramSchema[] field-for-field.
   // feat-20260613 fix-issue-1 (D-8): channelMap split into 4 f32 selectors;
   // emissive / emissiveIntensity / occlusionStrength absorbed into the
   // schema (used to live in the legacy 80-B UBO without sidecar visibility).
@@ -908,8 +908,6 @@ import {
     'emissive',
     'emissiveIntensity',
     'occlusionStrength',
-    // feat-city-glb multi-UV tiling: per-material UV-set selector.
-    'uvSet',
     'alphaCutoff',
     'clearcoat',
     'clearcoatRoughness',
@@ -942,7 +940,7 @@ import {
   }
 
   function lookup(registry: ShaderRegistry): MaterialShaderEntry {
-    const r = registry.lookupMaterialShader('forgeax::pbr-skin');
+    const r = registry.findMaterialArtifact('forgeax::pbr-skin');
     if (!r.ok) throw new Error(`lookup failed: ${r.error.code}`);
     return r.value;
   }
@@ -976,7 +974,7 @@ import {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      expect(entry.paramSchema).toHaveLength(19);
+      expect(entry.paramSchema).toHaveLength(18);
     });
 
     it('paramSchema names match default-standard-pbr schema field-for-field', () => {
@@ -1004,8 +1002,6 @@ import {
         // emissive vec3 + emissiveIntensity + occlusionStrength.
         'vec3',
         'f32',
-        'f32',
-        // uvSet selector (feat-city-glb multi-UV tiling).
         'f32',
         // alpha cutoff + clearcoat controls.
         'f32',
@@ -1053,7 +1049,7 @@ import {
     it('lookup after registration still fails for non-existent id', () => {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
-      const r = registry.lookupMaterialShader('forgeax::no-such-skin');
+      const r = registry.findMaterialArtifact('forgeax::no-such-skin');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('material-shader-not-found');

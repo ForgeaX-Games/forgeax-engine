@@ -7,7 +7,7 @@
 // frames each draw (plan-strategy D-1).
 //
 // AI-user side: declares a VideoAsset { url } -> loadByGuid -> spawn a
-// quad entity with MeshFilter + MeshRenderer + MaterialAsset.paramValues
+// quad entity with MeshFilter + MeshRenderer + MaterialAsset.values
 // referencing the video GUID + VideoPlayer { clip, playing:true, loop:true }.
 // The material reuses the same texture2d slot a static texture would (D-5),
 // so the AI-user code is line-by-line isomorphic to a static-textured quad
@@ -130,7 +130,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     console.log('[video-texture] VideoAsset registered');
 
-    // Step 2: register unlit MaterialAsset with paramValues.baseColorTexture=videoGuid.
+    // Step 2: register unlit MaterialAsset with values.baseColorTexture=videoGuid.
     // The video GUID occupies the same texture2d slot a static texture would (D-5).
     const matGuidResult = AssetGuid.parse(MATERIAL_GUID_STRING);
     if (!matGuidResult.ok) {
@@ -140,16 +140,11 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     assets.catalog(matGuidResult.value, {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
-        },
+        { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
       ],
-      paramValues: {
+      values: {
         baseColor: [0.9, 0.9, 0.9],
-        // paramValues texture fields are dash-form GUID strings (D-19): the
+        // values texture fields are dash-form GUID strings (D-19): the
         // extract stage resolves the string against the catalogue and routes a
         // video-kind payload to the transient DynamicTextureStore. Passing the
         // raw AssetGuid (Uint8Array) here would match neither the string nor the

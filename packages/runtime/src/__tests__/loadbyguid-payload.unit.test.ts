@@ -60,15 +60,15 @@ describe('M8 material-walk: handle root via sharedRefs, parent chain via catalog
     const parentGuid = reg.parseGuid(parentGuidStr);
     const parentPayload: MaterialAsset = {
       kind: 'material',
-      passes: [{ name: 'forward', shader: 'forgeax::default-unlit' }],
-      paramValues: { baseColor: [0.2, 0.4, 0.6] },
+      passes: [{ name: 'forward', program: { module: 'forgeax_material::unlit' } }],
+      values: { baseColor: [0.2, 0.4, 0.6] },
     } as unknown as MaterialAsset;
     reg.catalog(parentGuid, parentPayload);
     // Child material: no passes (inherits parent), parent stored as a GUID
     // (D-19 embedded ref). The child gets a user-tier column handle.
     const childPayload: MaterialAsset = {
       kind: 'material',
-      paramValues: { metallic: 1 },
+      values: { metallic: 1 },
       parent: parentGuid,
     } as unknown as MaterialAsset;
     const childHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
@@ -81,10 +81,10 @@ describe('M8 material-walk: handle root via sharedRefs, parent chain via catalog
     if (!walk.ok) return;
     // Passes inherited from parent (W-5 full inheritance).
     expect(walk.value.passes.length).toBe(1);
-    expect(walk.value.passes[0]?.shader).toBe('forgeax::default-unlit');
-    // paramValues shallow-merged: parent baseColor + child metallic (W-4).
-    expect(walk.value.paramValues.metallic).toBe(1);
-    expect(walk.value.paramValues.baseColor).toEqual([0.2, 0.4, 0.6]);
+    expect(walk.value.passes[0]?.program.module).toBe('forgeax_material::unlit');
+    // values shallow-merged: parent baseColor + child metallic (W-4).
+    expect(walk.value.values.metallic).toBe(1);
+    expect(walk.value.values.baseColor).toEqual([0.2, 0.4, 0.6]);
   });
 });
 

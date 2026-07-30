@@ -7,7 +7,7 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import shader from './animate-shader.wgsl';
+import './animate-shader.wgsl';
 
 const SHADER_ID = 'bevy::animate_shader';
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -26,18 +26,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = result.value;
-  const shaderRegistry = app.renderer.shader;
-  if (shaderRegistry === null) {
-    console.error('[bevy-animate-shader] renderer.shader is null');
-    return;
-  }
-  if (!shaderRegistry.lookupMaterialShader(SHADER_ID).ok) {
-    shaderRegistry.registerMaterialShader(SHADER_ID, {
-      source: shader.wgsl,
-      paramSchema: [{ name: 'time', type: 'f32', default: 0 }],
-    });
-  }
-
   const geometry = createBoxGeometry(1, 1, 1);
   if (!geometry.ok) {
     console.error('[bevy-animate-shader] createBoxGeometry failed:', geometry.error);
@@ -69,8 +57,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         ? world.getResource<{ elapsed: number }>('Time').elapsed
         : 0;
       const resolved = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(material);
-      if (!resolved.ok || resolved.value.paramValues === undefined) return;
-      (resolved.value.paramValues as Record<string, unknown>).time = time;
+      if (!resolved.ok || resolved.value.values === undefined) return;
+      (resolved.value.values as Record<string, unknown>).time = time;
     },
   });
   app.onError((error) => console.error('[bevy-animate-shader] app error:', error.code, error.hint));
@@ -81,7 +69,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 function makeMaterial(): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: SHADER_ID, tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: { time: 0 },
+    passes: [{ name: 'Forward', program: { module: SHADER_ID }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+    values: { time: 0 },
   };
 }

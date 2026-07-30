@@ -1,173 +1,123 @@
-// M3 / w15: Materials.unlit / Materials.standard factory functions
-// (feat-20260526-material-asset-multipass-renderstate +
-//  feat-20260612-hdrp-deferred-shading M3 / w15)
-//
-// Returns pass-based MaterialAsset shape per plan-strategy D-1 / D-4.
-// Replaces the old UnlitMaterialAsset / SchemaDrivenMaterialAsset
-// return shapes with unified pass-based MaterialAsset.
-//
-// Charter P1 progressive disclosure: Materials. autocomplete exposes
-// unlit / standard in a single IDE completion chain.
-//
-// Design decisions:
-//   D-1: pass-based MaterialAsset unified interface — single kind='material'.
-//   D-2: RenderQueue.Geometry=2000 default queue for Forward pass.
-//   D-4: 3-pass literal — deferred (fs_gbuffer) + forward (fs_main) + shadow-caster.
-//     HDRP execute selects pass by passKind + alpha-blend state; AI users call
-//     Materials.standard() without knowing passKind routing internals (charter P4).
-//   D-8: g-buffer fragment entry lands in default-standard-pbr.wgsl fs_gbuffer.
-//   w17: forgeax::default-standard-pbr template registered in ShaderRegistry.
-
-import {
-  type MaterialAsset,
-  type MaterialPassDescriptor,
-  type MaterialRenderState,
-  RenderQueue,
+import type {
+  MaterialAsset,
+  MaterialParameter,
+  MaterialPass,
+  MaterialRenderState,
+  MaterialValue,
 } from '@forgeax/engine-types';
 
-/**
- * Premultiplied-alpha blend state for sprite materials (and any other
- * transparent surface that ships pre-multiplied RGB).
- *
- * Equation (per WebGPU `GPUBlendState`):
- *
- *   color_out = color_src * 1 + color_dst * (1 - alpha_src)
- *   alpha_out = alpha_src * 1 + alpha_dst * (1 - alpha_src)
- *
- * The factor pair (`srcFactor='one'` / `dstFactor='one-minus-src-alpha'`)
- * is the canonical premultiplied-alpha composite — applicable to texture
- * atlases and PNGs with premultiplied alpha. Pass it on
- * {@link MaterialPassDescriptor.renderState}.blend; the runtime treats the
- * presence of `renderState.blend` as the SSOT for transparent routing
- * (LDR-split sub-pass + back-to-front sort).
- *
- * @example AI users opt sprite materials into transparency:
- * ```ts
- * import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
- *
- * const spriteMaterial: MaterialAsset = {
- *   kind: 'material',
- *   passes: [{
- *     name: 'Forward',
- *     shader: 'forgeax::sprite',
- *     renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
- *   }],
- *   paramValues: { baseColorTexture: textureHandle },
- * };
- * ```
- *
- * @see {@link MaterialPassDescriptor.renderState} on `@forgeax/engine-types`.
- * @see `packages/runtime/README.md` section sprite for blend preset alternatives
- *   (additive / multiply / opaque overlay).
- */
 export const SPRITE_PREMULTIPLIED_ALPHA_BLEND: GPUBlendState = {
   color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
 };
 
-const SHADOW_CASTER_PASS = {
-  name: 'ShadowCaster',
-  shader: 'forgeax::default-shadow-caster',
-  tags: { LightMode: 'ShadowCaster' } as Record<string, string>,
-  passKind: 'shadow-caster' as const,
-};
+const STANDARD_MODULE = 'forgeax_material::standard';
+const UNLIT_MODULE = 'forgeax_material::unlit';
+const SPRITE_MODULE = 'forgeax_material::sprite';
 
-interface UnlitOpts {
-  castShadow?: boolean;
-  baseColorTexture?: number;
-  alphaCutoff?: number;
-  renderState?: MaterialRenderState;
-  queue?: RenderQueue;
+const standardParameters: readonly MaterialParameter[] = [
+  { name: 'baseColor', type: 'color' },
+  { name: 'metallic', type: 'f32' },
+  { name: 'roughness', type: 'f32' },
+  { name: 'metallicChannel', type: 'f32', optional: true },
+  { name: 'roughnessChannel', type: 'f32', optional: true },
+  { name: 'aoChannel', type: 'f32', optional: true },
+  { name: 'extraChannel', type: 'f32', optional: true },
+  { name: 'emissive', type: 'vec3', optional: true },
+  { name: 'emissiveIntensity', type: 'f32', optional: true },
+  { name: 'occlusionStrength', type: 'f32', optional: true },
+  { name: 'alphaCutoff', type: 'f32', optional: true },
+  { name: 'clearcoat', type: 'f32', optional: true },
+  { name: 'clearcoatRoughness', type: 'f32', optional: true },
+  { name: 'specularTint', type: 'vec3', optional: true },
+  { name: 'baseColorTexture', type: 'texture', optional: true },
+  { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
+  { name: 'normalTexture', type: 'texture', optional: true },
+  { name: 'specularTintTexture', type: 'texture', optional: true },
+  { name: 'emissiveTexture', type: 'texture', optional: true },
+  { name: 'occlusionTexture', type: 'texture', optional: true },
+];
+
+const unlitParameters: readonly MaterialParameter[] = [
+  { name: 'baseColor', type: 'color' },
+  { name: 'baseColorTexture', type: 'texture', optional: true },
+  { name: 'alphaCutoff', type: 'f32', optional: true },
+];
+
+function pass(
+  name: string,
+  module: string,
+  renderState: MaterialRenderState | undefined,
+  fragmentEntry?: string,
+  queue?: number,
+): MaterialPass {
+  const lightMode =
+    name === 'shadow-caster' ? 'ShadowCaster' : name === 'deferred' ? 'Deferred' : 'Forward';
+  const authoredState = (renderState ?? {}) as Readonly<Record<string, unknown>>;
+  const authoredTags = authoredState.tags as Readonly<Record<string, string>> | undefined;
+  return {
+    name,
+    program: {
+      module,
+      ...(fragmentEntry === undefined ? {} : { fragmentEntry }),
+    },
+    renderState: {
+      ...authoredState,
+      tags: { LightMode: lightMode, ...authoredTags },
+      ...(queue === undefined ? {} : { queue }),
+    },
+  };
 }
 
-/**
- * Create an unlit material asset from a 4-component sRGB base colour.
- *
- * Returns a {@link MaterialAsset} with a Forward pass using
- * `forgeax::default-unlit` shader and `baseColor` in paramValues.
- * Optionally accepts `baseColorTexture` (a `Handle<TextureAsset>` ID)
- * which the unlit shader samples and multiplies with `baseColor`.
- * By default also includes a ShadowCaster pass so the entity casts
- * shadows.  Pass `{ castShadow: false }` to disable.
- *
- * @example
- * ```ts
- * const m = Materials.unlit([1, 1, 1, 1], { baseColorTexture: texHandle });
- * assets.register<MaterialAsset>(m).unwrap();
- * ```
- */
+interface UnlitOpts {
+  readonly castShadow?: boolean;
+  readonly baseColorTexture?: MaterialValue;
+  readonly alphaCutoff?: number;
+  readonly renderState?: MaterialRenderState;
+  readonly queue?: number;
+}
+
 function unlit(rgba: readonly [number, number, number, number], opts?: UnlitOpts): MaterialAsset {
   if (opts?.alphaCutoff !== undefined && (opts.alphaCutoff < 0 || opts.alphaCutoff > 1)) {
     throw new Error(`Materials.unlit: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
   }
-  const passes: MaterialPassDescriptor[] = [
-    {
-      name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      queue: opts?.queue ?? RenderQueue.Geometry,
-      passKind: 'forward',
-      ...(opts?.renderState !== undefined && { renderState: opts.renderState }),
-    },
+  const values: Record<string, MaterialValue> = { baseColor: rgba };
+  if (opts?.baseColorTexture !== undefined) values.baseColorTexture = opts.baseColorTexture;
+  if (opts?.alphaCutoff !== undefined) values.alphaCutoff = opts.alphaCutoff;
+  const passes: [MaterialPass, ...MaterialPass[]] = [
+    pass('forward', UNLIT_MODULE, opts?.renderState, undefined, opts?.queue),
   ];
-  if (opts?.castShadow !== false) {
-    passes.push({ ...SHADOW_CASTER_PASS });
-  }
-  const paramValues: Record<string, unknown> = { baseColor: rgba };
-  if (opts?.baseColorTexture !== undefined) paramValues.baseColorTexture = opts.baseColorTexture;
-  if (opts?.alphaCutoff !== undefined) paramValues.alphaCutoff = opts.alphaCutoff;
+  if (opts?.castShadow !== false) passes.push(pass('shadow-caster', UNLIT_MODULE, undefined));
   return {
     kind: 'material',
     passes,
-    paramValues,
+    parameters: unlitParameters,
+    values,
   };
 }
 
 interface StandardOpts {
-  baseColor: readonly [number, number, number, number];
-  metallic?: number;
-  roughness?: number;
-  /** Clearcoat layer strength, in [0, 1]. */
-  clearcoat?: number;
-  /** Clearcoat perceptual roughness, in [0, 1]. */
-  clearcoatRoughness?: number;
-  /** Dielectric specular tint; metallic materials keep their base-color F0. */
-  specularTint?: readonly [number, number, number];
-  /** Optional texture multiplied into the dielectric specular tint. */
-  specularTintTexture?: number;
-  emissive?: readonly [number, number, number];
-  emissiveIntensity?: number;
-  emissiveTexture?: number;
-  baseColorTexture?: number;
-  occlusionTexture?: number;
-  occlusionStrength?: number;
-  alphaCutoff?: number;
-  renderState?: MaterialRenderState;
-  queue?: RenderQueue;
-  castShadow?: boolean;
+  readonly baseColor: readonly [number, number, number, number];
+  readonly metallic?: number;
+  readonly roughness?: number;
+  readonly clearcoat?: number;
+  readonly clearcoatRoughness?: number;
+  readonly specularTint?: readonly [number, number, number];
+  readonly specularTintTexture?: MaterialValue;
+  readonly emissive?: readonly [number, number, number];
+  readonly emissiveIntensity?: number;
+  readonly emissiveTexture?: MaterialValue;
+  readonly baseColorTexture?: MaterialValue;
+  readonly metallicRoughnessTexture?: MaterialValue;
+  readonly normalTexture?: MaterialValue;
+  readonly occlusionTexture?: MaterialValue;
+  readonly occlusionStrength?: number;
+  readonly alphaCutoff?: number;
+  readonly renderState?: MaterialRenderState;
+  readonly castShadow?: boolean;
+  readonly queue?: number;
 }
 
-/**
- * Create a standard PBR material asset with deferred + forward + shadow passes.
- *
- * Returns a {@link MaterialAsset} with three ShaderPass entries:
- *   1. GBuffer (passKind='deferred') — opaque g-buffer write via fs_gbuffer
- *   2. Forward (passKind='forward') — transparent cluster-forward via fs_main
- *   3. ShadowCaster (passKind='shadow-caster') — depth-only shadow map write
- *
- * When used with HDRP (the default render pipeline), opaque geometry routes to
- * the deferred pass and transparent geometry routes to the forward pass
- * automatically (charter P4 consistent abstraction). AI users do not need to
- * manually select passKind — calling `Materials.standard(...)` is sufficient.
- *
- * `metallic` defaults to 0, `roughness` defaults to 0.5 (glTF 2.0 spec defaults).
- *
- * @example
- * ```ts
- * const m = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
- * assets.register<MaterialAsset>(m).unwrap();
- * ```
- */
 function standard(opts: StandardOpts): MaterialAsset {
   const occlusionStrength = opts.occlusionStrength ?? 1;
   if (occlusionStrength < 0 || occlusionStrength > 1) {
@@ -178,94 +128,41 @@ function standard(opts: StandardOpts): MaterialAsset {
   if (opts.alphaCutoff !== undefined && (opts.alphaCutoff < 0 || opts.alphaCutoff > 1)) {
     throw new Error(`Materials.standard: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
   }
-  if (opts.clearcoat !== undefined && (opts.clearcoat < 0 || opts.clearcoat > 1)) {
-    throw new Error(`Materials.standard: clearcoat must be in [0, 1], got ${opts.clearcoat}`);
-  }
-  if (
-    opts.clearcoatRoughness !== undefined &&
-    (opts.clearcoatRoughness < 0 || opts.clearcoatRoughness > 1)
-  ) {
-    throw new Error(
-      `Materials.standard: clearcoatRoughness must be in [0, 1], got ${opts.clearcoatRoughness}`,
-    );
-  }
-  const specularTint = opts.specularTint ?? ([1, 1, 1] as const);
-  if (specularTint.some((channel) => channel < 0 || channel > 1)) {
-    throw new Error(
-      `Materials.standard: specularTint channels must be in [0, 1], got ${specularTint}`,
-    );
-  }
-  const paramValues: Record<string, unknown> = {
+  const values: Record<string, MaterialValue> = {
     baseColor: opts.baseColor,
     metallic: opts.metallic ?? 0,
     roughness: opts.roughness ?? 0.5,
     occlusionStrength,
+    specularTint: opts.specularTint ?? [1, 1, 1],
   };
-  if (opts.clearcoat !== undefined) paramValues.clearcoat = opts.clearcoat;
-  if (opts.clearcoatRoughness !== undefined) {
-    paramValues.clearcoatRoughness = opts.clearcoatRoughness;
+  if (opts.clearcoat !== undefined) values.clearcoat = opts.clearcoat;
+  if (opts.clearcoatRoughness !== undefined) values.clearcoatRoughness = opts.clearcoatRoughness;
+  if (opts.emissive !== undefined) values.emissive = opts.emissive;
+  if (opts.emissiveIntensity !== undefined) values.emissiveIntensity = opts.emissiveIntensity;
+  if (opts.emissiveTexture !== undefined) values.emissiveTexture = opts.emissiveTexture;
+  if (opts.baseColorTexture !== undefined) values.baseColorTexture = opts.baseColorTexture;
+  if (opts.metallicRoughnessTexture !== undefined) {
+    values.metallicRoughnessTexture = opts.metallicRoughnessTexture;
   }
-  paramValues.specularTint = specularTint;
-  if (opts.alphaCutoff !== undefined) paramValues.alphaCutoff = opts.alphaCutoff;
-  if (opts.emissive !== undefined) paramValues.emissive = opts.emissive;
-  if (opts.emissiveIntensity !== undefined) paramValues.emissiveIntensity = opts.emissiveIntensity;
-  if (opts.emissiveTexture !== undefined) paramValues.emissiveTexture = opts.emissiveTexture;
-  if (opts.baseColorTexture !== undefined) paramValues.baseColorTexture = opts.baseColorTexture;
-  if (opts.occlusionTexture !== undefined) paramValues.occlusionTexture = opts.occlusionTexture;
+  if (opts.normalTexture !== undefined) values.normalTexture = opts.normalTexture;
+  if (opts.occlusionTexture !== undefined) values.occlusionTexture = opts.occlusionTexture;
   if (opts.specularTintTexture !== undefined) {
-    paramValues.specularTintTexture = opts.specularTintTexture;
+    values.specularTintTexture = opts.specularTintTexture;
   }
-  // feat-20260612-hdrp-deferred-shading M3 / w15: 3-pass literal declaration.
-  // Pass 1: deferred opaque — writes g-buffer (fs_gbuffer entry per D-8).
-  // Pass 2: forward transparent — cluster-forward GGX (fs_main entry).
-  // Pass 3: shadow-caster — depth-only shadow map write.
-  // HDRP execute selects pass by passKind + material alpha-blend state (D-4).
-  const passes: MaterialPassDescriptor[] = [
-    {
-      name: 'GBuffer',
-      shader: 'forgeax::default-standard-pbr',
-      fragmentEntry: 'fs_gbuffer',
-      tags: { LightMode: 'Deferred' },
-      queue: opts.queue ?? RenderQueue.Geometry,
-      passKind: 'deferred',
-      ...(opts.renderState !== undefined && { renderState: opts.renderState }),
-    },
-    {
-      name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      fragmentEntry: 'fs_main',
-      tags: { LightMode: 'Forward' },
-      queue: opts.queue ?? RenderQueue.Geometry,
-      passKind: 'forward',
-      ...(opts.renderState !== undefined && { renderState: opts.renderState }),
-    },
+  if (opts.alphaCutoff !== undefined) values.alphaCutoff = opts.alphaCutoff;
+  const passes: [MaterialPass, ...MaterialPass[]] = [
+    pass('forward', STANDARD_MODULE, opts.renderState, 'fs_main', opts.queue),
+    pass('deferred', STANDARD_MODULE, opts.renderState, 'fs_gbuffer', opts.queue),
   ];
-  if (opts.castShadow !== false) {
-    passes.push({ ...SHADOW_CASTER_PASS });
-  }
+  if (opts.castShadow !== false) passes.push(pass('shadow-caster', STANDARD_MODULE, undefined));
   return {
     kind: 'material',
     passes,
-    paramValues,
+    parameters: standardParameters,
+    values,
   };
 }
 
-/**
- * Materials namespace: static factory functions for creating material asset
- * payloads without writing full POJOs by hand.
- *
- * Two member functions: {@link unlit} and {@link standard}.
- * Both include a ShadowCaster pass by default ({@link castShadow} defaults to
- * `true`); pass `{ castShadow: false }` to disable shadow casting.
- *
- * @example Single import:
- * ```ts
- * import { Materials } from '@forgeax/engine-render';
- * const unlitWhite = Materials.unlit([1, 1, 1, 1]);
- * const standardPbr = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1], baseColorTexture: unwrapHandle(tex) });
- * ```
- */
-export const Materials = {
-  unlit,
-  standard,
-} as const;
+export const Materials = { unlit, standard } as const;
+
+export { SPRITE_MODULE };

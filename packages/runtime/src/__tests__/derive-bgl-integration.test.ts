@@ -1,5 +1,5 @@
 // derive-bgl-integration.test.ts -- M3 / w11 integration test for derive(schema)
-// integration into the BGL build path consumed by registerMaterialShader-like
+// integration into the BGL build path consumed by installMaterialArtifact-like
 // register-time validation.
 //
 // feat-20260613-material-paramschema-driven-binding M3 / w11.
@@ -33,7 +33,7 @@ import { describe, expect, it } from 'vitest';
 // ─── Synthetic schemas (one per built-in shader family) ─────────────────────
 //
 // These mirror the *intended* schemas after M4 sidecar updates. The current
-// .wgsl.meta.json sidecars (research F-1) are misaligned with WGSL @binding
+// .material.json sidecars (research F-1) are misaligned with WGSL @binding
 // numbers; M3 here verifies the derive plumbing works on well-formed schemas
 // — M4 brings the real sidecars into alignment.
 
@@ -48,7 +48,6 @@ const standardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0 },
   { name: 'occlusionStrength', type: 'f32', default: 1 },
-  { name: 'uvSet', type: 'f32', default: 0 },
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'clearcoat', type: 'f32', default: 0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
@@ -166,7 +165,7 @@ describe('derive(schema) integration over 5 built-in shader families (M3 w11)', 
 // Characterises today's derived pbr-material-merged layout so M2's
 // refactor (derived BGL replaces fixed base-7) is validated bit-for-bit.
 //
-// Layout (verified against pbr-pipeline.ts + default-standard-pbr.wgsl.meta.json):
+// Layout (verified against pbr-pipeline.ts + default-standard-pbr.material.json):
 //   user-region:    binding 0 (UBO, 15 numeric run-merged) + 4 sampler/texture pairs
 //                   = 9 entries, userRegionBindingEnd = 9
 //   ibl injection:  binding 9..15 (7 entries: irradiance/prefilter cube + brdfLut 2d +
@@ -177,7 +176,7 @@ describe('derive(schema) integration over 5 built-in shader families (M3 w11)', 
 // Invariant: injection start == userRegionBindingEnd (NOT hardcoded 7);
 //           injection order ibl-then-lightmap (D-8).
 
-// Exact paramSchema from packages/shader/src/default-standard-pbr.wgsl.meta.json:68-77
+// Exact paramSchema from packages/shader/src/default-standard-pbr.material.json:68-77
 // (15 numeric entries + 4 texture2d entries).
 const defaultStandardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
@@ -190,7 +189,6 @@ const defaultStandardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0 },
   { name: 'occlusionStrength', type: 'f32', default: 1 },
-  { name: 'uvSet', type: 'f32', default: 0 },
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'clearcoat', type: 'f32', default: 0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },

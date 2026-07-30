@@ -145,17 +145,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        renderState: {
+      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { ...{
           frontFace: 'cw',
           cullMode: 'back',
-        },
-      },
+        }, tags: { LightMode: 'Forward' } } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: marbleTex,
     },

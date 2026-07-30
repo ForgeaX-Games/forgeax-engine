@@ -24,6 +24,7 @@ import { PointLight } from '@forgeax/engine-render';
 
 import type {
   MaterialAsset,
+  MaterialValue,
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
@@ -141,16 +142,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   // feat-20260527 M1 / w4: pack payload is already pass-based MaterialAsset
   // shape. The pack stores texture slots as GUID strings; the render-system
-  // extract stage only binds a texture when paramValues.<slot> is a resolved
+  // extract stage only binds a texture when values.<slot> is a resolved
   // numeric Handle (string GUIDs fall through to the 1x1 white placeholder).
   // loadByGuid returns the texture PAYLOAD (M8 D-17); mint a user-tier column
   // handle via allocSharedRef for the diffuse/specular slots. On texture-load
   // failure drop the slot so the shader falls back to the placeholder.
-  const paramValuesIn = materialEntry.payload.paramValues as Readonly<
-    Record<string, unknown>
-  >;
-  const filteredValues: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(paramValuesIn)) {
+  const passes = materialEntry.payload.passes;
+  if (passes === undefined) {
+    console.error('[learn-render 2.4 lighting-maps] material entry has no passes');
+    return;
+  }
+  const valuesIn = materialEntry.payload.values ?? {};
+  const filteredValues: Record<string, MaterialValue | null> = {};
+  for (const [k, v] of Object.entries(valuesIn)) {
     if (k === 'baseColorTexture') {
       if (!diffuseTextureRes.ok) continue;
       filteredValues[k] = unwrapHandle(
@@ -169,8 +173,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const materialAsset: MaterialAsset = {
     kind: 'material',
-    passes: materialEntry.payload.passes ?? [],
-    paramValues: filteredValues,
+    passes,
+    values: filteredValues,
   };
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
@@ -231,8 +235,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // on the same entity reads its position from the companion Transform.
   const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: { baseColor: [1, 1, 1, 1] },
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+    values: { baseColor: [1, 1, 1, 1] },
   });
 
   world

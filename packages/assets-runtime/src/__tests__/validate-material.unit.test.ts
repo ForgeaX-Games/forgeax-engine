@@ -27,7 +27,7 @@ function makeRegistry(
 ): AssetRegistry {
   return {
     shaderRegistry: {
-      lookupMaterialShader(id: string) {
+      findMaterialArtifact(id: string) {
         const paramSchema = shaders[id];
         return paramSchema
           ? { ok: true as const, value: { source: '', paramSchema } }
@@ -39,8 +39,8 @@ function makeRegistry(
   } as unknown as AssetRegistry;
 }
 
-function mat(over: Partial<MaterialAsset>): MaterialAsset {
-  return { kind: 'material', ...over } as MaterialAsset;
+function mat(over: Record<string, unknown>): MaterialAsset {
+  return { kind: 'material', ...over } as unknown as MaterialAsset;
 }
 
 describe('validateMaterialPasses', () => {
@@ -54,46 +54,84 @@ describe('validateMaterialPasses', () => {
     expect((e?.detail as { passCount: number }).passCount).toBe(0);
   });
 
-  it('errors when a pass references an unregistered shader', () => {
+  it('errors when a pass has no program module', () => {
     const e = validateMaterialPasses(
       makeRegistry({}),
-      mat({ passes: [{ name: 'main', shader: 'forgeax::nope' }] }),
+      mat({ passes: [{ name: 'main', program: { module: '' } }] }),
     );
     expect(e?.code).toBe('asset-invalid-value');
-    expect((e?.detail as { cause: string }).cause).toBe('shader-not-found');
   });
 
-  it('errors when a required (no-default) param is missing from paramValues', () => {
-    const reg = makeRegistry({ 'forgeax::x': [{ name: 'roughness', type: 'f32' }] });
-    const e = validateMaterialPasses(reg, mat({ passes: [{ name: 'm', shader: 'forgeax::x' }] }));
+  it('errors when a required (no-default) param is missing from values', () => {
+    const e = validateMaterialPasses(
+      makeRegistry({}),
+      mat({
+        passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
+        parameters: [{ name: 'roughness', type: 'f32' }],
+      }),
+    );
     expect(e?.code).toBe('asset-invalid-value');
     expect((e?.detail as { missingParams: string[] }).missingParams).toContain('roughness');
   });
 
   it('accepts when a required param is supplied with the right type', () => {
-    const reg = makeRegistry({ 'forgeax::x': [{ name: 'roughness', type: 'f32' }] });
     expect(
       validateMaterialPasses(
-        reg,
-        mat({ passes: [{ name: 'm', shader: 'forgeax::x' }], paramValues: { roughness: 0.5 } }),
+        makeRegistry({}),
+        mat({
+          passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
+          parameters: [{ name: 'roughness', type: 'f32' }],
+          values: { roughness: 0.5 },
+        }),
       ),
     ).toBeNull();
   });
 
   it('errors on a supplied param with a mismatched type', () => {
-    const reg = makeRegistry({ 'forgeax::x': [{ name: 'roughness', type: 'f32' }] });
     const e = validateMaterialPasses(
-      reg,
-      mat({ passes: [{ name: 'm', shader: 'forgeax::x' }], paramValues: { roughness: 'no' } }),
+      makeRegistry({}),
+      mat({
+        passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
+        parameters: [{ name: 'roughness', type: 'f32' }],
+        values: { roughness: 'no' },
+      }),
     );
     expect((e?.detail as { paramName: string }).paramName).toBe('roughness');
   });
 
   it('skips params that carry a default', () => {
-    const reg = makeRegistry({ 'forgeax::x': [{ name: 'roughness', type: 'f32', default: 0.5 }] });
     expect(
-      validateMaterialPasses(reg, mat({ passes: [{ name: 'm', shader: 'forgeax::x' }] })),
+      validateMaterialPasses(
+        makeRegistry({}),
+        mat({
+          passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
+          parameters: [{ name: 'roughness', type: 'f32', default: 0.5 }],
+        }),
+      ),
     ).toBeNull();
+  });
+
+  it('accepts absent and explicitly cleared optional params', () => {
+    const material = {
+      passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
+      parameters: [{ name: 'alphaCutoff', type: 'f32', optional: true }],
+    };
+    expect(validateMaterialPasses(makeRegistry({}), mat(material))).toBeNull();
+    expect(
+      validateMaterialPasses(makeRegistry({}), mat({ ...material, values: { alphaCutoff: null } })),
+    ).toBeNull();
+  });
+
+  it('still validates a supplied optional param', () => {
+    const e = validateMaterialPasses(
+      makeRegistry({}),
+      mat({
+        passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
+        parameters: [{ name: 'alphaCutoff', type: 'f32', optional: true }],
+        values: { alphaCutoff: 'no' },
+      }),
+    );
+    expect((e?.detail as { paramName: string }).paramName).toBe('alphaCutoff');
   });
 });
 
@@ -113,9 +151,9 @@ describe('validateParamType', () => {
     expect(validateParamType(reg, 'x', 'color', [1, 2, 3, 4])).toBe(true);
     expect(validateParamType(reg, 'x', 'color', [1, 2])).toBe(false);
   });
-  it('texture/sampler are string GUIDs at register time', () => {
-    expect(validateParamType(reg, 'x', 'texture2d', 'guid')).toBe(true);
-    expect(validateParamType(reg, 'x', 'sampler', 123)).toBe(false);
+  it('texture values are structured records', () => {
+    expect(validateParamType(reg, 'x', 'texture', { texture: 'guid' })).toBe(true);
+    expect(validateParamType(reg, 'x', 'texture', 123)).toBe(false);
   });
   it('unknown type -> false', () => {
     expect(validateParamType(reg, 'x', 'mat4', {})).toBe(false);
@@ -124,40 +162,40 @@ describe('validateParamType', () => {
 
 describe('validateSpriteSlices', () => {
   const reg = makeRegistry({});
-  const spritePass = { name: 'main', shader: 'forgeax::sprite' };
+  const spritePass = { name: 'main', program: { module: 'forgeax_material::sprite' } };
 
   it('returns null for non-sprite shaders', () => {
     expect(
-      validateSpriteSlices(reg, mat({ passes: [{ name: 'm', shader: 'forgeax::standard' }] })),
+      validateSpriteSlices(
+        reg,
+        mat({ passes: [{ name: 'm', program: { module: 'forgeax::standard' } }] }),
+      ),
     ).toBeNull();
   });
 
   it('returns null when slices is absent', () => {
-    expect(validateSpriteSlices(reg, mat({ passes: [spritePass], paramValues: {} }))).toBeNull();
+    expect(validateSpriteSlices(reg, mat({ passes: [spritePass], values: {} }))).toBeNull();
   });
 
   it('accepts a well-formed slices tuple', () => {
     expect(
       validateSpriteSlices(
         reg,
-        mat({ passes: [spritePass], paramValues: { slices: [0.1, 0.1, 0.1, 0.1] } }),
+        mat({ passes: [spritePass], values: { slices: [0.1, 0.1, 0.1, 0.1] } }),
       ),
     ).toBeNull();
   });
 
   it('rejects a non-array / wrong-length / non-number slices', () => {
     expect(
-      validateSpriteSlices(reg, mat({ passes: [spritePass], paramValues: { slices: 'x' } }))?.code,
+      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: 'x' } }))?.code,
     ).toBe('asset-invalid-value');
     expect(
-      validateSpriteSlices(reg, mat({ passes: [spritePass], paramValues: { slices: [0, 0, 0] } }))
+      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: [0, 0, 0] } }))?.code,
+    ).toBe('asset-invalid-value');
+    expect(
+      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: [0, 0, 0, 'x'] } }))
         ?.code,
-    ).toBe('asset-invalid-value');
-    expect(
-      validateSpriteSlices(
-        reg,
-        mat({ passes: [spritePass], paramValues: { slices: [0, 0, 0, 'x'] } }),
-      )?.code,
     ).toBe('asset-invalid-value');
   });
 
@@ -165,20 +203,17 @@ describe('validateSpriteSlices', () => {
     expect(
       validateSpriteSlices(
         reg,
-        mat({ passes: [spritePass], paramValues: { slices: [Number.NaN, 0, 0, 0] } }),
+        mat({ passes: [spritePass], values: { slices: [Number.NaN, 0, 0, 0] } }),
       ),
     ).not.toBeNull();
     expect(
       validateSpriteSlices(
         reg,
-        mat({ passes: [spritePass], paramValues: { slices: [Number.POSITIVE_INFINITY, 0, 0, 0] } }),
+        mat({ passes: [spritePass], values: { slices: [Number.POSITIVE_INFINITY, 0, 0, 0] } }),
       ),
     ).not.toBeNull();
     expect(
-      validateSpriteSlices(
-        reg,
-        mat({ passes: [spritePass], paramValues: { slices: [-0.1, 0, 0, 0] } }),
-      ),
+      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: [-0.1, 0, 0, 0] } })),
     ).not.toBeNull();
   });
 
@@ -187,27 +222,27 @@ describe('validateSpriteSlices', () => {
     expect(
       validateSpriteSlices(
         reg,
-        mat({ passes: [spritePass], paramValues: { slices: [0.6, 0, 0.6, 0] } }),
+        mat({ passes: [spritePass], values: { slices: [0.6, 0, 0.6, 0] } }),
       ),
     ).not.toBeNull();
     expect(
       validateSpriteSlices(
         reg,
-        mat({ passes: [spritePass], paramValues: { slices: [0, 0.6, 0, 0.6] } }),
+        mat({ passes: [spritePass], values: { slices: [0, 0.6, 0, 0.6] } }),
       ),
     ).not.toBeNull();
   });
 });
 
 describe('detectTileNeedsRepeatSampler', () => {
-  const spritePass = { name: 'main', shader: 'forgeax::sprite' };
+  const spritePass = { name: 'main', program: { module: 'forgeax_material::sprite' } };
 
   it('no-ops when metrics is null', () => {
     // makeRegistry defaults metrics to null; call must not throw.
     expect(() =>
       detectTileNeedsRepeatSampler(
         makeRegistry({}),
-        mat({ passes: [spritePass], paramValues: { sliceMode: 1, sampler: 'g' } }),
+        mat({ passes: [spritePass], values: { sliceMode: 1, sampler: 'g' } }),
       ),
     ).not.toThrow();
   });
@@ -226,7 +261,7 @@ describe('detectTileNeedsRepeatSampler', () => {
     const reg = makeRegistry({}, { metrics: { increment: (k) => counts.push(k) }, catalog });
     detectTileNeedsRepeatSampler(
       reg,
-      mat({ passes: [spritePass], paramValues: { sliceMode: 1, sampler: 'S-GUID' } }),
+      mat({ passes: [spritePass], values: { sliceMode: 1, sampler: 'S-GUID' } }),
     );
     expect(counts).toContain('nineslice.tile-needs-repeat-sampler');
   });
@@ -245,7 +280,7 @@ describe('detectTileNeedsRepeatSampler', () => {
     const reg = makeRegistry({}, { metrics: { increment: (k) => counts.push(k) }, catalog });
     detectTileNeedsRepeatSampler(
       reg,
-      mat({ passes: [spritePass], paramValues: { sliceMode: 1, sampler: 's-guid' } }),
+      mat({ passes: [spritePass], values: { sliceMode: 1, sampler: 's-guid' } }),
     );
     expect(counts).toEqual([]);
   });
@@ -253,7 +288,7 @@ describe('detectTileNeedsRepeatSampler', () => {
   it('no-ops for sliceMode !== 1', () => {
     const counts: string[] = [];
     const reg = makeRegistry({}, { metrics: { increment: (k) => counts.push(k) } });
-    detectTileNeedsRepeatSampler(reg, mat({ passes: [spritePass], paramValues: { sliceMode: 0 } }));
+    detectTileNeedsRepeatSampler(reg, mat({ passes: [spritePass], values: { sliceMode: 0 } }));
     expect(counts).toEqual([]);
   });
 });

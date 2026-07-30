@@ -200,7 +200,7 @@ export interface BindGroupLayoutShape {
  * `@forgeax/engine-types` so cacheKeyOf can hash BGL shape deterministically
  * without expanding the ShaderRegistry public interface.
  *
- * @param entry - material shader entry from ShaderRegistry.lookupMaterialShader
+ * @param entry - material shader entry from ShaderRegistry.findMaterialArtifact
  * @param _variantSet - unused (post D-13); kept for backward signature compat
  * @returns the BGL shape for the given entry
  * @see plan-decisions.md D-13
@@ -547,7 +547,7 @@ function resolveMaterialParamSchema(
 ): readonly ParamSchemaEntry[] | undefined {
   if (options.materialParamSchema !== undefined) return options.materialParamSchema;
   if (options.registry !== undefined) {
-    const lookup = options.registry.lookupMaterialShader(spec.shader.id);
+    const lookup = options.registry.findMaterialArtifact(spec.shader.id);
     if (lookup.ok) return lookup.value.paramSchema;
   }
   return undefined;
@@ -673,7 +673,7 @@ export function buildBindGroupLayoutDescriptor(
       const caps = options.caps ?? { storageBuffer: true };
       const desc = createHdrpBindGroupLayoutDescriptor(caps.storageBuffer);
       if (options.registry !== undefined) {
-        const lookup = options.registry.lookupMaterialShader(spec.shader.id);
+        const lookup = options.registry.findMaterialArtifact(spec.shader.id);
         if (lookup.ok) {
           deriveBglShapeFromShader(lookup.value, spec.shader.variantSet);
         }
@@ -1328,21 +1328,20 @@ const TRI_GEOMETRY = {
 };
 
 // feat-city-glb multi-UV tiling: the built-in standard PBR shader now declares
-// a second UV set (@location(6) uv1), so naga reflects uvSetCount=2 for it and
-// the URP record path threads `shaderUvSetCount: 2` into every standard-pbr
-// spec (createRenderer.ts buildPipelineContext / getMaterialShaderPipeline).
-// The boot-time prewarm must match on BOTH axes or it is useless: (1) the PSO
-// vertex layout must include @location(6) or CreateRenderPipeline rejects the
-// standard-pbr module (slot 6 absent from VertexState); (2) the cacheKey must
-// carry `:uvsc2` or the record-path lookup misses the prewarmed entry. For
-// single-UV meshes deriveVertexBufferLayout clamp-to-last aliases uv1 onto uv0
-// (48-byte stride unchanged), so this is byte-stable for existing geometry.
+// UV sets @location(6..12), so naga reflects uvSetCount=8 for it and the URP
+// record path threads `shaderUvSetCount: 8` into every standard-pbr spec
+// (createRenderer.ts buildPipelineContext / getMaterialShaderPipeline).
+// The boot-time prewarm must match on both axes: the PSO vertex layout includes
+// all declared UV slots, and the cacheKey carries `:uvsc8`. For single-UV
+// meshes deriveVertexBufferLayout clamp-to-last aliases every missing set onto
+// the last mesh set (48-byte stride unchanged), so existing geometry remains
+// byte-stable.
 // unlit stays on TRI_GEOMETRY (its shader declares only @location(0..3)).
 const TRI_GEOMETRY_PBR = {
   topology: 'triangle-list' as PrimitiveTopology,
   stripIndexFormat: undefined,
   vertexLayout: PROCEDURAL_ATTR_LAYOUT,
-  shaderUvSetCount: 2,
+  shaderUvSetCount: 8,
 };
 
 // M6 fix-up: URP-variant key string for the standard PBR shader. Mirrors the
@@ -1562,8 +1561,8 @@ export function buildSpecConstTable(
     // has sampleCount=4. Both use empty vertexLayout (fullscreen triangle, no
     // attributes) and cullMode='none' (forward cull for fullscreen-quad passthrough).
     //
-    // Shadow-probe / fxaa / bloom 4-pass / SSAO 2-pass are lazy-build — not in
-    // SPEC_CONST_TABLE (R-D4 decision: only passes that are always-present on
+    // Shadow-probe / fxaa / bloom 4-stage / SSAO 2-stage are lazy-build — not in
+    // SPEC_CONST_TABLE (R-D4 decision: only entries that are always-present on
     // every boot).
 
     // tonemap LDR S1 (writes to runtime-resolved swap-chain LDR view format)

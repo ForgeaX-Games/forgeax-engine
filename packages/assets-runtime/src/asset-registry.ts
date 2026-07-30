@@ -232,8 +232,8 @@ interface MutablePackage {
  * }
  * const material = world.allocSharedRef('MaterialAsset', {       // mint column handle
  *   kind: 'material',
- *   passes: [{ name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 }],
- *   paramValues: { baseColorTexture: res.value },
+ *   passes: [{ name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, tags: { LightMode: 'Forward' }, queue: 2000 }],
+ *   values: { baseColorTexture: res.value },
  * });
  * world.spawn({ component: MeshRenderer, data: { materials: [material] } });
  * ```
@@ -1329,7 +1329,7 @@ export class AssetRegistry {
    * .textureFieldNames`. Returns `undefined` when the shader is not yet
    * registered (cross-worktree shader-late-register, plan R-4).
    *
-   * Used by `extractFrame` to know which paramValues fields the shader
+   * Used by `extractFrame` to know which values fields the shader
    * declares as texture handles; the extract layer validates handle-vs-
    * scalar typing and drops misclassified slots so the record stage's
    * MISSING_TEXTURE_HANDLE fallback can take over (white default texture)

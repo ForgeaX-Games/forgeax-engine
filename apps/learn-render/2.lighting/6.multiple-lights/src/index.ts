@@ -14,6 +14,7 @@ import { PointLight, SpotLight } from '@forgeax/engine-render';
 
 import type {
   MaterialAsset,
+  MaterialValue,
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
@@ -167,11 +168,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // mint a user-tier column handle via allocSharedRef for the diffuse/specular
   // slots; drop the slot on texture-load failure so the schema-driven path
   // falls back to placeholders.
-  const paramValuesIn = materialEntry.payload.paramValues as Readonly<
-    Record<string, unknown>
-  >;
-  const filteredValues: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(paramValuesIn)) {
+  const passes = materialEntry.payload.passes;
+  if (passes === undefined) {
+    console.error('[learn-render 2.6 multiple-lights] material entry has no passes');
+    return;
+  }
+  const valuesIn = materialEntry.payload.values ?? {};
+  const filteredValues: Record<string, MaterialValue | null> = {};
+  for (const [k, v] of Object.entries(valuesIn)) {
     if (k === 'baseColorTexture') {
       if (!diffuseTextureRes.ok) continue;
       filteredValues[k] = unwrapHandle(
@@ -190,8 +194,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const materialAsset: MaterialAsset = {
     kind: 'material',
-    passes: materialEntry.payload.passes ?? [],
-    paramValues: filteredValues,
+    passes,
+    values: filteredValues,
   };
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
@@ -267,8 +271,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (plPos === undefined || plColor === undefined) continue;
     const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
-      passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-      paramValues: { baseColor: [plColor[0], plColor[1], plColor[2], 1.0] },
+      passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+      values: { baseColor: [plColor[0], plColor[1], plColor[2], 1.0] },
     });
     world.spawn(
       {

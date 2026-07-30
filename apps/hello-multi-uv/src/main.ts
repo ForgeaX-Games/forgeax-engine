@@ -36,7 +36,7 @@ import { RenderGraph } from '@forgeax/engine-render-graph';
 import { Transform } from '@forgeax/engine-scene';
 import type { RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
 import customPipelineInversionShader from './custom-pipeline-inversion.wgsl';
-import demoShader from './multi-uv-demo.wgsl';
+import './multi-uv-demo.wgsl';
 import depthFalsifierShader from './post-depth-falsifier.wgsl';
 import depthOverlayShader from './post-depth-overlay.wgsl';
 import depthOverlayMsaaShader from './post-depth-overlay-msaa.wgsl';
@@ -227,7 +227,6 @@ if (!app.ok) {
   reportError(app.error);
 } else {
   const world = app.value.world;
-  const shader = app.value.renderer.shader;
   const assets = app.value.renderer.assets;
   const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
   const falsifyVariantSelection = params.has('falsify');
@@ -283,21 +282,6 @@ if (!app.ok) {
   postControl.append(postStatus);
   document.body.append(postControl);
 
-  // Register the demo's custom material shader (AC-10 visual carrier). The
-  // shader samples uv0 through a real TextureAsset and paints uv1; the
-  // smoke-dawn path passes the same paramSchema explicitly; here vite's
-  // forgeaxShader() transform already composed multi-uv-demo.wgsl into
-  // { hash, wgsl } and the .meta.json sidecar is the paramSchema SSOT.
-  if (!shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
-    shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
-      source: demoShader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color' },
-        { name: 'baseColorTexture', type: 'texture2d' },
-        { name: 'detailTexture', type: 'texture2d' },
-      ],
-    });
-  }
   const baseColorTexture: TextureAsset = {
     kind: 'texture',
     width: 2,
@@ -412,15 +396,16 @@ if (!app.ok) {
     passes: [
       {
         name: 'Forward',
-        shader: DEMO_MATERIAL_SHADER_PATH,
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-        defines: {
-          M3_MULTI_UV_VARIANT: falsifyVariantSelection ? 'true' : variant,
+        program: {
+          module: DEMO_MATERIAL_SHADER_PATH,
+          moduleSlots: {
+            M3_MULTI_UV_VARIANT: falsifyVariantSelection ? 'true' : variant,
+          },
         },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: [0.7, 0.7, 0.7],
       baseColorTexture: baseColorTextureHandle,
       ...(falsifyDetailTexture ? {} : { detailTexture: detailTextureHandle }),

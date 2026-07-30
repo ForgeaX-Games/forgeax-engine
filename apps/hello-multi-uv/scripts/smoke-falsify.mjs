@@ -234,8 +234,8 @@ const meshAsset = {
 };
 const materialAsset = {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: DEMO_MATERIAL_SHADER_PATH, tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: {
+  passes: [{ name: 'Forward', program: { module: DEMO_MATERIAL_SHADER_PATH }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: {
     baseColor: [0.7, 0.7, 0.7],
     baseColorTexture: baseColorTextureHandle,
     detailTexture: detailTextureHandle,
@@ -314,8 +314,8 @@ if (
   process.exit(1);
 }
 console.log('[falsify-smoke] texture binding: PASS schema=baseColorTexture+detailTexture textureSample=true');
-if (!renderer.shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
-  renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
+if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
+  renderer.shader.installMaterialArtifact(DEMO_MATERIAL_SHADER_PATH, {
     source: demoComposedWgsl,
     paramSchema: [
       { name: 'baseColor', type: 'color' },

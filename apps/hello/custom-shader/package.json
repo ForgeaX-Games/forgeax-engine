@@ -4,17 +4,20 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "feat-20260523-shader-template-instance-split AC-14 free-end demo: a user-side custom material shader (pulse-material.wgsl) registered through ShaderRegistry.registerMaterialShader('my-game::pulse-material', ...). Shows the simple-end .pack.json + .wgsl + sidecar trio that AI users assemble at app boot.",
+  "description": "Custom material demo: a user shader and inherited MaterialAsset are loaded from a cooked pack and consumed through the runtime catalog.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:falsify": "node scripts/smoke-falsify.mjs",
+    "smoke:all": "pnpm run smoke && pnpm run smoke:browser"
   },
   "forgeax": {
-    "smokeInvocation": "pnpm --filter @forgeax/hello-custom-shader smoke",
-    "_comment": "AC-14 free-end demo (custom material shader); smoke gate verifies the .wgsl composes + the .pack.json validates + the engine starts. The full visible-pulse acceptance lands in M6 once the runtime per-material-shader pipeline cache is wired (see hello-custom-shader README + M5 milestone report).",
+    "smokeInvocation": "pnpm --filter @forgeax/hello-custom-shader smoke:all",
+    "_comment": "AC-14 free-end demo (custom material shader); smoke:all runs the shared cooked fixture through Dawn and browser paths. smoke:falsify independently proves missing-parent and UV-transform regressions fail with attributed evidence.",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -30,7 +33,7 @@
       },
       "gate": {
         "enabled": true,
-        "command": "pnpm --filter @forgeax/hello-custom-shader smoke"
+        "command": "pnpm --filter @forgeax/hello-custom-shader smoke:all"
       },
       "spike-report": {
         "enabled": false,
@@ -40,9 +43,12 @@
   },
   "dependencies": {
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
@@ -50,6 +56,7 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "vite": "8.0.10",
     "webgpu": "^0.4.0",
     "@webgpu/types": "^0.1.71"

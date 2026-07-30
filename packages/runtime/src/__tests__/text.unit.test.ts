@@ -167,7 +167,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         // The bound material resolves to a forgeax::msdf-text pass (not default).
         const passes = walkMaterialPassesOverSharedRefs(world, material as never, assets);
         expect(passes.ok).toBe(true);
-        expect(passes.unwrap().passes[0]?.shader).toBe('forgeax::msdf-text');
+        expect(passes.unwrap().passes[0]?.program.module).toBe('forgeax::msdf-text');
       });
 
       it('(b) dirty text -> updateMesh in place, assets size unchanged (AC-08)', () => {

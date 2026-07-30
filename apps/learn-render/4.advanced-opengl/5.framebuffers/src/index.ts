@@ -14,7 +14,7 @@
 //   addColorTarget('offscreenColor', bgra8unorm, swapchain-size)
 //   addColorTarget('offscreenDepth', depth24plus,   swapchain-size)
 //   addScenePass('main', { color: 'offscreenColor', depth: 'offscreenDepth' })
-//   addFullscreenPass('post', { shader: 'learn-render-5::<effect>',
+//   addFullscreenPass('post', { program: { module: 'learn-render-5::<effect>' },
 //                               reads: ['offscreenColor'] })
 //
 // GREP anchors for AI users:
@@ -379,13 +379,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cubeMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: containerTex,
     },
@@ -399,13 +395,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: metalTex,
     },

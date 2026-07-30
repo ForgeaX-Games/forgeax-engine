@@ -3,7 +3,7 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.2 Stencil Testing](https://learnopengl.com/Advanced-OpenGL/Stencil-testing)
 >
-> **Engine surface**: `createApp` + `MeshRenderer` with `stencilWriteMask`/`stencilReadMask` in `MaterialRenderState` + `stencilReference` in `MaterialPassDescriptor` + `configurePackIndex` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (outline-solid).
+> **Engine surface**: `createApp` + `MeshRenderer` with `stencilWriteMask`/`stencilReadMask` in `MaterialRenderState` + `stencilReference` in `MaterialPass` + `configurePackIndex` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (outline-solid).
 
 ## Hit-rate index (AI user fast-locate)
 
@@ -11,7 +11,7 @@
 |:--|:--|:--|
 | `stencilWriteMask` pipeline state | `stencilWriteMask:` | `src/index.ts` (floor + cube pass renderState literals) |
 | `stencilReadMask` pipeline state | `stencilReadMask:` | `src/index.ts` (outline pass renderState literal) |
-| `stencilReference` draw-call state | `stencilReference:` | `src/index.ts` (cube + outline MaterialPassDescriptor) |
+| `stencilReference` draw-call state | `stencilReference:` | `src/index.ts` (cube + outline MaterialPass) |
 | `stencil.compare='not-equal'` stencil test | `compare: 'not-equal'` | `src/index.ts` (outline pass renderState.stencil) |
 | Multi-pass material (per-entity passes) | `passes: [` | `src/index.ts` (cube + floor + outline three-pass layout) |
 | `loadByGuid<TextureAsset>` GUID texture loading | `loadByGuid<TextureAsset>` | `src/index.ts` (bootstrap section) |

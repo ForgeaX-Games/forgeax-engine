@@ -110,9 +110,9 @@ function spawnPulseScene(world: World): void {
   const playMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 },
+      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: { baseColor: PLAY_BASE_COLOR },
+    values: { baseColor: PLAY_BASE_COLOR },
   });
   // Triangle entity: builtin HANDLE_TRIANGLE mesh + MeshRenderer
   // pointing at the unlit MaterialAsset above. The triangle sits at

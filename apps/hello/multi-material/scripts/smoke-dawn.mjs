@@ -277,12 +277,11 @@ function mintUnlit(rgb) {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: rgb },
+    values: { baseColor: rgb },
   });
 }
 

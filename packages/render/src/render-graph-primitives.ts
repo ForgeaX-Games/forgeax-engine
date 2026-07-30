@@ -66,7 +66,7 @@
 //   //    a stale id THROWS PostProcessError{code:'post-process-not-found'}
 //   //    inside the per-frame execute closure (charter P3 fail-fast).
 //   addFullscreenPass(graph, 'vignette', {
-//     shader: 'mypkg::vignette',
+//     program: { module: 'mypkg::vignette' },
 //     color: 'rt',                 // graph-owned scratch target
 //     reads: ['hdrComposited'],
 //   });
@@ -1403,9 +1403,9 @@ function dispatchFullscreenPass(
   // attachment-state mismatch (the framebuffers/gamma/hdr learn-render demos hit
   // this on BGRA runners: nightly #385/#391). The `?? 'rgba8unorm-srgb'`
   // fallback keeps the unit fixtures that build a bare ctx without pipelineState
-  // (makeSpyCtx in dispatch-fullscreen-pass-custom-reads.dawn.test.ts) green.
+  // (makeSpyCtx in dispatch-fullscreen-stage-custom-reads.dawn.test.ts) green.
   // FXAA's rgba8unorm storage-view path is unaffected: it routes through
-  // `recordFxaaPass` (the if(shader==='fxaa') branch above) and never reaches
+  // `recordFxaaStage` (the if(shader==='fxaa') branch above) and never reaches
   // this dispatcher line.
   // The PSO target format MUST equal the render-pass attachment format. For
   // the composite-over-swap-chain path that is the non-srgb storage format

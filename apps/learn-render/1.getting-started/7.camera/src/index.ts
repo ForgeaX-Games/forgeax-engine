@@ -160,8 +160,8 @@ interface MaterialPackEntry {
   readonly kind: string;
   readonly payload: {
     readonly kind: string;
-    readonly passes: ReadonlyArray<{ readonly name: string; readonly shader: string }>;
-    readonly paramValues: {
+    readonly passes: ReadonlyArray<{ readonly name: string; readonly program: { readonly module: string } }>;
+    readonly values: {
       readonly baseColor: readonly [number, number, number, number];
       readonly baseColorTexture?: string;
     };
@@ -264,9 +264,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     : undefined;
   const cubeMaterial: MaterialAsset = {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: {
-      baseColor: matEntry.payload.paramValues.baseColor,
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+    values: {
+      baseColor: matEntry.payload.values.baseColor,
       ...(containerTexHandle !== undefined ? { baseColorTexture: containerTexHandle } : {}),
     },
   };

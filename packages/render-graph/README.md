@@ -227,7 +227,7 @@ const result = graph.compile({
 | Term | Meaning | In code |
 |:--|:--|:--|
 | **Graph Pass** | A render-graph pass node declared via `graph.addPass({ reads, writes, execute })` | `RenderGraph.addPass()`, `PassDescriptor` |
-| **material pass** | A shader descriptor inside `MaterialAsset.passes[]` | `MaterialAsset.passes?: readonly MaterialPassDescriptor[]` |
+| **material pass** | A shader descriptor inside `MaterialAsset.passes[]` | `MaterialAsset.passes?: readonly MaterialPass[]` |
 
 `MaterialAsset.passes[]` retains its name (unchanged). Graph Pass is the framework concept; material pass is the shader-descriptor concept. Documentation and comments distinguish the two.
 

@@ -610,8 +610,8 @@ export class SkinMaterialMismatchError extends Error {
   readonly detail: SkinMaterialMismatchDetail;
 
   constructor(entity: number, actualShader: string | undefined) {
-    const expected = "Skin entity's material first pass shader === 'forgeax::pbr-skin'";
-    const hint = `entity ${entity} has Skin but material first pass shader is ${actualShader ?? '<empty>'}; load the mesh via the gltf importer (cooker auto-routes 'forgeax::pbr-skin' for skinned primitives), or remove the Skin component to render the entity unskinned with Materials.standard / Materials.unlit`;
+    const expected = "Skin entity's first material program module === 'forgeax::pbr-skin'";
+    const hint = `entity ${entity} has Skin but the first material program module is ${actualShader ?? '<empty>'}; load the mesh via the gltf importer (cooker auto-routes 'forgeax::pbr-skin' for skinned primitives), or remove the Skin component to render the entity unskinned with Materials.standard / Materials.unlit`;
     super(
       `Skin / material mismatch on entity ${entity}: expected forgeax::pbr-skin, got ${actualShader ?? '<empty>'}`,
     );

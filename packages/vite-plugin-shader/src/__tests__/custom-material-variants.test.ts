@@ -51,7 +51,7 @@ describe('user material shader variant manifest', () => {
       }>;
     };
     const entry = manifest.materialShaders.find(
-      (item) => item.identifier === 'learn-render::alpha-test',
+      (item) => item.identifier === 'learn_render::alpha_test',
     );
     expect(entry).toBeDefined();
     if (entry === undefined) return;
@@ -104,7 +104,7 @@ describe('user material shader variant manifest', () => {
       }>;
     };
     const entry = manifest.materialShaders.find(
-      (item) => item.identifier === 'learn-render::5-1-blinn-phong',
+      (item) => item.identifier === 'learn_render::5_1_blinn_phong',
     );
     expect(entry?.variants).toHaveLength(2);
     expect(entry?.variants.map((variant) => variant.defines.STORAGE_BUFFER_AVAILABLE)).toEqual([

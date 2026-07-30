@@ -85,6 +85,103 @@ const engineDocuments = [
   ]),
 ];
 
+const materialDocuments = [
+  ['packages/types/README.md', 'MaterialAsset route'],
+  ['packages/pack/README.md', 'MaterialAsset cook contract'],
+  ['packages/shader/README.md', 'MaterialAsset and shader route'],
+  ['packages/assets-runtime/README.md', 'MaterialAsset runtime recovery'],
+  ['packages/gltf/README.md', 'glTF material output'],
+  ['packages/render/README.md', 'MaterialAsset render contract'],
+  ['skills/forgeax-engine-material/SKILL.md', 'Mental model'],
+  ['skills/forgeax-engine-shader/SKILL.md', 'Route'],
+  ['skills/forgeax-engine-assets/SKILL.md', 'Material assets follow'],
+  ['rules/forgeax-engine-usage.md', 'MaterialAsset route'],
+  ['docs/material-asset-migration.md', 'MaterialAsset migration'],
+];
+
+const materialRecoveryCodes = [
+  'material-specialization-not-cooked',
+  'material-parent-not-found',
+  'material-value-type-mismatch',
+  'material-reflection-binding-mismatch',
+];
+const materialRouteTokens = [
+  'MaterialAsset',
+  'passes',
+  'values',
+  'parent',
+  'coordinates',
+  'cook',
+  'recovery',
+];
+const retiredMaterialTerms = ['ShaderAsset', 'paramValues', 'uvSet', 'registerMaterial', 'sidecar'];
+
+async function checkMaterialDocuments(root) {
+  const failures = [];
+  for (const [relativePath, anchor] of materialDocuments) {
+    const absolutePath = resolve(root, relativePath);
+    let source;
+    try {
+      source = await readFile(absolutePath, 'utf8');
+    } catch (error) {
+      failures.push(
+        `engine/${relativePath}: unreadable (${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+    const anchorIndex = source.indexOf(anchor);
+    if (anchorIndex < 0) {
+      failures.push(
+        `engine/${relativePath}: add the MaterialAsset route anchor ${JSON.stringify(anchor)}`,
+      );
+      continue;
+    }
+    const route = source.slice(anchorIndex, anchorIndex + 700);
+    for (const token of materialRouteTokens) {
+      if (!route.includes(token))
+        failures.push(
+          `engine/${relativePath}: add material route guidance ${JSON.stringify(token)}`,
+        );
+    }
+    for (const token of retiredMaterialTerms) {
+      if (route.includes(token))
+        failures.push(
+          `engine/${relativePath}: remove retired material term ${JSON.stringify(token)}`,
+        );
+    }
+    if (relativePath === 'docs/material-asset-migration.md') {
+      for (const token of materialRecoveryCodes) {
+        if (!source.includes(token))
+          failures.push(`engine/${relativePath}: document recovery code ${JSON.stringify(token)}`);
+      }
+    }
+    const links = [...route.matchAll(/\]\(([^)]+)\)/g)].map((match) => match[1]);
+    for (const link of links) {
+      if (
+        link.startsWith('http://') ||
+        link.startsWith('https://') ||
+        link.startsWith('#') ||
+        link.startsWith('../../commit/')
+      )
+        continue;
+      const target = resolve(absolutePath, '..', link.split('#', 1)[0]);
+      try {
+        await access(target);
+      } catch {
+        failures.push(`engine/${relativePath}: broken material route link ${JSON.stringify(link)}`);
+      }
+    }
+  }
+  try {
+    await access(resolve(root, 'scripts/__tests__/catalog-documentation-material.test.mjs'));
+  } catch {
+    failures.push(
+      'engine/scripts/__tests__/catalog-documentation-material.test.mjs: missing material catalog test',
+    );
+  }
+  return failures;
+}
+
 const editorDocuments = [
   ['packages/core/README.md', ['CatalogDelta', 'subscribe to', 'enumerate', 'GUID', 'pinned']],
   [
@@ -119,6 +216,7 @@ async function checkDocuments(root, documents, label) {
 }
 
 const failures = await checkDocuments(engineRoot, engineDocuments, 'engine');
+failures.push(...(await checkMaterialDocuments(engineRoot)));
 for (const [relativePath, term] of [
   ['packages/assets-runtime/README.md', 'forgeax:asset-changed'],
   ['packages/vite-plugin-pack/README.md', 'forgeax:asset-changed'],

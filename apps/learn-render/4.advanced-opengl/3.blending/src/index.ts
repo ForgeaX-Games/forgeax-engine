@@ -40,7 +40,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 // 2. example glue
 
-import alphaTestShader from './alpha-test.wgsl';
+import './alpha-test.wgsl';
 
 const ALPHA_TEST_SHADER_ID = 'learn-render::alpha-test';
 
@@ -122,24 +122,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Register the custom alpha-test material shader before scene setup.
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[learn-render 4.3 blending] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(ALPHA_TEST_SHADER_ID).ok) {
-    shader.registerMaterialShader(ALPHA_TEST_SHADER_ID, {
-      source: alphaTestShader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color' },
-        { name: 'metallic', type: 'f32' },
-        { name: 'roughness', type: 'f32' },
-        { name: 'baseColorTexture', type: 'texture2d' },
-      ],
-    });
-  }
-
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);
 
@@ -194,13 +176,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const floorMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.9,
@@ -212,13 +190,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.5,
@@ -233,15 +207,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const grassMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: ALPHA_TEST_SHADER_ID,
-        tags: { LightMode: 'Forward' },
-        queue: RenderQueue.Transparent as number,
-        renderState: { depthWriteEnabled: false },
-      },
+      { name: 'Forward', program: { module: ALPHA_TEST_SHADER_ID }, renderState: { ...{ depthWriteEnabled: false }, tags: { LightMode: 'Forward' }, queue: RenderQueue.Transparent as number } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.5,
@@ -256,21 +224,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const windowMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: RenderQueue.Transparent as number,
-        renderState: {
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { ...{
           depthWriteEnabled: false,
           blend: {
             color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
             alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
           },
-        },
-      },
+        }, tags: { LightMode: 'Forward' }, queue: RenderQueue.Transparent as number } },
     ],
-    paramValues: {
+    values: {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.5,

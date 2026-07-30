@@ -38,8 +38,14 @@ function makeRegistry(): AssetRegistry {
 
 const stubMaterial: MaterialAsset = {
   kind: 'material',
-  passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-  paramValues: {},
+  passes: [
+    {
+      name: 'forward',
+      program: { module: 'test::dummy' },
+      renderState: { tags: { LightMode: 'Forward' } },
+    },
+  ],
+  values: {},
 };
 
 afterEach(() => {
@@ -77,8 +83,14 @@ describe('AC-07 — a new reference appears in the load graph via envelope.refs'
           guid: PARENT_GUID,
           kind: 'material',
           payload: {
-            passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-            paramValues: {},
+            passes: [
+              {
+                name: 'forward',
+                program: { module: 'test::dummy' },
+                renderState: { tags: { LightMode: 'Forward' } },
+              },
+            ],
+            values: {},
           },
           refs: [EXTRA_REF_GUID],
         },

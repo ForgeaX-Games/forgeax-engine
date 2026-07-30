@@ -596,19 +596,9 @@ function registerCharacterMaterial(
   return args.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
-        // `renderState.blend` drives LDR split + premultiplied-alpha
-        // pipeline + transparentDispatch routing (preset
-        // `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: {
+    values: {
       // feat-20260625 M3 / w11 (D-4): UBO-aligned 1:1 with paramSchema.
       // flipY is still a recognised user input (extract folds it into region
       // sign-negation per plan-strategy D-8); colorTint / baseColorTexture /

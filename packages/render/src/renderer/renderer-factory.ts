@@ -148,6 +148,13 @@ import { loadBackendPack as loadAssemblyBackendPack } from './backend-selection'
 import { classifyEnvErrorReason, composeEnvErrorHint } from './environment-classify';
 import { EngineEnvironmentError } from './environment-error';
 
+export { assembleMaterialProjection } from './material/assembly';
+export {
+  projectMaterialPipeline,
+  routeMaterialPipeline,
+  updateMaterialRuntimeValues,
+} from './material/pipeline-projection';
+
 // Re-export registerAdvanceAnimationPlayer so consumers can wire it.
 // Re-export registerPropagateTransforms so consumers can wire the
 // Transform.world mat4 derivation (audio listener sync + picking read the
@@ -1087,7 +1094,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const shaderRegistry = getShader();
 
   // feat-20260528-material-shader-registration-unification M3 / w14:
-  // placeholder hardcoded registerMaterialShader calls deleted.
+  // placeholder hardcoded installMaterialArtifact calls deleted.
   //
   // bug-20260601-hello-tonemap-material-register M1 (plan-strategy D-1):
   // All material-shader entries are now registered from the manifest
@@ -1152,18 +1159,16 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // so they are available in ShaderRegistry before `register<MaterialAsset>`.
   // Failures throw structured RhiError / ShaderError through `createRenderer`.
   await prepareMaterialShaders(internals.device, getShader, assets, materialShaderUvSetCounts);
-  // feat-city-glb multi-UV tiling: the built-in standard PBR + skin shaders now
-  // UNCONDITIONALLY declare a second UV set (@location(6) uv1) so they can honor
-  // per-material `uvSet` selection. Their vertex layout must therefore always
-  // carry slot 6 or CreateRenderPipeline rejects the module ("slot 6 not present
+  // MaterialAsset per-slot texCoord: the built-in standard PBR + skin shaders
+  // unconditionally declare all eight supported UV sets so they can honor
+  // per-slot coordinate selection. Their vertex layout must therefore always
+  // carry the declared UV slots or CreateRenderPipeline rejects the module.
   // in VertexState"). `materialShaderUvSetCounts` is the SSOT both PSO paths read
   // (buildPipelineContext + getMaterialShaderPipeline) to drive the clamp-to-last
-  // alias; naga @location reflection reports 0 for engine shaders in this build,
-  // so we assert the count explicitly. For single-UV meshes clamp-to-last aliases
-  // uv1 onto uv0 (48-byte stride unchanged), so this is byte-stable for existing
-  // geometry while emitting the required slot-6 attribute.
-  materialShaderUvSetCounts.set('forgeax::default-standard-pbr', 2);
-  materialShaderUvSetCounts.set(SKIN_MATERIAL_SHADER_ID, 2);
+  // alias; naga reflection can be stale for engine-shipped modules, so the
+  // count is asserted explicitly. Missing mesh sets are clamp-to-last aliases.
+  materialShaderUvSetCounts.set('forgeax::default-standard-pbr', 8);
+  materialShaderUvSetCounts.set(SKIN_MATERIAL_SHADER_ID, 8);
   // M5 wiring (feat-20260517-vite-plugin-image-build-time-cook w14b): hand
   // the RhiDevice to the AssetRegistry so `loadByGuid<TextureAsset>` ->
   // `loadTextureFromEntry` -> `uploadTexture` actually runs the GPU
@@ -1274,7 +1279,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const cached = perShaderMaterialLayoutCache.get(materialShaderId);
     if (cached !== undefined) return cached;
     if (pipelineState === null) return null;
-    const lookup = getShader().lookupMaterialShader(materialShaderId);
+    const lookup = getShader().findMaterialArtifact(materialShaderId);
     if (!lookup.ok) return null;
     const paramSchema = lookup.value.paramSchema;
     // 4-or-fewer user-region textures derive to the same shape as the shared
@@ -1461,29 +1466,25 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // layoutKinds keep the hardcoded 4-attribute / 48-byte layout for
     // backward-compat (`undefined` / `'pbr'` / `'hdrp-pbr'` -- the URP/HDRP
     // path has no skin attributes, AC-04 zero-regression).
-    // feat-20260629-multi-uv-set-support m5-fixup: restore the non-skin PBR
-    // hardcoded 4-attribute / 48-byte layout (pos@0/normal@1/uv@2/tangent@3) as
-    // the zero-regression DEFAULT (AC-04). A prior m5-fixup collapsed this
-    // branch unconditionally onto deriveVertexBufferLayout for "SSOT purity",
-    // but git-bisect confirmed that collapse is the hello-room multi-mesh smoke
-    // regression source: derive produced a layout inconsistent with the
-    // built-in PBR shader (@location 0..3). Per the user decision the built-in
-    // PBR consumes a single UV set, so the URP/HDRP fallback path (no per-mesh
-    // attributes forwarded, meshAttributes === undefined) needs no multi-UV
-    // layout -- it stays on the original hardcoded 48-byte layout.
+    // The non-skin PBR fallback keeps the hardcoded 4-attribute / 48-byte
+    // source layout (pos@0/normal@1/uv@2/tangent@3) for zero-regression
+    // geometry. The shader-declared UV0-UV7 inputs are supplied by
+    // deriveVertexBufferLayout's clamp-to-last aliases without changing the
+    // interleaved stride.
     //
     // The derive path is taken in exactly the two cases where it is required:
     //   1. meshAttributes !== undefined -- a real per-mesh VertexAttributeMap
     //      was forwarded (the record stage hands one through whenever a mesh
     //      carries extra UV sets, e.g. uv1; honouring its key set is what emits
     //      the @location(6+) attributes a custom multi-UV shader samples). A
-    //      custom shader registered via registerMaterialShader is absent from
+    //      custom shader registered via installMaterialArtifact is absent from
     //      the naga-reflection map, so resolvedUvSetCount is undefined here --
     //      the layout must come from the mesh keys, not the (missing) count.
     //   2. resolvedUvSetCount > 1 -- a manifest-reflected custom shader declares
     //      multiple UV sets, so clamp-to-last aliases the missing mesh sets.
-    // Built-in PBR (meshAttributes undefined + reflected count 1/absent) keeps
-    // the hardcoded zero-regression path. The pbr-skin branch is unchanged.
+    // Built-in PBR (meshAttributes undefined + the explicit reflected count 8)
+    // still uses the source layout plus the derived aliases. The pbr-skin
+    // branch follows the same rule with its six-attribute source layout.
     const resolvedUvSetCount =
       materialShaderId !== undefined ? materialShaderUvSetCounts.get(materialShaderId) : undefined;
     const vertexBuffers: readonly GPUVertexBufferLayout[] =
@@ -1759,14 +1760,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         topology: topology ?? 'triangle-list',
         stripIndexFormat: indexFormat,
         vertexLayout: meshAttributes ?? DEFAULT_VERTEX_ATTRS,
-        // feat-20260629-multi-uv-set-support m5-fixup: only thread
-        // shaderUvSetCount when a custom material shader truly declares >1 UV
-        // set. Built-in PBR reflects count=1 (single UV per the user decision),
-        // and threading `1` here perturbs the PipelineSpec cache key + layout
-        // derivation versus the origin/main zero-regression path (git-bisect
-        // confirmed the hello-room multi-mesh collapse). Leaving it undefined
-        // for count<=1 keeps the canonical 48-byte 4-attribute layout, so
-        // clamp-to-last only kicks in for real multi-UV custom materials.
+        // Thread the shader-declared count whenever it is greater than one.
+        // Built-in PBR reserves all eight supported UV inputs; single-UV meshes
+        // remain byte-stable because missing sets are clamp-to-last aliases.
         ...(resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
           ? { shaderUvSetCount: resolvedUvSetCount }
           : {}),
@@ -1777,7 +1773,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const cached = materialShaderPipelineCache.get(cacheKey);
     if (cached !== undefined) return cached;
     if (pipelineState === null) return null;
-    const lookup = getShader().lookupMaterialShader(materialShaderId);
+    const lookup = getShader().findMaterialArtifact(materialShaderId);
     if (!lookup.ok) {
       // bug-20260527-renderstate-pipeline-dispatch-gap D-3:
       // fallback path parity -- when renderState is defined and the
@@ -1812,16 +1808,16 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // wrong BGL chain. With LayoutKind='pbr-skin' the selector returns
         // null when pbrSkinPipelineLayout is null (charter P3 explicit fail).
         //
-        // feat-city-glb multi-UV tiling: this branch always compiles the
+        // MaterialAsset per-slot texCoord: this branch always compiles the
         // built-in PBR module (`pbrEntry.wgsl` / 'module-fallback-pbr'), whose
-        // vertex stage now declares @location(6) uv1. The vertex-buffer LAYOUT
-        // therefore has to be the PBR layout (uvSetCount=2 -> slot 6 present),
+        // vertex stage declares all eight UV inputs. The vertex-buffer layout
+        // therefore has to be the PBR layout with all declared slots present,
         // not the caller shader's -- e.g. a transparent sprite / sprite-lit
         // material lands here with meshAttributes carrying only uv0, so the
         // sprite id would resolve a 48-byte 4-attribute layout and the PBR
-        // module would reject "slot 6 not present in VertexState". Pass the
-        // built-in PBR id for layout resolution so buildPipelineContext derives
-        // the slot-6 layout that matches the compiled module. Skin keeps its
+        // module would reject a missing UV slot. Pass the built-in PBR id for
+        // layout resolution so buildPipelineContext derives the layout that
+        // matches the compiled module. Skin keeps its
         // own id so the pbr-skin fail-fast (null layout) is preserved.
         materialShaderId === SKIN_MATERIAL_SHADER_ID
           ? materialShaderId
@@ -1836,7 +1832,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     }
     // feat-20260609 M4 / w31: resolve variant WGSL from manifest when
     // variantSet is non-empty. The boot-time registered shader (from
-    // `registerMaterialShader` at line ~2473) carries the default (all-true)
+    // `installMaterialArtifact` at line ~2473) carries the default (all-true)
     // variant's WGSL. For URP callers that want a different variant
     // (e.g. STORAGE_BUFFER_AVAILABLE=true without CLUSTER_FORWARD_AVAILABLE),
     // we look up the manifest entry, find the matching variant, and
@@ -1921,7 +1917,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     );
   };
   const getParamSchema = (materialShaderId: string) => {
-    const lookup = getShader().lookupMaterialShader(materialShaderId);
+    const lookup = getShader().findMaterialArtifact(materialShaderId);
     return lookup.ok ? lookup.value.paramSchema : undefined;
   };
   // feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): expose the per-shader
@@ -3475,7 +3471,7 @@ const COMPOSITE_PARAMS_BYTES = 16;
 // faces showed as a wood-coloured rim outside the front-face footprint.
 const DEPTH_TEXTURE_FORMAT: GPUTextureFormat = 'depth24plus-stencil8';
 
-const PER_ENTITY_STRIDE = 256;
+const PER_ENTITY_STRIDE = 512;
 // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 / T-M2-05:
 // the legacy MESH_SSBO_SLOT_COUNT / MATERIAL_UBO_TOTAL_BYTES /
 // MESH_SSBO_TOTAL_BYTES literal-1024 module constants are gone. The
@@ -3798,7 +3794,7 @@ async function prepareMaterialShaders(
   const unlitGuidRes = AssetGuid.parse('37f593ea-0c79-528c-b7f7-23d17045d776');
   const spriteGuidRes = AssetGuid.parse('658234f6-a605-5fff-957d-7149b48fd0f4');
   // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7: stable
-  // UUID for sprite-lit material shader (matches sprite-lit.wgsl.meta.json
+  // UUID for sprite-lit material shader (matches sprite-lit.material.json
   // subAssets[0].guid; shader-id catalog SSOT).
   const spriteLitGuidRes = AssetGuid.parse('f0ec6a4b-cad1-5a3d-9b4e-6d2b0fa14d8e');
   const pbrSkinGuidRes = AssetGuid.parse('5ad0833e-2f17-56e5-a3d2-dab543afae65');
@@ -3868,7 +3864,7 @@ async function prepareMaterialShaders(
     // bug-20260610: skip synthetic non-material engine entries piggy-backing
     // on the materialShaders channel for variant surfacing (shadow_caster).
     // They use the `forgeax::engine-` prefix and are consumed by Step 2's
-    // engine-entry compile path, NOT by registerMaterialShader.
+    // engine-entry compile path, NOT by installMaterialArtifact.
     if (msEntry.identifier.startsWith('forgeax::engine-')) continue;
     // buildVariantKey logic: sorted key=value pairs joined with +; all-true = ''.
     const variantDefines: Record<string, boolean> = {
@@ -3903,7 +3899,7 @@ async function prepareMaterialShaders(
     const chosen = findVariantByKey(msEntry, definesKey);
     const wgsl = chosen?.composedWgsl ?? msEntry.composedWgsl;
     if (wgsl.length > 0) {
-      const existing = registry.lookupMaterialShader(msEntry.identifier);
+      const existing = registry.findMaterialArtifact(msEntry.identifier);
       if (existing.ok) continue;
       const paramSchema = JSON.parse(
         msEntry.paramSchema,
@@ -3913,8 +3909,8 @@ async function prepareMaterialShaders(
       // `derive(paramSchema).bglEntries` and consumed by
       // buildPbrPipelineLayouts at pipeline-build time. The historical
       // separate bind-layout sidecar field has been deleted from
-      // MaterialShaderEntry / ShaderAsset (D-1 / D-2).
-      registry.registerMaterialShader(msEntry.identifier, {
+      // MaterialShaderEntry / MaterialRuntimeInfo (D-1 / D-2).
+      registry.installMaterialArtifact(msEntry.identifier, {
         source: wgsl,
         paramSchema,
       });
@@ -3939,7 +3935,7 @@ async function prepareMaterialShaders(
         };
         // feat-20260614 M8 (D-17): catalogue the shader asset by GUID so it is
         // GUID-addressable; no handle minted. A shader without an engine GUID
-        // lives only in the ShaderRegistry (the registerMaterialShader SSOT
+        // lives only in the ShaderRegistry (the installMaterialArtifact SSOT
         // above) -- there is no GUID to catalogue it under.
         assets.catalog(shaderGuid, shaderAsset);
       }
@@ -3949,12 +3945,12 @@ async function prepareMaterialShaders(
   // ── Step 1c: register forgeax::default-shadow-caster from manifest entries ──
   // feat-20260609-pipeline-driven-pass-selector-shadowcaster-via-mat M3 / T-007:
   // shadow_caster.wgsl is a vertex-only depth pass (29 lines). It enters the
-  // manifest as a general entry (no .wgsl.meta.json sidecar) — not via the
+  // manifest as a general entry (no .material.json sidecar) — not via the
   // materialShaders[] path. Detect it with the same marker as the legacy triage
   // (@location(0) position without @location(1) normal) and register it as the
   // 6th built-in material shader.
   const shadowCasterIdentifier = 'forgeax::default-shadow-caster';
-  if (!registry.lookupMaterialShader(shadowCasterIdentifier).ok) {
+  if (!registry.findMaterialArtifact(shadowCasterIdentifier).ok) {
     for (const entry of registry.entries()) {
       if (
         entry.wgsl.includes('@location(0) position') &&
@@ -3964,7 +3960,7 @@ async function prepareMaterialShaders(
         // empty paramSchema. M3 / w12-w13 (D-2 / D-12): derive([]) returns
         // bglEntries=[], graceful empty-schema path; the separate
         // bind-layout sidecar field is gone — paramSchema is the SSOT.
-        registry.registerMaterialShader(shadowCasterIdentifier, {
+        registry.installMaterialArtifact(shadowCasterIdentifier, {
           source: entry.wgsl,
           paramSchema: [],
         });

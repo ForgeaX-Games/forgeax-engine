@@ -70,13 +70,13 @@ export const FORGEAX_RESERVED_PATH_PREFIX = 'forgeax::' as const;
 
 /**
  * Registered material shader entry — 2-field record stored in the registry
- * by `registerMaterialShader(identifier, entry)` and returned by
- * `lookupMaterialShader(identifier)`.
+ * by `installMaterialArtifact(identifier, entry)` and returned by
+ * `findMaterialArtifact(identifier)`.
  *
  * - `source`: composed WGSL source (post-naga_oil); the final form fed to
  *   `device.createShaderModule({ code })` at pipeline-build time.
  * - `paramSchema`: closed list of `{name, type, default?}` triples that the
- *   `MaterialAsset.payload.paramValues` is validated against at register-time
+ *   `MaterialAsset.payload.values` is validated against at register-time
  *   (feat-20260523-shader-template-instance-split M4 3-tier validation). Per
  *   feat-20260613-material-paramschema-driven-binding M3 / w12-w13, the
  *   paramSchema is also the SSOT for the pipeline BGL via
@@ -85,7 +85,7 @@ export const FORGEAX_RESERVED_PATH_PREFIX = 'forgeax::' as const;
  *
  * The shape is symmetric across engine-default + user-custom paths
  * (charter P4 consistent abstraction): both go through the same
- * `registerMaterialShader` API regardless of whether the host wires the
+ * `installMaterialArtifact` API regardless of whether the host wires the
  * default-standard-pbr triple at boot or the user registers a custom
  * shader after asset import.
  */
@@ -142,7 +142,7 @@ export class ShaderRegistry {
   // createShaderModule on cache miss).
   readonly #errorCache = new Map<string, RhiError>();
   // identifier → MaterialShaderEntry index (populated by
-  // registerMaterialShader; feat-20260523-shader-template-instance-split M5 / T05).
+  // installMaterialArtifact; feat-20260523-shader-template-instance-split M5 / T05).
   readonly #materialShaders = new Map<string, MaterialShaderEntry>();
   readonly #materialShaderManifestEntries: MaterialShaderManifestEntry[] = [];
   #manifestLoaded = false;
@@ -350,7 +350,7 @@ export class ShaderRegistry {
    *     pattern; charter P3 explicit failure on misuse).
    *
    * Successful path returns void — the registry mutates in-place. Use
-   * {@link lookupMaterialShader} to read back.
+   * {@link findMaterialArtifact} to read back.
    *
    * Identifier conventions (charter F1 / plan-strategy §8 §2):
    *   - `forgeax::<kebab-case>` — engine-shipped reserved prefix; the host
@@ -360,16 +360,16 @@ export class ShaderRegistry {
    * @example
    * ```ts
    * const registry = new ShaderRegistry({ device, manifestUrl });
-   * registry.registerMaterialShader('forgeax::default-standard-pbr', {
+   * registry.installMaterialArtifact('forgeax::default-standard-pbr', {
    *   source: composedWgsl,
    *   paramSchema: defaultStandardPbrSchema,
    * });
    * ```
    */
-  registerMaterialShader(identifier: string, entry: MaterialShaderEntry): void {
+  installMaterialArtifact(identifier: string, entry: MaterialShaderEntry): void {
     if (this.#materialShaders.has(identifier)) {
       throw new Error(
-        `ShaderRegistry: material shader identifier '${identifier}' already registered; same-name re-register is forbidden (AGENTS.md "explicit registration" + Inspector "fail-fast no overwrite" pattern). Use lookupMaterialShader to read back the existing entry.`,
+        `ShaderRegistry: material shader identifier '${identifier}' already registered; same-name re-register is forbidden (AGENTS.md "explicit registration" + Inspector "fail-fast no overwrite" pattern). Use findMaterialArtifact to read back the existing entry.`,
       );
     }
     // bug-20260619: user shaders registered directly here bypass the build-time
@@ -401,19 +401,19 @@ export class ShaderRegistry {
    *
    * @example
    * ```ts
-   * const r = registry.lookupMaterialShader('forgeax::default-standard-pbr');
+   * const r = registry.findMaterialArtifact('forgeax::default-standard-pbr');
    * if (!r.ok) return handleError(r.error);
    * const { source, paramSchema } = r.value;
    * ```
    */
-  lookupMaterialShader(identifier: string): ShaderResult<MaterialShaderEntry, ShaderError> {
+  findMaterialArtifact(identifier: string): ShaderResult<MaterialShaderEntry, ShaderError> {
     const entry = this.#materialShaders.get(identifier);
     if (entry === undefined) {
       return err(
         materialShaderNotFound({
           identifier,
           expected: Array.from(this.#materialShaders.keys()),
-          hint: `register the shader via ShaderRegistry.registerMaterialShader('${identifier}', ...) at engine boot, or grep '${FORGEAX_RESERVED_PATH_PREFIX}' to enumerate engine-shipped reserved identifiers`,
+          hint: `register the shader via ShaderRegistry.installMaterialArtifact('${identifier}', ...) at engine boot, or grep '${FORGEAX_RESERVED_PATH_PREFIX}' to enumerate engine-shipped reserved identifiers`,
         }),
       );
     }
@@ -436,7 +436,7 @@ export class ShaderRegistry {
    * feat-20260526-pbr-uniform-fallback-no-storage-buffer M3 / w12:
    * createRenderer variant resolution consumes this list to select the
    * correct variant (by `caps.storageBuffer`) and register the resolved
-   * WGSL via `registerMaterialShader`.
+   * WGSL via `installMaterialArtifact`.
    *
    * Returns an empty iterator when no manifest has been loaded yet or
    * the manifest lacks `materialShaders` (backward-compatible).

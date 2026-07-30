@@ -177,12 +177,11 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: {
+      values: {
         baseColor: [0.8, 0.6, 0.4, 1],
         metallic: 0.3,
         roughness: 0.5,
@@ -197,12 +196,11 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: {
+      values: {
         baseColor: [0.9, 0.9, 0.9, 1],
         metallic: 0,
         roughness: 0.9,

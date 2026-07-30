@@ -2,7 +2,7 @@
 // loadByGuid per-frame texture re-upload bug.
 //
 // SYMPTOM: a MaterialAsset loaded via loadByGuid keeps its texture/sampler
-// paramValues as embedded GUID strings (dash-form). The extract stage
+// values as embedded GUID strings (dash-form). The extract stage
 // (render-system-extract.ts) re-resolved each GUID to a column handle EVERY
 // frame by calling `world.allocSharedRef`, which mints a NEW monotonically-
 // increasing slot id per call. The GPU residency cache
@@ -78,15 +78,15 @@ function spawnTexturedRenderable(world: World, assets: AssetRegistry): { texture
   // Catalog the texture under a GUID; the material references it by GUID string.
   // The embedded ref must be the EXACT dash-form string that
   // AssetRegistry.lookup keys on (AssetGuid.format, lowercased) -- the same
-  // shape loadByGuid leaves in a MaterialAsset's paramValues (D-19).
+  // shape loadByGuid leaves in a MaterialAsset's values (D-19).
   const textureGuid = AssetGuid.random();
   const textureGuidStr = AssetGuid.format(textureGuid);
   assets.catalog(textureGuid, textureAsset());
 
   const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit' }],
-    paramValues: {
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' } }],
+    values: {
       baseColor: [1, 1, 1],
       // Embedded GUID string -- the loadByGuid texture-ref shape (D-19).
       baseColorTexture: textureGuidStr,

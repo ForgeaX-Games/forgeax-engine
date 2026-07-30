@@ -2,13 +2,9 @@
 //
 // `@forgeax/engine-vite-plugin-shader` transforms `*.wgsl` modules into a
 // `{ hash, wgsl }` JS module (vite-plugin-shader/src/index.ts line 875+),
-// where `hash` is the content-addressed manifest entry id (8-hex chars)
-// and `wgsl` is the post-naga_oil composed source. The pulse-material
-// demo imports the .wgsl directly to feed
-// `renderer.shader.registerMaterialShader('my-game::pulse-material',
-// { source: pulseShader.wgsl, ... })` (M9-T05; charter F1 grep gate:
-// `import .* from '.*\.wgsl'` enumerates every user shader entry point
-// at app boot).
+// where `hash` is the content-addressed manifest entry id and `wgsl` is the
+// post-composition source. The runtime consumes the manifest entry by its
+// module identifier after the cooked pack has been loaded.
 
 declare module '*.wgsl' {
   const value: { readonly hash: string; readonly wgsl: string };

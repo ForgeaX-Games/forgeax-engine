@@ -1,10 +1,11 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const manifests = new Map();
 for (const directory of readdirSync('packages', { withFileTypes: true })) {
   if (!directory.isDirectory()) continue;
   const path = join('packages', directory.name, 'package.json');
+  if (!existsSync(path)) continue;
   const manifest = JSON.parse(readFileSync(path, 'utf8'));
   manifests.set(manifest.name, manifest);
 }

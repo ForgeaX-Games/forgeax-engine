@@ -2607,7 +2607,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // variantDefines). Asserts that a sprite-like manifest entry (with the PIR
   // axis) resolves to the PIR=false variant at boot, so per-entity spritePH
   // path (variantSet=undefined) sees PIR=false shader source via
-  // registerMaterialShader → lookup.value.source fallback.
+  // installMaterialArtifact → lookup.value.source fallback.
   // ============================================================================
   describe('sprite boot variant resolution (bug-20260708 AC-03/AC-04)', () => {
     const SPRITE_ID = 'forgeax::sprite';
@@ -6836,9 +6836,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   });
 
   describe('M3 T-007 forgeax::default-shadow-caster registration (AC-09)', () => {
-    it('lookupMaterialShader returns ok for forgeax::default-shadow-caster after makeMockShaderRegistry', () => {
+    it('findMaterialArtifact returns ok for forgeax::default-shadow-caster after makeMockShaderRegistry', () => {
       const sr = makeMockShaderRegistry();
-      const result = sr.lookupMaterialShader('forgeax::default-shadow-caster');
+      const result = sr.findMaterialArtifact('forgeax::default-shadow-caster');
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.source).toBe('fn main() {}');

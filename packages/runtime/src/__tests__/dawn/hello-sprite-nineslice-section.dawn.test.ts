@@ -33,7 +33,7 @@
 //
 // feat-20260625-refactor-sprite-as-transparent-mesh M4 / w16 — touched
 // only the MaterialAsset literal: pass-side `transparent: true` flag
-// (M2 / w6) + UBO-aligned `slicesAndMode` vec4 in paramValues (M3 / w11).
+// (M2 / w6) + UBO-aligned `slicesAndMode` vec4 in values (M3 / w11).
 // The mid-band divergence predicate is invariant under the F-4 unit-quad
 // resize: both stretch and tile entities render at the same Transform.
 // scale[xy] under unit-quad, so the rendered pixel sets remain pairwise
@@ -223,29 +223,30 @@ async function renderOneFrame(opts: {
     passes: [
       {
         name: 'Sprite',
-        shader: 'forgeax::sprite',
-        queue: 3000,
-        tags: { LightMode: 'Forward' },
-        // feat-20260625 M2 / w6 (Q3=b): transparent first-pass flag drives
-        // LDR split + premultiplied-alpha blend pipeline selection. The
-        // legacy shadingModel='sprite' arm (M3 / w15 ablated) used to imply
-        // it; post-w15 the flag is the SSOT.
-        // feat-20260626-sprite-transparent-collapse M1/M4: the boolean
-        // `transparent` field has collapsed into `renderState.blend` as the
-        // single asset-side SSOT; transparent routing now derives from
-        // `renderState.blend !== undefined`.
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        program: { module: 'forgeax::sprite' },
+        renderState: {
+          ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          queue: 3000,
+          tags: { LightMode: 'Forward' },
+        },
       },
     ],
-    paramValues: {
+    parameters: [
+      { name: 'colorTint', type: 'color', default: [1, 1, 1, 1] },
+      { name: 'region', type: 'vec4', default: [0, 0, 1, 1] },
+      { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1, 1] },
+      { name: 'slicesAndMode', type: 'vec4', default: [0, 0, 0, 0] },
+      { name: 'baseColorTexture', type: 'texture', optional: true },
+    ],
+    values: {
       // feat-20260625 M3 / w11 (D-4): UBO-aligned field names. The
       // extract-stage backwards-compat fold (render-system-extract.ts
       // L2344) keeps the legacy `slices` + `sliceMode` split working for
       // unmigrated demos, but new tests declare the UBO-aligned
       // `slicesAndMode` vec4 directly: `.xyz` = [left, top, right] in UV,
       // `.w` carries the sliceMode sentinel (>=0 stretch, <0 tile).
-      baseColorTexture: texHandle as unknown as string,
-      sampler: samplerHandle as unknown as string,
+      baseColorTexture: { texture: texHandle as unknown as never },
+      sampler: { texture: samplerHandle as unknown as never },
       slicesAndMode: [0.25, 0.25, 0.25, opts.sliceMode === 1 ? -0.25 : 0.25],
     },
   });

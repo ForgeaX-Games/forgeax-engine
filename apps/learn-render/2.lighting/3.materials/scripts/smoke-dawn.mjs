@@ -179,12 +179,11 @@ const objectMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [objectBaseColor[0], objectBaseColor[1], objectBaseColor[2]],
     metallic: 0.0,
     roughness: 0.3,
@@ -193,8 +192,8 @@ const objectMatHandle = world.allocSharedRef('MaterialAsset', {
 
 const lampMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0] },
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0] },
 });
 
 // Spawn the object cube at origin (LO: model = identity).

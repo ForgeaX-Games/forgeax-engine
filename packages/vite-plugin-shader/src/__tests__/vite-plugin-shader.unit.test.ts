@@ -487,13 +487,13 @@ import { toRollupLog } from '../wrap.js';
       dirs.push(dir);
       makeWgsl(dir, 'mod_a.wgsl', 'forgeax_test::mod_a');
       makeWgsl(dir, 'mod_b.wgsl', 'forgeax_test::mod_b');
-      makeWgsl(dir, 'mod_c.wgsl', 'forgeax_test::mod_c');
+      makeWgsl(dir, 'mod_c.wgsl', 'my-game::pulse-material');
 
       const map = loadEngineImportsMap([dir]);
       expect(Object.keys(map).length).toBe(3);
       expect(map['forgeax_test::mod_a']).toBeTruthy();
       expect(map['forgeax_test::mod_b']).toBeTruthy();
-      expect(map['forgeax_test::mod_c']).toBeTruthy();
+      expect(map['my-game::pulse-material']).toBeTruthy();
       // values are non-empty wgsl source
       expect(map['forgeax_test::mod_a']?.length).toBeGreaterThan(0);
       expect(map['forgeax_test::mod_a']).toContain('define_import_path');
@@ -1035,55 +1035,19 @@ import { toRollupLog } from '../wrap.js';
         );
       }
 
-      // Verify known paramSchema field counts. Post feat-20260613 fix-issue-1
-      // (D-8 channelMap split): default-standard-pbr + pbr-skin sidecars now
-      // expose the full 96-B authored UBO field-by-field (baseColor + metallic +
-      // roughness + 4 channel selectors + emissive + emissiveIntensity +
-      // occlusionStrength + uvSet + alphaCutoff + clearcoat +
-      // clearcoatRoughness + specularTint + 4 textures = 19 entries).
-      // Sampler-first auto-pair
-      // (D-4) still applies; shadow-caster stays 0 (vertex-only depth pass).
-      //
-      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11: sprite
-      // paramSchema collapsed from 8 user-facing fields to 5 UBO-aligned
-      // entries (4 vec4: colorTint / region / pivotAndSize / slicesAndMode
-      // + baseColorTexture) so the generic std140 writer derives byte-stable
-      // offsets straight from `derive(paramSchema).uboLayout`.
-      const expectedFieldCounts: Record<string, number> = {
-        // feat-city-glb Bug 4 (multi-UV tiling): built-in PBR + skin gained a
-        // `uvSet` and `alphaCutoff` params, then clearcoat and specular tint
-        // added five fields so the fragment selects the glTF UV set, coat
-        // layer, and tinted specular response.
-        'forgeax::default-standard-pbr': 19,
-        'forgeax::pbr-skin': 19,
-        'forgeax::default-unlit': 3,
-        'forgeax::sprite': 5,
-        'forgeax::sprite-lit': 5,
-        'forgeax::msdf-text': 3,
-        'forgeax::default-shadow-caster': 0,
-      };
+      // Parameters belong to MaterialAsset values. The shader manifest only
+      // records compiled module provenance and therefore carries an empty
+      // compatibility array for every built-in entry.
       for (const ms of manifest.materialShaders) {
         const parsed = JSON.parse(ms.paramSchema) as Array<{ name: string; type: string }>;
-        const expected = expectedFieldCounts[ms.identifier];
-        expect(parsed.length, `paramSchema field count for '${ms.identifier}'`).toBe(expected);
-      }
-
-      // Verify paramSchema content is from sidecar (spot-check first field of pbr)
-      const pbr = manifest.materialShaders.find(
-        (ms) => ms.identifier === 'forgeax::default-standard-pbr',
-      );
-      expect(pbr).toBeDefined();
-      if (pbr) {
-        const schema = JSON.parse(pbr.paramSchema) as Array<{ name: string; type: string }>;
-        expect(schema[0]?.name).toBe('baseColor');
-        expect(schema[0]?.type).toBe('color');
+        expect(parsed.length, `paramSchema must stay empty for '${ms.identifier}'`).toBe(0);
       }
     });
 
     it('(b) engine entry missing sidecar causes buildStart fail-fast with file path', async () => {
       const plugin = forgeaxShader({ engineEntries: true });
       // forgeaxShader with a custom engineShaderRoots pointing to a temp dir
-      // that has a .wgsl but no .wgsl.meta.json sidecar. However, the engine
+      // that has a .wgsl but no .material.json sidecar. However, the engine
       // entries are loaded from the built-in @forgeax/engine-shader package
       // by loadEngineShaderEntries, which is internal. We test the fail-fast
       // by constructing a scenario: the buildStart function already reads
@@ -1100,7 +1064,7 @@ import { toRollupLog } from '../wrap.js';
       //
       // For a true integration test of this path, we would need to:
       // 1. Create a temp dir with .wgsl file having reservedIdentifier
-      // 2. No .wgsl.meta.json sidecar
+      // 2. No .material.json sidecar
       // 3. Run buildStart -> expect throw with path
       //
       // This is deferred to the smoke suite. The unit-level verification
@@ -1532,7 +1496,7 @@ ${MINIMAL_WGSL.trim()}
       const plugin = forgeaxShader({ engineEntries: false });
       const ctx = createMockContext();
 
-      // No .wgsl.meta.json sidecar next to no-sidecar.wgsl
+      // No .material.json sidecar next to no-sidecar.wgsl
       const result = await plugin.transform?.call(
         ctx as never,
         WGSL_WITH_DEFINE_IMPORT_PATH,
@@ -1552,8 +1516,10 @@ ${MINIMAL_WGSL.trim()}
         materialShaders: MaterialShaderEntry[];
         entries: unknown[];
       };
-      // No sidecar -> no material-shader push -> materialShaders is empty
-      expect(manifest.materialShaders.length).toBe(0);
+      // No sidecar is required; the module declaration is enough to create an
+      // inspection entry, while authored parameters remain in MaterialAsset.
+      expect(manifest.materialShaders.length).toBe(1);
+      expect(manifest.materialShaders[0]?.paramSchema).toBe('[]');
       // But entries[] still contains the compiled shader
       expect(manifest.entries.length).toBeGreaterThanOrEqual(1);
     });
@@ -1573,25 +1539,28 @@ ${MINIMAL_WGSL.trim()}
       expect(plugin.name).toBe('forgeax:shader');
     });
 
-    it('(c) user sidecar with malformed JSON -> fail-fast with path in error', async () => {
+    it('(c) legacy sidecar content is ignored by the transform', async () => {
       const wgslId = 'bad-json-material';
       const wgslPath = join(testDir, `${wgslId}.wgsl`);
-      const metaPath = join(testDir, `${wgslId}.wgsl.meta.json`);
+      const metaPath = join(testDir, `${wgslId}.material.json`);
       await writeFile(wgslPath, WGSL_WITH_DEFINE_IMPORT_PATH, 'utf8');
       await writeFile(metaPath, '{ invalid json {{{', 'utf8');
 
       const plugin = forgeaxShader({ engineEntries: false });
       const ctx = createMockContext();
 
-      await expect(
-        plugin.transform?.call(ctx as never, WGSL_WITH_DEFINE_IMPORT_PATH, wgslPath),
-      ).rejects.toThrow(/bad-json-material\.wgsl\.meta\.json/);
+      const result = await plugin.transform?.call(
+        ctx as never,
+        WGSL_WITH_DEFINE_IMPORT_PATH,
+        wgslPath,
+      );
+      expect(result).not.toBeNull();
     });
 
-    it('(d) user sidecar present but missing paramSchema -> fail-fast', async () => {
+    it('(d) legacy sidecar without paramSchema is ignored by the transform', async () => {
       const wgslId = 'no-schema-material';
       const wgslPath = join(testDir, `${wgslId}.wgsl`);
-      const metaPath = join(testDir, `${wgslId}.wgsl.meta.json`);
+      const metaPath = join(testDir, `${wgslId}.material.json`);
       await writeFile(wgslPath, WGSL_WITH_DEFINE_IMPORT_PATH, 'utf8');
       await writeFile(
         metaPath,
@@ -1619,11 +1588,12 @@ ${MINIMAL_WGSL.trim()}
       const plugin = forgeaxShader({ engineEntries: false });
       const ctx = createMockContext();
 
-      await expect(
-        plugin.transform?.call(ctx as never, WGSL_WITH_DEFINE_IMPORT_PATH, wgslPath),
-      ).rejects.toThrow(
-        /no-schema-material\.wgsl\.meta\.json.*missing required non-empty paramSchema/,
+      const result = await plugin.transform?.call(
+        ctx as never,
+        WGSL_WITH_DEFINE_IMPORT_PATH,
+        wgslPath,
       );
+      expect(result).not.toBeNull();
     });
   });
 }
@@ -2223,7 +2193,7 @@ struct UserParams { tint: vec4<f32> };
 
     it('(a) matching paramSchema + WGSL bindings -> transform succeeds', async () => {
       const wgslPath = join(testDir, 'w8-match.wgsl');
-      const metaPath = join(testDir, 'w8-match.wgsl.meta.json');
+      const metaPath = join(testDir, 'w8-match.material.json');
       await writeFile(wgslPath, MATCHING_WGSL, 'utf8');
       await writeFile(metaPath, makeSidecar([{ name: 'tint', type: 'color' }]), 'utf8');
 
@@ -2233,9 +2203,9 @@ struct UserParams { tint: vec4<f32> };
       expect(result).not.toBeNull();
     });
 
-    it('(b) paramSchema declares binding WGSL lacks -> throws material-shader-binding-mismatch', async () => {
+    it('(b) legacy sidecar schema does not gate module compilation', async () => {
       const wgslPath = join(testDir, 'w8-missing.wgsl');
-      const metaPath = join(testDir, 'w8-missing.wgsl.meta.json');
+      const metaPath = join(testDir, 'w8-missing.material.json');
       await writeFile(wgslPath, MISSING_BINDING_WGSL, 'utf8');
       await writeFile(
         metaPath,
@@ -2248,14 +2218,13 @@ struct UserParams { tint: vec4<f32> };
 
       const plugin = forgeaxShader({ engineEntries: false });
       const ctx = createMockContext();
-      await expect(
-        plugin.transform?.call(ctx as never, MISSING_BINDING_WGSL, wgslPath),
-      ).rejects.toThrow(/missing WGSL @binding/);
+      const result = await plugin.transform?.call(ctx as never, MISSING_BINDING_WGSL, wgslPath);
+      expect(result).not.toBeNull();
     });
 
     it('(c) WGSL has extra binding beyond paramSchema -> transform succeeds (superset)', async () => {
       const wgslPath = join(testDir, 'w8-superset.wgsl');
-      const metaPath = join(testDir, 'w8-superset.wgsl.meta.json');
+      const metaPath = join(testDir, 'w8-superset.material.json');
       await writeFile(wgslPath, SUPERSET_WGSL, 'utf8');
       await writeFile(metaPath, makeSidecar([{ name: 'tint', type: 'color' }]), 'utf8');
 

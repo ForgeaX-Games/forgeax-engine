@@ -8,11 +8,11 @@ export type MaterialHandle = Handle<'MaterialAsset', 'shared'>;
 
 /** Clone an authored PBR material so gameplay owns the optional clearcoat layer. */
 export function withClearcoat(material: MaterialAsset): MaterialAsset | undefined {
-  if (!material.passes?.some((pass) => pass.shader === 'forgeax::default-standard-pbr')) return undefined;
+  if (!material.passes?.some((pass) => pass.program.module === 'forgeax::default-standard-pbr')) return undefined;
   return {
     ...material,
-    paramValues: {
-      ...material.paramValues,
+    values: {
+      ...material.values,
       clearcoat: CLEARCOAT_STRENGTH,
       clearcoatRoughness: CLEARCOAT_ROUGHNESS,
     },

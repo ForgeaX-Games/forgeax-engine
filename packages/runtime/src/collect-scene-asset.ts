@@ -234,7 +234,7 @@ function _collectOverrideGuids(ov: MountOverride, set: Set<string>): void {
   }
 }
 
-// serializeSceneAssetToPack — unchanged from original
+// serializeSceneAssetToPack — emits the current Pack v2/local-artifact envelope.
 export function serializeSceneAssetToPack(
   sceneAsset: SceneAsset,
   guid?: string,
@@ -371,9 +371,9 @@ export function serializeSceneAssetToPack(
   const payload: Record<string, unknown> = { entities: serializedEntities };
   if (serializedMounts !== undefined) payload.mounts = serializedMounts;
   return ok({
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
-    assets: [{ guid: assetGuid, kind: 'scene', payload, refs }],
+    assets: [{ guid: assetGuid, kind: 'scene', payload, refs, artifacts: {} }],
   });
 }
 

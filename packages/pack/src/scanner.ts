@@ -1,12 +1,12 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ImportedOutputDeclaration, PackErrorCode } from '@forgeax/engine-types';
-import { MATERIAL_PARAM_TYPES, PACK_ERROR_HINTS } from '@forgeax/engine-types';
+import { PACK_ERROR_HINTS } from '@forgeax/engine-types';
 import { loadAssetConfig } from './config.js';
 import { PackError } from './errors.js';
 import { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
-import { buildMaterialAssetValidator, validateMeta, validatePack } from './schema-compiled.js';
+import { validateMeta, validatePack } from './schema-compiled.js';
 
 // Minimal Result<T, E> — structurally compatible with @forgeax/engine-rhi Result
 // but defined locally to avoid a heavy runtime dep in this build-time package.
@@ -98,7 +98,7 @@ function* extractMountSourceGuids(asset: {
  *   Step 4 - GUID collision detection
  *   Step 5 - orphan .meta.json detection
  *   Step 6 - cyclic reference detection (hand-written DFS)
- *   Step 7 - material-payload-schema-check (buildMaterialAssetValidator for kind='material')
+ *   Step 7 - complete pack and source closure validation
  *
  * Returns `Ok(paths)` or `Err(PackError)` on the first violation.
  *
@@ -163,14 +163,6 @@ export async function scan(
   // kind stays in the path/detail evidence; identity is the normalized GUID.
   const guidToPath = new Map<string, string>();
   const packRefs = new Map<string, string[]>(); // guid -> refs[]
-
-  // Collect material payloads for step-7 validation
-  interface MaterialPayloadEntry {
-    guid: string;
-    payload: unknown;
-    path: string;
-  }
-  const materialPayloads: MaterialPayloadEntry[] = [];
 
   for (const packPath of packPaths) {
     let parsed: unknown;
@@ -294,31 +286,6 @@ export async function scan(
         existingRefs.push(guid);
       }
       packRefs.set(normalizedGuid, existingRefs);
-
-      // Collect material payloads for step-7 validation.
-      // Pass-based (new) payloads carry `passes` + optional `paramValues`.
-      // Schema-driven (legacy) payloads carry `materialShader` + `paramSchema` + `paramValues`.
-      // Old unlit payloads carry `shadingModel` — these are skipped from step-7
-      // since they lack paramSchema for validation, but are still valid assets.
-      const assetObj = asset as { kind?: unknown; payload?: unknown };
-      if (assetObj.kind === 'material' && assetObj.payload !== undefined) {
-        const payload = assetObj.payload as {
-          materialShader?: unknown;
-          shadingModel?: unknown;
-          passes?: unknown;
-          paramSchema?: unknown;
-        };
-        const hasPasses = Array.isArray(payload.passes);
-        const isSchemaDriven =
-          typeof payload.materialShader === 'string' && Array.isArray(payload.paramSchema);
-        if (hasPasses || isSchemaDriven) {
-          materialPayloads.push({
-            guid: normalizedGuid,
-            payload: assetObj.payload,
-            path: packPath,
-          });
-        }
-      }
     }
   }
 
@@ -460,28 +427,6 @@ export async function scan(
             code: 'pack-cyclic-reference',
             kind: 'mount-asset',
             cycle,
-          }),
-        );
-      }
-    }
-  }
-
-  // Step 7: material-payload-schema-check (schema-driven payloads only)
-  if (materialPayloads.length > 0) {
-    const validateMaterialPayload = buildMaterialAssetValidator(new Set(MATERIAL_PARAM_TYPES));
-    for (const entry of materialPayloads) {
-      const p = entry.payload as { passes?: unknown; materialShader?: unknown };
-      if (Array.isArray(p.passes)) continue;
-      const valid = validateMaterialPayload(entry.payload);
-      if (!valid) {
-        return packErr(
-          makePackError('payload-schema-mismatch', {
-            code: 'payload-schema-mismatch' as const,
-            guid: entry.guid,
-            errors: (validateMaterialPayload.errors ?? []).map((e) => ({
-              instancePath: e.instancePath,
-              message: e.message ?? 'unknown ajv error',
-            })),
           }),
         );
       }

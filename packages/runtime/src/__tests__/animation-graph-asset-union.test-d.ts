@@ -48,8 +48,6 @@ describe('AnimationGraph POD in the Asset union (M2 / w12)', () => {
           return 'material';
         case 'scene':
           return 'scene';
-        case 'shader':
-          return 'shader';
         case 'skeleton':
           return 'skeleton';
         case 'skin':

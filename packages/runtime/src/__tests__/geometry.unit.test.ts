@@ -358,12 +358,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [1, 1, 1] },
+      values: { baseColor: [1, 1, 1] },
     });
     if (!result.ok) throw new Error('catalog failed');
     return world.allocSharedRef('MaterialAsset', result.value);
@@ -2160,12 +2159,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: color },
+      values: { baseColor: color },
     };
   }
 
@@ -2408,7 +2406,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   function freshRegistry() {
     return new AssetRegistry(
       // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
-      { lookupMaterialShader: () => ({ ok: false }) } as any,
+      { findMaterialArtifact: () => ({ ok: false }) } as any,
     );
   }
 

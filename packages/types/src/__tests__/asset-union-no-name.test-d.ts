@@ -7,19 +7,17 @@
 // (b) Type-level: exhaustiveSwitch returns string (proves all cases present).
 // (c) grep: none of the 15 Asset union member interfaces (MeshAsset /
 //     TextureAsset / EquirectAsset / SamplerAsset / MaterialAsset /
-//     SceneAsset / ShaderAsset / SkeletonAsset / SkinAsset / AnimationClip /
+//     SceneAsset / SkeletonAsset / SkinAsset / AnimationClip /
 //     AudioClipAsset / FontAsset / RenderPipelineAsset / TilesetAsset /
 //     VideoAsset) has gained a `name`
-//     field -- only ShaderAsset.name is allowed (registration identifier,
-//     orthogonal to resolveName display name per D-8). The check scans
+//     field. The check scans
 //     each Asset member interface block between `export interface <N>Asset`
 //     and the next `}` for `readonly name` and asserts exactly 1 hit
-//     (ShaderAsset).
+//     (MaterialRuntimeInfo).
 //
 // Anchors:
 // - requirements OOS-2 (Asset POD shall not carry name)
 // - requirements section 6 constraint (Route B: name via resolveName, not POD)
-// - plan-strategy D-8 (ShaderAsset.name is orthogonal registration id)
 // - plan-tasks w1 acceptanceCheck
 
 import { execSync } from 'node:child_process';
@@ -47,8 +45,6 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'MaterialAsset';
     case 'scene':
       return 'SceneAsset';
-    case 'shader':
-      return 'ShaderAsset';
     case 'skeleton':
       return 'SkeletonAsset';
     case 'skin':
@@ -84,7 +80,6 @@ const ASSET_MEMBER_NAMES = [
   'SamplerAsset',
   'MaterialAsset',
   'SceneAsset',
-  'ShaderAsset',
   'SkeletonAsset',
   'SkinAsset',
   'AnimationClip',
@@ -159,18 +154,12 @@ describe('M1 Asset union cardinality grep gate (17 members, OOS-2 POD no-name)',
     expectTypeOf(exhaustiveAssetKindSwitch).returns.toEqualTypeOf<string>();
   });
 
-  it('(c) no Asset union member interface has a name field except ShaderAsset', () => {
+  it('(c) no Asset union member interface has a name field', () => {
     const counts = countNameFieldsPerAssetInterface();
     expect(counts.size).toBeGreaterThanOrEqual(13);
 
-    for (const [iface, count] of counts) {
-      if (iface === 'ShaderAsset') {
-        // ShaderAsset.name is allowed (registration identifier, D-8).
-        expect(count).toBe(1);
-      } else {
-        // All other Asset union members must NOT carry a `name` field.
-        expect(count).toBe(0);
-      }
+    for (const count of counts.values()) {
+      expect(count).toBe(0);
     }
   });
 });

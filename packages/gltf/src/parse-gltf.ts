@@ -250,6 +250,27 @@ export interface GltfTextureIr {
   readonly name?: string;
 }
 
+export interface GltfTextureTransformIr {
+  readonly offset?: readonly [number, number];
+  readonly rotation?: number;
+  readonly scale?: readonly [number, number];
+}
+
+export interface GltfTextureInfoIr {
+  readonly texture: number;
+  readonly sampler?: number;
+  readonly texCoord?: number;
+  readonly transform?: GltfTextureTransformIr;
+}
+
+export interface GltfNormalTextureInfoIr extends GltfTextureInfoIr {
+  readonly scale?: number;
+}
+
+export interface GltfOcclusionTextureInfoIr extends GltfTextureInfoIr {
+  readonly strength?: number;
+}
+
 export interface GltfImageIr {
   readonly uri?: string;
   readonly mimeType?: string;
@@ -270,13 +291,14 @@ export interface GltfMaterialIr {
   readonly baseColorFactor: readonly [number, number, number, number];
   /** glTF emissiveFactor; omitted means the glTF default [0, 0, 0]. */
   readonly emissiveFactor?: readonly [number, number, number];
-  readonly baseColorTexture?: number;
-  /** Index into the parent document's textures array for the emissive map. */
-  readonly emissiveTexture?: number;
+  readonly baseColorTexture?: GltfTextureInfoIr | number;
+  /** Texture binding for the emissive map. */
+  readonly emissiveTexture?: GltfTextureInfoIr | number;
   readonly metallicFactor: number;
   readonly roughnessFactor: number;
-  readonly metallicRoughnessTexture?: number;
-  readonly normalTexture?: number;
+  readonly metallicRoughnessTexture?: GltfTextureInfoIr | number;
+  readonly normalTexture?: GltfNormalTextureInfoIr | number;
+  readonly occlusionTexture?: GltfOcclusionTextureInfoIr | number;
   /**
    * glTF `alphaMode` (`'OPAQUE'` | `'MASK'` | `'BLEND'`). Absent -> `'OPAQUE'`
    * (glTF spec default). Drives the bridge's transparent / alpha-test routing.
@@ -359,6 +381,29 @@ interface BuffersJson {
   readonly uri?: string;
 }
 
+interface TextureTransformJson {
+  readonly offset?: readonly number[];
+  readonly rotation?: number;
+  readonly scale?: readonly number[];
+  readonly texCoord?: number;
+}
+
+interface TextureInfoJson {
+  readonly index: number;
+  readonly texCoord?: number;
+  readonly extensions?: {
+    readonly KHR_texture_transform?: TextureTransformJson;
+  };
+}
+
+interface NormalTextureInfoJson extends TextureInfoJson {
+  readonly scale?: number;
+}
+
+interface OcclusionTextureInfoJson extends TextureInfoJson {
+  readonly strength?: number;
+}
+
 interface RootGltfJson extends GltfExtensionsJson {
   readonly asset?: { readonly version?: string };
   readonly scene?: number;
@@ -393,14 +438,15 @@ interface RootGltfJson extends GltfExtensionsJson {
     readonly name?: string;
     readonly pbrMetallicRoughness?: {
       readonly baseColorFactor?: readonly number[];
-      readonly baseColorTexture?: { readonly index: number; readonly texCoord?: number };
+      readonly baseColorTexture?: TextureInfoJson;
       readonly metallicFactor?: number;
       readonly roughnessFactor?: number;
-      readonly metallicRoughnessTexture?: { readonly index: number };
+      readonly metallicRoughnessTexture?: TextureInfoJson;
     };
-    readonly normalTexture?: { readonly index: number };
+    readonly normalTexture?: NormalTextureInfoJson;
     readonly emissiveFactor?: readonly number[];
-    readonly emissiveTexture?: { readonly index: number; readonly texCoord?: number };
+    readonly emissiveTexture?: TextureInfoJson;
+    readonly occlusionTexture?: OcclusionTextureInfoJson;
     readonly alphaMode?: string;
     readonly alphaCutoff?: number;
     readonly doubleSided?: boolean;
@@ -441,6 +487,37 @@ interface RootGltfJson extends GltfExtensionsJson {
       readonly interpolation?: string;
     }>;
   }>;
+}
+
+function tuple2(values: readonly number[] | undefined): readonly [number, number] | undefined {
+  if (values === undefined || values.length < 2) return undefined;
+  return [values[0] ?? 0, values[1] ?? 0];
+}
+
+function parseTextureInfo(
+  info: TextureInfoJson,
+  textures: readonly GltfTextureIr[],
+): GltfTextureInfoIr {
+  const transformJson = info.extensions?.KHR_texture_transform;
+  const offset = tuple2(transformJson?.offset);
+  const scale = tuple2(transformJson?.scale);
+  const transform =
+    offset === undefined && transformJson?.rotation === undefined && scale === undefined
+      ? undefined
+      : {
+          ...(offset === undefined ? {} : { offset }),
+          ...(transformJson?.rotation === undefined ? {} : { rotation: transformJson.rotation }),
+          ...(scale === undefined ? {} : { scale }),
+        };
+  const sampler = textures[info.index]?.sampler;
+  return {
+    texture: info.index,
+    ...(sampler === undefined ? {} : { sampler }),
+    ...(info.texCoord === undefined && transformJson?.texCoord === undefined
+      ? {}
+      : { texCoord: transformJson?.texCoord ?? info.texCoord }),
+    ...(transform === undefined ? {} : { transform }),
+  };
 }
 
 export type ExternalLoader = (uri: string) => Promise<ArrayBuffer>;
@@ -912,7 +989,6 @@ async function parseGltfWithBin(
 
     const alphaMode =
       matJson.alphaMode === 'MASK' || matJson.alphaMode === 'BLEND' ? matJson.alphaMode : undefined;
-    const baseColorTexCoord = pbr?.baseColorTexture?.texCoord;
     const emissiveFactor = matJson.emissiveFactor;
     const emissiveFactor3: readonly [number, number, number] = [
       emissiveFactor?.[0] ?? 0,
@@ -927,20 +1003,39 @@ async function parseGltfWithBin(
       roughnessFactor: pbr?.roughnessFactor ?? 1.0,
       ...(pbr?.baseColorTexture === undefined
         ? {}
-        : { baseColorTexture: pbr.baseColorTexture.index }),
+        : { baseColorTexture: parseTextureInfo(pbr.baseColorTexture, textures) }),
       ...(pbr?.metallicRoughnessTexture === undefined
         ? {}
-        : { metallicRoughnessTexture: pbr.metallicRoughnessTexture.index }),
+        : { metallicRoughnessTexture: parseTextureInfo(pbr.metallicRoughnessTexture, textures) }),
       ...(matJson.normalTexture === undefined
         ? {}
-        : { normalTexture: matJson.normalTexture.index }),
+        : {
+            normalTexture: {
+              ...parseTextureInfo(matJson.normalTexture, textures),
+              ...(matJson.normalTexture.scale === undefined
+                ? {}
+                : { scale: matJson.normalTexture.scale }),
+            },
+          }),
+      ...(matJson.occlusionTexture === undefined
+        ? {}
+        : {
+            occlusionTexture: {
+              ...parseTextureInfo(matJson.occlusionTexture, textures),
+              ...(matJson.occlusionTexture.strength === undefined
+                ? {}
+                : { strength: matJson.occlusionTexture.strength }),
+            },
+          }),
       ...(matJson.emissiveTexture === undefined
         ? {}
-        : { emissiveTexture: matJson.emissiveTexture.index }),
+        : { emissiveTexture: parseTextureInfo(matJson.emissiveTexture, textures) }),
       ...(alphaMode === undefined ? {} : { alphaMode }),
       ...(matJson.alphaCutoff === undefined ? {} : { alphaCutoff: matJson.alphaCutoff }),
       ...(matJson.doubleSided === true ? { doubleSided: true } : {}),
-      ...(baseColorTexCoord === undefined || baseColorTexCoord === 0 ? {} : { baseColorTexCoord }),
+      ...(pbr?.baseColorTexture?.texCoord === undefined || pbr.baseColorTexture.texCoord === 0
+        ? {}
+        : { baseColorTexCoord: pbr.baseColorTexture.texCoord }),
     });
   }
 
@@ -1161,6 +1256,16 @@ export function toAssetPack(
       ...(img.name === undefined ? {} : { name: img.name }),
     });
   }
+  const samplers = doc.samplers ?? [];
+  for (let i = 0; i < samplers.length; i++) {
+    const sampler = samplers[i];
+    if (sampler === undefined) continue;
+    items.push({
+      kind: 'sampler',
+      sourceIndex: i,
+      ...(sampler.name === undefined ? {} : { name: sampler.name }),
+    });
+  }
   // Skeletons (feat-20260523-skin-skeleton-animation M0).
   for (let i = 0; i < doc.skeletons.length; i++) {
     items.push({ kind: 'skeleton', sourceIndex: i });
@@ -1184,6 +1289,9 @@ export function toAssetPack(
     subAssets: reuse.subAssets,
     importSettings: {
       defaultSceneIndex: doc.defaultSceneIndex,
+      ...(typeof existingMeta?.importSettings.standardMaterialGuid === 'string'
+        ? { standardMaterialGuid: existingMeta.importSettings.standardMaterialGuid }
+        : {}),
       ...(existingMeta?.importSettings.downscaleMaxDimension !== undefined
         ? { downscaleMaxDimension: existingMeta.importSettings.downscaleMaxDimension }
         : {}),

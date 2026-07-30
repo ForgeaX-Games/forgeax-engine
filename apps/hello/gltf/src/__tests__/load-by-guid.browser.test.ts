@@ -77,7 +77,7 @@ function makeMockShaderRegistry(): ShaderRegistry {
     device: mockDevice,
     manifestUrl: undefined,
   });
-  sr.registerMaterialShader('forgeax::default-unlit', {
+  sr.installMaterialArtifact('forgeax::default-unlit', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color' },
@@ -141,8 +141,8 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
 function materialIrToPod(mat: GltfMaterialIr): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: { baseColor: mat.baseColorFactor },
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+    values: { baseColor: mat.baseColorFactor },
   };
 }
 

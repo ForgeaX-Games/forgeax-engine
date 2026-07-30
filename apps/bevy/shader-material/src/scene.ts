@@ -47,14 +47,8 @@ export function makeTextureAsset(pixels: Uint8Array): TextureAsset {
 export function makeMaterial(texture: number): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{
-      name: 'Forward',
-      shader: SHADER_ID,
-      tags: { LightMode: 'Forward' },
-      queue: 3000,
-      renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-    }],
-    paramValues: { baseColor: [0.82, 0.9, 1, 1], baseColorTexture: texture },
+    passes: [{ name: 'Forward', program: { module: SHADER_ID }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
+    values: { baseColor: [0.82, 0.9, 1, 1], baseColorTexture: texture },
   };
 }
 

@@ -25,7 +25,7 @@
 //
 // feat-20260625-refactor-sprite-as-transparent-mesh M4 / w16 — touched
 // only the material-payload literal (transparent:true + UBO-aligned
-// paramValues field names per D-3 / D-4). The pixel-diff predicate
+// values field names per D-3 / D-4). The pixel-diff predicate
 // (MSAA frame != none-AA frame) is invariant under the F-4 unit-quad
 // resize because the sprite occupies the same rotated-quad footprint
 // in NDC and the rotated edge still gives MSAA something to smooth.
@@ -123,7 +123,7 @@ function buildSyntheticRgba(): { width: number; height: number; data: Uint8Array
 function spawnSpriteScene(world: World, spriteMaterialPayload: unknown, antialias: number): void {
   // feat-20260614 M8: MeshRenderer.materials holds a per-World column handle
   // (numeric); mint it from the catalogued material payload on the World the
-  // scene is spawned into. The material's texture/sampler paramValues are GUID
+  // scene is spawned into. The material's texture/sampler values are GUID
   // strings the extract stage resolves to per-World handles.
   const spriteMaterial = world.allocSharedRef('MaterialAsset', spriteMaterialPayload);
   // A rotated quad gives diagonal sprite edges so MSAA has something to
@@ -243,7 +243,7 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     // the legacy shadingModel='sprite' arm) drives the LDR split sub-pass
     // in the record stage. feat-20260614 M8: AssetRegistry holds GUID->
     // payload only (no handle concept); texture/sampler are referenced
-    // from the material paramValues by GUID string and resolved to per-
+    // from the material values by GUID string and resolved to per-
     // World column handles at extract. The explicit uploadTexture call
     // exercises the GPU residency path via a column handle minted on an
     // upload-only World.
@@ -300,24 +300,17 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::sprite',
-          tags: { LightMode: 'Forward' },
-          queue: 3000,
-          // feat-20260625 M2 / w6 (Q3=b): transparent is now a first-class
-          // material-side flag that drives the LDR pass split + premultiplied
-          // -alpha blend pipeline selection in the record stage. The legacy
-          // shadingModel='sprite' arm that used to trigger the split via
-          // shader-id inference is gone (M3 / w15).
-          // feat-20260626-sprite-transparent-collapse M1/M4: the boolean
-          // `transparent` field has collapsed into `renderState.blend` as
-          // the single asset-side SSOT; transparent routing now derives
-          // from `renderState.blend !== undefined`.
-          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          program: { module: 'forgeax::sprite' },
+          renderState: {
+            ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+            tags: { LightMode: 'Forward' },
+            queue: 3000,
+          },
         },
       ],
-      paramValues: {
-        // feat-20260625 M3 / w11 (D-4): paramValues field names are now UBO-
-        // aligned to match sprite.wgsl.meta.json paramSchema 1:1 (colorTint /
+      values: {
+        // feat-20260625 M3 / w11 (D-4): values field names are now UBO-
+        // aligned to match sprite.material.json paramSchema 1:1 (colorTint /
         // region / pivotAndSize / slicesAndMode / baseColorTexture). The
         // legacy `baseColor` / `texture` / `pivot` / `size` field names are
         // still read by the extract-stage backwards-compat fold (D-8) so

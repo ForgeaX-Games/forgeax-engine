@@ -1,4 +1,4 @@
-#define_import_path my_game::pulse_material
+#define_import_path my-game::pulse-material
 
 #import forgeax_view::common::{view, meshes}
 #import forgeax_pbr::brdf::{f_schlick}
@@ -8,7 +8,7 @@
 // of body) that pulses baseColor over time using a tiny user-defined uniform.
 //
 // AI-user discoverability (charter F1 + AC-14): grep
-// `#define_import_path my_game::` + `#import forgeax_pbr` to enumerate
+// `#define_import_path my-game::` + `#import forgeax_pbr` to enumerate
 // (a) the user-namespaced module + (b) the engine helpers it depends on.
 // User shaders pick their own `<package>::<id>` import path; only the
 // `forgeax::` prefix is engine-reserved (FORGEAX_RESERVED_PATH_PREFIX).
@@ -17,11 +17,15 @@ struct PulseUniforms {
   baseColor : vec4<f32>,
   time      : f32,
   speed     : f32,
+  baseColorUvTransform : vec4<f32>,
+  normalUvTransform : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> pulse : PulseUniforms;
 @group(1) @binding(1) var baseColorTexture_sampler : sampler;
 @group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
+@group(1) @binding(3) var normalTexture_sampler : sampler;
+@group(1) @binding(4) var normalTexture : texture_2d<f32>;
 
 struct VsIn  {
   @location(0) pos    : vec3<f32>,
@@ -31,8 +35,13 @@ struct VsIn  {
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) worldNormal : vec3<f32>,
-  @location(1) uv : vec2<f32>,
+  @location(1) baseColorUv : vec2<f32>,
+  @location(2) normalUv : vec2<f32>,
 };
+
+fn transformUv(uv : vec2<f32>, transform : vec4<f32>) -> vec2<f32> {
+  return uv * transform.zw + transform.xy;
+}
 
 @vertex
 fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
@@ -40,7 +49,8 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   var out : VsOut;
   out.clip = view.worldViewProj * world;
   out.worldNormal = normalize(meshes[idx].normalMatrix * in.normal);
-  out.uv = in.uv;
+  out.baseColorUv = transformUv(in.uv, pulse.baseColorUvTransform);
+  out.normalUv = transformUv(in.uv, pulse.normalUvTransform);
   return out;
 }
 
@@ -56,6 +66,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let n = normalize(in.worldNormal);
   let v = vec3<f32>(0.0, 0.0, 1.0);
   let f = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04));
-  let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
-  return vec4<f32>(modulated * sampled.rgb * (vec3<f32>(1.0) - f * 0.1), pulse.baseColor.a * sampled.a);
+  let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.baseColorUv);
+  let normalSample = textureSample(normalTexture, normalTexture_sampler, in.normalUv);
+  let normalDetail = 0.9 + normalSample.g * 0.1;
+  return vec4<f32>(modulated * sampled.rgb * normalDetail * (vec3<f32>(1.0) - f * 0.1), pulse.baseColor.a * sampled.a);
 }

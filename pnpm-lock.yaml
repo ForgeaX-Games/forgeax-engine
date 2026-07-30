@@ -4103,6 +4103,9 @@ importers:
       '@forgeax/engine-rhi-debug':
         specifier: workspace:*
         version: link:../../packages/rhi-debug
+      '@forgeax/engine-rhi-webgpu':
+        specifier: workspace:*
+        version: link:../../packages/rhi-webgpu
       '@forgeax/engine-vite-plugin-rhi-debug':
         specifier: workspace:*
         version: link:../../packages/vite-plugin-rhi-debug
@@ -4618,15 +4621,24 @@ importers:
 
   apps/hello/custom-shader:
     dependencies:
+      '@forgeax/engine-assets-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/assets-runtime
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../../../packages/ecs
       '@forgeax/engine-geometry':
         specifier: workspace:*
         version: link:../../../packages/geometry
+      '@forgeax/engine-gltf':
+        specifier: workspace:*
+        version: link:../../../packages/gltf
       '@forgeax/engine-math':
         specifier: workspace:*
         version: link:../../../packages/math
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../../../packages/pack
       '@forgeax/engine-render':
         specifier: workspace:*
         version: link:../../../packages/render
@@ -4643,6 +4655,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-pack':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-pack
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -8696,6 +8711,9 @@ importers:
       '@forgeax/engine-ui':
         specifier: workspace:*
         version: link:../ui
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
     devDependencies:
       '@forgeax/engine-skinning':
         specifier: workspace:*
@@ -8865,18 +8883,15 @@ importers:
 
   packages/gltf:
     dependencies:
-      '@forgeax/engine-assets-runtime':
+      '@forgeax/engine-import':
         specifier: workspace:*
-        version: link:../assets-runtime
+        version: link:../import
       '@forgeax/engine-math':
         specifier: workspace:*
         version: link:../math
       '@forgeax/engine-pack':
         specifier: workspace:*
         version: link:../pack
-      '@forgeax/engine-render':
-        specifier: workspace:*
-        version: link:../render
       '@forgeax/engine-scene':
         specifier: workspace:*
         version: link:../scene
@@ -8887,12 +8902,15 @@ importers:
         specifier: ^0.1.71
         version: 0.1.71
     devDependencies:
-      '@forgeax/engine-import':
+      '@forgeax/engine-assets-runtime':
         specifier: workspace:*
-        version: link:../import
+        version: link:../assets-runtime
       '@forgeax/engine-picking':
         specifier: workspace:*
         version: link:../picking
+      '@forgeax/engine-render':
+        specifier: workspace:*
+        version: link:../render
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -8946,6 +8964,9 @@ importers:
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.40
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
 
   packages/import:
     dependencies:
@@ -9543,6 +9564,12 @@ importers:
       '@forgeax/engine-import':
         specifier: workspace:*
         version: link:../import
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../pack
+      '@forgeax/engine-shader-compiler':
+        specifier: workspace:*
+        version: link:../shader-compiler
       '@forgeax/engine-ui':
         specifier: workspace:*
         version: link:../ui
@@ -9550,9 +9577,6 @@ importers:
       '@forgeax/engine-assets-runtime':
         specifier: workspace:*
         version: link:../assets-runtime
-      '@forgeax/engine-pack':
-        specifier: workspace:*
-        version: link:../pack
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types

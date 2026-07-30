@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "feat-20260623-world-space-video-asset M5 convergence app — world-space video texture demo: host provides HTMLVideoElement, engine uploads frames to GPU as transient textures sampled by MaterialAsset paramValues (shares texture2d slot with static textures). AC-07 browser e2e pixel readback carrier.",
+  "description": "feat-20260623-world-space-video-asset M5 convergence app — world-space video texture demo: host provides HTMLVideoElement, engine uploads frames to GPU as transient textures sampled by MaterialAsset values (shares texture2d slot with static textures). AC-07 browser e2e pixel readback carrier.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

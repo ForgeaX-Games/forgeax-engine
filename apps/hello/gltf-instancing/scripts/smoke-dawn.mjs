@@ -287,7 +287,7 @@ if (!materialIr) {
 }
 // MaterialAsset shape mirrors src/main.ts `materialIrToPod`: the retired
 // `shadingModel` discriminator (feat-20260526 M4) is replaced by an explicit
-// `passes[]` + `paramValues`. allocSharedRef stores the POD verbatim (no
+// `passes[]` + `values`. allocSharedRef stores the POD verbatim (no
 // register-time normalization), so a bare `{ shadingModel }` material resolves
 // to zero passes and trips MaterialResolvedEmptyPassesError in extract.
 const materialAsset = {
@@ -295,12 +295,11 @@ const materialAsset = {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: materialIr.baseColorFactor,
   },
 };

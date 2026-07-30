@@ -121,14 +121,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const objectMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: {
+    values: {
       baseColor: [OBJECT_BASE_COLOR[0], OBJECT_BASE_COLOR[1], OBJECT_BASE_COLOR[2]],
       metallic: OBJECT_METALLIC,
       roughness: OBJECT_ROUGHNESS,
@@ -137,8 +132,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0] },
+    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+    values: { baseColor: [1.0, 1.0, 1.0, 1.0] },
   });
 
   // Spawn the object cube at origin (LO: model = identity).

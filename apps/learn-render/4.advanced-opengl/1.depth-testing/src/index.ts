@@ -8,8 +8,8 @@
 //       cube 1 at (-1,0,-1), cube 2 at (2,0,0).
 //   (B) Depth-viz path: same geometry, but all entities use a custom
 //       depth-viz material shader that outputs linearizeDepth(depth) as
-//       grayscale (near=dark, far=light). The shader is registered via
-//       registerMaterialShader and uses @builtin(position).z to read
+//       grayscale (near=dark, far=light). The shader uses
+//       @builtin(position).z to read
 //       the fragment's clip-space depth.
 //
 // Textures are loaded through the GUID asset pipeline:
@@ -38,7 +38,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 // 2. example glue
 
-import depthVizShader from './depth-viz.wgsl';
+import './depth-viz.wgsl';
 
 const DEPTH_VIZ_SHADER_ID = 'learn-render::depth-viz';
 
@@ -106,23 +106,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
-  // Register the custom depth-viz material shader before scene setup.
-  const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[learn-render 4.1 depth-testing] renderer.shader is null');
-    return;
-  }
-  if (!shader.lookupMaterialShader(DEPTH_VIZ_SHADER_ID).ok) {
-    shader.registerMaterialShader(DEPTH_VIZ_SHADER_ID, {
-      source: depthVizShader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color' },
-        { name: 'metallic', type: 'f32' },
-        { name: 'roughness', type: 'f32' },
-      ],
-    });
-  }
-
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);
 
@@ -162,13 +145,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const vizMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: DEPTH_VIZ_SHADER_ID,
-          tags: { LightMode: 'Forward' },
-        },
+        { name: 'Forward', program: { module: DEPTH_VIZ_SHADER_ID }, renderState: { tags: { LightMode: 'Forward' } } },
       ],
-      paramValues: {
+      values: {
         baseColor: [1.0, 1.0, 1.0, 1.0],
         metallic: 0.0,
         roughness: 1.0,
@@ -182,13 +161,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const metalFloorMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-        },
+        { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } } },
       ],
-      paramValues: {
+      values: {
         baseColor: [1.0, 1.0, 1.0, 1.0],
         metallic: 0.0,
         roughness: 0.9,
@@ -198,13 +173,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const marbleCubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-        },
+        { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } } },
       ],
-      paramValues: {
+      values: {
         baseColor: [1.0, 1.0, 1.0, 1.0],
         metallic: 0.0,
         roughness: 0.5,

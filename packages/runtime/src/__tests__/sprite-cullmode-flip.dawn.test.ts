@@ -266,15 +266,17 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
         // exported preset for sprite-like premultiplied-alpha composition.
         {
           name: 'Forward',
-          shader: 'forgeax::sprite',
-          tags: { LightMode: 'Forward' },
-          queue: 3000,
-          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          program: { module: 'forgeax::sprite' },
+          renderState: {
+            ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+            tags: { LightMode: 'Forward' },
+            queue: 3000,
+          },
         },
       ],
-      paramValues: {
-        // feat-20260625 M3 / w11 (D-4): paramValues field names are UBO-aligned
-        // to sprite.wgsl.meta.json paramSchema 1:1 (colorTint / region /
+      values: {
+        // feat-20260625 M3 / w11 (D-4): values field names are UBO-aligned
+        // to sprite.material.json paramSchema 1:1 (colorTint / region /
         // pivotAndSize / baseColorTexture). The legacy baseColor / texture /
         // pivot field names lose their backwards-compat fold post-R1.
         colorTint: [1.0, 1.0, 1.0, 1.0],
@@ -415,15 +417,17 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
         // exported preset for sprite-like premultiplied-alpha composition.
         {
           name: 'Forward',
-          shader: 'forgeax::sprite',
-          tags: { LightMode: 'Forward' },
-          queue: 3000,
-          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+          program: { module: 'forgeax::sprite' },
+          renderState: {
+            ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+            tags: { LightMode: 'Forward' },
+            queue: 3000,
+          },
         },
       ],
-      paramValues: {
-        // feat-20260625 M3 / w11 (D-4): paramValues field names are UBO-aligned
-        // to sprite.wgsl.meta.json paramSchema 1:1 (colorTint / region /
+      values: {
+        // feat-20260625 M3 / w11 (D-4): values field names are UBO-aligned
+        // to sprite.material.json paramSchema 1:1 (colorTint / region /
         // pivotAndSize / baseColorTexture). The legacy baseColor / texture /
         // pivot field names lose their backwards-compat fold post-R1.
         colorTint: [1.0, 1.0, 1.0, 1.0],

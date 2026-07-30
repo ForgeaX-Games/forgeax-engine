@@ -262,14 +262,9 @@ function materialIrToPod(mat: GltfMaterialIr): MaterialAsset {
   return {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-      },
+      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
     ],
-    paramValues: {
+    values: {
       baseColor: mat.baseColorFactor,
     },
   };

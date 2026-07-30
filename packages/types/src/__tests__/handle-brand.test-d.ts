@@ -47,7 +47,6 @@ import type {
   RenderPipelineAsset,
   SamplerAsset,
   SceneAsset,
-  ShaderAsset,
   SkeletonAsset,
   SkinAsset,
   TextureAsset,
@@ -132,10 +131,6 @@ describe('AssetTagMap — 11-member closed map aligned with Asset.kind tags', ()
     expectTypeOf<AssetTagMap['animation-clip']>().toEqualTypeOf<'AnimationClip'>();
   });
 
-  it('shader -> ShaderAsset', () => {
-    expectTypeOf<AssetTagMap['shader']>().toEqualTypeOf<'ShaderAsset'>();
-  });
-
   it('render-pipeline -> RenderPipelineAsset (feat-20260601 N+1 member)', () => {
     expectTypeOf<AssetTagMap['render-pipeline']>().toEqualTypeOf<'RenderPipelineAsset'>();
   });
@@ -186,10 +181,6 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
     expectTypeOf<TagOf<AudioClipAsset>>().toEqualTypeOf<'AudioClipAsset'>();
   });
 
-  it('TagOf<ShaderAsset> = ShaderAsset', () => {
-    expectTypeOf<TagOf<ShaderAsset>>().toEqualTypeOf<'ShaderAsset'>();
-  });
-
   it('TagOf<FontAsset> = FontAsset', () => {
     expectTypeOf<TagOf<FontAsset>>().toEqualTypeOf<'FontAsset'>();
   });
@@ -211,7 +202,6 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
       | 'SkeletonAsset'
       | 'AnimationClip'
       | 'AnimationGraph'
-      | 'ShaderAsset'
       | 'FontAsset'
       | 'RenderPipelineAsset'
       | 'TilesetAsset'

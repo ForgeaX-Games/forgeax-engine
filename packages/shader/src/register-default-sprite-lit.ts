@@ -4,7 +4,7 @@
 // (plan-strategy D-10 application registration path).
 //
 // Mirrors registerDefaultStandardPbrSkin (same package; identical
-// registration shape). paramSchema mirrors sprite.wgsl.meta.json minus
+// registration shape). paramSchema mirrors sprite.material.json minus
 // PBR-only fields; the BGL is derived from paramSchema via
 // `derive(paramSchema).bglEntries` inside the runtime pipeline-builder.
 //
@@ -18,7 +18,7 @@
 import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
 
 /**
- * paramSchema for forgeax::sprite-lit -- mirrors sprite.wgsl.meta.json
+ * paramSchema for forgeax::sprite-lit -- mirrors sprite.material.json
  * exactly (same 5 fields: colorTint / region / pivotAndSize /
  * slicesAndMode / baseColorTexture). sprite-lit and sprite share the
  * same Material UBO layout byte-for-byte so the host-side
@@ -75,7 +75,7 @@ export interface SpriteLitCaps {
  * @param caps sprite-lit caps (storageBuffer boolean) for BGL entry type selection.
  *
  * Throws if the identifier is already registered (fail-fast per
- * ShaderRegistry.registerMaterialShader contract).
+ * ShaderRegistry.installMaterialArtifact contract).
  */
 export function registerDefaultSpriteLit(
   registry: ShaderRegistry,
@@ -87,7 +87,7 @@ export function registerDefaultSpriteLit(
   // buildPbrPipelineLayouts since the per-shader BGL is paramSchema-derived
   // and the storage-vs-uniform branching is a runtime-level concern.
   void caps;
-  registry.registerMaterialShader(RESERVED_ID, {
+  registry.installMaterialArtifact(RESERVED_ID, {
     source: composedWgsl,
     paramSchema: defaultSpriteLitParamSchema,
   });

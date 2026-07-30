@@ -266,7 +266,7 @@ function processEntity(
  * Build (or reuse) the MSDF text MaterialAsset for `(font, tintColor)` and
  * return its raw unmanaged handle id. The material carries a single
  * Transparent-queue pass on the `forgeax::msdf-text` shader with premultiplied
- * blend, and paramValues binding the tint color, the atlas distance range, and
+ * blend, and values binding the tint color, the atlas distance range, and
  * the atlas texture + sampler (plan D-7). HDR tint components (>1) flow through
  * unchanged so bloom-enabled cameras pick up bright text (AC-12).
  */
@@ -283,7 +283,7 @@ function resolveTextMaterial(
 
   // feat-20260614 M8 (D-19): font.atlas / font.sampler are embedded GUIDs.
   // Resolve each to a user-tier column handle by looking up the catalogued
-  // payload and minting via world.allocSharedRef; the material paramValues
+  // payload and minting via world.allocSharedRef; the material values
   // carry the column handle ids the render path reads.
   const atlasPayload = assets.lookup(font.atlas);
   const samplerPayload = assets.lookup(font.sampler);
@@ -303,32 +303,27 @@ function resolveTextMaterial(
     passes: [
       {
         name: 'text',
-        shader: 'forgeax::msdf-text',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        // cullMode none: the billboard reconstructs a camera-facing right/up
-        // basis whose triangle winding flips with the view direction, so a
-        // fixed back-face cull would drop the text whenever the quad winds CW
-        // relative to the camera. Text is conceptually double-sided. depthWrite
-        // off keeps transparent text from occluding later transparent draws
-        // while depthCompare less-equal still respects opaque-geometry depth
-        // (AC-11 occlusion).
+        program: { module: 'forgeax::msdf-text' },
         renderState: {
-          blend: MSDF_TEXT_BLEND as never,
-          cullMode: 'none',
-          depthWriteEnabled: false,
-          depthCompare: 'less-equal',
+          ...{
+            blend: MSDF_TEXT_BLEND as never,
+            cullMode: 'none',
+            depthWriteEnabled: false,
+            depthCompare: 'less-equal',
+          },
+          tags: { LightMode: 'Forward' },
+          queue: 3000,
         },
       },
     ],
-    paramValues: {
+    values: {
       tintColor: [gt.color[0], gt.color[1], gt.color[2], gt.color[3]],
       distanceRange: font.common.distanceRange,
       ...(atlasHandle !== undefined ? { baseColorTexture: atlasHandle as unknown as number } : {}),
       ...(samplerHandle !== undefined ? { sampler: samplerHandle as unknown as number } : {}),
     },
   });
-  // catalog can only fail on schema validation; the literal passes/paramValues
+  // catalog can only fail on schema validation; the literal passes/values
   // above are schema-valid for forgeax::msdf-text, so a failure here is an
   // engine-internal invariant break. The material then needs a column handle
   // for the MeshRenderer; mint it from the catalogued payload.

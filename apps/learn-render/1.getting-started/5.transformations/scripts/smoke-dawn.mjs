@@ -253,9 +253,9 @@ const woodTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', woodTexA
 const woodMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
-    { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 },
+    { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 },
   ],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: woodTexHandle },
+  values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: woodTexHandle },
 });
 // Single cube at origin with LO 1.5 Z-axis 30deg rotation baked in.
 world.spawn(

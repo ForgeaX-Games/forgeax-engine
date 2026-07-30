@@ -71,18 +71,19 @@ function casterMat(w: World) {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
       {
         name: 'ShadowCaster',
-        shader: 'forgeax::default-shadow-caster',
-        tags: { LightMode: 'ShadowCaster' } as Record<string, string>,
-        passKind: 'shadow-caster' as const,
+        program: { module: 'forgeax::default-shadow-caster' },
+        renderState: {
+          tags: { LightMode: 'ShadowCaster' } as Record<string, string>,
+          passKind: 'shadow-caster' as const,
+        },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: [0.8, 0.6, 0.4, 1],
       metallic: 0.3,
       roughness: 0.5,
@@ -98,12 +99,11 @@ function floorMat(w: World) {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: [0.9, 0.9, 0.9, 1],
       metallic: 0,
       roughness: 0.9,

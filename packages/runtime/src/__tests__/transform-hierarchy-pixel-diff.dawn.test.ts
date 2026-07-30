@@ -167,12 +167,11 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [0.7, 0.7, 0.7], metallic: 0, roughness: 0.4 },
+      values: { baseColor: [0.7, 0.7, 0.7], metallic: 0, roughness: 0.4 },
     });
 
     const parent = world

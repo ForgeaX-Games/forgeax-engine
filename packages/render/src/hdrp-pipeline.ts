@@ -344,7 +344,7 @@ export const hdrpPipeline: RenderPipeline = {
 
     // D-2 / D-6 / D-4 g-buffer pass: render opaque geometry via passKind='deferred'.
     // Filters dispatch entries by tags={LightMode:'Deferred'} so only entities
-    // with a MaterialPassDescriptor carrying passKind='deferred' are drawn.
+    // with a MaterialPass carrying passKind='deferred' are drawn.
     // recordMainPass delegates the per-entity draw loop (bind mesh SSBO, set
     // PSO with fs_gbuffer fragment entry, draw indexed). Depth writes are enabled
     // (opaque geometry), so the subsequent forward pass culls behind opaque surfaces.
@@ -404,7 +404,7 @@ export const hdrpPipeline: RenderPipeline = {
 
     // D-6 / D-4 forward transparent pass: renders alpha-blended geometry via
     // passKind='forward'. Filters dispatch entries by tags={LightMode:'Forward'}
-    // so only entities with a MaterialPassDescriptor carrying passKind='forward'
+    // so only entities with a MaterialPass carrying passKind='forward'
     // are drawn. Depth test reads the g-buffer's hdrDepth (written by g-buffer
     // pass) so transparent fragments behind opaque surfaces are naturally culled.
     // Opaque geometry was already rendered in g-buffer; this pass handles

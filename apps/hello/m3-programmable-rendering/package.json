@@ -35,6 +35,9 @@
         "stdoutIncludes": [
           "[m3-programmable] custom material pixel: PASS",
           "[m3-programmable] custom material texture binding: PASS",
+          "[m3-programmable] custom material browser: PASS repeats=2",
+          "[m3-programmable] custom material browser missing-parent falsifier: PASS repeats=2",
+          "[m3-programmable] custom material browser uv-transform falsifier: PASS repeats=2",
           "[m3-programmable] render graph seam: PASS",
           "[m3-programmable] depth-aware URP overlay: PASS",
           "[m3-programmable] fake-depth falsifier: PASS",

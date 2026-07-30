@@ -39,6 +39,13 @@ const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOL
 const WIDTH = 800;
 const HEIGHT = 600;
 const CLEAR_RGBA = [0.05, 0.06, 0.08, 1.0];
+const SPRITE_LIT_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
+];
 
 // --- 1. dawn.node setup --------------------------------------------------
 
@@ -151,6 +158,7 @@ const {
   SpotLight,
   TONEMAP_NONE,
 } = await import('@forgeax/engine-render');
+const { SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -262,17 +270,17 @@ async function buildWorld({ includePoint, includeSpot }) {
         passes: [
           {
             name: 'Forward',
-            shader: 'forgeax::sprite-lit',
-            tags: { LightMode: 'Forward' },
-            queue: 3000,
+            program: { module: 'forgeax::sprite-lit' },
+            renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 },
           },
         ],
-        // paramValues field names align with sprite-lit.wgsl.meta.json
+        // values field names align with sprite-lit.material.json
         // paramSchema (colorTint / region / pivotAndSize / baseColorTexture;
         // post-#520 SSOT). The pre-tweak-20260701 M2 script used the legacy
         // baseColor / texture / pivot names which silently defaulted the
         // UBO fields to schema defaults instead of the intended tint / atlas.
-        paramValues: {
+        parameters: SPRITE_LIT_PARAMETERS,
+        values: {
           colorTint: slot.tint,
           baseColorTexture: textureHandle,
           sampler: samplerHandle,
@@ -351,12 +359,11 @@ async function buildWorld({ includePoint, includeSpot }) {
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [0.7, 0.7, 0.75], metallic: 0.0, roughness: 0.8 },
+    values: { baseColor: [0.7, 0.7, 0.75], metallic: 0.0, roughness: 0.8 },
   });
   expectOk(
     world.spawn(

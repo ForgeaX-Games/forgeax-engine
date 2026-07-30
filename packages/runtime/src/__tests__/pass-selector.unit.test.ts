@@ -1,5 +1,5 @@
 import { matchPass, selectPasses } from '@forgeax/engine-render/internal';
-import type { MaterialPassDescriptor, PassSelector } from '@forgeax/engine-types';
+import type { MaterialPass, PassSelector } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 /*
@@ -12,11 +12,11 @@ import { describe, expect, it } from 'vitest';
  *   - selector with multiple keys requires all keys to match (AND logic)
  */
 
-function makePass(name: string, tags?: Record<string, string>): MaterialPassDescriptor {
+function makePass(name: string, tags?: Record<string, string>): MaterialPass {
   if (tags !== undefined) {
-    return { name, shader: 'forgeax::default-unlit', tags };
+    return { name, program: { module: 'forgeax_material::unlit' }, renderState: { tags } };
   }
-  return { name, shader: 'forgeax::default-unlit' };
+  return { name, program: { module: 'forgeax_material::unlit' } };
 }
 
 describe('pass-selector semantics', () => {
@@ -34,7 +34,7 @@ describe('pass-selector semantics', () => {
     });
 
     it('returns empty array reference when input is empty and selector is empty', () => {
-      const passes: MaterialPassDescriptor[] = [];
+      const passes: MaterialPass[] = [];
       const result = selectPasses(passes, {});
       expect(result).toBe(passes);
       expect(result.length).toBe(0);

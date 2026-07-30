@@ -107,12 +107,11 @@ function litBox(
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [color[0], color[1], color[2]], metallic: 0, roughness: 0.5 },
+    values: { baseColor: [color[0], color[1], color[2]], metallic: 0, roughness: 0.5 },
   });
   world
     .spawn(
@@ -292,12 +291,11 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-standard-pbr',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-standard-pbr' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [0.95, 0.85, 0.1], metallic: 0, roughness: 0.6 },
+      values: { baseColor: [0.95, 0.85, 0.1], metallic: 0, roughness: 0.6 },
     });
     editorWorld
       .spawn(

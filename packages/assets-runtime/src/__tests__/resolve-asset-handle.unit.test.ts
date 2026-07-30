@@ -67,50 +67,80 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     const world = new World();
     const handle = world.allocSharedRef(
       'MaterialAsset',
-      mat({ passes: [{ name: 'main', shader: 'forgeax::standard' }], paramValues: { a: 1 } }),
+      mat({
+        passes: [{ name: 'main', program: { module: 'forgeax::standard' } }],
+        values: { a: 1 },
+      }),
     );
     const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => undefined });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.passes.map((p) => p.name)).toEqual(['main']);
-    expect(res.value.paramValues).toEqual({ a: 1 });
+    expect(res.value.values).toEqual({ a: 1 });
   });
 
-  it('inherits parent passes when the child declares none, merging paramValues', () => {
+  it('inherits parent passes when the child declares none, merging values', () => {
     const world = new World();
     const parent = mat({
-      passes: [{ name: 'base', shader: 'forgeax::standard' }],
-      paramValues: { a: 1, b: 2 },
+      passes: [{ name: 'base', program: { module: 'forgeax::standard' } }],
+      values: { a: 1, b: 2 },
     });
-    const child = mat({ parent: 'p-guid' as never, paramValues: { b: 20 } });
+    const child = mat({ parent: 'p-guid' as never, values: { b: 20 } });
     const handle = world.allocSharedRef('MaterialAsset', child);
     const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => parent });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.passes.map((p) => p.name)).toEqual(['base']);
-    expect(res.value.paramValues).toEqual({ a: 1, b: 20 }); // child overrides
+    expect(res.value.values).toEqual({ a: 1, b: 20 }); // child overrides
+  });
+
+  it('inherits and specializes the effective parameter contract by name', () => {
+    const world = new World();
+    const parent = mat({
+      passes: [{ name: 'base', program: { module: 'forgeax::standard' } }],
+      parameters: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'roughness', type: 'f32' },
+      ],
+    });
+    const child = mat({
+      parent: 'p-guid' as never,
+      parameters: [
+        { name: 'roughness', type: 'f32', static: true },
+        { name: 'normalTexture', type: 'texture' },
+      ],
+    });
+    const handle = world.allocSharedRef('MaterialAsset', child);
+    const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => parent });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.parameters).toEqual([
+      { name: 'baseColor', type: 'color' },
+      { name: 'roughness', type: 'f32', static: true },
+      { name: 'normalTexture', type: 'texture' },
+    ]);
   });
 
   it('child passes override parent by name and append new ones', () => {
     const world = new World();
     const parent = mat({
       passes: [
-        { name: 'shadow', shader: 'forgeax::shadow' },
-        { name: 'main', shader: 'forgeax::parent-main' },
+        { name: 'shadow', program: { module: 'forgeax::shadow' } },
+        { name: 'main', program: { module: 'forgeax::parent-main' } },
       ],
     });
     const child = mat({
       parent: 'p-guid' as never,
       passes: [
-        { name: 'main', shader: 'forgeax::child-main' },
-        { name: 'extra', shader: 'forgeax::extra' },
+        { name: 'main', program: { module: 'forgeax::child-main' } },
+        { name: 'extra', program: { module: 'forgeax::extra' } },
       ],
     });
     const handle = world.allocSharedRef('MaterialAsset', child);
     const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => parent });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const byName = new Map(res.value.passes.map((p) => [p.name, p.shader]));
+    const byName = new Map(res.value.passes.map((p) => [p.name, p.program.module]));
     expect(byName.get('main')).toBe('forgeax::child-main'); // overridden
     expect(byName.get('extra')).toBe('forgeax::extra'); // appended
     expect(byName.get('shadow')).toBe('forgeax::shadow'); // inherited

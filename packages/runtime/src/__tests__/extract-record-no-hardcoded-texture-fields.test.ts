@@ -57,7 +57,7 @@ describe('extract/record have no per-field hardcoding of the user-region texture
     const src = stripComments(readFileSync(EXTRACT_SRC, 'utf8'));
     for (const field of USER_REGION_FIELDS) {
       // `pv.baseColorTexture` / `pv["baseColorTexture"]` member reads off the
-      // paramValues object are the hardcoded per-field resolve pattern w7
+      // values object are the hardcoded per-field resolve pattern w7
       // replaces with a loop over derive().textureFieldNames.
       const dotForm = new RegExp(`pv\\.${field}\\b`);
       const bracketForm = new RegExp(`pv\\[['"]${field}['"]\\]`);

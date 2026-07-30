@@ -197,12 +197,11 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
       passes: [
         {
           name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
         },
       ],
-      paramValues: { baseColor: [0.9, 0.2, 0.2, 1], metallic: 0, roughness: 0.5 },
+      values: { baseColor: [0.9, 0.2, 0.2, 1], metallic: 0, roughness: 0.5 },
     } as MaterialAsset;
 
     // Build ~60 instances (well under 128 uniform cap), 2D grid

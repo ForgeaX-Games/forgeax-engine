@@ -1,6 +1,6 @@
 /**
  * Type-only helper mirroring the `forgeax::sprite` shader's paramSchema
- * (sprite.wgsl.meta.json). Field set is 1:1 with paramSchema entries; field
+ * (sprite.material.json). Field set is 1:1 with paramSchema entries; field
  * order matches schema order so the std140 UBO layout (slot 0..3 = colorTint
  * / region / pivotAndSize / slicesAndMode) reads top-to-bottom.
  *
@@ -10,10 +10,10 @@
  * `applyParamSnapshotToUbo` walks `derive(paramSchema).uboLayout.entries`
  * and writes each field at its declared offset, no sprite-specific path).
  *
- * AI-user discoverability: annotate a sprite material's `paramValues`
+ * AI-user discoverability: annotate a sprite material's `values`
  * literal as `SpriteParamValues` to get autocomplete on `slicesAndMode`,
  * `pivotAndSize`, etc. Without the annotation the literal binds to
- * `MaterialAsset.paramValues: Record<string, unknown>` and field
+ * `MaterialAsset.values: Record<string, unknown>` and field
  * autocomplete is unavailable.
  *
  * Required fields:
@@ -46,7 +46,7 @@
  *
  * Composes with {@link SpriteRegionOverride}: when both are present, the
  * `slicesAndMode` are interpreted relative to the per-entity `region`
- * override (AC-14), not the material's `paramValues.region`.
+ * override (AC-14), not the material's `values.region`.
  *
  * Sibling type, not a sibling asset kind: `MaterialAsset` is the only
  * material asset shape; using `SpriteParamValues` as an annotation does

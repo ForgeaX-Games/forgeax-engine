@@ -165,11 +165,16 @@ console.log(
   `[learn-render-5-1-blinn-phong] decoded wood=${woodDecoded.width}x${woodDecoded.height} ${woodDecoded.mime}`,
 );
 
-const { buildEngineShaderManifest } = await import(
-  '@forgeax/engine-vite-plugin-shader'
-);
-const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
+if (!existsSync(DEMO_MANIFEST_PATH)) {
+  console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${DEMO_MANIFEST_PATH}`);
+  console.error(
+    "  hint: rebuild via `pnpm --filter '@forgeax/app-learn-render-5-advanced-lighting-1-advanced-lighting' build`",
+  );
+  process.exit(1);
+}
+const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
+const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(demoManifest))}`;
 
 let renderer;
 try {
@@ -200,43 +205,25 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Register the custom Blinn-Phong shader.
+// The build manifest is the cooked source catalogue. The renderer consumes its
+// module identity and composed WGSL directly; the smoke must not reconstruct a
+// shader parameter schema or manually install a second registry entry.
 const shader = renderer.shader;
 if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
 
-// Register the custom Blinn-Phong shader from the build-output COMPOSED WGSL.
-// `ShaderRegistry.registerMaterialShader` requires post-naga_oil composed WGSL
-// (see packages/shader/src/ShaderRegistry.ts: `source` = "composed WGSL source
-// (post-naga_oil)"). The runtime deliberately does NOT bundle naga_oil, so the
-// raw `src/blinn-phong.wgsl` (which opens with `#define_import_path` + `#import`)
-// cannot be registered directly -- it must go through the build-time vite-plugin
-// composition (exactly as the real app does via `import ... from './blinn-phong.wgsl'`).
-// This smoke has no vite transform, so read the demo build's composed entry from
-// dist/shaders/manifest.json (mirrors apps/hello/custom-shader/scripts/smoke-dawn.mjs).
-const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
-if (!existsSync(DEMO_MANIFEST_PATH)) {
-  console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${DEMO_MANIFEST_PATH}`);
-  console.error(
-    "  hint: rebuild via `pnpm --filter '@forgeax/app-learn-render-5-advanced-lighting-1-advanced-lighting' build`",
-  );
-  process.exit(1);
-}
-const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
 const blinnPhongEntry = (demoManifest.materialShaders ?? []).find(
-  (m) => m && m.identifier === 'learn-render::5-1-blinn-phong',
+  (m) => m && m.identifier === 'learn_render::5_1_blinn_phong',
 );
 if (!blinnPhongEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing 5_1_blinn_phong entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing learn_render::5_1_blinn_phong');
   process.exit(1);
 }
-if (!shader.lookupMaterialShader('learn-render::5-1-blinn-phong').ok) {
-  shader.registerMaterialShader('learn-render::5-1-blinn-phong', {
-    source: blinnPhongEntry.composedWgsl,
-    paramSchema: JSON.parse(blinnPhongEntry.paramSchema),
-  });
+if (!shader.findMaterialArtifact('learn_render::5_1_blinn_phong').ok) {
+  console.error('[smoke] FAIL - cooked Blinn-Phong module was not registered from manifest');
+  process.exit(1);
 }
 
 // Register texture under its GUID (wood.png, the LO 5.1 floor texture).
@@ -269,11 +256,11 @@ const matHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'learn-render::5-1-blinn-phong',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'learn_render::5_1_blinn_phong' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: {
+  values: {
     baseColorTexture: unwrapHandle(woodHandle),
   },
 });

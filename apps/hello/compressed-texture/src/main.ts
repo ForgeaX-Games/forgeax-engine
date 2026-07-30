@@ -132,8 +132,8 @@ async function bootstrap(
     kind: 'material',
     passes: [
       {
-        shader: 'forgeax::standard-pbr',
-        paramValues: {
+        program: { module: 'forgeax::standard-pbr' },
+        values: {
           baseColorFactor: [1, 1, 1, 1],
           roughnessFactor: 0.8,
           metallicFactor: 0,

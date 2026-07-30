@@ -3,8 +3,8 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import shader from './shader-material.wgsl';
-import { buildShaderMaterialWorld, makeTextureAsset, makeTexturePixels, SHADER_ID, TEXTURE_SIZE } from './scene';
+import './shader-material.wgsl';
+import { buildShaderMaterialWorld, makeTextureAsset, makeTexturePixels, TEXTURE_SIZE } from './scene';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-shader-material: missing <canvas id="app">');
@@ -22,21 +22,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = result.value;
-  const registry = app.renderer.shader;
-  if (registry === null) {
-    console.error('[bevy-shader-material] renderer.shader is null');
-    return;
-  }
-  if (!registry.lookupMaterialShader(SHADER_ID).ok) {
-    registry.registerMaterialShader(SHADER_ID, {
-      source: shader.wgsl,
-      paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
-        { name: 'baseColorTexture', type: 'texture2d' },
-      ],
-    });
-  }
-
   const pixels = makeTexturePixels();
   const texture = makeTextureAsset(pixels);
   const textureHandle = app.world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texture);

@@ -130,7 +130,7 @@
         "templates/game-default/AGENTS.md",
         "apps/bevy/animated-material/src/animated-material.ts"
       ],
-      "reason": "The canonical 3x3 gallery remains the focused material mutation lesson, while game-default extracts one authored YellowPillar into a Play-only hue animation that composes with its existing rotation, physics, hit, and reset loop. The public MaterialAsset paramValues path is exercised without a second gallery or a template-only material.",
+      "reason": "The canonical 3x3 gallery remains the focused material mutation lesson, while game-default extracts one authored YellowPillar into a Play-only hue animation that composes with its existing rotation, physics, hit, and reset loop. The public MaterialAsset values path is exercised without a second gallery or a template-only material.",
       "betterConsumer": "templates/game-default"
     },
     {
@@ -943,6 +943,117 @@
       ],
       "reason": "The canonical app proves public AABB picking over four procedural meshes: its 300-frame Dawn smoke hits box/sphere/capsule/torus at known screen coordinates, rejects a corner miss, and reports zero RHI errors. It has no reset/re-entry owner, asset delivery, recovery path, or browser smoke, and click handling only resets four highlight materials before applying one local highlight. game-default already consumes the same pick() primitive for screen-aim/shoot intent, target hit feedback, pointer/camera modes, and one typed reset owner; adding a parallel click-to-highlight gallery would duplicate interaction policy rather than add a feature-loop behavior. Keep the focused picking contract canonical until a distinct gameplay mechanic needs selection state.",
       "betterConsumer": "apps/bevy/mesh-picking"
+    },
+    {
+      "id": "app:bevy/mouse-input",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/mouse-input/src/mouse-input.ts",
+        "apps/bevy/mouse-input/src/main.ts",
+        "apps/bevy/mouse-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/mouse-input/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-153613-classify-mouse-input-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves low-level InputSnapshot mouse semantics at the frozen frame boundary: 100-frame Dawn yields primaryPresses=1, primaryReleases=1, movement=(-1,-1), movementFrames=2, wheel=(1,-1), held=false, errors=0, and Chrome proves the same edges plus movementX=40, movementY=20, movementFrames=1, wheelPositive=1. It has no gameplay/reset/re-entry/asset/recovery contract beyond a diagnostic marker scene. game-default already owns one InputSnapshot/InputMap boundary with pointer-lock look, screen-pick aim, wheel camera controls, click-to-shoot, gamepad parity, and typed reset; adding another low-level mouse resource would split input ownership without a distinct mechanic.",
+      "betterConsumer": "apps/bevy/mouse-input"
+    },
+    {
+      "id": "app:bevy/parallax-mapping",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/parallax-mapping/src/main.ts",
+        "apps/bevy/parallax-mapping/src/parallax.wgsl",
+        "apps/bevy/parallax-mapping/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-172100-classify-parallax-mapping-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real multi-texture custom-WGSL chain: bricks2 diffuse, normal, and displacement assets decode, GUID-backed pack rows load, the shader registers six parameters, three algorithm materials spawn, Dawn runs 100 frames on webgpu, and RHI errors remain zero. It is nevertheless a static basic/steep/POM panel with no gameplay input, reset/re-entry owner, browser loop, or user-facing recovery; its learn-opengl vendor textures are not a template-authored redistribution boundary. game-default already teaches custom WGSL animation, authored texture payloads, GUID asset loading, and one typed gameplay reset; copying the panel would duplicate presentation. Revisit as a guided slice only with license-safe engine-authored height/normal assets and a real gameplay mechanic that benefits from parallax.",
+      "betterConsumer": "apps/bevy/parallax-mapping"
+    },
+    {
+      "id": "app:bevy/orthographic",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/orthographic/src/orthographic.ts",
+        "apps/bevy/orthographic/src/main.ts",
+        "apps/bevy/orthographic/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-163151-classify-orthographic-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real orthographic camera over a green plane and four lit cubes: typecheck/build pass, Dawn runs 100 frames on webgpu, the NDC center is non-black, the expected geometry is visible, and RHI errors are zero. It is a static camera/material/light gallery with no gameplay input, reset/re-entry owner, asset delivery, recovery path, or browser loop. game-default already owns an interactive Map view with orthographic projection, bounded X/Z pan, wheel zoom, HUD discovery, authored scene content, and typed reset; copying the four-cube gallery would duplicate projection policy without a new feature-loop behavior.",
+      "betterConsumer": "apps/bevy/orthographic"
+    },
+    {
+      "id": "app:bevy/parenting",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/parenting/src/main.ts",
+        "apps/bevy/parenting/src/parenting.ts",
+        "apps/bevy/parenting/scripts/smoke-dawn.mjs",
+        "apps/bevy/parenting/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-181832-classify-parenting-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves ChildOf and propagateTransforms with a rotating parent and orbiting child: typecheck/build pass, Dawn runs 300 frames on webgpu, NDC-center is non-black, motionMeanDelta=0.05200, childMove=7.0212, and RHI errors are zero. It is a static code-spawned two-cube oracle with no gameplay input, reset/re-entry owner, asset delivery, recovery path, or browser loop. game-default already authors a multi-part Player hierarchy in scene.pack.json, resolves it through SceneAsset localId mapping, mutates gameplay-owned rotating targets, and restores them through one typed reset owner; copying this scene would duplicate hierarchy policy and violate the template's pack-vs-runtime spawn boundary.",
+      "betterConsumer": "apps/bevy/parenting"
+    },
+    {
+      "id": "app:bevy/pbr",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/pbr/src/main.ts",
+        "apps/bevy/pbr/src/pbr.ts",
+        "apps/bevy/pbr/scripts/smoke-dawn.mjs",
+        "apps/bevy/pbr/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-184329-classify-pbr-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the standard PBR parameter contract with an 11x5 metallic/roughness sphere matrix and an unlit control: after the prescribed root pnpm build refreshed workspace dist, typecheck/build pass, Dawn runs 300 frames on webgpu, center-region lit=255.0000, earlyMaxBright=1.0000, roughness-spread=0.0623, and RHI errors are zero. It is a static code-spawned material gallery with no gameplay input, reset/re-entry owner, browser loop, asset delivery, or recovery path. game-default already owns authored standard PBR, DirectionalLight plus HDR Skylight IBL, gameplay emissive feedback, and a clearcoat parameter slice; copying the matrix would duplicate presentation without a new feature-loop contract. Revisit only when a material parameter changes a resettable gameplay outcome and browser evidence observes it.",
+      "betterConsumer": "apps/bevy/pbr"
+    },
+    {
+      "id": "app:bevy/play-sound-effect",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/play-sound-effect/src/main.ts",
+        "apps/bevy/play-sound-effect/src/play-sound-effect.ts",
+        "apps/bevy/play-sound-effect/scripts/smoke-dawn.mjs",
+        "apps/bevy/play-sound-effect/scripts/smoke-browser.mjs",
+        "apps/bevy/play-sound-effect/artifacts/play-sound-effect-after.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-190915-classify-play-sound-effect-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real GUID-loaded one-shot SFX: typecheck/build, Dawn structural audio smoke, and Chrome Web Audio evidence all pass; two Space edges reach audio=running with active=1 and app.stop closes the context with activeSourceCount=0. It nevertheless uses the same SFX GUID already owned by game-default's gameplay-audio.ts. The template already loads that clip, routes spatial Player hit feedback through the sfx bus, combines looping music controls, settings, re-arm, and typed reset/recovery. Adding a second Space-triggered AudioSource owner would duplicate the public audio contract rather than compose a new feature-loop mechanic.",
+      "betterConsumer": "apps/bevy/play-sound-effect"
+    },
+    {
+      "id": "app:bevy/random-sampling",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/random-sampling/src/main.ts",
+        "apps/bevy/random-sampling/src/random-sampling.ts",
+        "apps/bevy/random-sampling/scripts/smoke-dawn.mjs",
+        "apps/bevy/random-sampling/artifacts/random-sampling-ref.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-195448-classify-random-sampling-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a procedural sampling/render contract: after the prescribed root pnpm build refreshed a fresh worktree's package dist, typecheck/build pass, Dawn runs 300 frames on webgpu, the wireframe cube and random point scene are non-black and colored, and RHI errors are zero. It is nevertheless an unseeded Math.random() gallery that code-spawns persistent points, reads low-level S/D/M keyboard edges directly, has no browser smoke, no reset/despawn owner, and no gameplay outcome. game-default already owns one frozen InputSnapshot/InputMap boundary, authored SceneAsset content, bounded transient spawns, typed R reset, and browser semantic evidence; copying this gallery would add a second input owner and teach non-reproducible lifecycle. Revisit only with a deterministic seed or public sampling contract that changes a resettable gameplay outcome.",
+      "betterConsumer": "apps/bevy/random-sampling"
     }
   ]
 }

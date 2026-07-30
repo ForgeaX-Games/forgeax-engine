@@ -4,7 +4,7 @@
 //
 // End-to-end structural proof: dawn-node drives the video-texture ECS path
 // (VideoAsset register + VideoPlayer spawn + MeshFilter/MeshRenderer +
-// MaterialAsset.paramValues referencing the video GUID), runs 300 frames,
+// MaterialAsset.values referencing the video GUID), runs 300 frames,
 // and exits 0 when the registration/spawn/bind-group chain does not throw.
 //
 // Dawn structural-only: dawn-node has NO HTMLVideoElement / VideoFrame, so
@@ -200,12 +200,11 @@ assets.catalog(matGuidResult.value, {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [0.2, 0.5, 0.9],
     baseColorTexture: videoGuid,
   },

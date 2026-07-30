@@ -22,17 +22,27 @@
 import type { Mat4 } from '@forgeax/engine-math';
 import { box3, mat4, quat, vec3 } from '@forgeax/engine-math';
 import type {
+  AssetGuid,
   Handle,
   LocalEntityId,
   MaterialAsset,
-  MaterialPassDescriptor,
+  MaterialError,
+  MaterialTextureValue,
   MeshAsset,
   RenderQueue,
+  Result,
   SceneAsset,
   SceneEntity,
   Submesh,
 } from '@forgeax/engine-types';
-import type { GltfDoc, GltfMaterialIr, GltfMeshIr, GltfNodeIr } from './parse-gltf.js';
+import { createMaterialError, err, ok } from './errors.js';
+import type {
+  GltfDoc,
+  GltfMaterialIr,
+  GltfMeshIr,
+  GltfNodeIr,
+  GltfTextureInfoIr,
+} from './parse-gltf.js';
 
 /** Canonical interleaved vertex stride for the unskinned 4-attribute layout. */
 const FLOATS_PER_VERTEX_12 = 12;
@@ -629,10 +639,12 @@ export interface MaterialBridgeContext {
   readonly textureHandles?: ReadonlyMap<number, Handle<'TextureAsset', 'shared'>>;
   /** glTF sampler index -> registry SamplerAsset handle. */
   readonly samplerHandles?: ReadonlyMap<number, Handle<'SamplerAsset', 'shared'>>;
+  /** Built-in standard MaterialAsset GUID supplied by the importing project. */
+  readonly standardRootGuid?: AssetGuid;
   /**
    * feat-20260611 w17-a: when any primitive consuming this material carries
    * JOINTS_0 + WEIGHTS_0, the cooker passes `skinned: true` so the emitted
-   * MaterialAsset's pass[0].shader is `forgeax::pbr-skin` instead of
+   * MaterialAsset's pass[0].program.module is `forgeax::pbr-skin` instead of
    * `forgeax::default-standard-pbr`. The cooker (gltf-importer) is the only
    * site with full mesh<->material wiring info; routing here keeps shader
    * choice content-driven (not user-driven, per Q4 — runtime fail-fast in
@@ -641,99 +653,122 @@ export interface MaterialBridgeContext {
   readonly skinned?: boolean;
 }
 
-/**
- * Convert a parsed GltfMaterialIr into a pass-based MaterialAsset POD
- * (feat-20260526-material-asset-multipass-renderstate M4 / w29).
- *
- * Maps glTF material fields to paramValues:
- *
- * | glTF field               | param key                |
- * |:-------------------------|:-------------------------|
- * | baseColorFactor          | baseColor                |
- * | emissiveFactor           | emissive + emissiveIntensity=1 |
- * | metallicFactor           | metallic                 |
- * | roughnessFactor          | roughness                |
- * | baseColorTexture (index) | baseColorTexture         |
- * | metallicRoughnessTexture | metallicRoughnessTexture |
- * | normalTexture (index)    | normalTexture            |
- * | emissiveTexture (index)  | emissiveTexture          |
- *
- * The output MaterialAsset uses `forgeax::default-standard-pbr` shader
- * in a single Forward pass at RenderQueue.Geometry.
- *
- * Caller provides registry handles via `ctx`; the bridge does no registration
- * of its own. AI users compose this with `AssetRegistry.register`:
- *
- * ```ts
- * const matAsset = toMaterialAsset(materialIr, {
- *   textureHandles: buildTextureHandleMap(),
- *   samplerHandles: buildSamplerHandleMap(),
- * });
- * const h = assets.register<MaterialAsset>(matAsset);
- * ```
- */
+function textureInfo(info: GltfTextureInfoIr | number | undefined): GltfTextureInfoIr | undefined {
+  return info === undefined ? undefined : typeof info === 'number' ? { texture: info } : info;
+}
+
+type MaterialTextureSlot =
+  | 'baseColorTexture'
+  | 'metallicRoughnessTexture'
+  | 'normalTexture'
+  | 'occlusionTexture'
+  | 'emissiveTexture';
+
+function textureValue(
+  info: GltfTextureInfoIr | number | undefined,
+  slot: MaterialTextureSlot,
+  ctx: MaterialBridgeContext | undefined,
+): MaterialTextureValue | undefined {
+  const binding = textureInfo(info);
+  if (binding === undefined || ctx?.textureHandles === undefined) return undefined;
+  const textureHandle = ctx.textureHandles.get(binding.texture);
+  if (textureHandle === undefined) return undefined;
+  const samplerHandle =
+    binding.sampler === undefined ? undefined : ctx.samplerHandles?.get(binding.sampler);
+  const coordinates =
+    binding.texCoord === undefined && binding.transform === undefined
+      ? undefined
+      : {
+          ...(binding.texCoord === undefined ? {} : { set: binding.texCoord }),
+          ...(binding.transform === undefined ? {} : { transform: binding.transform }),
+        };
+  const value =
+    samplerHandle === undefined
+      ? {
+          texture: textureHandle as unknown as MaterialTextureValue['texture'],
+          ...(coordinates === undefined ? {} : { coordinates }),
+        }
+      : {
+          texture: textureHandle as unknown as MaterialTextureValue['texture'],
+          sampler: samplerHandle as unknown as NonNullable<MaterialTextureValue['sampler']>,
+          ...(coordinates === undefined ? {} : { coordinates }),
+        };
+  if (slot === 'normalTexture') {
+    const normal = info as GltfMaterialIr['normalTexture'];
+    if (typeof normal === 'object' && normal?.scale !== undefined) {
+      return { ...value, normalScale: normal.scale };
+    }
+  }
+  if (slot === 'occlusionTexture') {
+    const occlusion = info as GltfMaterialIr['occlusionTexture'];
+    if (typeof occlusion === 'object' && occlusion?.strength !== undefined) {
+      return { ...value, occlusionStrength: occlusion.strength };
+    }
+  }
+  return value;
+}
+
+export function validateMaterialUvSets(
+  mat: GltfMaterialIr,
+  primitive: string,
+  availableSets: readonly number[],
+): Result<void, MaterialError> {
+  const available = new Set(availableSets);
+  const slots: readonly [MaterialTextureSlot, GltfTextureInfoIr | number | undefined][] = [
+    ['baseColorTexture', mat.baseColorTexture],
+    ['metallicRoughnessTexture', mat.metallicRoughnessTexture],
+    ['normalTexture', mat.normalTexture],
+    ['occlusionTexture', mat.occlusionTexture],
+    ['emissiveTexture', mat.emissiveTexture],
+  ];
+  for (const [slot, rawBinding] of slots) {
+    const binding = textureInfo(rawBinding);
+    if (binding === undefined) continue;
+    const requestedSet = binding.texCoord ?? 0;
+    if (!available.has(requestedSet)) {
+      return err(
+        createMaterialError('gltf-material-uv-set-missing', {
+          material: mat.name ?? '<unnamed>',
+          primitive,
+          slot,
+          requestedSet,
+          availableSets,
+        }),
+      );
+    }
+  }
+  return ok(undefined);
+}
+
+/** Convert a parsed GltfMaterialIr into a standard-root derived MaterialAsset. */
 export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext): MaterialAsset {
-  const paramValues: Record<string, unknown> = {
+  const values: Record<string, NonNullable<MaterialAsset['values']>[string]> = {
     baseColor: mat.baseColorFactor,
     metallic: mat.metallicFactor,
     roughness: mat.roughnessFactor,
   };
   if (mat.emissiveFactor !== undefined) {
-    paramValues.emissive = mat.emissiveFactor;
-    // glTF has no separate intensity scalar; its emissiveFactor carries the
-    // complete scalar/vector contribution, so the engine multiplier is 1.
-    paramValues.emissiveIntensity = 1;
+    values.emissive = mat.emissiveFactor;
+    values.emissiveIntensity = 1;
+  }
+  const textureSlots: readonly [MaterialTextureSlot, GltfTextureInfoIr | number | undefined][] = [
+    ['baseColorTexture', mat.baseColorTexture],
+    ['metallicRoughnessTexture', mat.metallicRoughnessTexture],
+    ['normalTexture', mat.normalTexture],
+    ['occlusionTexture', mat.occlusionTexture],
+    ['emissiveTexture', mat.emissiveTexture],
+  ];
+  for (const [slot, info] of textureSlots) {
+    const value = textureValue(info, slot, ctx);
+    if (value !== undefined) values[slot] = value;
+  }
+  if (mat.occlusionTexture !== undefined && values.occlusionStrength === undefined) {
+    values.occlusionStrength = 1;
   }
 
-  if (ctx?.textureHandles !== undefined) {
-    if (mat.baseColorTexture !== undefined) {
-      const h = ctx.textureHandles.get(mat.baseColorTexture);
-      if (h !== undefined) paramValues.baseColorTexture = h;
-    }
-    if (mat.metallicRoughnessTexture !== undefined) {
-      const h = ctx.textureHandles.get(mat.metallicRoughnessTexture);
-      if (h !== undefined) paramValues.metallicRoughnessTexture = h;
-    }
-    if (mat.normalTexture !== undefined) {
-      const h = ctx.textureHandles.get(mat.normalTexture);
-      if (h !== undefined) paramValues.normalTexture = h;
-    }
-    if (mat.emissiveTexture !== undefined) {
-      const h = ctx.textureHandles.get(mat.emissiveTexture);
-      if (h !== undefined) paramValues.emissiveTexture = h;
-    }
-  }
+  const module = ctx?.skinned === true ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr';
 
-  if (ctx?.samplerHandles !== undefined && ctx.samplerHandles.size > 0) {
-    const firstSampler = ctx.samplerHandles.values().next();
-    if (firstSampler.value !== undefined) {
-      paramValues.sampler = firstSampler.value;
-    }
-  }
-
-  const shader = ctx?.skinned === true ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr';
-
-  // UV-set tiling: glTF `baseColorTexture.texCoord` selects which vertex UV set
-  // the material's textures sample. The built-in PBR now declares a second UV
-  // set (@location(6) uv1) and honors a per-material `uvSet` selector in the
-  // material UBO (feat-city-glb multi-UV tiling). We emit the selector when the
-  // material samples a non-zero set (default 0 -> set 0, byte-identical to the
-  // prior single-UV path). A single per-material selector suffices: within a
-  // glTF material every textured slot shares one texCoord in practice (verified
-  // on the UE5 city_Sample asset -- 433/452 materials at texCoord=1, zero with
-  // slots split across sets); glTF's theoretical per-slot texCoord divergence is
-  // a future extension. Sets >=2 clamp to set 1 (the shader forwards uv0/uv1).
-  if (mat.baseColorTexCoord !== undefined && mat.baseColorTexCoord > 0) {
-    paramValues.uvSet = mat.baseColorTexCoord;
-  }
-
-  // feat: map glTF alphaMode to render state. BLEND -> straight (non-
-  // premultiplied) alpha blend + Transparent queue (glTF BLEND is straight
-  // alpha; the PBR fs outputs baseColor.a * sample.a un-premultiplied). The
-  // presence of renderState.blend is the runtime's SSOT for transparent
-  // routing (back-to-front sort + composite). OPAQUE / MASK stay in the
-  // opaque Geometry queue. (MASK alpha-testing needs a shader discard the
-  // built-in PBR does not yet implement; routed opaque for now.)
+  // glTF BLEND uses straight alpha and does not write depth.
   const isBlend = mat.alphaMode === 'BLEND';
   const straightAlphaBlend = {
     color: {
@@ -754,24 +789,25 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   // frequently coplanar with the opaque surface they overlay (e.g. a crosswalk
   // decal on the road); writing depth would z-fight / self-occlude. Back-to-
   // front ordering is handled by the Transparent queue + transparent sort.
-  const pass: MaterialPassDescriptor = {
+  const pass = {
     name: 'Forward',
-    shader,
-    tags: { LightMode: 'Forward' },
-    queue: (isBlend ? 3000 : 2000) as RenderQueue,
-    ...(isBlend || mat.doubleSided === true
-      ? {
-          renderState: {
+    program: { module },
+    renderState: {
+      tags: { LightMode: 'Forward' },
+      queue: (isBlend ? 3000 : 2000) as RenderQueue,
+      ...(isBlend || mat.doubleSided === true
+        ? {
             ...(isBlend ? { blend: straightAlphaBlend, depthWriteEnabled: false } : {}),
             ...(mat.doubleSided === true ? { cullMode: 'none' as const } : {}),
-          },
-        }
-      : {}),
+          }
+        : {}),
+    },
   };
 
   return {
     kind: 'material',
+    ...(ctx?.standardRootGuid === undefined ? {} : { parent: ctx.standardRootGuid }),
     passes: [pass],
-    paramValues,
+    values,
   };
 }

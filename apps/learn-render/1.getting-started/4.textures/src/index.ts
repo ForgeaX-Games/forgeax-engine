@@ -162,9 +162,9 @@ interface MaterialPackEntry {
     readonly kind: string;
     readonly passes: ReadonlyArray<{
       readonly name: string;
-      readonly shader: string;
+      readonly program: { readonly module: string };
     }>;
-    readonly paramValues: {
+    readonly values: {
       readonly baseColor: readonly [number, number, number, number];
       readonly baseColorTexture?: string;
     };
@@ -281,15 +281,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const woodMaterial: MaterialAsset = {
       kind: 'material',
       passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
-        },
+        { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
       ],
-      paramValues: {
-        baseColor: matEntry.payload.paramValues.baseColor,
+      values: {
+        baseColor: matEntry.payload.values.baseColor,
         baseColorTexture: containerTexHandle,
       },
     };
@@ -345,12 +340,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
     // ac-09: AI-user TS-inference proof point. loadByGuid<MaterialAsset>
     // returns the MaterialAsset POD directly (M8 D-17); its
-    // paramValues.baseColorTexture: Handle<TextureAsset> | undefined assigns
+    // values.baseColorTexture: Handle<TextureAsset> | undefined assigns
     // to a typed local with no `as` cast (charter P4 consistent abstraction).
     // AI users read this block as the single grep target for AC-09.
     const mat = matHandleRes.value;
     const slot =
-      (mat.paramValues?.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined);
+      (mat.values?.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined);
     console.warn(
       `[learn-render 1.4 textures] baseColorTexture slot=${
         slot === undefined ? 'undefined' : unwrapHandle(slot).toString()

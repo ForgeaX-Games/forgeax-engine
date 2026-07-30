@@ -4,7 +4,7 @@
 // Closed 2-member PipelineErrorCode union + PipelineError discriminated-union class. Two
 // failure channels split by error nature (charter P3 + plan-strategy D-E):
 //   - 'pipeline-already-registered' (programmer error) -> registerPipeline THROWS a
-//     PipelineError, mirroring ShaderRegistry.registerMaterialShader's Map.has -> throw
+//     PipelineError, mirroring ShaderRegistry.installMaterialArtifact's Map.has -> throw
 //     fail-fast (research Finding 3). A second register under the same id is a coding
 //     mistake that must surface immediately.
 //   - 'pipeline-not-found' (runtime path) -> installPipeline returns Result.err with this

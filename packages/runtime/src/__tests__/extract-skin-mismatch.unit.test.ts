@@ -61,7 +61,7 @@ function makeAssetRegistry(): AssetRegistry {
   // minimal entry here. paramSchema mirrors the standard PBR family head
   // (baseColor / metallic / roughness) since this test does not exercise
   // skin-specific param overlay.
-  shaderRegistry.registerMaterialShader('forgeax::pbr-skin', {
+  shaderRegistry.installMaterialArtifact('forgeax::pbr-skin', {
     source: 'fn main() {}',
     paramSchema: [
       { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -106,12 +106,11 @@ function registerPbrSkinMaterial(world: World): Handle<'MaterialAsset', 'shared'
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::pbr-skin',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::pbr-skin' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [1, 1, 1] },
+    values: { baseColor: [1, 1, 1] },
   });
 }
 
@@ -121,12 +120,11 @@ function registerUnlitMaterial(world: World): Handle<'MaterialAsset', 'shared'> 
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [1, 1, 1] },
+    values: { baseColor: [1, 1, 1] },
   });
 }
 

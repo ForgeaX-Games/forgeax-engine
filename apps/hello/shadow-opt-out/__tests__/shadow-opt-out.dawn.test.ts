@@ -181,11 +181,11 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       if (shader === null || assets === null) return;
 
       // Register cutout shadow shader from manifest (if not already registered)
-      const alreadyRegistered = shader.lookupMaterialShader(CUTOUT_SHADER_PATH);
+      const alreadyRegistered = shader.findMaterialArtifact(CUTOUT_SHADER_PATH);
       if (!alreadyRegistered.ok) {
         for (const entry of shader.materialShaderManifestEntries()) {
           if (entry.identifier === CUTOUT_SHADER_PATH) {
-            shader.registerMaterialShader(CUTOUT_SHADER_PATH, {
+            shader.installMaterialArtifact(CUTOUT_SHADER_PATH, {
               source: entry.composedWgsl,
               paramSchema: [{ name: 'baseColor', type: 'color' }],
             });
@@ -193,7 +193,7 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
           }
         }
       }
-      const cutoutLookup = shader.lookupMaterialShader(CUTOUT_SHADER_PATH);
+      const cutoutLookup = shader.findMaterialArtifact(CUTOUT_SHADER_PATH);
       if (!cutoutLookup.ok) {
         const ids = [...shader.materialShaderManifestEntries()].map((e) => e.identifier);
         console.warn(`[T-018] cutout shader not in manifest: ${JSON.stringify(ids)}`);
@@ -228,10 +228,10 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       const matC = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         passes: [
-          { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
-          { name: 'ShadowCaster', shader: CUTOUT_SHADER_PATH, tags: { LightMode: 'ShadowCaster' } },
+          { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
+          { name: 'ShadowCaster', program: { module: CUTOUT_SHADER_PATH }, renderState: { tags: { LightMode: 'ShadowCaster' } } },
         ],
-        paramValues: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
+        values: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
       });
       world.spawn(
         {

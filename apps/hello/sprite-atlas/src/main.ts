@@ -145,7 +145,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   //     plied-alpha blend pipeline (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`;
   //     replaces ablated `transparent` boolean flag + earlier
   //     shadingModel='sprite' arm; requirements §2 NOTE breaking change).
-  //   - paramValues UBO-aligned: colorTint (was baseColor),
+  //   - values UBO-aligned: colorTint (was baseColor),
   //     baseColorTexture (was texture), pivotAndSize (was pivot).
   //     SpriteRegionOverride still writes the .region vec4 into
   //     paramSnapshot every frame, untouched by the rename.
@@ -163,15 +163,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const material: MaterialAsset = {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    paramValues: {
+    values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: textureHandle,
       sampler: samplerHandle,

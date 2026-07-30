@@ -1,4 +1,4 @@
-#define_import_path hello_multi_uv::multi_uv_demo
+#define_import_path hello-multi-uv::multi-uv-demo
 #pragma variant_axis M3_MULTI_UV_VARIANT
 
 #import forgeax_view::common::{view, meshes, instances}

@@ -68,7 +68,7 @@ export function recordGeometryDraws(
     validatedOrdered,
     splitLdrSprite,
   } = c;
-  const MATERIAL_PER_ENTITY_STRIDE = 256;
+  const MATERIAL_PER_ENTITY_STRIDE = 512;
   let lastVertexBuffer: GpuBuffer | null = null;
   let lastIndexBuffer: GpuBuffer | null = null;
   // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):

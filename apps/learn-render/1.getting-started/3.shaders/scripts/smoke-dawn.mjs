@@ -9,15 +9,15 @@
 //   src/index.ts (LO 1.3) drives a single triangle via builtin
 //   HANDLE_TRIANGLE + a passes-form MaterialAsset that carries the
 //   forgeax::default-unlit shader pass and a baseColor paramValue.
-//   The runtime plumbs paramValues through to the unlit pipeline; the
+//   The runtime plumbs values through to the unlit pipeline; the
 //   on-screen colour is the LO 1.3 teaching colour vec4(1, 0.5, 0.2, 1).
 //
 // Differential axes vs hello-triangle (D-2 / D-8 byte-level):
 //   - GUID set: builtin HANDLE_TRIANGLE only, ZERO loadByGuid + ZERO
 //     registerWithGuid (matches src/index.ts: `loadByGuid=0
 //     registerWithGuid=0` -- no asset chain wired in 1.3).
-//   - Material form: passes-form (`passes:[{shader: 'forgeax::default-
-//     unlit'}]` + `paramValues: {baseColor: PLAY_BASE_COLOR}`) -- LO 1.3
+//   - Material form: passes-form (`passes:[{program: { module: 'forgeax::default-
+//     unlit'}]` + `values: {baseColor: PLAY_BASE_COLOR}`) -- LO 1.3
 //     introduces this surface (vs hello-triangle's flat shadingModel
 //     form). Smoke uses the asset.register Result-returning surface.
 //   - clear color: engine teal default (0.2, 0.3, 0.3) -- src/index.ts
@@ -206,12 +206,11 @@ const playMaterial = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-unlit',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
+      program: { module: 'forgeax::default-unlit' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],
-  paramValues: { baseColor: PLAY_BASE_COLOR },
+  values: { baseColor: PLAY_BASE_COLOR },
 });
 // LO 1.3 single triangle at origin / identity rotation / unit scale.
 world.spawn(

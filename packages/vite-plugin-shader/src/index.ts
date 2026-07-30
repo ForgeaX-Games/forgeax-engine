@@ -24,14 +24,12 @@
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
-import {
-  checkBindGroupOverflow,
-  compareParamSchemaSuperset,
-  compileShader,
-  ShaderError,
-} from '@forgeax/engine-shader-compiler';
-import type { BindGroupLayoutDescriptor, ParamSchemaEntry } from '@forgeax/engine-types';
+import { checkBindGroupOverflow } from '@forgeax/engine-shader-compiler';
+import type { BindGroupLayoutDescriptor } from '@forgeax/engine-types';
 import { loadEngineImportsMap } from './engine-imports-map.js';
+import { cookMaterialSource } from './material/cook-adapter.js';
+import { MaterialHmrGraph } from './material/hmr.js';
+import { createMaterialSourceProvider } from './material/source-provider.js';
 import { SHADER_MANIFEST_PATH } from './shader-manifest-path.js';
 import {
   loadSharedEngineShaderManifest,
@@ -39,8 +37,19 @@ import {
 } from './shared-engine-inputs.js';
 import { toRollupLog } from './wrap.js';
 
+export {
+  cookMaterialSource,
+  type MaterialCookResult,
+} from './material/cook-adapter.js';
+export { MaterialHmrGraph } from './material/hmr.js';
+export {
+  createMaterialSourceProvider,
+  type MaterialSourceProvider,
+} from './material/source-provider.js';
 export type { ForgeaXShaderRollupLog } from './wrap.js';
 export { toRollupLog } from './wrap.js';
+
+const materialSourceProvider = createMaterialSourceProvider((path) => readFile(path, 'utf8'));
 
 /**
  * Build a `shaders/manifest.json`-shaped payload by compiling the engine's
@@ -132,7 +141,7 @@ export async function buildEngineShaderManifest(): Promise<{
         PER_INSTANCE_REGION: false,
         ...defines,
       };
-      const r = await compileShader(
+      const r = await cookMaterialSource(
         defines === undefined
           ? stripPragmas(file.source)
           : stripFalseImports(stripPragmas(file.source), defines),
@@ -471,7 +480,7 @@ async function compileUserMaterialVariants(
       defines === undefined
         ? imports
         : filterImportsByDefines(transitiveImports, cleanSource, defines, axes);
-    const r = await compileShader(variantSource, {
+    const r = await cookMaterialSource(variantSource, {
       id: definesKey === '' ? id : `${id}#${definesKey}`,
       imports: variantImports,
       defines: effectiveDefines,
@@ -529,7 +538,7 @@ function scanUserMaterialVariantAxes(source: string): string[] {
 // the map (never writes) to resolve downstream modules when a dep file
 // changes. The Map + Set combo is safe under JS single-threaded
 // transform serialisation (plan-strategy §3 RISK-3 — no manual locking).
-const reverseDeps = new Map<string, Set<string>>();
+const reverseDeps = new MaterialHmrGraph();
 
 /**
  * Resolve an `#import <name>` directive discovered inside `importerFile` to an
@@ -555,30 +564,8 @@ function resolveImportToFile(importerFile: string, name: string): string {
   return `${dir}/${basename}.wgsl`;
 }
 
-/**
- * Scan `source` for `#define NAME` (without value) directives and return the
- * define names. `#define NAME VALUE` lines are not matched — those are caught
- * by compileShader Stage 0a (non-boolean define pre-scan).
- *
- * Used by the material-shader define-reject path (AC-03).
- */
-function scanDefineDirectives(source: string): string[] {
-  const out: string[] = [];
-  for (const line of source.split(/\r?\n/)) {
-    const trimmed = line.trimStart();
-    if (!trimmed.startsWith('#define ')) continue;
-    // Exclude #define NAME VALUE (with assignment)
-    const parts = trimmed.slice('#define '.length).split(/\s+/);
-    const name = parts[0];
-    if (name !== undefined && parts.length === 1) {
-      out.push(name);
-    }
-  }
-  return out;
-}
-
-const IMPORT_DIRECTIVE_RE = /^\s*(?:\/\/\s*)?#import\s+([A-Za-z0-9_:]+)/;
-const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:]+)/;
+const IMPORT_DIRECTIVE_RE = /^\s*(?:\/\/\s*)?#import\s+([A-Za-z0-9_:-]+)/;
+const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/;
 const PRAGMA_VARIANT_AXIS_RE = /^#pragma\s+variant_axis\s+(\w+)/gm;
 
 /**
@@ -729,7 +716,7 @@ async function collectSiblingImports(
   const moduleIds = scanImportModuleIds(source);
   for (const moduleId of moduleIds) {
     const siblingPath = resolveImportToFile(importerFile, moduleId);
-    const siblingSource = await readFile(siblingPath, 'utf8');
+    const siblingSource = await materialSourceProvider.read(siblingPath);
     let canonicalId = moduleId;
     for (const line of siblingSource.split(/\r?\n/)) {
       const header = DEFINE_IMPORT_PATH_RE.exec(line);
@@ -750,14 +737,7 @@ async function collectSiblingImports(
  * no mutex is required (plan-strategy §3 RISK-3).
  */
 function updateReverseDeps(importerFile: string, depFiles: readonly string[]): void {
-  for (const depFile of depFiles) {
-    let bucket = reverseDeps.get(depFile);
-    if (bucket === undefined) {
-      bucket = new Set<string>();
-      reverseDeps.set(depFile, bucket);
-    }
-    bucket.add(importerFile);
-  }
+  reverseDeps.record(importerFile, depFiles);
 }
 
 /**
@@ -766,22 +746,7 @@ function updateReverseDeps(importerFile: string, depFiles: readonly string[]): v
  * Handles self-referential cycles via a visited set.
  */
 function collectTransitiveImporters(seed: string): string[] {
-  const visited = new Set<string>();
-  const out: string[] = [];
-  const stack: string[] = [seed];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (current === undefined) break;
-    const bucket = reverseDeps.get(current);
-    if (bucket === undefined) continue;
-    for (const importer of bucket) {
-      if (visited.has(importer)) continue;
-      visited.add(importer);
-      out.push(importer);
-      stack.push(importer);
-    }
-  }
-  return out;
+  return reverseDeps.collect(seed);
 }
 
 // === 4-hook shape (minimal Vite Plugin interface contract) =========================
@@ -996,7 +961,7 @@ interface EngineShaderEntries {
   // feat-20260523-shader-template-instance-split M5 / T09: pbr.wgsl is
   // retired; default-standard-pbr.wgsl is the engine PBR entry. The
   // composed manifest entry feeds
-  // ShaderRegistry.registerMaterialShader('forgeax::default-standard-pbr',
+  // ShaderRegistry.installMaterialArtifact('forgeax::default-standard-pbr',
   // ...) wired by createRenderer at engine boot (M6 host wiring + the
   // existing `f_schlick` content marker in createRenderer.ts identifies
   // the engine PBR entry post-rename).
@@ -1341,7 +1306,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
  * Rewrite materialShaders entries so that every `composedWgsl` field is the
  * inline WGSL source string, not the relative path reference (`./<hash>.composed.wgsl`).
  * Runtime consumer (createRenderer) passes composedWgsl directly to
- * registerMaterialShader({ source: wgsl }) and WGSL tokenizers reject path strings.
+ * installMaterialArtifact({ source: wgsl }) and WGSL tokenizers reject path strings.
  */
 function inlineMaterialShaderComposedWgsl(
   materialShaders: readonly MaterialShaderManifestEntry[],
@@ -1460,51 +1425,12 @@ async function compileEngineEntry(
   // are unavailable. We piggy-back on the materialShaders channel with a
   // synthetic `forgeax::engine-<basename>` identifier — the runtime treats
   // these the same way it treats material-shader entries (variant lookup
-  // by identifier) but does NOT call registerMaterialShader on them.
+  // by identifier) but does NOT call installMaterialArtifact on them.
   const hasVariantAxis = scanVariantAxes(file.source).length > 0;
   const surfaceVariants = isMaterialShader || hasVariantAxis;
-  let paramSchemaJson = '[]';
-
-  if (isMaterialShader) {
-    const metaPath = `${file.id}.meta.json`;
-    let metaRaw: string;
-    try {
-      metaRaw = await readFile(metaPath, 'utf8');
-    } catch {
-      throw new Error(
-        `engine material-shader entry '${file.id}' is missing required .wgsl.meta.json sidecar (plan-strategy D-2: sidecar is the paramSchema SSOT for all material shaders)`,
-      );
-    }
-    let meta: unknown;
-    try {
-      meta = JSON.parse(metaRaw);
-    } catch (e) {
-      throw new Error(
-        `engine material-shader sidecar '${metaPath}' contains invalid JSON: ${String(e)}`,
-      );
-    }
-    if (meta == null || typeof meta !== 'object') {
-      throw new Error(`engine material-shader sidecar '${metaPath}' is not a valid JSON object`);
-    }
-    const metaObj = meta as Record<string, unknown>;
-    if (metaObj.importer !== 'shader') {
-      throw new Error(
-        `engine material-shader sidecar '${metaPath}' has importer '${String(metaObj.importer)}', expected 'shader'`,
-      );
-    }
-    const paramSchema = metaObj.paramSchema;
-    if (!Array.isArray(paramSchema)) {
-      throw new Error(
-        `engine material-shader sidecar '${metaPath}' is missing required paramSchema array`,
-      );
-    }
-    // feat-20260609 T-018 fixup: empty paramSchema is allowed for vertex-only
-    // material shaders (e.g. forgeax::default-shadow-caster — shadow depth
-    // pass with no fragment stage and no per-material params). Earlier
-    // requirement of non-empty paramSchema was an artifact of forward-only
-    // material shaders predating this feat.
-    paramSchemaJson = JSON.stringify(paramSchema);
-  }
+  // Material parameter declarations are part of the authored MaterialAsset
+  // contract. Runtime shader compilation no longer reads a WGSL sidecar.
+  const paramSchemaJson = '[]';
   const variantAxes = scanVariantAxes(file.source);
   const axisCombos = variantAxes.length > 0 ? cartesianDefines(variantAxes) : [{}];
 
@@ -1546,7 +1472,7 @@ async function compileEngineEntry(
     // eliminated at the TS layer.
     const perVariantSource =
       variantAxes.length > 0 ? stripFalseImports(cleanSource, defines) : cleanSource;
-    const r = await compileShader(perVariantSource, {
+    const r = await cookMaterialSource(perVariantSource, {
       id: uniqueId,
       imports: perVariantImports,
       // Non-variant entries always compile with STORAGE_BUFFER_AVAILABLE=true
@@ -1607,24 +1533,6 @@ async function compileEngineEntry(
         // helper does not clash with same-numbered entries from other groups
         // (e.g. shadowMap @group(0) @binding(3) vs metallicRoughnessSampler
         // @group(1) @binding(3)).
-        const allBgls =
-          typeof manifestEntry.bindings === 'string'
-            ? (JSON.parse(manifestEntry.bindings) as readonly BindGroupLayoutDescriptor[])
-            : (manifestEntry.bindings as readonly BindGroupLayoutDescriptor[]);
-        const materialBgl = allBgls[1];
-        const groupOneBgls: readonly BindGroupLayoutDescriptor[] =
-          materialBgl !== undefined ? [materialBgl] : [];
-        const supersetResult = compareParamSchemaSuperset(
-          JSON.parse(paramSchemaJson) as readonly ParamSchemaEntry[],
-          groupOneBgls,
-          file.id,
-        );
-        if (!supersetResult.ok) {
-          throw Object.assign(
-            new Error(supersetResult.error.message),
-            toRollupLog(supersetResult.error),
-          );
-        }
         state.materialShaders.push({
           identifier: baseIdentifier,
           sourcePath: file.id,
@@ -1680,32 +1588,6 @@ async function compileEngineEntry(
       defaultVariantBindingsJson !== undefined &&
       surfaceVariants
     ) {
-      // feat-20260613 M4 / w8 fix-up (orchestrator Q2) +
-      // feat-20260613 fix-issue-2: superset gate also applies to engine
-      // entries that carry variant axes (default-standard-pbr
-      // STORAGE_BUFFER_AVAILABLE / CLUSTER_FORWARD_AVAILABLE etc). Compare
-      // paramSchema against the default variant's BGL -- bindings are read
-      // from the parallel `variantBindingsJson[0]` rather than the now-gone
-      // `defaultVariant.bindingLayout` field.
-      if (isMaterialShader) {
-        const allBgls = JSON.parse(
-          defaultVariantBindingsJson,
-        ) as readonly BindGroupLayoutDescriptor[];
-        const materialBgl = allBgls[1];
-        const groupOneBgls: readonly BindGroupLayoutDescriptor[] =
-          materialBgl !== undefined ? [materialBgl] : [];
-        const supersetResult = compareParamSchemaSuperset(
-          JSON.parse(paramSchemaJson) as readonly ParamSchemaEntry[],
-          groupOneBgls,
-          file.id,
-        );
-        if (!supersetResult.ok) {
-          throw Object.assign(
-            new Error(supersetResult.error.message),
-            toRollupLog(supersetResult.error),
-          );
-        }
-      }
       // bug-20260610: derive a synthetic identifier for non-material engine
       // entries (shadow_caster etc.) so the runtime variant-resolution path
       // can find them via materialShaderManifestEntries(). Material shaders
@@ -1759,14 +1641,16 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
 
   let engineShaderRoots: string[];
   try {
+    const packageSrc = resolve(
+      dirname(createRequire(import.meta.url).resolve('@forgeax/engine-shader/package.json')),
+      'src',
+    );
     engineShaderRoots = options.engineShaderRoots ?? [
-      resolve(
-        dirname(createRequire(import.meta.url).resolve('@forgeax/engine-shader/package.json')),
-        'src',
-      ),
+      packageSrc,
+      resolve(process.cwd(), 'packages/shader/src'),
     ];
   } catch {
-    engineShaderRoots = [];
+    engineShaderRoots = [resolve(process.cwd(), 'packages/shader/src')];
   }
 
   return {
@@ -1799,7 +1683,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // retired; default-standard-pbr.wgsl is the engine PBR entry. The
       // runtime createRenderer.ts identifies the entry by `f_schlick`
       // content marker (unchanged); M6 host wiring calls
-      // registry.registerMaterialShader('forgeax::default-standard-pbr', ...)
+      // registry.installMaterialArtifact('forgeax::default-standard-pbr', ...)
       // off the manifest entry + default-standard-pbr.schema.json sidecar.
       await compileEngineEntry(this, state, eng.defaultStandardPbr, eng.imports, isServeMode);
       // feat-20260523-skin-skeleton-animation M3 / T-34: pbr-skin entry compiled
@@ -1880,113 +1764,31 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     async transform(this: MinimalPluginContext, code: string, id: string) {
       if (!id.endsWith('.wgsl')) return null;
 
-      // Detect material-shader sidecar: *.wgsl.meta.json with
-      // subAssets[].kind='material-shader' (AC-09 / plan-strategy D-ImportsMap).
-      // In M2 (feat-20260528-material-shader-registration-unification), the
-      // sidecar is also the paramSchema SSOT -- if a material-shader sidecar
-      // is present, paramSchema MUST be declared there (requirements E4).
+      // Material identity comes from the WGSL module declaration. The authored
+      // parameter contract remains in the sibling shader sidecar so the cooked
+      // manifest can install the same artifact that the pack path validates.
+      let paramSchemaJson = '[]';
       let isMaterialShader = false;
       let materialShaderIdentifier: string | undefined;
-      const metaPath = `${id}.meta.json`;
       let engineImports: Record<string, string> = {};
-      let userParamSchema: Array<{ name: string; type: string }> = [];
-      try {
-        const metaRaw = await readFile(metaPath, 'utf8');
-        let meta: unknown;
+      const declaredModule = extractDefineImportPath(code);
+      const isProjectMaterialModule =
+        declaredModule !== undefined &&
+        (!declaredModule.startsWith('forgeax_') || declaredModule.startsWith('forgeax_material::'));
+      if (isProjectMaterialModule) {
+        isMaterialShader = true;
+        materialShaderIdentifier = declaredModule;
+        engineImports = loadEngineImportsMap(engineShaderRoots);
         try {
-          meta = JSON.parse(metaRaw);
-        } catch (e) {
-          // Sidecar exists but JSON is malformed -> fail-fast with path (AC-17)
-          throw Object.assign(
-            new Error(`material-shader sidecar '${metaPath}' contains invalid JSON: ${String(e)}`),
-            { code: 'PLUGIN_ERROR' },
-          );
-        }
-        const metaObj = meta as Record<string, unknown> | null;
-        if (metaObj == null || typeof metaObj !== 'object') {
-          throw Object.assign(
-            new Error(`material-shader sidecar '${metaPath}' is not a valid JSON object`),
-            { code: 'PLUGIN_ERROR' },
-          );
-        }
-
-        // Validate importer -- only the reserved 'shader' importer key gets
-        // material-shader treatment (feat-20260603-asset-import-loader-injection
-        // M2: the former assetType 'shader' became importer 'shader').
-        const importer = metaObj.importer;
-        if (importer !== 'shader') {
-          // Sidecar exists but is not a shader sidecar -- skip the
-          // material-shader path entirely (fall through to catch block)
-          throw new Error('not a shader sidecar');
-        }
-
-        const subAssets: unknown = metaObj.subAssets;
-        let sidecarHasMaterialShader = false;
-        if (Array.isArray(subAssets)) {
-          for (const sa of subAssets) {
-            if (
-              sa != null &&
-              typeof sa === 'object' &&
-              (sa as Record<string, unknown>).kind === 'material-shader'
-            ) {
-              sidecarHasMaterialShader = true;
-              break;
-            }
+          const metaRaw = await readFile(`${id}.meta.json`, 'utf8');
+          const meta = JSON.parse(metaRaw) as Record<string, unknown>;
+          if (meta.importer === 'shader' && Array.isArray(meta.paramSchema)) {
+            paramSchemaJson = JSON.stringify(meta.paramSchema);
           }
+        } catch {
+          // A missing sidecar keeps the manifest contract empty; runtime
+          // installation still reports any shader/resource mismatch.
         }
-
-        if (sidecarHasMaterialShader) {
-          // Sidecar is material-shader: paramSchema is required (E4)
-          const paramSchema = metaObj.paramSchema;
-          if (!Array.isArray(paramSchema) || paramSchema.length === 0) {
-            throw Object.assign(
-              new Error(
-                `material-shader sidecar '${metaPath}' is missing required non-empty paramSchema array`,
-              ),
-              { code: 'PLUGIN_ERROR' },
-            );
-          }
-          userParamSchema = paramSchema as Array<{ name: string; type: string }>;
-          isMaterialShader = true;
-          const importSettings = metaObj.importSettings;
-          if (
-            importSettings !== null &&
-            typeof importSettings === 'object' &&
-            typeof (importSettings as Record<string, unknown>).materialShaderIdentifier === 'string'
-          ) {
-            materialShaderIdentifier = (importSettings as Record<string, unknown>)
-              .materialShaderIdentifier as string;
-          }
-
-          // AC-03: reject #define (boolean) directives in material-shader entries.
-          // v1 assembly mechanism is #import + direct call only (plan-strategy
-          // §3.6). #define directives found in the user's wgsl source are
-          // rejected before compose with shader-define-conflict.
-          const defineLines = scanDefineDirectives(code);
-          if (defineLines.length > 0) {
-            const firstDefine = defineLines[0] ?? '<unknown>';
-            const err = new ShaderError({
-              code: 'shader-define-conflict',
-              expected:
-                'material-shader entries disallow #define directives; use paramSchema+paramValues instead',
-              message: `material-shader '${id}' contains #define directive: ${firstDefine}`,
-              hint: 'remove the #define directive; v1 material-shader supports only #import + direct call assembly (AC-03). Use paramSchema+paramValues in the .pack.json payload for per-instance parameter injection.',
-              detail: {
-                code: 'shader-define-conflict',
-                defineName: firstDefine,
-                sites: [{ moduleId: id }],
-              },
-            });
-            throw Object.assign(new Error(err.message), toRollupLog(err));
-          }
-          engineImports = loadEngineImportsMap(engineShaderRoots);
-        }
-      } catch (e: unknown) {
-        if (e instanceof Error && 'code' in e && e.code === 'PLUGIN_ERROR') {
-          // Re-throw fail-fast errors (bad JSON, missing paramSchema)
-          throw e;
-        }
-        // Missing sidecar or non-shader sidecar -> fall through to existing behavior
       }
 
       // Collect sibling `#import` sources so `compileShader` can resolve
@@ -2052,7 +1854,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // The schema is sourced from the sibling `.pack.json` payload's
       // paramSchema field; when no .pack.json sits next to the .wgsl the
       // schema check is skipped (M9-T05: deferred to runtime
-      // registerMaterialShader, which validates paramValues against the
+      // installMaterialArtifact, which validates values against the
       // user-supplied paramSchema -- charter P3 explicit failure: bad
       // shape surfaces at register time, not silently). The bind-group
       // overflow gate (AC-07) still runs unconditionally.
@@ -2065,29 +1867,8 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           );
         }
 
-        // Single-direction superset gate (feat-20260613-material-paramschema-
-        // driven-binding M2 / w8 / D-9): the actually reflected BGL must
-        // contain every binding emitted by derive(schema). Extra bindings on
-        // the actual side are tolerated (engine-injection placeholders).
-        // Failures emit material-shader-binding-mismatch with a synthesised
-        // WGSL-author hint so the AI user can fix without trial-and-error.
-        const supersetResult = compareParamSchemaSuperset(
-          userParamSchema as readonly ParamSchemaEntry[],
-          bindings,
-          id,
-        );
-        if (!supersetResult.ok) {
-          throw Object.assign(
-            new Error(supersetResult.error.message),
-            toRollupLog(supersetResult.error),
-          );
-        }
-
-        // paramSchema sourced from sidecar (M2 feat-20260528-material-shader-
-        // registration-unification). Runtime registerMaterialShader still
-        // validates paramSchema vs paramValues at register-time.
-        const paramSchema: Array<{ name: string; type: string }> = userParamSchema;
-        // Push material-shader manifest entry (5-field mini schema).
+        // Push a module inspection entry; authored parameter declarations stay
+        // in MaterialAsset values and are not reconstructed from WGSL.
         // composedWgsl is a path-only index -- the actual composed wgsl is
         // emitted as a sidecar file in generateBundle.
         const composedWgslPath = `./${hash}.composed.wgsl`;
@@ -2095,7 +1876,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           identifier: materialShaderIdentifier ?? extractDefineImportPath(code) ?? hash,
           sourcePath: id,
           composedWgsl: composedWgslPath,
-          paramSchema: JSON.stringify(paramSchema),
+          paramSchema: paramSchemaJson,
           variants: compiledVariants.map((variant) => ({
             definesKey: variant.definesKey,
             defines: variant.defines,
@@ -2128,7 +1909,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // The default export `wgsl` field carries the post-naga_oil composed
       // source (manifestEntry.wgsl) so that consumers passing
       // `pulseShader.wgsl` directly into device.createShaderModule (e.g.
-      // hello-custom-shader -> registerMaterialShader({ source })) receive a
+      // hello-custom-shader -> installMaterialArtifact({ source })) receive a
       // tokenizer-valid WGSL string. Storing raw `code` here would re-feed
       // `#define_import_path` / `#import` directives into the GPU compiler
       // and produce `RhiError shader-compile-failed: invalid character found`

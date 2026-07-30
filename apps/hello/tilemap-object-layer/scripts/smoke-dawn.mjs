@@ -286,10 +286,10 @@ const spriteMaterialResult = assets.register({
   kind: 'material',
   passes: [
     // feat-20260626 M3: renderState.blend SSOT.
-    { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
+    { name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 } },
   ],
-  paramValues: {
-    // feat-20260625 M3/w11 (D-4): UBO-aligned 1:1 with sprite.wgsl.meta.json.
+  values: {
+    // feat-20260625 M3/w11 (D-4): UBO-aligned 1:1 with sprite.material.json.
     colorTint: [1, 1, 1, 1],
     baseColorTexture: atlasA,
     sampler: samplerResult.value,

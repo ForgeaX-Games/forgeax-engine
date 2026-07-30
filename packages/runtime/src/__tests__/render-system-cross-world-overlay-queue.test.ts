@@ -31,12 +31,7 @@ import { World } from '@forgeax/engine-ecs';
 import { Camera, extractFrames, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
-import type {
-  Handle,
-  MaterialAsset,
-  MaterialPassDescriptor,
-  MeshAsset,
-} from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 // Two-index owner shape w4-w6 introduces (see w1 for rationale).
@@ -74,7 +69,7 @@ function makeShaderRegistry(): ShaderRegistry {
     },
   };
   const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
-  sr.registerMaterialShader('forgeax::default-unlit', {
+  sr.installMaterialArtifact('forgeax::default-unlit', {
     source: 'fn main() {}',
     paramSchema: [{ name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] }],
   });
@@ -99,15 +94,15 @@ function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
 }
 
 function registerMaterial(world: World, queue: number): Handle<'MaterialAsset', 'shared'> {
-  const pass: MaterialPassDescriptor = {
+  const pass: MaterialPass = {
     name: queue === QUEUE_OVERLAY ? 'Overlay' : 'Forward',
-    shader: 'forgeax::default-unlit',
-    queue,
+    program: { module: 'forgeax::default-unlit' },
+    renderState: { queue },
   };
   return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [pass],
-    paramValues: {},
+    values: {},
   } as MaterialAsset);
 }
 

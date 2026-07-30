@@ -290,12 +290,11 @@ async function spawnMixedTransparentScene(): Promise<{
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-standard-pbr' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: [1, 1, 1],
       metallic: 0,
       roughness: 0.5,
@@ -310,19 +309,21 @@ async function spawnMixedTransparentScene(): Promise<{
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
+        program: { module: 'forgeax::default-standard-pbr' },
         renderState: {
-          depthWriteEnabled: false,
-          blend: {
-            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          ...{
+            depthWriteEnabled: false,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
           },
+          tags: { LightMode: 'Forward' },
+          queue: 3000,
         },
       },
     ],
-    paramValues: {
+    values: {
       baseColor: [1, 1, 1],
       metallic: 0,
       roughness: 0.5,

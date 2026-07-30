@@ -215,9 +215,13 @@ export function spawnPlayer(
   const playerMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::pbr-skin', tags: { LightMode: 'Forward' }, queue: 2000 },
+      {
+        name: 'Forward',
+        program: { module: 'forgeax::pbr-skin' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+      },
     ],
-    paramValues: { baseColor: [0.1, 0.6, 0.85, 1], metallic: 0.05, roughness: 0.55 },
+    values: { baseColor: [0.1, 0.6, 0.85, 1], metallic: 0.05, roughness: 0.55 },
   });
   world.set(skin, MeshRenderer, { materials: [playerMat] });
 

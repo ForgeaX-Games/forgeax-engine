@@ -3,9 +3,6 @@
   "kind": "external-asset-package",
   "importer": "shader",
   "source": "pulse-material.wgsl",
-  "importSettings": {
-    "materialShaderIdentifier": "my-game::pulse-material"
-  },
   "subAssets": [
     {
       "guid": "01935b00-7d8c-7c4e-9f12-345678abcd01",
@@ -15,8 +12,11 @@
   ],
   "paramSchema": [
     { "name": "baseColor", "type": "color" },
-    { "name": "metallic", "type": "f32" },
-    { "name": "roughness", "type": "f32" },
-    { "name": "baseColorTexture", "type": "texture2d" }
+    { "name": "time", "type": "f32" },
+    { "name": "speed", "type": "f32" },
+    { "name": "baseColorUvTransform", "type": "vec4" },
+    { "name": "normalUvTransform", "type": "vec4" },
+    { "name": "baseColorTexture", "type": "texture2d" },
+    { "name": "normalTexture", "type": "texture2d" }
   ]
 }

@@ -50,6 +50,14 @@ import { PointLight, SpotLight } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
+const SPRITE_LIT_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
+] as const;
+
 type Mode = 'sweep-spot' | 'point-circle' | 'both';
 
 function readModeFromUrl(): Mode {
@@ -291,17 +299,12 @@ function spawnSprite(
   const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite-lit',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
+      { name: 'Forward', program: { module: 'forgeax::sprite-lit' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } },
     ],
-    // paramValues field names align with sprite-lit.wgsl.meta.json paramSchema:
+    parameters: SPRITE_LIT_PARAMETERS,
+    // values field names align with sprite-lit.material.json paramSchema:
     // colorTint / region / pivotAndSize / baseColorTexture (post-#520 SSOT).
-    paramValues: {
+    values: {
       colorTint: tint,
       baseColorTexture: texHandle,
       sampler: samplerHandle,

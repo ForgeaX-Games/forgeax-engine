@@ -13,7 +13,7 @@ import { addOnEnter, defineState, getState, setNextState } from '@forgeax/engine
 import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { CapstoneVelocity, buildCapstoneScene } from './scene';
-import pulseShader from './pulse-material.wgsl';
+import './pulse-material.wgsl';
 import { CAPSTONE_CONTENT_GUID, capstoneContentLoader, type CapstoneContent } from './reimport';
 
 const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
@@ -43,20 +43,7 @@ assets.configurePackIndex('/pack-index.json');
 assets.loaders.register(capstoneContentLoader());
 
 const scene = buildCapstoneScene(world);
-const shader = app.renderer.shader;
-if (shader === null) throw new Error('m8-capstone: renderer shader registry unavailable');
 const pulseShaderId = 'my-game::pulse-material';
-if (!shader.lookupMaterialShader(pulseShaderId).ok) {
-  shader.registerMaterialShader(pulseShaderId, {
-    source: pulseShader.wgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'metallic', type: 'f32' },
-      { name: 'roughness', type: 'f32' },
-      { name: 'baseColorTexture', type: 'texture2d' },
-    ],
-  });
-}
 const pulseTexture = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
   kind: 'texture',
   width: 2,
@@ -79,8 +66,8 @@ const pulseParams: Record<string, number | number[]> = {
 };
 const customMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', shader: pulseShaderId, tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: pulseParams,
+  passes: [{ name: 'Forward', program: { module: pulseShaderId }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
+  values: pulseParams,
 });
 const phase = { value: 'boot' };
 const fixedTicks = { value: 0 };

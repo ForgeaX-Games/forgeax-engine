@@ -139,12 +139,11 @@ function registerMaterial(world: World, assets: AssetRegistry): Handle<'Material
     passes: [
       {
         name: 'Forward',
-        shader: 'forgeax::default-unlit',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
       },
     ],
-    paramValues: { baseColor: [1, 1, 1] },
+    values: { baseColor: [1, 1, 1] },
   });
   if (!result.ok) throw new Error('material catalog failed');
   return world.allocSharedRef('MaterialAsset', result.value);

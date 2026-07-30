@@ -304,8 +304,8 @@ if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
-if (!shader.lookupMaterialShader('learn-render::alpha-test').ok) {
-  shader.registerMaterialShader('learn-render::alpha-test', {
+if (!shader.findMaterialArtifact('learn-render::alpha-test').ok) {
+  shader.installMaterialArtifact('learn-render::alpha-test', {
     source: COMPOSED_ALPHA_TEST_WGSL,
     paramSchema: [
       { name: 'baseColor', type: 'color' },
@@ -364,11 +364,11 @@ const floorMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.9,
@@ -382,11 +382,11 @@ const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' } },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.5,
@@ -400,13 +400,13 @@ const grassMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'learn-render::alpha-test',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'learn-render::alpha-test' },
+      renderState: { tags: { LightMode: 'Forward' } },
       queue: 3000, // RenderQueue.Transparent
       renderState: { depthWriteEnabled: false },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.5,
@@ -420,8 +420,8 @@ const windowMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' } },
       queue: 3000, // RenderQueue.Transparent
       renderState: {
         depthWriteEnabled: false,
@@ -432,7 +432,7 @@ const windowMatHandle = world.allocSharedRef('MaterialAsset', {
       },
     },
   ],
-  paramValues: {
+  values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.5,

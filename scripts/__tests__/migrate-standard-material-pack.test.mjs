@@ -1,7 +1,7 @@
 // migrate-standard-material-pack.test.mjs (feat-20260523-shader-template-instance-split M6-T02).
 //
 // Unit test for the M6 codemod. Coverage:
-//   (a) standard -> schema-driven 1:1 migration (paramValues populated;
+//   (a) standard -> schema-driven 1:1 migration (values populated;
 //       shadingModel removed; materialShader = forgeax::default-standard-pbr).
 //   (b) unlit shading model is left untouched (codemod skip).
 //   (c) already-migrated payload (no shadingModel) is left untouched
@@ -42,15 +42,15 @@ describe('migrate-standard-material-pack codemod', () => {
     expect(migrated).not.toBeNull();
     expect(migrated.materialShader).toBe('forgeax::default-standard-pbr');
     expect(migrated.paramSchema).toEqual(SCHEMA);
-    expect(migrated.paramValues).toEqual({
+    expect(migrated.values).toEqual({
       baseColor: [0.8, 0.4, 0.2, 1],
       metallic: 0,
       roughness: 0.5,
     });
-    expect(Object.hasOwn(migrated.paramValues, 'shadingModel')).toBe(false);
+    expect(Object.hasOwn(migrated.values, 'shadingModel')).toBe(false);
   });
 
-  it('(a2) carries texture references through paramValues verbatim', () => {
+  it('(a2) carries texture references through values verbatim', () => {
     const legacy = {
       shadingModel: 'standard',
       baseColor: [1, 1, 1, 1],
@@ -58,10 +58,8 @@ describe('migrate-standard-material-pack codemod', () => {
       metallicRoughnessTexture: '019e3969-1d46-76ca-9a46-2168b746a292',
     };
     const migrated = migratePayload(legacy, SCHEMA);
-    expect(migrated.paramValues.baseColorTexture).toBe('019e3969-1d46-7945-a75a-ef97d537531e');
-    expect(migrated.paramValues.metallicRoughnessTexture).toBe(
-      '019e3969-1d46-76ca-9a46-2168b746a292',
-    );
+    expect(migrated.values.baseColorTexture).toBe('019e3969-1d46-7945-a75a-ef97d537531e');
+    expect(migrated.values.metallicRoughnessTexture).toBe('019e3969-1d46-76ca-9a46-2168b746a292');
   });
 
   it('(b) returns null for unlit payload (skip)', () => {
@@ -76,7 +74,7 @@ describe('migrate-standard-material-pack codemod', () => {
     const alreadyMigrated = {
       materialShader: 'forgeax::default-standard-pbr',
       paramSchema: SCHEMA,
-      paramValues: { baseColor: [1, 1, 1, 1], metallic: 0, roughness: 0.5 },
+      values: { baseColor: [1, 1, 1, 1], metallic: 0, roughness: 0.5 },
     };
     expect(migratePayload(alreadyMigrated, SCHEMA)).toBeNull();
   });
@@ -90,7 +88,7 @@ describe('migrate-standard-material-pack codemod', () => {
       channelMap: { metallic: 'b', roughness: 'g', occlusion: 'r' },
     };
     const migrated = migratePayload(legacy, SCHEMA);
-    expect(migrated.paramValues.channelMap).toEqual([2, 1, 0, 0]);
+    expect(migrated.values.channelMap).toEqual([2, 1, 0, 0]);
   });
 
   it('(e) idempotency: running migratePack twice yields the same result', () => {

@@ -127,11 +127,15 @@ import {
 import type {
   Asset,
   Handle,
+  MaterialParameter,
   MaterialRenderState,
+  MaterialTextureCoordinates,
+  MaterialTextureValue,
   MeshAsset,
+  ParamSchemaEntry,
   SkeletonAsset,
 } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError, toShared } from '@forgeax/engine-types';
+import { ASSET_ERROR_HINTS, AssetError, derive, toShared } from '@forgeax/engine-types';
 import {
   type Antialias,
   antialiasFromF32,
@@ -779,6 +783,10 @@ export interface MaterialSnapshot {
    * vec/color params, string (GUID) for texture2d/sampler params.
    */
   readonly paramSnapshot?: Readonly<Record<string, number | number[] | string>> | undefined;
+  /** Effective MaterialAsset parameter contract used to lay out this snapshot. */
+  readonly materialParamSchema?: readonly ParamSchemaEntry[] | undefined;
+  /** Authored per-slot UV set and KHR texture transform metadata. */
+  readonly textureCoordinates?: ReadonlyMap<string, MaterialTextureCoordinates> | undefined;
   /**
    * User-region texture handles keyed by paramSchema field name
    * (feat-20260621-learn-render-5-5-parallax M2 / w7). The SSOT carrier for
@@ -800,7 +808,7 @@ export interface MaterialSnapshot {
    * User-region texture field names whose paramValue resolved to a VideoAsset
    * (kind `'video'`) rather than a static TextureAsset
    * (feat-20260623-world-space-video-asset M4 / w14, D-5). The video GUID
-   * occupies the same texture2d paramValues slot a static texture would (P4:
+   * occupies the same texture2d values slot a static texture would (P4:
    * one binding shape), but extract routes it here instead of `textureHandles`
    * so the record stage pulls the current-frame view from the transient
    * DynamicTextureStore (D-3) instead of `GpuResourceStore.ensureResident`
@@ -824,7 +832,7 @@ export interface MaterialSnapshot {
    * feat-20260522-learn-render-3-1-sponza-model-loading-with-multi-l M4:
    * field added so the record stage can wire real metallic-roughness
    * textures from Sponza glTF materials (M3 writes the handle into
-   * SchemaDrivenMaterialAsset paramValues; M4 extract carries it through to the snapshot).
+   * SchemaDrivenMaterialAsset values; M4 extract carries it through to the snapshot).
    */
   readonly metallicRoughnessTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   /**
@@ -847,8 +855,8 @@ export interface MaterialSnapshot {
   /**
    * Transparent composition flag derived from the first pass's
    * `renderState.blend` presence on the underlying
-   * {@link MaterialPassDescriptor} (feat-20260626-collapse M2: blend
-   * presence is the SSOT after `MaterialPassDescriptor.transparent` was
+   * {@link MaterialPass} (feat-20260626-collapse M2: blend
+   * presence is the SSOT after `MaterialPass.transparent` was
    * dropped in M1).
    *
    * The record stage reads this to drive both the LDR split-pass
@@ -876,7 +884,7 @@ export interface MaterialSnapshot {
 // Plan-strategy D-3: single dispatch list sorted by queue value,
 // replacing the old three-bucket opaque/transparent/overlay dispatch.
 // Each entry carries the per-pass render-state, defines, and entry-point
-// data from the resolved MaterialPassDescriptor so the record stage
+// data from the resolved MaterialPass so the record stage
 // reads them without re-resolving the material.
 
 export interface DispatchEntry {
@@ -899,7 +907,7 @@ export interface DispatchEntry {
   readonly materialShaderId: string | undefined;
   readonly paramSnapshot: Readonly<Record<string, number | number[] | string>> | undefined;
   /**
-   * Stencil reference value from {@link MaterialPassDescriptor.stencilReference}
+   * Stencil reference value from {@link MaterialPass.stencilReference}
    * (draw-call dynamic state). Folded during extract for per-draw consumption
    * in the record stage. `undefined` when the pass does not set a reference
    * value (record stage falls back to WebGPU default 0).
@@ -1043,12 +1051,119 @@ const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
   'baseColorTexture',
   'metallicRoughnessTexture',
   'normalTexture',
+  'specularTintTexture',
+  'emissiveTexture',
+  'occlusionTexture',
 ];
+const BUILTIN_USER_REGION_TEXTURE_FIELD_SET = new Set(BUILTIN_USER_REGION_TEXTURE_FIELDS);
+const BUILTIN_BASE_COLOR_TEXTURE_FIELD_SET = new Set(['baseColorTexture']);
+
+function materialTextureFields(
+  shaderId: string | undefined,
+  fields: ReadonlySet<string> | undefined,
+): ReadonlySet<string> | undefined {
+  if (fields !== undefined && fields.size > 0) return fields;
+  if (
+    shaderId === 'forgeax::default-standard-pbr' ||
+    shaderId === 'forgeax::default-standard-pbr-skin' ||
+    shaderId === 'forgeax::pbr-skin'
+  ) {
+    return BUILTIN_USER_REGION_TEXTURE_FIELD_SET;
+  }
+  if (
+    shaderId === 'forgeax::default-unlit' ||
+    shaderId === 'forgeax::sprite' ||
+    shaderId === 'forgeax::sprite-lit'
+  ) {
+    return BUILTIN_BASE_COLOR_TEXTURE_FIELD_SET;
+  }
+  return fields;
+}
+
+/**
+ * The authored material surface uses the module IDs declared by built-in WGSL
+ * sources. Runtime pipeline caches still use the existing engine registration
+ * IDs, so this small projection keeps authored identity and renderer lookup
+ * identity in one place during the migration.
+ */
+function runtimeMaterialShaderId(
+  module: string | undefined,
+  passName?: string,
+): string | undefined {
+  if (
+    passName === 'shadow-caster' &&
+    (module === 'forgeax_material::standard' ||
+      module === 'forgeax_material::unlit' ||
+      module === 'forgeax::default-standard-pbr' ||
+      module === 'forgeax::default-unlit')
+  ) {
+    return 'forgeax::default-shadow-caster';
+  }
+  switch (module) {
+    case 'forgeax_material::standard':
+      return 'forgeax::default-standard-pbr';
+    case 'forgeax_material::unlit':
+      return 'forgeax::default-unlit';
+    case 'forgeax_material::sprite':
+      return 'forgeax::sprite';
+    case 'forgeax_material::sprite-lit':
+      return 'forgeax::sprite-lit';
+    default:
+      return module;
+  }
+}
+
+function pipelineRenderState(
+  renderState:
+    | (MaterialRenderState & {
+        readonly tags?: Readonly<Record<string, string>>;
+        readonly queue?: number;
+        readonly stencilReference?: number;
+      })
+    | undefined,
+): MaterialRenderState | undefined {
+  if (renderState === undefined) return undefined;
+  const {
+    cullMode,
+    depthCompare,
+    depthWriteEnabled,
+    blend,
+    alphaToCoverageEnabled,
+    stencil,
+    stencilReadMask,
+    stencilWriteMask,
+    frontFace,
+  } = renderState;
+  if (
+    cullMode === undefined &&
+    depthCompare === undefined &&
+    depthWriteEnabled === undefined &&
+    blend === undefined &&
+    alphaToCoverageEnabled === undefined &&
+    stencil === undefined &&
+    stencilReadMask === undefined &&
+    stencilWriteMask === undefined &&
+    frontFace === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(cullMode !== undefined && { cullMode }),
+    ...(depthCompare !== undefined && { depthCompare }),
+    ...(depthWriteEnabled !== undefined && { depthWriteEnabled }),
+    ...(blend !== undefined && { blend }),
+    ...(alphaToCoverageEnabled !== undefined && { alphaToCoverageEnabled }),
+    ...(stencil !== undefined && { stencil }),
+    ...(stencilReadMask !== undefined && { stencilReadMask }),
+    ...(stencilWriteMask !== undefined && { stencilWriteMask }),
+    ...(frontFace !== undefined && { frontFace }),
+  };
+}
 
 /**
  * tweak-20260627-model-loading-smoke-build-perf M4: per-World intern cache for
  * the loadByGuid texture/sampler resolution path. A MaterialAsset's
- * texture/sampler paramValues remain embedded GUID strings (dash-form) after
+ * texture/sampler values remain embedded GUID strings (dash-form) after
  * loadByGuid; the extract stage re-resolves each GUID to a column handle every
  * frame. Before this cache each resolution called `world.allocSharedRef`, which
  * mints a NEW monotonically-increasing slot id per call. Because the GPU
@@ -1120,7 +1235,7 @@ function internSharedRefFromGuid<B extends string>(
  * it and return that handle; otherwise return undefined (the field is a static
  * texture / sampler / scalar and flows through the normal TextureAsset path).
  *
- * The video GUID occupies the same texture2d paramValues slot a static texture
+ * The video GUID occupies the same texture2d values slot a static texture
  * would (P4: identical binding shape) — extract just routes it to a different
  * GPU lifecycle (the transient DynamicTextureStore, D-3) instead of the static
  * `ensureResident` cache, whose switch has no `video` arm (AC-08). Minting a
@@ -1136,14 +1251,46 @@ function resolveVideoFieldHandle(
   world: World,
   assetsRef: AssetRegistry,
 ): Handle<'VideoAsset', 'shared'> | undefined {
-  if (typeof value !== 'string') return undefined;
-  const payload = assetsRef.lookup(value);
+  const texture = materialTextureValue(value);
+  const textureRef = texture?.texture ?? (typeof value === 'string' ? value : undefined);
+  if (typeof textureRef !== 'string') return undefined;
+  const payload = assetsRef.lookup(textureRef);
   if (payload === undefined || payload.kind !== 'video') return undefined;
   // M4: intern so a video GUID mints one stable VideoAsset handle per World
   // instead of a fresh slot every frame. The transient per-frame view is
   // resolved downstream by this handle (DynamicTextureStore); minting the
   // handle once does not freeze the view (P5: handle != frame data).
-  return internSharedRefFromGuid(world, assetsRef, value, 'VideoAsset');
+  return internSharedRefFromGuid(world, assetsRef, textureRef, 'VideoAsset');
+}
+
+function materialTextureValue(value: unknown): MaterialTextureValue | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const textureValue = value as Partial<MaterialTextureValue>;
+  return typeof textureValue.texture === 'number' || typeof textureValue.texture === 'string'
+    ? (textureValue as MaterialTextureValue)
+    : undefined;
+}
+
+function materialTextureRef(value: unknown): unknown {
+  return materialTextureValue(value)?.texture ?? value;
+}
+
+function collectMaterialTextureCoordinates(
+  values: Readonly<Record<string, unknown>>,
+): Map<string, MaterialTextureCoordinates> {
+  const out = new Map<string, MaterialTextureCoordinates>();
+  for (const field of [
+    'baseColorTexture',
+    'metallicRoughnessTexture',
+    'normalTexture',
+    'specularTintTexture',
+    'emissiveTexture',
+    'occlusionTexture',
+  ]) {
+    const coordinates = materialTextureValue(values[field])?.coordinates;
+    if (coordinates !== undefined) out.set(field, coordinates);
+  }
+  return out;
 }
 
 /**
@@ -1168,8 +1315,9 @@ function resolveVideoFieldHandle(
  * membership is asserted in w13.
  */
 function collectUserRegionTextureHandles(
-  pv: Readonly<Record<string, number | number[] | string | undefined>>,
+  pv: Readonly<Record<string, unknown>>,
   shaderId: string | undefined,
+  paramSchema: readonly ParamSchemaEntry[] | undefined,
   assetsRef: AssetRegistry,
   world: World,
   resolveTex: (
@@ -1179,8 +1327,14 @@ function collectUserRegionTextureHandles(
   videoOut: Map<string, Handle<'VideoAsset', 'shared'>>,
 ): Map<string, Handle<'TextureAsset', 'shared'>> {
   const fields =
-    (shaderId !== undefined ? assetsRef.materialShaderTextureFieldNames(shaderId) : undefined) ??
-    BUILTIN_USER_REGION_TEXTURE_FIELDS;
+    materialTextureFields(
+      shaderId,
+      paramSchema !== undefined
+        ? derive(paramSchema).textureFieldNames
+        : shaderId !== undefined
+          ? assetsRef.materialShaderTextureFieldNames(shaderId)
+          : undefined,
+    ) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
   const out = new Map<string, Handle<'TextureAsset', 'shared'>>();
   for (const field of fields) {
     // D-5: a video-kind paramValue is routed to the transient path (videoOut),
@@ -1191,10 +1345,26 @@ function collectUserRegionTextureHandles(
       videoOut.set(field, videoHandle);
       continue;
     }
-    const handle = resolveTex(pv[field], 'TextureAsset');
+    const handle = resolveTex(materialTextureRef(pv[field]), 'TextureAsset');
     if (handle !== undefined) out.set(field, handle);
   }
   return out;
+}
+
+function materialParametersToParamSchema(
+  parameters: readonly MaterialParameter[],
+): readonly ParamSchemaEntry[] {
+  return parameters.flatMap((parameter): ParamSchemaEntry[] => {
+    // Static values select a cooked specialization and boolean material
+    // values have no runtime UBO representation in ParamSchemaEntry.
+    if (parameter.static || parameter.type === 'bool') return [];
+    return [
+      {
+        name: parameter.name,
+        type: parameter.type === 'texture' ? 'texture2d' : parameter.type,
+      },
+    ];
+  });
 }
 
 /**
@@ -1227,9 +1397,7 @@ function resolveMaterialSnapshot(
   const resolvedResult = walkMaterialPassesOverSharedRefs(world, tagged, assetsRef);
   if (!resolvedResult.ok) return defaultMaterialSnapshot();
   const resolved = resolvedResult.value;
-  const pv = resolved.paramValues as Readonly<
-    Record<string, number | number[] | string | undefined>
-  >;
+  const pv = resolved.values as Readonly<Record<string, unknown>>;
   const baseColorPv = pv.baseColor as readonly number[] | undefined;
   const baseColor = vec3.create(
     baseColorPv?.[0] ?? 1,
@@ -1251,8 +1419,12 @@ function resolveMaterialSnapshot(
     }
   }
   const allPasses = resolved.passes;
-  const firstPassShader = allPasses.length > 0 ? allPasses[0]?.shader : undefined;
-  // feat-20260614 M8 (D-19): texture / sampler paramValues are embedded GUIDs
+  const materialParamSchema = materialParametersToParamSchema(resolved.parameters ?? []);
+  const firstPassShader =
+    allPasses.length > 0
+      ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
+      : undefined;
+  // feat-20260614 M8 (D-19): texture / sampler values are embedded GUIDs
   // (dash-form strings) after loadByGuid. Resolve each to a user-tier column
   // handle by looking up the catalogued payload and minting via
   // world.allocSharedRef; a numeric value (already a column handle from a
@@ -1287,14 +1459,22 @@ function resolveMaterialSnapshot(
   const textureHandles = collectUserRegionTextureHandles(
     pv,
     firstPassShader,
+    materialParamSchema.length > 0 ? materialParamSchema : undefined,
     assetsRef,
     world,
     resolveTexLike,
     videoTextureFields,
   );
-  const samplerHandle = resolveTexLike(pv.sampler, 'SamplerAsset');
-  const emissiveTextureHandle = resolveTexLike(pv.emissiveTexture, 'TextureAsset');
-  const occlusionTextureHandle = resolveTexLike(pv.occlusionTexture, 'TextureAsset');
+  const samplerHandle = resolveTexLike(materialTextureRef(pv.sampler), 'SamplerAsset');
+  const emissiveTextureHandle = resolveTexLike(
+    materialTextureRef(pv.emissiveTexture),
+    'TextureAsset',
+  );
+  const occlusionTextureHandle = resolveTexLike(
+    materialTextureRef(pv.occlusionTexture),
+    'TextureAsset',
+  );
+  const textureCoordinates = collectMaterialTextureCoordinates(pv);
   // Named user-region fields are derived from the map (sprite + legacy reads).
   const baseColorTextureHandle = textureHandles.get('baseColorTexture');
   const metallicRoughnessTextureHandle = textureHandles.get('metallicRoughnessTexture');
@@ -1307,8 +1487,10 @@ function resolveMaterialSnapshot(
     clearcoat: clearcoatPv,
     clearcoatRoughness: clearcoatRoughnessPv,
     materialShaderId: firstPassShader,
-    renderState: allPasses[0]?.renderState,
+    renderState: pipelineRenderState(allPasses[0]?.renderState),
     paramSnapshot: paramSnap,
+    ...(materialParamSchema.length > 0 && { materialParamSchema }),
+    ...(textureCoordinates.size > 0 && { textureCoordinates }),
     ...(textureHandles.size > 0 && { textureHandles }),
     ...(videoTextureFields.size > 0 && { videoTextureFields }),
     ...(baseColorTextureHandle !== undefined && { baseColorTexture: baseColorTextureHandle }),
@@ -2779,7 +2961,7 @@ export function extractFrame(
     // pushes via `spawnDerivedRenderEntities`) reach this loop via the same
     // archetype edge that carries any sprite entity -- they all wear
     // `MeshFilter.assetHandle === HANDLE_QUAD` + a `forgeax::sprite`-shaded
-    // material asset + the sprite-bucket `paramValues.region` rectangle.
+    // material asset + the sprite-bucket `values.region` rectangle.
     // For the per-entity Y-sort path (requirements §AC-12 / §AC-13):
     //
     //   sortKey = -(Transform.posY - effectivePivotY * |Transform.scaleY|)
@@ -2795,7 +2977,7 @@ export function extractFrame(
     // §D-1 / §D-3). The detection lives on the material side -- detect a
     // tilemap-spawned entity by `MeshFilter.assetHandle === HANDLE_QUAD`
     // plus the `forgeax::sprite` shader id on `MeshRenderer.material`'s
-    // first pass + non-empty `paramValues.region`; no new public ECS
+    // first pass + non-empty `values.region`; no new public ECS
     // marker component lands (charter F1 minimum surface).
     //
     // Layer.value is now folded into each DispatchEntry.layer (fLayerValue
@@ -2806,7 +2988,7 @@ export function extractFrame(
     // feat-20260527-sprite-nineslice M4 / w17 (AC-14): SpriteRegionOverride
     // per-entity UV sub-rectangle. When the entity carries this component the
     // 4-float `[uMin, vMin, uW, vH]` override displaces the asset-side
-    // `paramValues.region` for this entity only — downstream 9-slice logic
+    // `values.region` for this entity only — downstream 9-slice logic
     // measures slices against this effective region.zw, so a half-width sub-
     // sprite reduces the anchor budget to 0.5 rather than the asset's 1.0.
     //
@@ -2954,7 +3136,7 @@ export function extractFrame(
         } else {
           // feat-20260529 M3 / w11: material parent chain inheritance via
           // read-through _materialWalk accessor (plan-strategy D-6).
-          // The old direct asset.passes / asset.paramValues read never
+          // The old direct asset.passes / asset.values read never
           // walked the parent chain, causing broken-inheritance (root cause).
           const resolvedResult = walkMaterialPassesOverSharedRefs(world, tagged, assets);
           if (!resolvedResult.ok) {
@@ -2990,9 +3172,7 @@ export function extractFrame(
             continue;
           }
           const resolved = resolvedResult.value;
-          const pv = resolved.paramValues as Readonly<
-            Record<string, number | number[] | string | undefined>
-          >;
+          const pv = resolved.values as Readonly<Record<string, unknown>>;
 
           const baseColorPv = pv.baseColor as readonly number[] | undefined;
           const baseColor = vec3.create(
@@ -3016,7 +3196,11 @@ export function extractFrame(
           }
 
           const allPasses = resolved.passes;
-          const firstPassShader = allPasses.length > 0 ? allPasses[0]?.shader : undefined;
+          const materialParamSchema = materialParametersToParamSchema(resolved.parameters ?? []);
+          const firstPassShader =
+            allPasses.length > 0
+              ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
+              : undefined;
           // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w17 (D-5):
           // bidirectional Skin <-> pbr-skin material fail-fast at extract.
           // Skin component without a forgeax::pbr-skin first-pass material
@@ -3081,7 +3265,7 @@ export function extractFrame(
           // exception block below covers exactly 2 plan-authorised cases:
           //   1. SpriteRegionOverride per-entity region displacement (Q4=a)
           //   2. flipX / flipY -> region fold (plan-strategy D-8)
-          // No legacy paramValues field-name shim; demos and SpriteParamValues
+          // No legacy values field-name shim; demos and SpriteParamValues
           // are UBO-aligned (no `texture` / `baseColor` / `pivot` / `slices`
           // / `sliceMode` keys reaching this code path). AGENTS.md §Change
           // stance: "no shim layer, no v1/v2 dual-path".
@@ -3111,26 +3295,37 @@ export function extractFrame(
             // GUID; resolve it to a column handle via catalog + allocSharedRef
             // before validation. A number is an already-minted column handle.
             let handle: Handle<'TextureAsset', 'shared'>;
-            if (typeof raw === 'string') {
+            const textureRef = materialTextureRef(raw);
+            if (typeof textureRef === 'string') {
               if (assets === null || assets === undefined) return undefined;
               // M4: intern so the GUID mints one stable handle per World
               // instead of a fresh slot every frame (GPU residency relies on
               // a stable handleSlot). onLastRelease -> gpuStore.evictTexture.
-              const interned = internSharedRefFromGuid(world, assets, raw, 'TextureAsset', (h) => {
-                if (gpuStore) gpuStore.evictTexture(h);
-              });
+              const interned = internSharedRefFromGuid(
+                world,
+                assets,
+                textureRef,
+                'TextureAsset',
+                (h) => {
+                  if (gpuStore) gpuStore.evictTexture(h);
+                },
+              );
               if (interned === undefined) return undefined;
               handle = interned;
-            } else if (typeof raw === 'number') {
-              handle = raw as unknown as Handle<'TextureAsset', 'shared'>;
+            } else if (typeof textureRef === 'number') {
+              handle = textureRef as unknown as Handle<'TextureAsset', 'shared'>;
             } else {
               return undefined;
             }
             if (assets === null || assets === undefined) return handle;
-            const declaredFields =
-              firstPassShader !== undefined
-                ? assets.materialShaderTextureFieldNames(firstPassShader)
-                : undefined;
+            const declaredFields = materialTextureFields(
+              firstPassShader,
+              materialParamSchema.length > 0
+                ? derive(materialParamSchema).textureFieldNames
+                : firstPassShader !== undefined
+                  ? assets.materialShaderTextureFieldNames(firstPassShader)
+                  : undefined,
+            );
             // Shader not registered (R-4 cross-worktree path) -> trust the
             // raw handle and let the record stage / GPU layer surface any
             // mismatch via MISSING_TEXTURE_HANDLE.
@@ -3153,17 +3348,18 @@ export function extractFrame(
             raw: unknown,
             brand: B,
           ): Handle<B, 'shared'> | undefined => {
-            if (typeof raw === 'number') return raw as unknown as Handle<B, 'shared'>;
-            if (typeof raw === 'string') {
+            const value = materialTextureRef(raw);
+            if (typeof value === 'number') return value as unknown as Handle<B, 'shared'>;
+            if (typeof value === 'string') {
               if (assets === null || assets === undefined) return undefined;
               // M4: intern the GUID -> column-handle resolution (one stable
               // handle per (world, guid, brand), reused across frames).
               if (gpuStore !== undefined && brand === 'TextureAsset') {
-                return internSharedRefFromGuid(world, assets, raw, brand, (handle) => {
+                return internSharedRefFromGuid(world, assets, value, brand, (handle) => {
                   gpuStore.evictTexture(handle as Handle<'TextureAsset', 'shared'>);
                 });
               }
-              return internSharedRefFromGuid(world, assets, raw, brand);
+              return internSharedRefFromGuid(world, assets, value, brand);
             }
             return undefined;
           };
@@ -3173,9 +3369,14 @@ export function extractFrame(
           // carried, replacing the hardcoded 3-field list. validateTextureHandle
           // already drops fields a shader doesn't declare as a texture.
           const userRegionFields =
-            (firstPassShader !== undefined && assets !== null && assets !== undefined
-              ? assets.materialShaderTextureFieldNames(firstPassShader)
-              : undefined) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
+            materialTextureFields(
+              firstPassShader,
+              materialParamSchema.length > 0
+                ? derive(materialParamSchema).textureFieldNames
+                : firstPassShader !== undefined && assets !== null && assets !== undefined
+                  ? assets.materialShaderTextureFieldNames(firstPassShader)
+                  : undefined,
+            ) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
           const textureHandles = new Map<string, Handle<'TextureAsset', 'shared'>>();
           const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
           for (const field of userRegionFields) {
@@ -3206,6 +3407,7 @@ export function extractFrame(
             'occlusionTexture',
             pv.occlusionTexture,
           );
+          const textureCoordinates = collectMaterialTextureCoordinates(pv);
           const emissivePv = pv.emissive as readonly number[] | undefined;
 
           // feat-20260625 M2 / w6: first-pass transparency flag folds into
@@ -3213,14 +3415,14 @@ export function extractFrame(
           // LDR split + premultiplied-alpha blend decision without
           // re-reading passes[]. feat-20260626-collapse M2: derive from
           // `passes[0].renderState.blend !== undefined` (blend presence is
-          // the SSOT after MaterialPassDescriptor.transparent was dropped).
+          // the SSOT after MaterialPass.transparent was dropped).
           // Result is plain boolean (always defined here) — written as-is
           // into the snapshot (`boolean | undefined` field, see L759).
           const firstPassTransparent: boolean = allPasses[0]?.renderState?.blend !== undefined;
 
           // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w12 (D-8):
           // narrow `forgeax::sprite` extract block --- folds the legacy user
-          // paramValues format (flipX / flipY / slices / sliceMode + free
+          // values format (flipX / flipY / slices / sliceMode + free
           // region / pivot) into the UBO-aligned paramSnapshot vec4 fields
           // (region / pivotAndSize / slicesAndMode + colorTint). Also folds
           // per-entity SpriteRegionOverride (Q4=a). After this block the
@@ -3291,8 +3493,10 @@ export function extractFrame(
             clearcoat: clearcoatPv,
             clearcoatRoughness: clearcoatRoughnessPv,
             materialShaderId: firstPassShader,
-            renderState: allPasses[0]?.renderState,
+            renderState: pipelineRenderState(allPasses[0]?.renderState),
             paramSnapshot: paramSnap,
+            ...(materialParamSchema.length > 0 && { materialParamSchema }),
+            ...(textureCoordinates.size > 0 && { textureCoordinates }),
             ...(textureHandles.size > 0 && { textureHandles }),
             ...(videoTextureFields.size > 0 && { videoTextureFields }),
             ...(baseColorTextureHandle !== undefined && {
@@ -3336,22 +3540,27 @@ export function extractFrame(
               // the entity survives frustum cull. `renderableIndex` is a
               // placeholder here — the flush rewrites it to the actual slot
               // (renderables.length at push time).
+              const passState = (pass.renderState ?? {}) as MaterialRenderState & {
+                readonly tags?: Record<string, string>;
+                readonly queue?: number;
+                readonly stencilReference?: number;
+              };
               pendingDispatch.push({
                 entityIndex: i,
                 materialHandle: handleRaw,
                 renderableIndex: renderables.length,
                 passIndex: pIdx,
-                queue: pass.queue ?? 2000,
+                queue: passState.queue ?? 2000,
                 layer: layerVal,
-                tags: pass.tags ?? {},
-                renderState: pass.renderState,
-                defines: pass.defines,
-                vertexEntry: pass.vertexEntry,
-                fragmentEntry: pass.fragmentEntry,
-                materialShaderId: pass.shader,
+                tags: passState.tags ?? {},
+                renderState: pipelineRenderState(passState),
+                defines: pass.program.moduleSlots,
+                vertexEntry: pass.program.vertexEntry,
+                fragmentEntry: pass.program.fragmentEntry,
+                materialShaderId: runtimeMaterialShaderId(pass.program.module, pass.name),
                 paramSnapshot: paramSnap,
-                ...(pass.stencilReference !== undefined && {
-                  stencilReference: pass.stencilReference,
+                ...(passState.stencilReference !== undefined && {
+                  stencilReference: passState.stencilReference,
                 }),
               });
             }

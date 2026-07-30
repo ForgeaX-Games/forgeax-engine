@@ -29,7 +29,7 @@ import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shade
 import type {
   Handle,
   MaterialAsset,
-  MaterialPassDescriptor,
+  MaterialPass,
   MeshAsset,
   ParamSchemaEntry,
   PassSelector,
@@ -110,7 +110,7 @@ import { describe, expect, it } from 'vitest';
       expect(typeof mod.buildPbrMaterialUboPayload).toBe('function');
     });
 
-    it('160 B payload size + standard PBR slot layout (baseline)', () => {
+    it('288 B payload size + standard PBR slot layout (baseline)', () => {
       if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet');
       }
@@ -125,7 +125,7 @@ import { describe, expect, it } from 'vitest';
         clearcoatRoughness: 0.12,
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(160);
+      expect(buf.byteLength).toBe(288);
       const f32 = new Float32Array(buf);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at
@@ -153,25 +153,26 @@ import { describe, expect, it } from 'vitest';
       expect(f32[15]).toBe(0);
       // occlusionStrength (offset 64..67).
       expect(f32[16]).toBe(1);
-      // uvSet + alphaCutoff (offsets 68..75).
+      // alphaCutoff (offset 68).
       expect(f32[17]).toBe(0);
-      expect(f32[18]).toBe(0);
-      // clearcoat layer (offsets 76..83).
-      expect(f32[19]).toBeCloseTo(0.85);
-      expect(f32[20]).toBeCloseTo(0.12);
+      // clearcoat layer (offsets 72..79).
+      expect(f32[18]).toBeCloseTo(0.85);
+      expect(f32[19]).toBeCloseTo(0.12);
     });
 
     it('keeps engine-owned texture UV tails aligned across PBR and sprite layouts', () => {
       const apply = mod.applyMaterialTextureUvScales;
       if (typeof apply !== 'function') throw new Error('helper not exported yet');
       const world = new World();
-      const pbrPayload = new ArrayBuffer(160);
+      const pbrPayload = new ArrayBuffer(288);
       apply(pbrPayload, makePbrSnapshot({}), world);
       const pbrF32 = new Float32Array(pbrPayload);
-      expect(pbrF32[28]).toBe(1);
-      expect(pbrF32[30]).toBe(1);
-      expect(pbrF32[32]).toBe(1);
+      expect(pbrF32[26]).toBe(1);
       expect(pbrF32[34]).toBe(1);
+      expect(pbrF32[42]).toBe(1);
+      expect(pbrF32[50]).toBe(1);
+      expect(pbrF32[58]).toBe(1);
+      expect(pbrF32[66]).toBe(1);
 
       const spritePayload = new ArrayBuffer(128);
       apply(
@@ -309,7 +310,7 @@ import { describe, expect, it } from 'vitest';
   //
   // AC-14: SpriteRegionOverride per-entity UV sub-rectangle composes with 9-slice.
   // When the entity carries the override component, the extract stage replaces
-  // the asset-side `paramValues.region` with the override's 4-float region
+  // the asset-side `values.region` with the override's 4-float region
   // before downstream snapshot construction; downstream 9-slice paths therefore
   // measure slices against the override's region.zw, not the asset's. Two
   // renderables sharing the same MaterialAsset can render with different
@@ -346,7 +347,7 @@ import { describe, expect, it } from 'vitest';
     // baseColorTexture). Legacy user inputs (slices/sliceMode/flipX/flipY/
     // pivot) are still accepted by extract and folded into the UBO-aligned
     // paramSnapshot vec4 entries (D-8).
-    sr.registerMaterialShader('forgeax::sprite', {
+    sr.installMaterialArtifact('forgeax::sprite', {
       source: 'fn main() {}',
       paramSchema: [
         { name: 'colorTint', type: 'vec4', default: [1.0, 1.0, 1.0, 1.0] },
@@ -359,10 +360,10 @@ import { describe, expect, it } from 'vitest';
     return sr;
   }
 
-  const SPRITE_PASS: MaterialPassDescriptor = {
+  const SPRITE_PASS: MaterialPass = {
     name: 'Sprite',
-    shader: 'forgeax::sprite',
-    queue: 3000,
+    program: { module: 'forgeax::sprite' },
+    renderState: { queue: 3000 },
   };
 
   function identity() {
@@ -425,7 +426,7 @@ import { describe, expect, it } from 'vitest';
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [SPRITE_PASS],
-        paramValues: { region: [0.1, 0.1, 0.8, 0.8] },
+        values: { region: [0.1, 0.1, 0.8, 0.8] },
       });
       spawnCamera(world);
       world
@@ -453,7 +454,7 @@ import { describe, expect, it } from 'vitest';
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [SPRITE_PASS],
-        paramValues: { region: [0.0, 0.0, 1.0, 1.0] },
+        values: { region: [0.0, 0.0, 1.0, 1.0] },
       });
       spawnCamera(world);
       world
@@ -487,7 +488,7 @@ import { describe, expect, it } from 'vitest';
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [SPRITE_PASS],
-        paramValues: {
+        values: {
           region: [0.0, 0.0, 1.0, 1.0],
           slicesAndMode: [0.25, 0.25, 0.25, 0.25],
         },
@@ -1023,7 +1024,7 @@ import { describe, expect, it } from 'vitest';
 // --- from feat-20260625-refactor-sprite-as-transparent-mesh M1 / w2 ---
 {
   // standard-pbr regression: the generic writer over the engine-shipped
-  // default-standard-pbr.wgsl.meta.json paramSchema (14 numeric entries
+  // default-standard-pbr.material.json paramSchema (14 numeric entries
   // std140-packed into 96 B) must produce byte-identical output to
   // buildPbrMaterialUboPayload. This is the gate plan-strategy section 2
   // D-2 sets so the generic writer can replace the inline overlay without
@@ -1040,7 +1041,7 @@ import { describe, expect, it } from 'vitest';
     buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
   };
 
-  // Mirror the engine-shipped default-standard-pbr.wgsl.meta.json schema
+  // Mirror the engine-shipped default-standard-pbr.material.json schema
   // (the on-disk SSOT; inline here to keep the unit suite free of asset
   // loads).
   const STANDARD_PBR_SCHEMA: readonly ParamSchemaEntry[] = [
@@ -1054,16 +1055,15 @@ import { describe, expect, it } from 'vitest';
     { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
     { name: 'emissiveIntensity', type: 'f32', default: 0 },
     { name: 'occlusionStrength', type: 'f32', default: 1 },
-    { name: 'uvSet', type: 'f32', default: 0 },
     { name: 'alphaCutoff', type: 'f32', default: 0 },
     { name: 'clearcoat', type: 'f32', default: 0 },
     { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
   ];
 
   describe('applyParamSnapshotToUbo: standard-pbr byte-identical via derive (M1 / w2)', () => {
-    it('derive(standard-pbr).uboLayout matches the 96 B layout the inline PBR writer uses', () => {
+    it('derive(standard-pbr).uboLayout matches the 80 B authored numeric layout', () => {
       const { uboLayout } = derive(STANDARD_PBR_SCHEMA);
-      expect(uboLayout.totalBytes).toBe(96);
+      expect(uboLayout.totalBytes).toBe(80);
       const byName = new Map(uboLayout.entries.map((e) => [e.name, e]));
       expect(byName.get('baseColor')?.offset).toBe(0);
       expect(byName.get('metallic')?.offset).toBe(16);
@@ -1076,10 +1076,9 @@ import { describe, expect, it } from 'vitest';
       expect(byName.get('emissive')?.offset).toBe(48);
       expect(byName.get('emissiveIntensity')?.offset).toBe(60);
       expect(byName.get('occlusionStrength')?.offset).toBe(64);
-      expect(byName.get('uvSet')?.offset).toBe(68);
-      expect(byName.get('alphaCutoff')?.offset).toBe(72);
-      expect(byName.get('clearcoat')?.offset).toBe(76);
-      expect(byName.get('clearcoatRoughness')?.offset).toBe(80);
+      expect(byName.get('alphaCutoff')?.offset).toBe(68);
+      expect(byName.get('clearcoat')?.offset).toBe(72);
+      expect(byName.get('clearcoatRoughness')?.offset).toBe(76);
     });
 
     it('generic writer over standard-pbr snapshot equals buildPbrMaterialUboPayload bytes', () => {
@@ -1108,7 +1107,6 @@ import { describe, expect, it } from 'vitest';
         emissive,
         emissiveIntensity,
         occlusionStrength,
-        uvSet: 0,
         alphaCutoff: 0,
         clearcoat: 0,
         clearcoatRoughness: 0.5,

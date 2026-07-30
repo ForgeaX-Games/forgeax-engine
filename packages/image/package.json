@@ -69,7 +69,8 @@
   },
   "devDependencies": {
     "@forgeax/engine-import": "workspace:*",
-    "@types/node": "^20.14.0"
+    "@types/node": "^20.14.0",
+    "@webgpu/types": "^0.1.71"
   },
   "forgeax": {
     "metrics": {

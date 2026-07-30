@@ -18,14 +18,14 @@ import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
  * paramSchema for forgeax::pbr-skin — mirrors default-standard-pbr 8 fields.
  * Previously sourced from default-standard-pbr.schema.json; now inlined because
  * the .schema.json file has been deleted (feat-20260528-material-shader-registration-unification M1/w4).
- * The SSOT is default-standard-pbr.wgsl.meta.json paramSchema[].
+ * The SSOT is default-standard-pbr.material.json paramSchema[].
  */
 const defaultStandardPbrParamSchema: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
   { name: 'metallic', type: 'f32', default: 0.0 },
   { name: 'roughness', type: 'f32', default: 0.5 },
   // feat-20260613 fix-issue-1 (D-8): channelMap split into 4 independent f32
-  // selectors; mirrors default-standard-pbr-skin.wgsl.meta.json paramSchema.
+  // selectors; mirrors default-standard-pbr-skin.material.json paramSchema.
   { name: 'metallicChannel', type: 'f32', default: 2.0 },
   { name: 'roughnessChannel', type: 'f32', default: 1.0 },
   { name: 'aoChannel', type: 'f32', default: 0.0 },
@@ -33,9 +33,6 @@ const defaultStandardPbrParamSchema: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0.0, 0.0, 0.0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0.0 },
   { name: 'occlusionStrength', type: 'f32', default: 1.0 },
-  // feat-city-glb multi-UV tiling: per-material UV-set selector (offset 68,
-  // UBO byte-stable at 80). Mirrors default-standard-pbr.wgsl.meta.json SSOT.
-  { name: 'uvSet', type: 'f32', default: 0.0 },
   { name: 'alphaCutoff', type: 'f32', default: 0.0 },
   { name: 'clearcoat', type: 'f32', default: 0.0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
@@ -78,7 +75,7 @@ export interface SkinCaps {
  * @param caps PBR caps (storageBuffer boolean) for BGL entry type selection.
  *
  * Throws if the identifier is already registered (fail-fast per
- * ShaderRegistry.registerMaterialShader contract).
+ * ShaderRegistry.installMaterialArtifact contract).
  */
 export function registerDefaultStandardPbrSkin(
   registry: ShaderRegistry,
@@ -92,7 +89,7 @@ export function registerDefaultStandardPbrSkin(
   // selected the storage-buffer vs uniform-buffer skin variant of the
   // BGL; equivalent caps gating now lives in buildPbrSkinLayouts.
   void caps;
-  registry.registerMaterialShader(RESERVED_ID, {
+  registry.installMaterialArtifact(RESERVED_ID, {
     source: composedWgsl,
     paramSchema: defaultStandardPbrParamSchema,
   });

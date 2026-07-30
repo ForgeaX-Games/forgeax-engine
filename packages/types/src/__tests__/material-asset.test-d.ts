@@ -16,7 +16,7 @@
 //          plan-strategy D-4 (PassSelector Record<string, string[]>).
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { PassSelector } from '../index';
+import type { AssetGuid, MaterialAsset, MaterialValue, PassSelector } from '../index';
 import { RenderQueue } from '../index';
 
 describe('RenderQueue - 5 standard queue constants (w5 / AC-04)', () => {
@@ -60,5 +60,43 @@ describe('PassSelector - type-level smoke tests (w8)', () => {
     // @ts-expect-error - PassSelector values must be string[], not number[]
     const _ps: PassSelector = { LightMode: [123] };
     void _ps;
+  });
+});
+
+describe('MaterialAsset authoring vocabulary', () => {
+  it('discovers root contract and derived values from a real authored literal', () => {
+    const parentGuid = new Uint8Array(16) as AssetGuid;
+    const material = {
+      kind: 'material',
+      passes: [
+        {
+          name: 'forward',
+          program: { module: 'project::standard' },
+        },
+      ],
+      parameters: [{ name: 'baseColor', type: 'color', default: [1, 1, 1, 1] }],
+      values: { baseColor: [0.2, 0.3, 0.4, 1] },
+    } satisfies MaterialAsset;
+    const derived = {
+      kind: 'material',
+      parent: parentGuid,
+      values: { baseColor: [0.9, 0.1, 0.1, 1] },
+    } satisfies MaterialAsset;
+
+    expectTypeOf(material.values?.baseColor).toMatchTypeOf<MaterialValue>();
+    expectTypeOf(derived.parent).toEqualTypeOf<AssetGuid>();
+  });
+
+  it('does not accept the retired authored fields', () => {
+    const retiredField = ['param', 'Values'].join('') as `param${'Values'}`;
+    // @ts-expect-error - the authoring contract does not accept the retired field.
+    const legacy: MaterialAsset = { kind: 'material', [retiredField]: {} };
+    void legacy;
+
+    const legacyPass: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', program: { module: 'forgeax::standard' } }],
+    };
+    void legacyPass;
   });
 });
