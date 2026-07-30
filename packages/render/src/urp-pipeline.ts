@@ -237,14 +237,14 @@ export const urpPipeline: RenderPipeline = {
       format: 'depth24plus-stencil8',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10,
+      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (depth post-process)
     });
     if (msaaSupported) {
       graph.addColorTarget('hdrDepthMsaa', {
         format: 'depth24plus-stencil8',
         size: 'swapchain',
         sample: 4,
-        usage: 0x10,
+        usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (depth post-process)
       });
     }
     // bug-20260610: aligned with createRenderer's RGBA swap-chain switch
@@ -277,7 +277,7 @@ export const urpPipeline: RenderPipeline = {
         format: 'depth24plus-stencil8',
         size: 'swapchain',
         sample: 4,
-        usage: 0x10,
+        usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (depth post-process)
       });
     }
 

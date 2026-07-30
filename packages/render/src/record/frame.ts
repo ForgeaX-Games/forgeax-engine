@@ -347,6 +347,7 @@ export function recordFrame(
       msaaActive,
       geometryColorView,
       geometryDepthView,
+      geometryDepthKey,
       geometryColorResolveView,
       ldrSpriteColorView,
     } = resolveGeometryTargetViews(
@@ -516,6 +517,7 @@ export function recordFrame(
       tonemapActive,
       geometryColorView,
       geometryDepthView,
+      geometryDepthKey,
       validated,
       validatedOrdered,
       viewBindGroup,

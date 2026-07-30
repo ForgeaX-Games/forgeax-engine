@@ -23,6 +23,7 @@ const doubleResizeChurn = process.env.FORGEAX_M3_DOUBLE_RESIZE_CHURN === '1';
 const useMsaa = process.env.FORGEAX_M3_MSAA === '1';
 const depthPost = process.env.FORGEAX_M3_DEPTH_POST === '1';
 const depthLiveSwitch = process.env.FORGEAX_M3_DEPTH_LIVE_SWITCH === '1';
+const depthReverseLiveSwitch = process.env.FORGEAX_M3_DEPTH_REVERSE_LIVE_SWITCH === '1';
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
   throw new Error(`unsupported start variant: ${startVariant}`);
@@ -445,6 +446,81 @@ async function runDepthLiveSwitchScenario(baseUrl, page) {
   console.log(`[m3-depth-live-switch] PASS msaa=${useMsaa} resizeHistory=${normal.resizeHistory.join('>')} changedPixels=${delta.changed} depthBinding=${normal.hasDepth}/${falsifier.hasDepth} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
+async function runDepthReverseLiveSwitchScenario(baseUrl, page) {
+  const expectedAntialias = `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}`;
+  const expectedHistory = '640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+  const querySuffix = useMsaa ? '&msaa' : '';
+  const waitForReady = async (pipeline) => {
+    await page.waitForFunction(
+      ({ expectedAntialias, expectedPipeline }) => document.querySelector('#variant-status')?.textContent === 'M3_MULTI_UV_VARIANT=true'
+        && document.querySelector('#pipeline-status')?.textContent === `M3_PIPELINE=${expectedPipeline}`
+        && document.querySelector('#post-status')?.textContent === 'M3_POST_EFFECT=depth'
+        && document.querySelector('#antialias-status')?.textContent === expectedAntialias,
+      { expectedAntialias, expectedPipeline: pipeline },
+      { timeout: 15_000 },
+    );
+  };
+
+  const drive = async (falsified) => {
+    const falsifierQuery = falsified ? '&falsify-reverse-pipeline' : '';
+    await page.goto(`${baseUrl}/?pipeline=custom&variant=true&post=depth${querySuffix}${falsifierQuery}`, {
+      waitUntil: 'networkidle',
+      timeout: 30_000,
+    });
+    await waitForReady('custom');
+    await waitForNonBlackCanvas(page, `${falsified ? 'falsifier' : 'normal'} custom depth`);
+    const custom = await capture(page, `${falsified ? 'falsified' : 'normal'}-depth-reverse-custom`);
+
+    await select(page, '#pipeline-select', 'standard', '#pipeline-status');
+    await waitForReady('standard');
+    const resizeHistory = [];
+    await resizeCanvas(page, 640, 360, resizeHistory);
+    await resizeCanvas(page, 480, 270, resizeHistory);
+    await resizeCanvas(page, 720, 405, resizeHistory);
+    await resizeCanvas(page, 640, 360, resizeHistory);
+    await resizeCanvas(page, 480, 270, resizeHistory);
+    await resizeCanvas(page, 720, 405, resizeHistory);
+    await resizeCanvas(page, 640, 360, resizeHistory);
+    await waitForNonBlackCanvas(page, `${falsified ? 'falsifier' : 'normal'} resized standard depth`);
+    const standard = await capture(page, `${falsified ? 'falsified' : 'normal'}-depth-reverse-live-standard`);
+    const rhi = await captureRhi(page, `${falsified ? 'falsified' : 'normal'}-depth-reverse-live-standard`);
+    const hasDepth = hasDepthBinding(rhi.report);
+    if (resizeHistory.join('>') !== expectedHistory) {
+      throw new Error(`depth reverse live-switch resize history wrong: ${resizeHistory.join('>')}`);
+    }
+    if (rhi.dawnReadback.nonBlackPixelCount === 0) {
+      throw new Error(`depth reverse live-switch Fresh Dawn replay was black: falsified=${falsified}`);
+    }
+    return { custom, standard, rhi, hasDepth, resizeHistory };
+  };
+
+  const normal = await drive(false);
+  const falsifier = await drive(true);
+  const delta = changedPixels(normal.standard, falsifier.standard);
+  if (!normal.hasDepth || falsifier.hasDepth) {
+    throw new Error(`depth reverse live-switch binding topology mismatch: normal=${normal.hasDepth} falsifier=${falsifier.hasDepth}`);
+  }
+  if (delta === null || delta.changed < 1000) {
+    throw new Error(`depth reverse live-switch falsifier did not change pixels: ${JSON.stringify(delta)}`);
+  }
+  writeFileSync(resolve(ARTIFACT_DIR, 'depth-reverse-live-switch-browser.json'), `${JSON.stringify({
+    normal: {
+      custom: { state: normal.custom.state, sha256: createHash('sha256').update(normal.custom.pixels).digest('hex') },
+      standard: { state: normal.standard.state, sha256: createHash('sha256').update(normal.standard.pixels).digest('hex') },
+      rhi: { report: normal.rhi.report, draws: normal.rhi.draws, dawn: normal.rhi.dawnReadback, hasDepthBinding: normal.hasDepth },
+      resizeHistory: normal.resizeHistory,
+    },
+    falsifier: {
+      custom: { state: falsifier.custom.state, sha256: createHash('sha256').update(falsifier.custom.pixels).digest('hex') },
+      standard: { state: falsifier.standard.state, sha256: createHash('sha256').update(falsifier.standard.pixels).digest('hex') },
+      rhi: { report: falsifier.rhi.report, draws: falsifier.rhi.draws, dawn: falsifier.rhi.dawnReadback, hasDepthBinding: falsifier.hasDepth },
+      resizeHistory: falsifier.resizeHistory,
+    },
+    delta,
+  }, null, 2)}\n`);
+  console.log(`[m3-depth-reverse-live-switch] PASS msaa=${useMsaa} resizeHistory=${normal.resizeHistory.join('>')} changedPixels=${delta.changed} depthBinding=${normal.hasDepth}/${falsifier.hasDepth} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
+}
+
 const port = Number(process.env.FORGEAX_BROWSER_PORT ?? 55980) + Math.floor(Math.random() * 20);
 const viteProc = spawn(process.execPath, [
   resolve(REPO_ROOT, 'node_modules/vite/bin/vite.js'),
@@ -471,7 +547,11 @@ try {
     if (message.type() === 'error' && !message.text().includes('404')) consoleErrors.push(message.text());
   });
 
-  if (depthLiveSwitch) {
+  if (depthReverseLiveSwitch) {
+    await runDepthReverseLiveSwitchScenario(baseUrl, page);
+    if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
+    if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
+  } else if (depthLiveSwitch) {
     await runDepthLiveSwitchScenario(baseUrl, page);
     if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
     if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);

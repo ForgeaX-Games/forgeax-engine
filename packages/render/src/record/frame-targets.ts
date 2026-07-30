@@ -112,6 +112,7 @@ export function resolveGeometryTargetViews(
   msaaActive: boolean;
   geometryColorView: TextureView | null;
   geometryDepthView: TextureView | null;
+  geometryDepthKey: string | null;
   geometryColorResolveView: TextureView | null;
   ldrSpriteColorView: TextureView | null;
 } {
@@ -123,6 +124,7 @@ export function resolveGeometryTargetViews(
     camera.antialias === 'msaa' && internals.device.caps.backendKind !== 'wgpu-webgl2';
   let geometryColorView: TextureView | null = view;
   let geometryDepthView: TextureView | null = depthView;
+  let geometryDepthKey: string | null = null;
   // Single-sample resolve out for the main colour pass (LDR: swap-chain
   // srgb view; HDR: hdrColorResolve view) + the multisample unorm target
   // for the LDR sprite split sub-pass. Both null when msaaActive is false.
@@ -137,6 +139,7 @@ export function resolveGeometryTargetViews(
     geometryDepthView = msaaActive
       ? ((frameState.perFrameGraph?.getColorTargetView('hdrDepthMsaa') as TextureView) ?? depthView)
       : ((frameState.perFrameGraph?.getColorTargetView('hdrDepth') as TextureView) ?? depthView);
+    geometryDepthKey = msaaActive ? 'hdrDepthMsaa' : 'hdrDepth';
     if (msaaActive) {
       geometryColorView =
         (frameState.perFrameGraph?.getColorTargetView('hdrColorMsaa') as TextureView) ??
@@ -179,6 +182,7 @@ export function resolveGeometryTargetViews(
       ? pipelineState.perPassResources.msaaColorView
       : msaaColorView;
     geometryDepthView = frameState.perFrameGraph?.getColorTargetView('msaaDepth') as TextureView;
+    geometryDepthKey = 'msaaDepth';
     geometryColorResolveView = view;
     ldrSpriteColorView = msaaColorView;
   } else if (camera.antialias === 'fxaa') {
@@ -243,6 +247,7 @@ export function resolveGeometryTargetViews(
     geometryDepthView,
     geometryColorResolveView,
     ldrSpriteColorView,
+    geometryDepthKey,
   };
 }
 

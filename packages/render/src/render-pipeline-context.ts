@@ -255,6 +255,13 @@ export interface _StandardForwardSceneView {
   readonly tonemapActive: boolean;
   readonly geometryColorView: TextureView | null;
   readonly geometryDepthView: TextureView | null;
+  /**
+   * @internal — graph key owning the active geometry depth attachment. URP's
+   * MSAA route writes `hdrDepthMsaa` while depth post-process registrations
+   * retain the stable logical `depth` key; the dispatcher uses this fact to
+   * bind the matching sample-count texture.
+   */
+  readonly geometryDepthKey: string | null;
   readonly skyboxActive: boolean;
   readonly splitLdrSprite: boolean;
   readonly ldrSpriteUnormView: TextureView | null;

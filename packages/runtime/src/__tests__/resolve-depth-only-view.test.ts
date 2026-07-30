@@ -21,6 +21,7 @@ let resolveDepthOnlyView: (
   internals: Record<string, unknown>,
   key: string,
   label: string,
+  preferredKey?: string | null,
 ) => unknown;
 
 // Dynamic import so Vitest hoists vi.mock before the module loads.
@@ -100,6 +101,25 @@ describe('resolveDepthOnlyView', () => {
       baseArrayLayer: 0,
       arrayLayerCount: 1,
     });
+  });
+
+  it('prefers the active geometry depth target when supplied', () => {
+    const logicalTexture = { __logicalDepth: true };
+    const activeTexture = { __activeDepth: true };
+    const createTextureViewFn = vi.fn().mockReturnValue({ ok: true, value: { __view: true } });
+    const graph = {
+      getColorTargetTexture: vi.fn((key: string) =>
+        key === 'hdrDepthMsaa' ? activeTexture : logicalTexture,
+      ),
+    } as unknown as RenderGraph;
+    const internals = makeSpyInternals({
+      graph,
+      device: { createTextureView: createTextureViewFn },
+    });
+
+    resolveDepthOnlyView(internals, 'depth', 'active-depth-view', 'hdrDepthMsaa');
+
+    expect(createTextureViewFn).toHaveBeenCalledWith(activeTexture, expect.anything());
   });
 
   it('fires error on createTextureView failure and returns null', () => {

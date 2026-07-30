@@ -21,6 +21,28 @@ import { createDefaultLoaderRegistry, wireDefaultLoaders } from '../wire-default
 const emptyCtx = {} as LoadContext;
 
 describe('meshLoader', () => {
+  it('restores extra UV attributes from a v2 mesh binary', () => {
+    const bytes = new Uint8Array(28 + 14 * Float32Array.BYTES_PER_ELEMENT);
+    const header = new DataView(bytes.buffer);
+    header.setUint32(0, 2, true); // mesh binary v2
+    header.setUint32(4, 2, true); // uv + uv1
+    header.setUint32(8, 14, true); // 12F base + 2F uv1
+    header.setUint32(12, 14, true); // one vertex
+    const vertex = new Float32Array(bytes.buffer, 28, 14);
+    vertex[12] = 0.25;
+    vertex[13] = 0.75;
+
+    const loadPack = meshLoader.loadPack;
+    expect(loadPack).toBeDefined();
+    if (!loadPack) throw new Error('meshLoader.loadPack must be registered');
+
+    const out = loadPack({ payload: {}, artifacts: { body: { bytes } } } as never, emptyCtx) as {
+      attributes: { uv1?: unknown };
+    };
+
+    expect(out.attributes.uv1).toEqual(new Float32Array([0.25, 0.75]));
+  });
+
   it('normalises Array vertices/indices into typed arrays with a default submesh', () => {
     const out = meshLoader.load(
       { vertices: new Array(12).fill(0), indices: [0, 0, 0] },

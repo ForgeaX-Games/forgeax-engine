@@ -1,5 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
@@ -17,6 +18,7 @@ export default withRhiDebug({
   extraPlugins: [
     pluginPack({
       refresh: reloadAssetHost(),
+      importers: [imageImporter],
       roots: [
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),

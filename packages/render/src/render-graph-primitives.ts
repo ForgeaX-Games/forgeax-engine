@@ -599,10 +599,15 @@ export function resolveDepthOnlyView(
   internals: _InternalRenderPipelineContext,
   key: string,
   label: string,
+  preferredKey?: string | null,
 ): TextureView | null {
   const graph = internals.frameState.perFrameGraph;
   if (graph === null) return null;
-  const tex = graph.getColorTargetTexture(key);
+  const preferredTexture =
+    preferredKey === null || preferredKey === undefined
+      ? undefined
+      : graph.getColorTargetTexture(preferredKey);
+  const tex = preferredTexture ?? graph.getColorTargetTexture(key);
   if (tex === undefined) return null;
   const res = internals.runtime.device.createTextureView(tex as never, {
     label,
@@ -1295,6 +1300,7 @@ function dispatchFullscreenPass(
           internals,
           depthKey,
           'post-process-scene-depth-only-view',
+          internals.geometryDepthKey,
         );
         if (depthTexView === null) {
           throw new PostProcessError({

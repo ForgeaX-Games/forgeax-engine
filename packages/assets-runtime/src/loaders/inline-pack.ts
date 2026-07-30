@@ -149,12 +149,43 @@ export const meshLoader: Loader = {
     if (artifact === undefined) return meshLoader.load(input.payload, input.refs, ctx);
     const decoded = unpackMeshBin(artifact.bytes);
     if (decoded === undefined) return undefined;
+
+    // The packed v2 header is the SSOT for the interleaved vertex stride and
+    // UV-set count. `uv1`…`uv7` are not standalone binary sections: they live
+    // after the base (or skinned) vertex fields. Reconstruct their attribute
+    // arrays here so the registry validator and GPU layout derive the same
+    // stride that the importer wrote. Without this bridge, a valid 14F mesh
+    // (two UV sets) loses `uv1` on load and is rejected as a malformed 12F mesh.
+    const extraUvAttributes: Record<string, Float32Array> = {};
+    const uvSetCount = decoded.uvSetCount ?? 1;
+    const floatsPerVertex = decoded.floatsPerVertex;
+    if (
+      uvSetCount > 1 &&
+      floatsPerVertex !== undefined &&
+      decoded.vertices.length % floatsPerVertex === 0
+    ) {
+      const hasSkin = floatsPerVertex === 18 + (uvSetCount - 1) * 2;
+      const firstExtraUvOffset = hasSkin ? 18 : 12;
+      const vertexCount = decoded.vertices.length / floatsPerVertex;
+      for (let set = 1; set < uvSetCount; set++) {
+        const values = new Float32Array(vertexCount * 2);
+        const sourceOffset = firstExtraUvOffset + (set - 1) * 2;
+        for (let vertex = 0; vertex < vertexCount; vertex++) {
+          const source = vertex * floatsPerVertex + sourceOffset;
+          const target = vertex * 2;
+          values[target] = decoded.vertices[source] ?? 0;
+          values[target + 1] = decoded.vertices[source + 1] ?? 0;
+        }
+        extraUvAttributes[`uv${set}`] = values;
+      }
+    }
     return meshLoader.load(
       {
         vertices: decoded.vertices,
         ...(decoded.indices !== undefined ? { indices: decoded.indices } : {}),
         ...(decoded.submeshes !== undefined ? { submeshes: decoded.submeshes } : {}),
         attributes: {
+          ...extraUvAttributes,
           ...(decoded.skinIndex !== undefined ? { skinIndex: decoded.skinIndex } : {}),
           ...(decoded.skinWeight !== undefined ? { skinWeight: decoded.skinWeight } : {}),
         },

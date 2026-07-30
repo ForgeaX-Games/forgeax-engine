@@ -500,6 +500,9 @@ if (!app.ok) {
   });
 
   const falsifyPipelineSelection = new URLSearchParams(location.search).has('falsify-pipeline');
+  const falsifyReversePipelineSelection = new URLSearchParams(location.search).has(
+    'falsify-reverse-pipeline',
+  );
   const falsifyDepthSelection = new URLSearchParams(location.search).has('falsify-depth');
   const standardPipeline: RenderPipelineAsset = {
     kind: 'render-pipeline',
@@ -525,7 +528,7 @@ if (!app.ok) {
               ? CUSTOM_PIPELINE_INVERSION_ID
               : CUSTOM_PIPELINE_ID
         : standardPipeline.pipelineId,
-    ...(pipeline === 'standard'
+    ...(pipeline === 'standard' && !falsifyReversePipelineSelection
       ? {
           config: {
             postEffects: [
