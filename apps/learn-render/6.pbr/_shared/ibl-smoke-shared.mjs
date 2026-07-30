@@ -204,7 +204,7 @@ const { Transform } = await import('@forgeax/engine-scene');
   if (!hdrEntry) fail(`newport_loft.hdr GUID ${NEWPORT_LOFT_GUID} not found in pack-index at ${packIndexPath}`);
   console.log(`[${demoId}] pack-index HDR entry: kind=${hdrEntry.kind} format=${hdrEntry.metadata?.format} ${hdrEntry.metadata?.width}x${hdrEntry.metadata?.height}`);
 
-  const importedBinPath = resolve(distDir, hdrEntry.relativeUrl.replace(/^\//, ''));
+  const importedBinPath = resolve(distDir, hdrEntry.packageUrl.replace(/^\//, ''));
   let importedBinBytes;
   try {
     const buf = await readFile(importedBinPath);
@@ -229,7 +229,7 @@ const { Transform } = await import('@forgeax/engine-scene');
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       };
     }
-    if (typeof url === 'string' && url === hdrEntry.relativeUrl) {
+    if (typeof url === 'string' && url === hdrEntry.packageUrl) {
       const ab = new ArrayBuffer(importedBinBytes.byteLength);
       new Uint8Array(ab).set(importedBinBytes);
       return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(ab) };

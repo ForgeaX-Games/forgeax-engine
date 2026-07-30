@@ -21,6 +21,8 @@
 | Assemble a renderer, diagnose backend selection, or recover a lost renderer | `forgeax-engine-app` + `packages/runtime/README.md` assembly owner |
 | Vec/Mat/Quat/Color / 从 mat4 读 pose / screenToRay | `forgeax-engine-math` |
 | sidecar (`*.meta.json` / `*.pack.json`) → 导入 → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
+| VFX source / operator cook / Pack v2 GUID load / `ParticleEffectPlayer` / `ParticleRenderBatch` | `forgeax-engine-assets` for the shared Pack v2 path, then `packages/vfx/README.md` and `packages/vfx-compiler/README.md` for the VFX public contract |
+| Public `RenderFeature<ParticleRenderBatch>` compatibility | Wave 2 Rendering loop per `docs/vfx-particle-runtime-design.md`; keep the adapter test-only and do not import RenderFeature into VFX production |
 | inspector (JSON-RPC WS) / kubectl 式 CLI 子命令 | `forgeax-engine-cli` |
 | RigidBody / Collider / PhysicsWorld (rapier 2D/3D) | `forgeax-engine-physics` |
 | AudioSource / AudioListener / bus 拓扑 | `forgeax-engine-audio` |

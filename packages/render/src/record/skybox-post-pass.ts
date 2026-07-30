@@ -479,54 +479,29 @@ export function recordBloomCompositePass(
   pass.end();
 }
 
-export function recordFxaaPass(c: _InternalRenderPipelineContext): void {
-  const { runtime, pipelineState, encoder, camera, targetW, targetH, currentTexture } = c;
-  // feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w14:
-  // refactored to use FullscreenPostProcessPass primitive. The FXAA pass
-  // reads the swap-chain (via copyTextureToTexture -> fxaaIntermediate),
-  // then executes a fullscreen FXAA fragment pass that writes the
-  // anti-aliased result back into the swap-chain non-srgb storage view
-  // (R-COLORSPACE: source is already sRGB-encoded; writing through srgb
-  // view would double-encode — see color-space contract below).
-  //
-  // D-1 copy approach: encoder.copyTextureToTexture from swap-chain to
-  // graph-owned fxaaIntermediate, then FXAA pass writes swap-chain.
+export function recordFxaaPass(c: _InternalRenderPipelineContext, resolve: ResolveContext): void {
+  const { runtime, pipelineState, encoder, camera, currentTexture } = c;
+  // FXAA samples the graph-owned LDR target and writes the current surface.
+  // The surface is an output attachment only: no COPY_SRC usage, no
+  // copyTextureToTexture, and no backend-specific surface sampling path.
   const fxaaActive = camera.antialias === 'fxaa';
   if (
     fxaaActive &&
     pipelineState.perPassResources.fxaaPipeline !== null &&
     pipelineState.perPassResources.fxaaBindGroupLayout !== null &&
-    pipelineState.perPassResources.fxaaSampler !== null &&
-    pipelineState.perPassResources.fxaaIntermediateTexture !== null &&
-    pipelineState.perPassResources.fxaaIntermediateView !== null
+    pipelineState.perPassResources.fxaaSampler !== null
   ) {
-    // Copy swap-chain content to the graph-owned fxaaIntermediate texture.
-    const swapTex = currentTexture as never;
-    encoder.copyTextureToTexture(
-      { texture: swapTex, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } },
-      {
-        texture: pipelineState.perPassResources.fxaaIntermediateTexture as never,
-        mipLevel: 0,
-        origin: { x: 0, y: 0, z: 0 },
-      },
-      { width: targetW, height: targetH, depthOrArrayLayers: 1 },
-    );
+    const inputView = resolve.resolve('ldrColor') as TextureView | undefined;
+    if (inputView === undefined) return;
 
     // Compose the 2-entry FXAA BindGroup (input texture + sampler). The
-    // primitive resolves both through the pre-built BGL/sampler stored in
-    // perPassResources (built once in createRenderer's ready phase). The bind
-    // group is identity-cached on the graph-owned fxaaIntermediate view: on
-    // resize the graph retires the old intermediate texture and the writeback
-    // installs a new view, so the WeakMap key changes -> rebuild against the
-    // live texture (D-3: physical texture identity invalidation). The prior
-    // `=== null` single-slot cache never rebuilt and submitted a destroyed
-    // texture after resize.
+    // graph view identity changes when the graph reallocates on resize, so
+    // the identity-keyed cache rebuilds against the live target.
     const fxaaBglLayout = pipelineState.perPassResources.fxaaBindGroupLayout;
     const fxaaSampler = pipelineState.perPassResources.fxaaSampler;
-    const fxaaIntermediateView = pipelineState.perPassResources.fxaaIntermediateView;
     const fxaaBg = getOrCreateFromChain(
       c.frameState.postProcessBgCache,
-      [fxaaIntermediateView as object],
+      [inputView],
       'fxaa',
       () => {
         const fxaaBgRes = runtime.device.createBindGroup({
@@ -537,7 +512,7 @@ export function recordFxaaPass(c: _InternalRenderPipelineContext): void {
               binding: 0,
               resource: {
                 kind: 'textureView',
-                value: fxaaIntermediateView,
+                value: inputView,
               },
             },
             {
@@ -552,20 +527,24 @@ export function recordFxaaPass(c: _InternalRenderPipelineContext): void {
       c.bindGroupCounts,
     );
 
-    // R-COLORSPACE: write through the swap-chain's non-srgb storage view
-    // (bgra8unorm). FXAA's source is ALREADY sRGB-encoded (verbatim copy
-    // of swap-chain, sampled through non-srgb view → no decode). The shader
-    // works in gamma space and emits sRGB-encoded values — writing through
-    // the srgb view would double-encode and brighten every pixel.
-    const fxaaStorageViewRes = runtime.device.createTextureView(currentTexture, {});
-    if (!fxaaStorageViewRes.ok) {
-      runtime.errorRegistry.fire(fxaaStorageViewRes.error);
+    const fxaaColorFormat = runtime.device.caps.storageBuffer
+      ? pipelineState.format
+      : pipelineState.colorAttachmentFormat;
+    const fxaaOutputView = runtime.device.createTextureView(currentTexture, {
+      format: fxaaColorFormat as unknown as GPUTextureFormat,
+    });
+    if (!fxaaOutputView.ok) {
+      runtime.errorRegistry.fire(fxaaOutputView.error);
       return;
     }
     const fxaaPass: RhiRenderPassEncoder = encoder.beginRenderPass(
       buildBeginRenderPassDescriptor(
-        { colorFormats: ['bgra8unorm'], depthFormat: undefined, sampleCount: 1 },
-        { colorViews: [fxaaStorageViewRes.value] },
+        {
+          colorFormats: [fxaaColorFormat as unknown as GPUTextureFormat],
+          depthFormat: undefined,
+          sampleCount: 1,
+        },
+        { colorViews: [fxaaOutputView.value] },
         'fxaa',
       ) as never,
     );

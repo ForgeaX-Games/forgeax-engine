@@ -520,7 +520,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         expect((payload.data as Uint8Array).length).toBe(8 * 4 * 4);
       });
 
-      it('(a) the runner extracts texture bytes into RunImportOk.bins and strips data from pack payload', async () => {
+      it('(a) the runner keeps texture bytes in the asset-local body', async () => {
         const png = makePng(8, 4, [200, 100, 50, 255]);
         const registry = new ImporterRegistry();
         registry.register(imageImporter);
@@ -544,20 +544,17 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           throw new Error('expected ok RunImportOk');
         }
 
-        const { pack, bins } = result.value;
-
-        expect(bins).toBeDefined();
-        expect(bins?.size).toBe(1);
-        expect(bins?.has(BINS_GUID.toLowerCase())).toBe(true);
-        const binBytes = bins?.get(BINS_GUID.toLowerCase());
-        expect(binBytes).toBeInstanceOf(Uint8Array);
-        expect(binBytes?.length).toBe(8 * 4 * 4);
+        const { pack } = result.value;
 
         const packAsset = pack.assets.find((a) => a.guid === BINS_GUID);
         expect(packAsset).toBeDefined();
+        const body = packAsset?.artifacts.body;
+        expect(body).toBeDefined();
+        expect(body?.mediaType).toBe('application/x-forgeax-rgba8');
+        expect(body?.bytes).toBeInstanceOf(Uint8Array);
+        expect((body?.bytes as Uint8Array).length).toBe(8 * 4 * 4);
         const packPayload = packAsset?.payload as unknown as Record<string, unknown>;
-        expect(packPayload.data).toBeInstanceOf(Uint8Array);
-        expect((packPayload.data as Uint8Array).length).toBe(0);
+        expect(packPayload.data).toEqual(expect.any(Array));
       });
     });
   });

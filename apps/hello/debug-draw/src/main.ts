@@ -165,12 +165,87 @@ async function runRuntime(): Promise<void> {
 
   if (!app.debugDraw) throw new Error('app.debugDraw missing — debug-draw auto-attach failed');
 
-  app.world
+  const cameraEntity = app.world
     .spawn(
       { component: Transform, data: { pos: [0, 2, 5] } },
       { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: canvas!.width / canvas!.height }) },
     )
     .unwrap();
+
+  const cameraPositions = {
+    base: [0, 2, 5],
+    pan: [1.25, 2, 5],
+  } as const;
+  let cameraPan = false;
+  let viewportMode: 'base' | 'wide' = 'base';
+  let zoomMode: 'base' | 'zoom' = 'base';
+  let clipMode: 'base' | 'near' | 'far' = 'base';
+  let rollMode: 'base' | 'roll' = 'base';
+  const updateHud = (): void => {
+    document.getElementById('debug-draw-hud')!.textContent =
+      `debug-draw: runtime (createApp + app.debugDraw) camera=${cameraPan ? 'pan' : 'base'} viewport=${viewportMode} zoom=${zoomMode} clip=${clipMode} roll=${rollMode}`;
+  };
+  const setCameraPan = (pan: boolean): void => {
+    const result = app.world.set(cameraEntity, Transform, { pos: [...(pan ? cameraPositions.pan : cameraPositions.base)] });
+    if (!result.ok) {
+      console.error(`[debug-draw] camera ${pan ? 'pan' : 'reset'} failed: ${result.error.code}`);
+      return;
+    }
+    cameraPan = pan;
+    updateHud();
+  };
+  const setCameraViewport = (mode: 'base' | 'wide'): void => {
+    const result = app.world.set(cameraEntity, Camera, mode === 'wide'
+      ? { aspect: 4 / 3, autoAspect: false }
+      : { aspect: canvas!.width / canvas!.height, autoAspect: true });
+    if (!result.ok) {
+      console.error(`[debug-draw] camera viewport ${mode} failed: ${result.error.code}`);
+      return;
+    }
+    viewportMode = mode;
+    updateHud();
+  };
+  const setCameraZoom = (mode: 'base' | 'zoom'): void => {
+    const result = app.world.set(cameraEntity, Camera, { fov: mode === 'zoom' ? Math.PI / 8 : Math.PI / 4 });
+    if (!result.ok) {
+      console.error(`[debug-draw] camera zoom ${mode} failed: ${result.error.code}`);
+      return;
+    }
+    zoomMode = mode;
+    updateHud();
+  };
+  const setCameraClip = (mode: 'base' | 'near' | 'far'): void => {
+    const result = app.world.set(cameraEntity, Camera, mode === 'near'
+      ? { near: 4.75, far: 100 }
+      : mode === 'far'
+        ? { near: 0.1, far: 4.75 }
+        : { near: 0.1, far: 100 });
+    if (!result.ok) {
+      console.error(`[debug-draw] camera clip ${mode} failed: ${result.error.code}`);
+      return;
+    }
+    clipMode = mode;
+    updateHud();
+  };
+  const setCameraRoll = (mode: 'base' | 'roll'): void => {
+    const halfTurn = Math.PI / 24;
+    const result = app.world.set(cameraEntity, Transform, {
+      quat: mode === 'roll' ? [0, 0, Math.sin(halfTurn), Math.cos(halfTurn)] : [0, 0, 0, 1],
+    });
+    if (!result.ok) {
+      console.error(`[debug-draw] camera roll ${mode} failed: ${result.error.code}`);
+      return;
+    }
+    rollMode = mode;
+    updateHud();
+  };
+  Object.assign(globalThis as Record<string, unknown>, {
+    __forgeax_debug_draw__: { setCameraPan, setCameraViewport, setCameraZoom, setCameraClip, setCameraRoll },
+  });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'p' || event.key === 'P') setCameraPan(true);
+    if (event.key === 'r' || event.key === 'R') setCameraPan(false);
+  });
 
   // Register an update callback that draws the four shapes every frame.
   // DebugDraw is immediate-mode: the auto-attached debug-overlay pass flushes
@@ -197,6 +272,11 @@ async function runRuntime(): Promise<void> {
     .unwrap();
 
   app.start();
+  setCameraPan(false);
+  setCameraViewport('base');
+  setCameraZoom('base');
+  setCameraClip('base');
+  setCameraRoll('base');
   // Keep the canvas loop alive: the browser front door observes the live
   // overlay, and the page owns teardown when it is closed.
 }
@@ -435,6 +515,7 @@ async function main(): Promise<void> {
     case 'runtime':
       document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: runtime (createApp + app.debugDraw)';
       await runRuntime();
+      document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: runtime (createApp + app.debugDraw) camera=base';
       break;
     case 'depth':
       document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: depth (always vs less-equal)';

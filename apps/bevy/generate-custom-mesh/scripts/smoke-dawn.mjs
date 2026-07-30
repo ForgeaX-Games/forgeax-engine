@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '100', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const WIDTH = 200;
 const HEIGHT = 150;
 
@@ -77,6 +77,7 @@ async function capture() {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
+const { unwrapHandle } = await import('@forgeax/engine-types');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(resolve(here, '..', 'dist', 'shaders', 'manifest.json'), 'utf8'))}`;
@@ -93,26 +94,58 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 const ready = await renderer.ready;
 if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`); process.exit(1); }
 
-const { buildCustomMeshWorld } = await import(resolve(here, '..', 'src', 'generate-custom-mesh.ts'));
+const { buildCustomMeshWorld, makeCustomMeshTexture, toggleCustomMesh } = await import(resolve(here, '..', 'src', 'generate-custom-mesh.ts'));
 const world = new World();
-buildCustomMeshWorld(world);
+const texture = makeCustomMeshTexture();
+const textureHandle = world.allocSharedRef('TextureAsset', texture);
+const textureUpload = await renderer.store.uploadTexture(textureHandle, texture, {
+  bytes: texture.data,
+  width: texture.width,
+  height: texture.height,
+  mime: 'image/png',
+  colorSpace: 'srgb',
+  mipmap: false,
+});
+if (!textureUpload.ok) {
+  console.error(`[smoke] FAIL - texture upload: ${textureUpload.error.code}`);
+  process.exit(1);
+}
+const meshState = buildCustomMeshWorld(world, unwrapHandle(textureHandle));
 
-for (let i = 0; i < SMOKE_MIN_FRAMES; i++) await renderer.draw([world], { owner: 0 });
+await renderer.draw([world], { owner: 0 });
 await delay(50);
-const pixels = await capture();
+const beforePixels = await capture();
+toggleCustomMesh(meshState, renderer.store);
+await renderer.draw([world], { owner: 0 });
+await delay(50);
+const afterPixels = await capture();
+for (let i = 2; i < SMOKE_MIN_FRAMES; i++) await renderer.draw([world], { owner: 0 });
+const pixels = afterPixels;
 const refPath = resolve(here, '..', 'artifacts', 'generate-custom-mesh-ref.png');
 mkdirSync(dirname(refPath), { recursive: true });
 writeFileSync(refPath, writeReferencePng(pixels, WIDTH, HEIGHT));
 
 let notBlack = false;
 for (let i = 0; i < pixels.length; i += 4) { if (pixels[i] > 0 || pixels[i + 1] > 0 || pixels[i + 2] > 0) { notBlack = true; break; } }
+let uvDiffSum = 0;
+let uvDiffPixels = 0;
+for (let i = 0; i < beforePixels.length; i += 4) {
+  const diff = Math.abs(beforePixels[i] - afterPixels[i])
+    + Math.abs(beforePixels[i + 1] - afterPixels[i + 1])
+    + Math.abs(beforePixels[i + 2] - afterPixels[i + 2]);
+  uvDiffSum += diff;
+  if (diff > 3) uvDiffPixels += 1;
+}
+const uvDiffMean = uvDiffSum / (WIDTH * HEIGHT);
 const checks = [
   ['backend=webgpu', renderer.backend === 'webgpu'],
   ['not-black', notBlack],
+  ['uv-toggle-changed-pixels', uvDiffPixels > 100],
+  ['uv-toggle-mean-diff', uvDiffMean > 1],
   ['rhi-error-count=0', errors.length === 0],
 ];
 let all = true;
 for (const [n, ok] of checks) { console.log(`${ok ? '✓' : '✗'} ${n}`); if (!ok) all = false; }
-if (!all) { console.error(`[smoke] FAIL`); process.exit(1); }
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}`);
+if (!all) { console.error(`[smoke] FAIL - uvDiffPixels=${uvDiffPixels} uvDiffMean=${uvDiffMean.toFixed(3)}`); process.exit(1); }
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}, uvDiffPixels=${uvDiffPixels}, uvDiffMean=${uvDiffMean.toFixed(3)}`);
 process.exit(0);

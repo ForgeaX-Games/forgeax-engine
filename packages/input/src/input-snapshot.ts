@@ -54,6 +54,9 @@ export type GamepadButtonIndex =
 /** Standard-layout gamepad axis index (0-3 per W3C Gamepad spec). */
 export type GamepadAxisIndex = 0 | 1 | 2 | 3;
 
+/** W3C MouseEvent.button index (0=primary, 1=auxiliary, 2=secondary). */
+export type MouseButtonIndex = 0 | 1 | 2;
+
 /** Per-slot gamepad frame data produced by `sample()`. */
 export interface GamepadSlotSample {
   readonly index: number;
@@ -150,7 +153,7 @@ export interface Capabilities {
  * previous Resource value.
  */
 export interface InputSnapshot {
-  /** Keyboard view (charter F2 minimal surface: down + up only). */
+  /** Keyboard view (held state plus frame edges). */
   readonly keyboard: {
     /**
      * `true` while `key` is currently held. `key` matches the value the
@@ -159,12 +162,20 @@ export interface InputSnapshot {
      * (charter P3: empty signal is the signal).
      */
     down(key: string): boolean;
+    /** `true` for the first frame in which `key` becomes held. */
+    justPressed(key: string): boolean;
     /**
      * `true` for one frame after the key was released (the up-edge). The
      * edge collapses on the following `world.update()`. `key` not in the
      * up-edge set returns `false`.
      */
     up(key: string): boolean;
+    /** Code-key equivalent of `down`, using KeyboardEvent.code identity. */
+    downCode(code: string): boolean;
+    /** Code-key equivalent of `justPressed`. */
+    justPressedCode(code: string): boolean;
+    /** Code-key equivalent of `up`. */
+    upCode(code: string): boolean;
   };
   /** Mouse view (charter F2 minimal surface: position + movementDelta + button + wheelDelta). */
   readonly mouse: {
@@ -200,7 +211,11 @@ export interface InputSnapshot {
      * - 1 -- auxiliary button (middle)
      * - 2 -- secondary button (right)
      */
-    button(i: 0 | 1 | 2): boolean;
+    button(i: MouseButtonIndex): boolean;
+    /** `true` for the first frame in which button `i` becomes held. */
+    justPressed(i: MouseButtonIndex): boolean;
+    /** `true` for the frame in which button `i` is released. */
+    justReleased(i: MouseButtonIndex): boolean;
     /**
      * Discrete wheel notches accumulated since the previous frame.
      * Plan-strategy D-5 sign-discrete: each `WheelEvent` contributes
@@ -373,6 +388,10 @@ export interface InputBackend {
 export interface InputBackendSample {
   readonly downKeys: ReadonlySet<string>;
   readonly upKeys: ReadonlySet<string>;
+  /** Physical code identity (KeyboardEvent.code), when the producer has it. */
+  readonly downCodes?: ReadonlySet<string>;
+  /** One-frame physical code release edges, when the producer has them. */
+  readonly upCodes?: ReadonlySet<string>;
   readonly buttons: readonly [boolean, boolean, boolean];
   readonly movementX: number;
   readonly movementY: number;
@@ -487,6 +506,7 @@ export function snapshotFromSample(
   sample: InputBackendSample,
   actionStates?: readonly ActionState[],
   inputMap?: readonly ActionConfig[],
+  previousSnapshot?: InputSnapshot,
 ): InputSnapshot {
   // structuralCopy: copying into local sets isolates the snapshot from
   // any later backend mutation (the browser backend reuses its internal
@@ -494,10 +514,34 @@ export function snapshotFromSample(
   // a derived view of the producer's state at one instant.
   const heldKeys = new Set<string>(sample.downKeys);
   const upEdges = new Set<string>(sample.upKeys);
+  const justPressedKeys = new Set<string>();
+  for (const key of heldKeys) {
+    if (previousSnapshot === undefined || !previousSnapshot.keyboard.down(key)) {
+      justPressedKeys.add(key);
+    }
+  }
+  const heldCodes = new Set<string>(sample.downCodes ?? []);
+  const upCodeEdges = new Set<string>(sample.upCodes ?? []);
+  const justPressedCodes = new Set<string>();
+  for (const code of heldCodes) {
+    if (previousSnapshot === undefined || !previousSnapshot.keyboard.downCode(code)) {
+      justPressedCodes.add(code);
+    }
+  }
   const buttons: readonly [boolean, boolean, boolean] = [
     sample.buttons[0],
     sample.buttons[1],
     sample.buttons[2],
+  ];
+  const justPressedButtons: readonly [boolean, boolean, boolean] = [
+    buttons[0] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(0)),
+    buttons[1] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(1)),
+    buttons[2] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(2)),
+  ];
+  const justReleasedButtons: readonly [boolean, boolean, boolean] = [
+    previousSnapshot?.mouse.button(0) === true && !buttons[0],
+    previousSnapshot?.mouse.button(1) === true && !buttons[1],
+    previousSnapshot?.mouse.button(2) === true && !buttons[2],
   ];
   const movementDelta = Object.freeze({ x: sample.movementX, y: sample.movementY });
   const mousePosition =
@@ -554,8 +598,20 @@ export function snapshotFromSample(
       down(key) {
         return heldKeys.has(key);
       },
+      justPressed(key) {
+        return justPressedKeys.has(key);
+      },
       up(key) {
         return upEdges.has(key);
+      },
+      downCode(code) {
+        return heldCodes.has(code);
+      },
+      justPressedCode(code) {
+        return justPressedCodes.has(code);
+      },
+      upCode(code) {
+        return upCodeEdges.has(code);
       },
     },
     mouse: {
@@ -568,6 +624,12 @@ export function snapshotFromSample(
         // -- no defensive fallback necessary because the type narrows the
         // input domain to the legal slots).
         return buttons[i] === true;
+      },
+      justPressed(i) {
+        return justPressedButtons[i] === true;
+      },
+      justReleased(i) {
+        return justReleasedButtons[i] === true;
       },
       wheelDelta,
     },
@@ -650,6 +712,8 @@ export function createInputSnapshot(): InputSnapshot {
   return snapshotFromSample({
     downKeys: new Set<string>(),
     upKeys: new Set<string>(),
+    downCodes: new Set<string>(),
+    upCodes: new Set<string>(),
     buttons: [false, false, false],
     movementX: 0,
     movementY: 0,

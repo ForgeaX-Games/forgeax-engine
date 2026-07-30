@@ -6,6 +6,12 @@ Autodesk FBX SDK, no native addon. Emits the engine FBX POD JSON schema
 (meshes, nodes, materials, skeletons, skins, clips), consumed by the shared
 `parse-*.ts` / `to-asset-pack.ts` bridge layer.
 
+## Evidence and recovery
+
+The FBX producer writes source meta and a producer-owned `CookReceipt`; the catalog only supplies the GUID locator (`packageUrl` and optional `cookReceiptUrl`). `AssetEvidence` joins those records with Pack v2 package and artifact verification so browser/runtime code does not guess whether a cook completed.
+
+Read `notCooked`, `ready/current`, `ready/stale`, or `unknown` literally. Package and artifact evidence must remain `notChecked`, `passed`, or `failed`. If the probe reports `stale` or `failed`, repair the source/import settings or recook and rerun `lookup/verify --guid --project --catalog --json`; retain the structured error hint for the next action.
+
 ```
 FBX bytes -> ufbx (wasm) -> JSON POD -> parse-*.ts -> meta.json
 ```

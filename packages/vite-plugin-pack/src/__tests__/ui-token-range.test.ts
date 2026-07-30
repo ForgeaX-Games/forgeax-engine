@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rewriteUiSourceTokens } from '../ui-artifact-finalizer.js';
+import { rewriteUiSourceTokens } from '../ui-pack-finalizer.js';
 
 describe('UI token source ranges', () => {
   it('rewrites repeated, escaped, and fragment-bearing references independently', () => {

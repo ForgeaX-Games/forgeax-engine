@@ -104,7 +104,7 @@ export type { ChangeTicks } from './change-detection';
  * `: Entity` annotations.
  */
 export type { EntityHandle } from './entity-handle';
-export { FixedUpdate, type ScheduleToken, Update } from './schedule-token';
+export { FixedUpdate, FrameEnd, type ScheduleToken, Update } from './schedule-token';
 export {
   FixedTime,
   type FixedTimeResource,

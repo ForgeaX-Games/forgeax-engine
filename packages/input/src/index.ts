@@ -79,6 +79,7 @@ export type {
   InputBackend,
   InputBackendSample,
   InputSnapshot,
+  MouseButtonIndex,
   PointerPhaseEvent,
   PointerSample,
   PointerType,

@@ -9,6 +9,7 @@ import type { Handle, MaterialAsset } from '@forgeax/engine-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Rotatable } from './rotating-target';
 import { ScoringTarget } from './scoring-target';
+import { cloneWithClearcoat } from './clearcoat-material';
 
 export type MatHandle = Handle<'MaterialAsset', 'shared'>;
 export type GameContext = {
@@ -24,7 +25,7 @@ export type LoadedScene = {
   nodes: PackNode[];
 };
 export type ScenePhysics = {
-  props: Array<{ e: EntityHandle; mat: MatHandle }>;
+  props: Array<{ e: EntityHandle; mat: MatHandle; clearcoat?: boolean }>;
   animatedMaterial?: { e: EntityHandle; mat: MatHandle };
   walkBlockers: Array<{ cx: number; cz: number; r: number }>;
 };
@@ -125,7 +126,17 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
       case 'TreeTrunk': staticBody(); box(0.2); addBlocker((transform.pos?.[1] ?? 0) - hy, Math.hypot(hx, hz)); break;
       case 'TreeCanopy': staticBody(); sphere(0.2); addBlocker((transform.pos?.[1] ?? 0) - sphereRadius, sphereRadius); break;
       case 'RedBox': dynamic(); box(0.25); props.push({ e: entity, mat: matOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 10 } }); break;
-      case 'BlueBall': dynamic(); sphere(0.55); props.push({ e: entity, mat: matOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 15 } }); break;
+      case 'BlueBall': {
+        dynamic();
+        sphere(0.55);
+        const authoredMat = matOf(entity);
+        const clearcoatMat = cloneWithClearcoat(world, authoredMat);
+        const mat = clearcoatMat ?? authoredMat;
+        if (clearcoatMat !== undefined) world.set(entity, MeshRenderer, { materials: [clearcoatMat] });
+        props.push({ e: entity, mat, clearcoat: clearcoatMat !== undefined });
+        world.addComponent(entity, { component: ScoringTarget, data: { points: 15 } });
+        break;
+      }
       case 'YellowPillar':
         dynamic();
         box(0.2);

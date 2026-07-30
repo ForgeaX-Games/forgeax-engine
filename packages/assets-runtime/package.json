@@ -34,7 +34,8 @@
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-ui": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-skinning": "workspace:*"

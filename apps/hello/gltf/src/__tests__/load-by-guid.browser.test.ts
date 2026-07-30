@@ -46,6 +46,7 @@ import {
   type GltfSceneIr,
 } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { parsePackV2 } from '@forgeax/engine-pack';
 import { AssetRegistry, type MeshAsset } from '@forgeax/engine-assets-runtime';
 import { type Handle, type MaterialAsset, type RhiError } from '@forgeax/engine-runtime';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
@@ -188,6 +189,45 @@ function gltfDocToSceneAsset(
 }
 
 describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => {
+  it('accepts a multi-asset Pack v2 envelope with GUID refs and local keys', () => {
+    const parsed = parsePackV2({
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: '019e2b88-aece-7b6e-bbfe-45d6453d21f3',
+          kind: 'mesh',
+          payload: { kind: 'mesh' },
+          refs: [],
+          artifacts: {
+            body: {
+              path: 'artifacts/mesh.bin',
+              mediaType: 'application/x-forgeax-mesh',
+            },
+          },
+        },
+        {
+          guid: '019e2b88-aecf-7e78-9888-655f0ec62ebc',
+          kind: 'material',
+          payload: { kind: 'material' },
+          refs: ['019e2b88-aece-7b6e-bbfe-45d6453d21f3'],
+          artifacts: {
+            body: {
+              path: 'artifacts/material.bin',
+              mediaType: 'application/octet-stream',
+            },
+          },
+        },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.assets[1]?.refs).toEqual([
+      '019e2b88-aece-7b6e-bbfe-45d6453d21f3',
+    ]);
+    expect(Object.keys(parsed.value.assets[0]?.artifacts ?? {})).toEqual(['body']);
+  });
+
   it('(a) loadByGuid<SceneAsset>(sceneGuid) infers Result<SceneAsset, AssetError>', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();

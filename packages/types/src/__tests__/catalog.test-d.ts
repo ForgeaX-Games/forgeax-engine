@@ -7,7 +7,7 @@ describe('Catalog POD contract', () => {
 
     expectTypeOf(entry.guid).toEqualTypeOf<string>();
     expectTypeOf(entry.kind).toEqualTypeOf<string>();
-    expectTypeOf(entry.relativeUrl).toEqualTypeOf<string>();
+    expectTypeOf(entry.packageUrl).toEqualTypeOf<string>();
   });
 
   it('keeps each GUID in exactly one delta collection', () => {

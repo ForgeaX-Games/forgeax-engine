@@ -471,6 +471,8 @@ export function buildPipelineDescriptor(
  *      per-frame params UBO (feat-20260621 D-2: `entry.params !== undefined`
  *      passes route here; the layout stays group(1), q3=B). `'fullscreen-post'`
  *      stays byte-identical so param-less consumers degrade with no change.
+ *    - `'fullscreen-post-with-scene-depth-msaa'` — the depth-read layout with
+ *      `texture.multisampled=true`, selected for a 4-sample scene depth target.
  */
 export type BglKind =
   | 'pbr-view'
@@ -482,7 +484,8 @@ export type BglKind =
   | 'hdrp-7-slot'
   | 'fullscreen-post'
   | 'fullscreen-post-with-params'
-  | 'fullscreen-post-with-scene-depth';
+  | 'fullscreen-post-with-scene-depth'
+  | 'fullscreen-post-with-scene-depth-msaa';
 
 /**
  * Output shape of {@link buildBindGroupLayoutDescriptor}: matches the RHI
@@ -729,6 +732,29 @@ export function buildBindGroupLayoutDescriptor(
             binding: 3,
             visibility: GPU_SHADER_STAGE_FRAGMENT,
             texture: { sampleType: 'depth', viewDimension: '2d' },
+          },
+          {
+            binding: 4,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            sampler: { type: 'non-filtering' },
+          },
+        ],
+      };
+    }
+    case 'fullscreen-post-with-scene-depth-msaa': {
+      return {
+        label: 'fullscreen-post-with-scene-depth-msaa-bgl',
+        entries: [
+          ...buildFullscreenPostInputEntries(spec),
+          {
+            binding: 2,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            buffer: { type: 'uniform' },
+          },
+          {
+            binding: 3,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            texture: { sampleType: 'depth', viewDimension: '2d', multisampled: true },
           },
           {
             binding: 4,

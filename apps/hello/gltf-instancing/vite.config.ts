@@ -1,6 +1,9 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { gltfImporter } from '@forgeax/engine-gltf';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { defineConfig } from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -13,7 +16,10 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // JSON-importable from src/main.ts so the 4-step recipe reads the GUID list
 // at build time without a fetch (charter P2 structured-over-prose).
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  plugins: [
+    forgeaxShader() as never,
+    pluginPack({ roots: [resolve(here, 'assets')], importers: [imageImporter, gltfImporter], refresh: reloadAssetHost() }),
+  ],
   server: {
     fs: {
       allow: [monorepoRoot],

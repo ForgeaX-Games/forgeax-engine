@@ -23,11 +23,28 @@ const engineDocuments = [
       'removed',
       'catalog-source-unconfigured',
       'static source',
+      'AssetEvidence',
+      'packageUrl',
+      'notCooked',
+      'stale',
+      'unknown',
+      'lookup/verify --guid --project --catalog --json',
     ],
   ],
   [
     'packages/vite-plugin-pack/README.md',
-    ['forgeax:catalog-delta', 'reloadAssetHost()', 'source-only', 'static build'],
+    [
+      'forgeax:catalog-delta',
+      'reloadAssetHost()',
+      'source-only',
+      'static build',
+      'AssetEvidence',
+      'packageUrl',
+      'notCooked',
+      'stale',
+      'unknown',
+      'lookup/verify --guid --project --catalog --json',
+    ],
   ],
   [
     'skills/forgeax-engine-assets/SKILL.md',
@@ -38,8 +55,34 @@ const engineDocuments = [
       'enumerateCatalog',
       'reloadAssetHost()',
       'editor pinned consumer',
+      'AssetEvidence',
+      'packageUrl',
+      'notCooked',
+      'stale',
+      'unknown',
+      'lookup/verify --guid --project --catalog --json',
     ],
   ],
+  ...[
+    'packages/types/README.md',
+    'packages/pack/README.md',
+    'packages/image/README.md',
+    'packages/gltf/README.md',
+    'packages/fbx/README.md',
+    'packages/font/README.md',
+    'packages/ui/README.md',
+    'packages/audio-webaudio/README.md',
+  ].map((path) => [
+    path,
+    [
+      'AssetEvidence',
+      'packageUrl',
+      'notCooked',
+      'stale',
+      'unknown',
+      'lookup/verify --guid --project --catalog --json',
+    ],
+  ]),
 ];
 
 const editorDocuments = [
@@ -103,6 +146,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(
-    `catalog documentation exit sweep passed (${editorRoot === undefined ? 'engine docs' : 'engine + editor docs'})`,
+    `catalog documentation exit sweep passed (${editorRoot === undefined ? 'engine docs' : 'engine + editor docs'}): AssetEvidence packageUrl notCooked stale unknown; lookup/verify --guid --project --catalog --json`,
   );
 }

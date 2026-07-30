@@ -1,4 +1,6 @@
 {
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
   "assets": [
     {
       "kind": "scene",
@@ -7,6 +9,7 @@
         "f47ac10b-58cc-4372-a567-0e02b2c3d479",
         "008e4f75-e7a3-4715-b05b-b93a9ec12074"
       ],
+      "artifacts": {},
       "payload": {
         "nodes": [
           {

@@ -174,6 +174,8 @@ export function attachBrowserInputBackend(
 
   const heldKeys = new Set<string>();
   const upEdges = new Set<string>();
+  const heldCodes = new Set<string>();
+  const upCodeEdges = new Set<string>();
   const buttons: [boolean, boolean, boolean] = [false, false, false];
   let mvx = 0;
   let mvy = 0;
@@ -343,6 +345,10 @@ export function attachBrowserInputBackend(
     }
     heldKeys.add(ev.key);
     upEdges.delete(ev.key);
+    if (ev.code) {
+      heldCodes.add(ev.code);
+      upCodeEdges.delete(ev.code);
+    }
     // w8 (D-1): ESC releases provider lock (W3C path handles ESC via browser
     // pointerlockchange). Only acts when providerLocked is true.
     if (ev.key === 'Escape' && providerLocked) {
@@ -354,6 +360,10 @@ export function attachBrowserInputBackend(
     heldKeys.delete(ev.key);
     if (isFocused()) {
       upEdges.add(ev.key);
+    }
+    if (ev.code) {
+      heldCodes.delete(ev.code);
+      if (isFocused()) upCodeEdges.add(ev.code);
     }
   }
   function onPointerDown(ev: PointerEvent): void {
@@ -531,7 +541,9 @@ export function attachBrowserInputBackend(
     // no state crosses a lease; the source itself still emits cancellation to its
     // sole consumer as it did before ownership routing existed.
     upEdges.clear();
+    upCodeEdges.clear();
     heldKeys.clear();
+    heldCodes.clear();
     buttons[0] = false;
     buttons[1] = false;
     buttons[2] = false;
@@ -748,6 +760,8 @@ export function attachBrowserInputBackend(
     const out: InputBackendSample = {
       downKeys: new Set(heldKeys),
       upKeys: new Set(upEdges),
+      downCodes: new Set(heldCodes),
+      upCodes: new Set(upCodeEdges),
       buttons: [buttons[0], buttons[1], buttons[2]] as readonly [boolean, boolean, boolean],
       movementX: mvx,
       movementY: mvy,
@@ -763,8 +777,9 @@ export function attachBrowserInputBackend(
       ...(gestures ? { gestures } : {}),
       ...(gestureEvents ? { gestureEvents } : {}),
     };
-    // Reset per-frame accumulators (movement delta + up-edge set + wheel notches + phase queue).
+    // Reset per-frame accumulators (movement delta + key edges + wheel notches + phase queue).
     upEdges.clear();
+    upCodeEdges.clear();
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
@@ -789,6 +804,8 @@ export function attachBrowserInputBackend(
   function clear(): void {
     heldKeys.clear();
     upEdges.clear();
+    heldCodes.clear();
+    upCodeEdges.clear();
     pointerMap.clear();
     phaseQueue.length = 0;
     prevGamepadFrame.clear();

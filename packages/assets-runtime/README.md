@@ -7,6 +7,12 @@ wire the default loader set. Tier 2.1 package extracted from
 user loads only the asset-cluster concept surface — not the whole renderer — when
 the task is "get an asset into the World".
 
+## AssetEvidence SDK boundary
+
+`AssetRegistry.inspect(guid)` and `verifyByGuid(guid)` expose the injected SDK side of the same `AssetEvidence` chain: source declaration, catalog `packageUrl`/`cookReceiptUrl`, producer `CookReceipt`, Pack v2 artifact verification, and optional runtime state. The registry does not import the Node CLI, Vite, or filesystem policy. Call `configureAssetEvidence(source)` in a host that can supply those facts; without it the result is explicit `unknown`/capability-missing evidence.
+
+Cook states are not interchangeable: `notCooked`, `ready/current`, `ready/stale`, and `unknown` each describe a different recovery action. Package/artifact verification separately reports `notChecked`, `passed`, or `failed`. Follow `.code` and `.hint`, repair the producer or package, and rerun the probe; never convert a missing capability into passed evidence.
+
 ## 30-second self-introduction
 
 - **`AssetRegistry`** — instance-per-engine GUID -> payload catalogue. `catalog` /
@@ -320,3 +326,9 @@ loud, not silent.
   `packages/pack/README.md` + `forgeax-engine-assets/README.md`.
 - Runtime image bytes decoding (this package, runtime-only-bytes case):
   see the `decodeImageBytes` section above.
+# Static asset evidence
+
+> [!IMPORTANT]
+> Static assets load from Pack v2 through `packageUrl`. Runtime-only bytes are the separate exception.
+
+`AssetEvidence` joins `packageUrl`, cook freshness, artifact verification, and optional runtime state. Use `lookup/verify --guid --project --catalog --json` or the SDK `inspect(guid)` / `verifyByGuid(guid)` surface. `notCooked`, `stale`, and `unknown` are distinct recovery states; `unknown` is not verification success.

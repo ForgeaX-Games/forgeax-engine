@@ -27,11 +27,11 @@ export function buildUrlToAbsolute(
   const map = new Map<string, string>();
   for (const entry of entries) {
     const guid = entry.guid.toLowerCase();
-    const imported = entry.relativeUrl.endsWith(`.${guid}.bin`);
-    map.set(
-      entry.relativeUrl,
-      imported ? options.ddcPath(guid) : resolve(options.cwd, entry.sourcePath),
-    );
+    if (entry.packageUrl.endsWith('.pack.json') && !entry.packageUrl.includes('/__forgeax-ddc/')) {
+      map.set(entry.packageUrl, resolve(options.cwd, entry.sourcePath));
+    } else {
+      map.set(entry.packageUrl, options.ddcPath(guid));
+    }
   }
   return map;
 }

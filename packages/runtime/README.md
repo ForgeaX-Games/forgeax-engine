@@ -3,6 +3,99 @@
 > [!IMPORTANT]
 > Runtime is the sole public host-assembly entry for `createRenderer`. It selects browser/backend services, invokes render's internal construction seam, and cleans up partial construction. It does not own scene, skinning, animation, or render-domain APIs.
 
+## Assemble producer features
+
+The host receives a heterogeneous list of producer-owned
+`RenderFeature<FrameData>` values through one `createRenderer` options bag.
+Import the feature contract and render vocabulary from
+`@forgeax/engine-render`; import only assembly from this package.
+
+```ts
+import { ok } from '@forgeax/engine-types';
+import type { RenderFeature } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+
+type FrameData = { readonly visibleCount: number };
+const feature = {
+  identity: 'package.feature',
+  extract: ({ owner }) => ok<FrameData>({ visibleCount: owner }),
+  prepare: (data) => {
+    void data.visibleCount;
+    return ok(undefined);
+  },
+  contribute: (data, context) => {
+    void data.visibleCount;
+    context.staging.addPass('named-pass', {
+      reads: [],
+      writes: [],
+      execute: ({ pass }) => void pass,
+    }).unwrap();
+    return ok(undefined);
+  },
+} satisfies RenderFeature<FrameData>;
+
+const renderer = await createRenderer(canvas, { features: [feature] });
+const ready = await renderer.ready;
+if (!ready.ok) throw ready.error;
+```
+
+`renderer.renderFeatureDiagnostics()` is the machine-readable lifecycle
+surface. Read `status` and `latestError?.code`; use `latestError?.hint` for
+the next action. `failed` retries on the next frame, `disabled` is revisited
+by `renderer.recover()`, and `disposed` is terminal. `dispose()` is
+idempotent. A pipeline switch preserves feature registration and rebuilds the
+active graph; use `renderer.registerPipeline(id, pipeline)` for that switch.
+
+## Assemble prepared graphics without a private seam
+
+Prepared graphics is still assembled by the runtime host. A producer imports
+the generic `RenderFeature` declaration from `@forgeax/engine-render`, keeps
+its frame data in `@forgeax/engine-vfx` (or another producer package), and
+uses `context.graphics` for opaque preparation references. Generation and
+recording remain render-host facts.
+
+```ts
+import { ok } from '@forgeax/engine-types';
+import type { RenderFeature } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import type { ParticleRenderBatch } from '@forgeax/engine-vfx';
+
+const batch: ParticleRenderBatch = { batches: [] };
+const feature = {
+  identity: 'package.prepared-feature',
+  extract: () => ok(batch),
+  prepare: (_data, context) => {
+    const pipeline = context.graphics.preparePipeline('package.pipeline', {
+      shader: 'package.shader',
+      vertexLayout: 'package.vertices',
+      colorFormats: ['rgba8unorm-srgb'],
+    });
+    if (!pipeline.ok) return pipeline;
+    void pipeline.value;
+    return ok(undefined);
+  },
+  contribute: () => ok(undefined),
+} satisfies RenderFeature<ParticleRenderBatch>;
+
+const renderer = await createRenderer(canvas, { features: [feature] });
+```
+
+The five public terms remain distinct: `RenderFeature`, `RenderPipeline`,
+RenderGraph pass, Material pass, and prepared graphics. This is a host
+preparation recipe, not a visible particle draw path or a VFX production
+branch. Wave 2 leaves simulation, manifest changes, RPC/CLI transport, and
+private imports out of scope. See the detailed render contract in
+[`packages/render/README.md`](../render/README.md), the declarations in
+[`features/prepared-graphics.ts`](../render/src/features/prepared-graphics.ts), and the
+producer contract in [`packages/vfx/README.md`](../vfx/README.md).
+
+The four concepts stay separate: `RenderFeature` is a producer callback
+contract, `RenderPipeline` is full frame policy, a RenderGraph pass is a
+declared execution node, and a material pass is a shader-facing asset pass.
+The feature API and its structured error model are documented by
+[`@forgeax/engine-render`](../render/README.md); this README documents only
+the runtime assembly boundary.
+
 ## Assemble a renderer
 
 ```ts
@@ -53,4 +146,4 @@ flowchart LR
   Runtime --> App
 ```
 
-`@forgeax/engine-render` owns `Renderer`, `RendererOptions`, render components, frame stages, and render errors. Runtime owns only the concrete `createRenderer` host contract and `EngineEnvironmentError`; it never re-exports the moved domain APIs.
+`@forgeax/engine-render` owns `Renderer`, `RendererOptions`, render components, frame stages, prepared graphics, and render errors. Runtime owns only the concrete `createRenderer` host contract and `EngineEnvironmentError`; it never re-exports the moved domain APIs.

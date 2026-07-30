@@ -15,7 +15,7 @@ describe('asset producer contract POD', () => {
     expectTypeOf<CatalogEntry['sourceKey']>().toEqualTypeOf<string | undefined>();
     expectTypeOf<CatalogEntry['sourceIndex']>().toEqualTypeOf<number | undefined>();
     expectTypeOf<CatalogEntry['sourcePath']>().toEqualTypeOf<string>();
-    expectTypeOf<CatalogEntry['relativeUrl']>().toEqualTypeOf<string>();
+    expectTypeOf<CatalogEntry['packageUrl']>().toEqualTypeOf<string>();
   });
 
   it('exposes complete producer fact fields as neutral PODs', () => {

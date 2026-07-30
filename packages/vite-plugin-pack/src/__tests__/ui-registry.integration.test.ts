@@ -14,23 +14,17 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'forgeax-ui-registry-'));
   process.chdir(root);
   await writeFile(join(root, 'main.js'), 'export default 1;\n');
+  await writeFile(join(root, 'hud.ui.html'), '<div class="hud">HUD</div>\n');
+  await writeFile(join(root, 'hud.ui.css'), '.hud { color: white; }\n');
   await writeFile(
-    join(root, 'hud.pack.json'),
+    join(root, 'hud.ui.html.meta.json'),
     JSON.stringify({
       schemaVersion: '1.0.0',
-      kind: 'internal-text-package',
-      assets: [
-        {
-          guid: UI_GUID,
-          kind: 'ui',
-          payload: {
-            guid: UI_GUID,
-            html: '<div class="hud">HUD</div>\n',
-            css: '.hud { color: white; }\n',
-          },
-          refs: [],
-        },
-      ],
+      kind: 'external-asset-package',
+      importer: 'ui',
+      source: 'hud.ui.html',
+      importSettings: {},
+      subAssets: [{ guid: UI_GUID, sourceIndex: 0, kind: 'ui' }],
     }),
   );
 });
@@ -40,8 +34,8 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-describe('pluginPack UI pack contract', () => {
-  it('emits a self-contained UI pack payload without an importer', async () => {
+describe('pluginPack UI importer registry', () => {
+  it('registers ui by default and emits finalized build payload', async () => {
     const dist = join(root, 'dist');
     await viteBuild({
       root,
@@ -59,21 +53,22 @@ describe('pluginPack UI pack contract', () => {
     const uiFile = files.find((file) => file.includes(UI_GUID));
     expect(uiFile).toBeDefined();
     const pack = JSON.parse(await readFile(join(dist, uiFile as string), 'utf8')) as {
-      assets: Array<{ payload: { html: string; css: string } }>;
+      schemaVersion: string;
+      assets: Array<{
+        payload: { html: string; css: string };
+        artifacts: Record<string, { path: string }>;
+      }>;
     };
-    const payload = pack.assets[0]?.payload;
-    expect(payload).toBeDefined();
-    if (payload === undefined) throw new Error('UI pack payload is missing');
-    expect(payload.html).toContain('HUD');
-    expect(payload.css).toContain('.hud');
-    expect(payload.html).not.toContain('ui-token:');
+    expect(pack.schemaVersion).toBe('2.0.0');
+    expect(pack.assets[0]?.payload.html).toContain('HUD');
+    expect(pack.assets[0]?.payload.css).toContain('.hud');
+    expect(pack.assets[0]?.payload.html).not.toContain('ui-token:');
+    expect(pack.assets[0]?.artifacts).toEqual({});
 
     const catalog = JSON.parse(await readFile(join(dist, 'pack-index.json'), 'utf8')) as Array<{
       guid: string;
-      relativeUrl: string;
+      packageUrl: string;
     }>;
-    expect(catalog.find((entry) => entry.guid === UI_GUID)?.relativeUrl).toMatch(
-      /\.pack-[^/]+\.json$/,
-    );
+    expect(catalog.find((entry) => entry.guid === UI_GUID)?.packageUrl).toContain('.pack');
   });
 });

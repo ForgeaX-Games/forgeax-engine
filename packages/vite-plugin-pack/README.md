@@ -3,7 +3,7 @@
 // Dev mode: HMR + /__pack/lookup/:guid + /__pack/index routes.
 // Build mode: generateBundle scans roots, imports each `kind: 'texture'` row
 // (parseImage -> raw RGBA bytes -> emitFile hashed `<guid>-[hash].bin`),
-// rewrites `relativeUrl` to the hashed path, and emits `pack-index.json`.
+// rewrites `packageUrl` to the hashed path, and emits `pack-index.json`.
 
 ## Producer fields are catalog facts
 
@@ -30,6 +30,11 @@ consumers never need to guess importer identity from a URL or file suffix.
 DDC locations are replaceable locators; they are never used as a fallback
 identity. Revision and producer facts remain attached to every row in a
 catalog delta, including a row whose locator changed.
+## AssetEvidence producer boundary
+
+The plugin publishes catalog navigation, not proof. A row's `packageUrl` and optional `cookReceiptUrl` are joined with the producer source meta, `CookReceipt`, and Pack v2 artifact verification by the pack CLI or runtime SDK as `AssetEvidence`. Dev and build paths should preserve the same locator semantics so diagnostics do not depend on HMR.
+
+When source bytes change, keep the evidence state explicit: `notCooked`, `ready/current`, `ready/stale`, or `unknown`; package/artifact checks are `notChecked`, `passed`, or `failed`. Recover by fixing the source/cook producer and rerunning `lookup/verify --guid --project --catalog --json`, not by inventing a replacement catalog row.
 
 # Catalog transport and host refresh
 
@@ -126,9 +131,9 @@ Each row in `pack-index.json` (build) or `/__pack/index` (dev) carries:
 | Field | Type | Notes |
 |:--|:--|:--|
 | `guid` | `string` (UUIDv5/v7 lowercase) | asset identity |
-| `relativeUrl` | `string` | dev: source-relative path (e.g. `/assets/wood-container.jpg`); build: hashed import artefact (e.g. `/assets/<guid>-[hash].bin`) |
+| `packageUrl` | `string` | dev: source-relative path (e.g. `/assets/wood-container.jpg`); build: hashed import artefact (e.g. `/assets/<guid>-[hash].bin`) |
 | `kind` | `string` (closed disc.) | `'texture'` / `'mesh'` / `'scene'` / `'material'` / future arms |
-| `sourcePath` | `string` | on-disk source path (debugging + grep; build retains source JPG path even though `relativeUrl` points to import artefact) |
+| `sourcePath` | `string` | on-disk source path (debugging + grep; build retains source JPG path even though `packageUrl` points to import artefact) |
 | `metadata` | `ImageMetadata \| undefined` | present iff `kind === 'texture'`; sub-structure: `width?` / `height?` / `format: GPUTextureFormat` / `colorSpace: 'srgb' \| 'linear'` / `mipmap: boolean`; `width` / `height` may be absent in dev-mode entries pre-decode (build-mode import fills them) |
 | `packageId`, `provenance`, `revision` | producer PODs | stable facts copied from the declaration; absent means no evidence was published |
 | `sourceKey`, `sourceIndex` | topology PODs | semantic key plus positional evidence; `sourceIndex` is never identity |
@@ -168,8 +173,14 @@ const app = await createApp(canvas, options, { importTransport: createDevImportT
 
 ## Layer 2 -- what the pair does on a DDC miss
 
-A dev catalog keeps a **discoverable raw-source texture row** for any asset that has only a `*.meta.json` (no build-imported `.bin`). When `loadByGuid` resolves that row, the runtime loader sees a non-`.bin` `relativeUrl` and returns the `AssetErrorCode` sentinel `texture-source-not-imported` (an `AssetError`). `loadByGuidProd` treats that sentinel as transport-eligible and calls the injected transport's `fetchPack(guid)`, which `POST`s `/__import/<guid>`. The dev server imports the source to an `rgba16float` / `rgba8` `.bin` via the shared `importTextureEntry` SSOT, rebuilds the catalog so the same-GUID row now ends `.bin`, and returns the fresh `PackIndexEntry[]`; the loader clears its cache and re-enters, reading the imported `.bin`. HDR equirect sources (`*.hdr` declared as a `cube-texture` sub-asset) ride the same path: the dev `POST /__import` tolerates the runner's `import-produced-no-assets` and still imports the `.hdr` to a 2D `rgba16float` `.bin` (the GPU cube-isation stays in `uploadCubemapFromEquirect`).
+A dev catalog keeps a **discoverable raw-source texture row** for any asset that has only a `*.meta.json` (no build-imported `.bin`). When `loadByGuid` resolves that row, the runtime loader sees a non-`.bin` `packageUrl` and returns the `AssetErrorCode` sentinel `texture-source-not-imported` (an `AssetError`). `loadByGuidProd` treats that sentinel as transport-eligible and calls the injected transport's `fetchPack(guid)`, which `POST`s `/__import/<guid>`. The dev server imports the source to an `rgba16float` / `rgba8` `.bin` via the shared `importTextureEntry` SSOT, rebuilds the catalog so the same-GUID row now ends `.bin`, and returns the fresh `PackIndexEntry[]`; the loader clears its cache and re-enters, reading the imported `.bin`. HDR equirect sources (`*.hdr` declared as a `cube-texture` sub-asset) ride the same path: the dev `POST /__import` tolerates the runner's `import-produced-no-assets` and still imports the `.hdr` to a 2D `rgba16float` `.bin` (the GPU cube-isation stays in `uploadCubemapFromEquirect`).
 
 ## Layer 3 -- shipped form fails fast; build is untouched
 
 Without an injected transport (shipped form), the same sentinel surfaces as `asset-not-imported` -- a fail-fast, never a silent lazy import. A genuinely corrupt imported `.bin` is a different signal entirely: it is the `ImageError` `image-decode-failed` and is **never** transport-eligible (the eligibility guard is `instanceof AssetError`), so a real decode failure is never re-fetched. The build path is also unaffected: `generateBundle` pre-imports every texture row (incl. `.hdr`) to a hashed `.bin` ahead of its own pre-import pass, so the shipped bundle carries the `.bin` directly and never exercises the dev `POST /__import` arm.
+# Static asset evidence
+
+> [!IMPORTANT]
+> Static assets publish as Pack v2 and are navigated by `packageUrl`; runtime-only bytes remain a separate exception.
+
+The derived `AssetEvidence` view joins catalog navigation, cook receipt freshness, and artifact verification. Discover it with `lookup/verify --guid --project --catalog --json`; `notCooked`, `stale`, and `unknown` require different recovery actions.

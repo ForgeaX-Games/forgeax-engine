@@ -2,6 +2,12 @@
 
 > Build-time MSDF font atlas baking + runtime `FontAsset` plumbing for world-space text. Bake a TTF into an MSDF atlas + glyph-metrics sidecar via the plugin bin `forgeax-engine-remote-font bake`; at runtime an AI user spawns a single `GlyphText` authoring component and the engine's `glyphTextLayoutSystem` lays out, bakes a one-mesh-per-segment `MeshAsset`, and attaches `MeshFilter` + `MeshRenderer` so the text rides the standard forward mesh path.
 
+## Evidence and recovery
+
+Font baking is a producer step. Its source meta and bake `CookReceipt` are joined with the catalog `packageUrl`/`cookReceiptUrl` and Pack v2 atlas/metrics artifacts as `AssetEvidence`; runtime text only consumes the resulting payload.
+
+`notCooked` identifies a source declaration without a successful bake. A matching fingerprint is `ready/current`, a changed fingerprint is `ready/stale`, and unavailable evidence is `unknown`; package/artifact checks remain `notChecked`, `passed`, or `failed`. On a failure, follow the structured hint, fix the TTF or bake settings, recook, and rerun `lookup/verify --guid --project --catalog --json` before debugging world-space text.
+
 ## One-line spawn = visible (P1)
 
 The whole point of the feature: an AI user never touches a layout asset, a glyph mesh, or a text pipeline. Spawn `GlyphText` + `Transform` and the auto-wired `glyphTextLayoutSystem` (loaded by `createRenderer` / `createApp`) does the rest.

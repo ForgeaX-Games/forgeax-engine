@@ -28,6 +28,73 @@ export interface Plugin {
   build(world: World): Result<void, PluginError> | Promise<Result<void, PluginError>>;
 }
 
+/** A named, preconfigured set of plugins that expands through the normal runner. */
+export interface PluginGroup {
+  readonly name: string;
+  readonly plugins: readonly Plugin[];
+}
+
+/** A plugin input accepted by `runPlugins` and `createApp`. */
+export type PluginSource = Plugin | PluginGroup;
+
+/**
+ * Mutable construction helper for a PluginGroup. The mutable builder is scoped
+ * to definition time; the resulting group owns a frozen plugin snapshot.
+ */
+export class PluginGroupBuilder {
+  private readonly plugins: Plugin[] = [];
+
+  add(plugin: Plugin): this {
+    this.plugins.push(plugin);
+    return this;
+  }
+
+  disable(name: string): this {
+    for (let index = this.plugins.length - 1; index >= 0; index -= 1) {
+      if (this.plugins[index]?.name === name) this.plugins.splice(index, 1);
+    }
+    return this;
+  }
+
+  addBefore(name: string, plugin: Plugin): this {
+    const index = this.plugins.findIndex((candidate) => candidate.name === name);
+    if (index < 0) this.plugins.push(plugin);
+    else this.plugins.splice(index, 0, plugin);
+    return this;
+  }
+
+  addAfter(name: string, plugin: Plugin): this {
+    const index = this.plugins.findIndex((candidate) => candidate.name === name);
+    if (index < 0) this.plugins.push(plugin);
+    else this.plugins.splice(index + 1, 0, plugin);
+    return this;
+  }
+
+  snapshot(): readonly Plugin[] {
+    return Object.freeze([...this.plugins]);
+  }
+}
+
+/** Define a named group; its plugins still use the ordinary Plugin runner. */
+export function definePluginGroup(
+  name: string,
+  configure: (builder: PluginGroupBuilder) => void,
+): PluginGroup {
+  const builder = new PluginGroupBuilder();
+  configure(builder);
+  return Object.freeze({ name, plugins: builder.snapshot() });
+}
+
+/** Expand groups while preserving source order for the single runner seam. */
+export function flattenPluginSources(sources: readonly PluginSource[]): readonly Plugin[] {
+  const plugins: Plugin[] = [];
+  for (const source of sources) {
+    if ('plugins' in source) plugins.push(...source.plugins);
+    else plugins.push(source);
+  }
+  return plugins;
+}
+
 // ---------------------------------------------------------------------------
 // PluginError -- closed 2-member union mirroring AppError template (D-7).
 //

@@ -944,13 +944,13 @@ function makePostProcessRecordCtx(): {
       bindGroupCreates.push(desc);
       return { ok: true, value: { label: `bg-${bindGroupCreates.length}` } };
     }),
-    createTextureView: vi.fn(() => ({ ok: true, value: { label: 'fxaa-storage-view' } })),
+    createTextureView: vi.fn(() => ({ ok: true, value: { label: 'fxaa-output-view' } })),
     queue: { writeBuffer: vi.fn(() => ({ ok: true, value: undefined })) },
   };
   const sampler = { label: 'postprocess-sampler' };
   const ctx = {
     runtime: {
-      device,
+      device: { ...device, caps: { storageBuffer: true } },
       errorRegistry: { fire: vi.fn() },
     },
     store: { getCubemapGpuView: vi.fn() },
@@ -959,6 +959,8 @@ function makePostProcessRecordCtx(): {
       copyTextureToTexture: vi.fn(),
     },
     pipelineState: {
+      format: 'bgra8unorm',
+      colorAttachmentFormat: 'bgra8unorm-srgb',
       viewUniformBuffer: { label: 'view-uniform' },
       perPassResources: {
         hdrColorView: { label: 'hdr-color' },
@@ -983,8 +985,6 @@ function makePostProcessRecordCtx(): {
         fxaaPipeline: { label: 'fxaa-pipeline' },
         fxaaBindGroupLayout: { label: 'fxaa-bgl' },
         fxaaSampler: sampler,
-        fxaaIntermediateTexture: { label: 'fxaa-intermediate-texture' },
-        fxaaIntermediateView: { label: 'fxaa-intermediate' },
       },
     },
     frameState: { postProcessBgCache: new WeakMap() },
@@ -1012,6 +1012,7 @@ describe('post-process bindgroup identity cache (issue #670)', () => {
     const { ctx, bindGroupCreates } = makePostProcessRecordCtx();
     const views = {
       hdrColor: { label: 'hdr-color' },
+      ldrColor: { label: 'ldr-color' },
       bloomBright: { label: 'bloom-bright' },
       bloomBlurH: { label: 'bloom-blur-h' },
       bloomBlurV: { label: 'bloom-blur-v' },
@@ -1027,10 +1028,11 @@ describe('post-process bindgroup identity cache (issue #670)', () => {
       recordBloomBlurHPass(ctx, resolve);
       recordBloomBlurVPass(ctx, resolve);
       recordBloomCompositePass(ctx, resolve);
-      recordFxaaPass(ctx);
+      recordFxaaPass(ctx, resolve);
       recordSkyboxPass(ctx);
     };
     recordAll();
+    expect(ctx.encoder.copyTextureToTexture).not.toHaveBeenCalled();
     expect(bindGroupCreates).toHaveLength(6);
     expect(bindGroupCreates.map((create) => create.label)).toEqual([
       'bloom-bright-bg',
@@ -1052,12 +1054,8 @@ describe('post-process bindgroup identity cache (issue #670)', () => {
     views.bloomBlurH = { label: 'bloom-blur-h-resized' };
     views.bloomBlurV = { label: 'bloom-blur-v-resized' };
     views.hdrColor = { label: 'hdr-color-resized' };
+    views.ldrColor = { label: 'ldr-color-resized' };
     views.cubemap = { label: 'cubemap-reprojected' };
-    (
-      ctx.pipelineState as { perPassResources: { fxaaIntermediateView: unknown } }
-    ).perPassResources.fxaaIntermediateView = {
-      label: 'fxaa-intermediate-resized',
-    };
     recordAll();
 
     expect(bindGroupCreates).toHaveLength(12);
@@ -1066,9 +1064,7 @@ describe('post-process bindgroup identity cache (issue #670)', () => {
     expect(bindGroupCreates[9]?.entries.map((entry) => entry.resource.value)).toContain(
       views.bloomBlurV,
     );
-    expect(bindGroupCreates[10]?.entries[0]?.resource.value).toEqual({
-      label: 'fxaa-intermediate-resized',
-    });
+    expect(bindGroupCreates[10]?.entries[0]?.resource.value).toBe(views.ldrColor);
     expect(bindGroupCreates[11]?.entries[0]?.resource.value).toBe(views.cubemap);
   });
 });

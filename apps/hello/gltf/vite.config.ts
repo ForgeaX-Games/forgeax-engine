@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { gltfImporter } from '@forgeax/engine-gltf';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
@@ -23,7 +26,10 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // lighting-mvp M5 / w22.8); the hello-gltf app consumes the manifest
 // through the same RenderSystem path.
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  plugins: [
+    forgeaxShader() as never,
+    pluginPack({ roots: [resolve(here, 'assets')], importers: [imageImporter, gltfImporter], refresh: reloadAssetHost() }),
+  ],
   server: {
     fs: {
       allow: [monorepoRoot],

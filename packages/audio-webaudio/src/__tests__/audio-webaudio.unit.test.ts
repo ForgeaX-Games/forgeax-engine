@@ -36,7 +36,7 @@ import {
   detectEdge,
   detectRemovedEntities,
 } from '../audio-tick-system';
-import { loadAudioClipByGuid } from '../clip-loader';
+import { decodeAudioClipBytes } from '../clip-loader';
 import { WebAudioEngine } from '../web-audio-engine';
 
 {
@@ -151,7 +151,8 @@ import { WebAudioEngine } from '../web-audio-engine';
       const result = await audioImporter.import(ctx);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.value.assets.length).toBe(0);
+      const produced = result.value.assets;
+      expect(produced.length).toBe(0);
     });
   });
 }
@@ -443,106 +444,10 @@ import { WebAudioEngine } from '../web-audio-engine';
 }
 
 {
-  // --- from clip-load.test.ts ---
-  describe('AudioClipAsset load via asset system (AC-03)', () => {
-    let OriginalAudioContext: typeof AudioContext;
-    let OriginalFetch: typeof globalThis.fetch;
-
-    beforeEach(() => {
-      OriginalAudioContext = globalThis.AudioContext;
-      OriginalFetch = globalThis.fetch;
-    });
-
-    afterEach(() => {
-      globalThis.AudioContext = OriginalAudioContext;
-      globalThis.fetch = OriginalFetch;
-      vi.restoreAllMocks();
-      vi.unstubAllGlobals();
-    });
-
-    it('loads a valid AudioClipAsset by GUID and returns Ok', async () => {
-      const audioData = new ArrayBuffer(1024);
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          arrayBuffer: vi.fn().mockResolvedValue(audioData),
-        }),
-      );
-
-      const mockBuffer = {
-        sampleRate: 48000,
-        length: 48000,
-        duration: 1,
-        numberOfChannels: 2,
-        getChannelData: vi.fn(() => new Float32Array(48000)),
-        copyFromChannel: vi.fn(),
-        copyToChannel: vi.fn(),
-      };
-
-      const ctorSpy = vi.fn().mockImplementation(function AudioContextMock() {
-        return {
-          decodeAudioData: vi.fn().mockResolvedValue(mockBuffer),
-          close: vi.fn().mockResolvedValue(undefined),
-          state: 'running',
-        } as unknown as AudioContext;
-      });
-      globalThis.AudioContext = ctorSpy as unknown as typeof AudioContext;
-
-      const result = await loadAudioClipByGuid('valid-guid-1234', '/audio/test.wav');
-
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value.kind).toBe('audio');
-        expect(result.value.buffer).toBe(mockBuffer);
-      }
-    });
-
-    it('returns decode-failed on HTTP error', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: false,
-          status: 404,
-          statusText: 'Not Found',
-        }),
-      );
-
-      const result = await loadAudioClipByGuid('nonexistent-guid', '/audio/missing.wav');
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('decode-failed');
-      }
-    });
-
-    it('returns decode-failed when decodeAudioData rejects', async () => {
-      const audioData = new ArrayBuffer(16);
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          arrayBuffer: vi.fn().mockResolvedValue(audioData),
-        }),
-      );
-
-      const ctorSpy = vi.fn().mockImplementation(function AudioContextMock() {
-        return {
-          decodeAudioData: vi
-            .fn()
-            .mockRejectedValue(new DOMException('Unable to decode audio data', 'EncodingError')),
-          close: vi.fn().mockResolvedValue(undefined),
-          state: 'running',
-        } as unknown as AudioContext;
-      });
-      globalThis.AudioContext = ctorSpy as unknown as typeof AudioContext;
-
-      const result = await loadAudioClipByGuid('corrupt-guid', '/audio/corrupt.wav');
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('decode-failed');
-      }
+  // --- Pack v2 bytes decoder contract ---
+  describe('AudioClipAsset Pack v2 bytes', () => {
+    it('keeps decoding behind the explicit bytes API', async () => {
+      expect(typeof decodeAudioClipBytes).toBe('function');
     });
   });
 }

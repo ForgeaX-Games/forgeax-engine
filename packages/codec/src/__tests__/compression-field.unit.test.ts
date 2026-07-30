@@ -37,7 +37,7 @@ interface ImageMetadataExpected {
 /** Expected PackIndexEntry shape (field location 2). */
 interface PackIndexEntryExpected {
   readonly guid: string;
-  readonly relativeUrl: string;
+  readonly packageUrl: string;
   readonly kind: string;
   readonly sourcePath: string;
   readonly name?: string;
@@ -49,7 +49,7 @@ interface PackIndexEntryExpected {
 /** Expected LoaderEntry shape (field location 3, private in asset-registry.ts:984-989). */
 interface LoaderEntryExpected {
   readonly guidKey: string;
-  readonly relativeUrl: string;
+  readonly packageUrl: string;
   readonly kind: string;
   readonly metadata?: ImageMetadataExpected | undefined;
   readonly compression?: AssetCompressionMirror;
@@ -60,7 +60,7 @@ interface CatalogRowExpected {
   readonly guid: string;
   readonly kind: string;
   readonly name?: string;
-  readonly relativeUrl: string;
+  readonly packageUrl: string;
   readonly refs?: readonly string[];
   readonly compression?: AssetCompressionMirror;
 }
@@ -111,7 +111,7 @@ describe('AssetCompression type domain (AC-01)', () => {
     // PackIndexEntry must have optional `compression` field.
     const entry: PackIndexEntryExpected = {
       guid: 'aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee',
-      relativeUrl: 'assets/test.bin',
+      packageUrl: 'assets/test.bin',
       kind: 'mesh',
       sourcePath: 'test.glb',
     };
@@ -140,7 +140,7 @@ describe('AssetCompression type domain (AC-01)', () => {
     // We verify that its structural contract accepts compression.
     const entry: LoaderEntryExpected = {
       guidKey: 'abc123',
-      relativeUrl: 'test.bin',
+      packageUrl: 'test.bin',
       kind: 'mesh',
       compression: 'zstd',
     };
@@ -151,7 +151,7 @@ describe('AssetCompression type domain (AC-01)', () => {
     // Compression is optional
     const entryWithout: LoaderEntryExpected = {
       guidKey: 'abc123',
-      relativeUrl: 'test.bin',
+      packageUrl: 'test.bin',
       kind: 'texture',
       metadata: {
         kind: 'texture',
@@ -169,7 +169,7 @@ describe('AssetCompression type domain (AC-01)', () => {
     const row: CatalogRowExpected = {
       guid: 'test-guid',
       kind: 'mesh',
-      relativeUrl: 'test.bin',
+      packageUrl: 'test.bin',
       compression: 'none',
     };
 
@@ -180,7 +180,7 @@ describe('AssetCompression type domain (AC-01)', () => {
     const rowWithout: CatalogRowExpected = {
       guid: 'test-guid',
       kind: 'texture',
-      relativeUrl: 'test.bin',
+      packageUrl: 'test.bin',
     };
     expect(rowWithout.compression).toBeUndefined();
   });
@@ -225,7 +225,7 @@ describe('AssetCompression type domain (AC-01)', () => {
 
     const entry: PackIndexEntryExpected = {
       guid: 'g',
-      relativeUrl: 'u',
+      packageUrl: 'u',
       kind: 'mesh',
       sourcePath: 's',
     };

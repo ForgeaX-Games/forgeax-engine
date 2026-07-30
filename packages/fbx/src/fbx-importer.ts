@@ -86,7 +86,6 @@ export const fbxImporter: Importer = {
           animationClips,
           subAssets: ctx.subAssets,
         }),
-        artifacts: [],
         sourceDependencies: [],
       },
     };

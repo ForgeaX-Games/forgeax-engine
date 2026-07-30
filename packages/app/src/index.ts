@@ -35,12 +35,17 @@ export type {
   PluginErrorCode,
   PluginErrorDetail,
   PluginErrorDetailFor,
+  PluginGroup,
+  PluginGroupBuilder,
+  PluginSource,
 } from '@forgeax/engine-plugin';
 // PluginError re-exports -- the canonical SSOT lives in @forgeax/engine-plugin
 // (D-1b). Re-exported here to keep AI-user import { Plugin, PluginError } from
 // '@forgeax/engine-app' stable (D-1c). Capability package
 // packages import directly from '@forgeax/engine-plugin'.
 export {
+  definePluginGroup,
+  flattenPluginSources,
   isPluginError,
   PLUGIN_ERROR_HINTS,
   PLUGIN_EXPECTED,

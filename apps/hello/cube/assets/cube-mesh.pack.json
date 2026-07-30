@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "kind": "internal-text-package",
   "assets": [
     {
@@ -9,7 +9,8 @@
         "geometry": "procedural-cube",
         "note": "cube geometry pre-baked in @forgeax/engine-runtime; BUILTIN_HANDLE_CUBE"
       },
-      "refs": []
+      "refs": [],
+      "artifacts": {}
     }
   ]
 }

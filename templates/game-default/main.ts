@@ -19,6 +19,7 @@ import {
 import type { UiAsset, UiError, UiResult } from '@forgeax/engine-ui';
 import { installHud, HUD_UI_GUID, type ViewMode } from './src/hud';
 import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID, type AntialiasMode } from './src/settings';
+import { applyClearColor } from './src/clear-color';
 import { installGameplayInput } from './src/gameplay-input';
 import { installGameplayLifecycle } from './src/gameplay-lifecycle';
 import { installGameplayAudio } from './src/gameplay-audio';
@@ -32,6 +33,15 @@ import { resetScoringTargets, scoringPoints } from './src/scoring-target';
 import { installRenderEvidence } from './src/render-evidence';
 import { installDebugAxes } from './src/debug-axes';
 import { ORBIT_INITIAL_PITCH, ORBIT_INITIAL_YAW, ORBIT_RADIUS, orbitPose } from './src/camera-orbit';
+import { PERSPECTIVE_FOV_INITIAL, zoomPerspectiveFov } from './src/camera-zoom';
+import { installGameplayChangeDetection, type GameplayChangeDetectionHandle } from './src/change-detection';
+import { installTargetHealth, TargetHealth, type TargetHealthHandle } from './src/target-health';
+import { installTargetDisabling, type TargetDisablingHandle } from './src/target-disabling';
+import { installDepthOfField, DEPTH_OF_FIELD_ID, type DepthOfFieldHandle } from './src/depth-of-field';
+import { installChromaticAberration, CHROMATIC_ABERRATION_ID, type ChromaticAberrationHandle } from './src/chromatic-aberration';
+import { createCustomProjectileMesh, resetCustomProjectileMesh, toggleCustomProjectileMesh, type CustomProjectileMesh } from './src/custom-projectile-mesh';
+import { createMeshHandleSwap, resetMeshHandleSwap, toggleMeshHandleSwap, type MeshHandleSwap } from './src/mesh-handle-swap';
+import { createFreeCameraState, resetFreeCamera, stepFreeCamera } from './src/free-camera';
 import {
   attachScenePhysics, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
   spawnFallbackScene, spawnGroundCollider, type LoadedScene, type MatHandle,
@@ -96,14 +106,14 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   let initX = 0, initZ = 0;
   // XZ circles the kinematic player is pushed out of (the tree trunk).
   const walkBlockers: Array<{ cx: number; cz: number; r: number }> = [];
-  const flashables: Array<{ e: EntityHandle; mat: MatHandle }> = []; // hit-flash targets (dynamic props)
+  const flashables: Array<{ e: EntityHandle; mat: MatHandle; clearcoat?: boolean }> = []; // hit-flash targets (dynamic props)
   let animatedMaterial: AnimatedMaterialTarget | undefined;
   let materialElapsed = 0;
   if (loaded) {
     const phys = attachScenePhysics({ world }, loaded);
     walkBlockers.push(...phys.walkBlockers);
     flashables.push(...phys.props);
-    if (phys.animatedMaterial) animatedMaterial = createAnimatedMaterialTarget(world, phys.animatedMaterial, 52);
+    if (phys.animatedMaterial) animatedMaterial = createAnimatedMaterialTarget(world, phys.animatedMaterial, 52, ctx?.renderer);
     const playerNode = loaded.nodes.find((n) => (n.components.Name as { value?: string } | undefined)?.value === 'Player');
     if (playerNode) {
       const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
@@ -113,6 +123,14 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     }
   }
   const origMatOf = new Map<EntityHandle, MatHandle>(flashables.map((f) => [f.e, f.mat] as [EntityHandle, MatHandle]));
+  const targetHealth: TargetHealthHandle = installTargetHealth(world, flashables.map((target) => target.e));
+  const targetDisabling: TargetDisablingHandle = installTargetDisabling(world, flashables.map((target) => target.e));
+  const meshHandleSwap: MeshHandleSwap | undefined = createMeshHandleSwap(world, flashables[0]?.e);
+  const damageTarget = (entity: EntityHandle, points: number): void => {
+    targetHealth.damage(entity, points);
+    const health = world.get(entity, TargetHealth);
+    if (health.ok && health.value.current <= 0) targetDisabling.disable(entity);
+  };
 
   const skylightEntity = loaded?.nodes
     .find((node) => (node.components.Name as { value?: string } | undefined)?.value === 'Skylight')
@@ -132,11 +150,17 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // antialias: ANTIALIAS_FXAA = post-process anti-aliasing (learn-render §4).
   const TOP_DY = 13, TOP_DZ = 9;                 // top-down offset (steeper = more 2.5D)
   const CAM_FOLLOW = 8;                          // top-down follow stiffness
+  const PAN_HALF_HEIGHT_INITIAL = 8;
+  const PAN_HALF_HEIGHT_MIN = 3;
+  const PAN_HALF_HEIGHT_MAX = 14;
+  const PAN_SPEED = 8;
   const EYE = 0.55;                              // FPS eye height above the player root (≈ box-man head, y≈1.3)
   const topPitch = -Math.atan2(TOP_DY, TOP_DZ);  // top-down look-down pitch
   const topQ = quat.create();
   quat.fromAxisAngle(topQ, [1, 0, 0], topPitch);
   let camX = initX, camZ = initZ + TOP_DZ;
+  let panX = initX, panZ = initZ + TOP_DZ, panHalfHeight = PAN_HALF_HEIGHT_INITIAL;
+  let perspectiveFov = PERSPECTIVE_FOV_INITIAL;
   const camera = world.spawn(
     { component: Transform, data: { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]} },
     // clearColor = visible sky background. WebKit/WKWebView (the desktop app)
@@ -144,7 +168,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     // it lacks), so without this the background clears to black. The Camera clear
     // color needs no GPU feature; a daytime blue reads as sky. Linear/pre-tonemap.
     // On Chromium the cubemap skybox draws over it (harmless).
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
+    { component: Camera, data: { ...perspective({ fov: PERSPECTIVE_FOV_INITIAL, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
     { component: AudioListener, data: {} },
   ).unwrap();
 
@@ -202,7 +226,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // ── on-screen UI + view-mode state (DOM overlay; gameplay stays ECS) ─────────
   let mode: ViewMode = 'topdown';
   let gameplayInput!: ReturnType<typeof installGameplayInput>;
-  let score = 0;
+  let changeDetection!: GameplayChangeDetectionHandle;
   // Pointer-lock is managed by engine-input's browser backend (M3 D-1/D-3):
   //   - Web:   backend onCanvasClick calls the W3C Pointer Lock API directly.
   //   - Host:  the editor play-runtime injects a lockProvider wrapping the native
@@ -214,12 +238,36 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // knowledge exists here.
   // setMode is captured inside the toggle button click; declared above the HUD
   // so installHud's onToggle can call it.
+  const applyPanCamera = () => {
+    const halfWidth = panHalfHeight * aspect;
+    world.set(camera, Camera, {
+      projection: 1,
+      left: -halfWidth,
+      right: halfWidth,
+      bottom: -panHalfHeight,
+      top: panHalfHeight,
+      near: 0.1,
+      far: 200,
+    });
+    world.set(camera, Transform, { pos: [panX, TOP_DY, panZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] });
+  };
+  const restorePerspectiveCamera = () => {
+    world.set(camera, Camera, { projection: 0, fov: perspectiveFov, aspect, near: 0.1, far: 200 });
+  };
   const setMode = (m: ViewMode) => {
     if (m !== mode && gameplayInput) {
       gameplayInput.lookYaw = 0;
       gameplayInput.lookPitch = 0;
     }
     mode = m;
+    if (m === 'pan') {
+      panX = initX;
+      panZ = initZ + TOP_DZ;
+      panHalfHeight = PAN_HALF_HEIGHT_INITIAL;
+      applyPanCamera();
+    } else if (mode !== 'pan') {
+      restorePerspectiveCamera();
+    }
     hud.setMode(m);
     setPlayerVisible(m !== 'fps');
     canvas.style.cursor = m === 'fps' ? 'crosshair' : '';
@@ -227,7 +275,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     // lock; top-down forbids it and immediately releases any existing lock.
     // and provider exitLock pathways). The template no longer touches
     // any pointer-lock escape-hatch directly (AC-06).
-    ctx?.setPointerLockAllowed?.(m !== 'topdown');
+    ctx?.setPointerLockAllowed?.(m === 'fps' || m === 'orbit');
     // Don't request lock from here: setMode is called from the toggle BUTTON's
     // click; Chromium rejects pointer-lock requests on a different element from
     // the gesture's target. The backend's onCanvasClick requests it on canvas
@@ -255,7 +303,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const hud = installHud({
     asset: hudAsset,
     initialMode: 'topdown',
-    onToggle: () => setMode(mode === 'topdown' ? 'orbit' : mode === 'orbit' ? 'fps' : 'topdown'),
+    onToggle: () => setMode(mode === 'topdown' ? 'orbit' : mode === 'orbit' ? 'fps' : mode === 'fps' ? 'pan' : 'topdown'),
     onSettings: () => settings?.open(),
     ...(hudHost ? { host: hudHost } : {}),
     ...(hudLoad.ok ? {} : { error: hudLoad.error }),
@@ -265,6 +313,24 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   ctx?.registerCleanup?.(() => hud.dispose());
   const settingsState = createGameSettingsState();
   settings = hudHost ? mountSettings(settingsAsset, hudHost, settingsState, canvas, settingsLoad.ok ? undefined : settingsLoad.error) : null;
+  const depthOfField: DepthOfFieldHandle = installDepthOfField(world, ctx?.renderer, settingsState.depthOfField);
+  if (!depthOfField.installed && depthOfField.error) console.warn(`[game] depth-of-field unavailable: ${depthOfField.error}`);
+  const chromaticAberration: ChromaticAberrationHandle = installChromaticAberration(
+    world,
+    ctx?.renderer,
+    [DEPTH_OF_FIELD_ID, CHROMATIC_ABERRATION_ID],
+  );
+  if (!chromaticAberration.installed && chromaticAberration.error) console.warn(`[game] chromatic aberration unavailable: ${chromaticAberration.error}`);
+  let appliedDepthOfField = settingsState.depthOfField;
+  world.addSystem(Update, {
+    name: 'game-depth-of-field-settings',
+    queries: [],
+    fn: () => {
+      if (settingsState.depthOfField === appliedDepthOfField) return;
+      appliedDepthOfField = settingsState.depthOfField;
+      depthOfField.setEnabled(appliedDepthOfField);
+    },
+  }).unwrap();
   ctx?.registerCleanup?.(() => settings?.dispose());
   let appliedAntialias: AntialiasMode = settingsState.antialias;
   const antialiasValue = (mode: AntialiasMode): number => {
@@ -289,6 +355,16 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       if (settingsState.bloom === appliedBloom) return;
       appliedBloom = settingsState.bloom;
       world.set(camera, Camera, { bloom: appliedBloom ? BLOOM_ENABLED : BLOOM_DISABLED });
+    },
+  }).unwrap();
+  let appliedClearColor = settingsState.clearColor;
+  world.addSystem(Update, {
+    name: 'game-clear-color-settings',
+    queries: [],
+    fn: () => {
+      if (settingsState.clearColor === appliedClearColor) return;
+      appliedClearColor = settingsState.clearColor;
+      applyClearColor(world, camera, appliedClearColor);
     },
   }).unwrap();
 
@@ -347,14 +423,21 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // dependent) NOT `.code`, so letters bind BOTH cases (shift / caps-lock) and
   // the space bar binds ' '. Arrows keep their raw `key` names.
   const KEY = (key: string) => ({ type: 'key', key } as const);
+  const PAD_BUTTON = (button: 0 | 1 | 2 | 3 | 7) => ({ type: 'gamepadButton', button } as const);
+  const PAD_AXIS = (axis: 0 | 1, sign: 1 | -1) => ({ type: 'gamepadAxis', axis, sign } as const);
   const INPUT_MAP: readonly ActionConfig[] = [
-    { action: 'moveForward', bindings: [KEY('w'), KEY('W')] },
-    { action: 'moveBack', bindings: [KEY('s'), KEY('S')] },
-    { action: 'moveLeft', bindings: [KEY('a'), KEY('A')] },
-    { action: 'moveRight', bindings: [KEY('d'), KEY('D')] },
-    { action: 'jump', bindings: [KEY(' ')] },
-    { action: 'shoot', bindings: [KEY('f'), KEY('F')] },
-    { action: 'reset', bindings: [KEY('r'), KEY('R')] },
+    { action: 'moveForward', bindings: [KEY('w'), KEY('W'), PAD_AXIS(1, -1)] },
+    { action: 'moveBack', bindings: [KEY('s'), KEY('S'), PAD_AXIS(1, 1)] },
+    { action: 'moveLeft', bindings: [KEY('a'), KEY('A'), PAD_AXIS(0, -1)] },
+    { action: 'moveRight', bindings: [KEY('d'), KEY('D'), PAD_AXIS(0, 1)] },
+    { action: 'jump', bindings: [KEY(' '), PAD_BUTTON(0)] },
+    { action: 'shoot', bindings: [KEY('f'), KEY('F'), PAD_BUTTON(7)] },
+    { action: 'meshUv', bindings: [KEY('g'), KEY('G'), PAD_BUTTON(3)] },
+    { action: 'meshHandle', bindings: [KEY('h'), KEY('H'), PAD_BUTTON(2)] },
+    { action: 'freeUp', bindings: [KEY('e')] },
+    { action: 'freeDown', bindings: [KEY('q')] },
+    { action: 'freeRun', bindings: [KEY('Shift')] },
+    { action: 'reset', bindings: [KEY('r'), KEY('R'), PAD_BUTTON(1)] },
     // Arrows: context-dependent (top-down move vs FPS look), so declared as
     // their own actions and read individually below (snap.action('arrowUp')
     // etc.) — their meaning stays with the per-mode logic, not the InputMap.
@@ -401,6 +484,16 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const BULLET_HALF_HEIGHT = 0.16;
   const bulletMeshRes = createCapsuleGeometry(BULLET_RADIUS, BULLET_HALF_HEIGHT * 2, 6, 12);
   const bulletMesh = bulletMeshRes.ok ? world.allocSharedRef('MeshAsset', bulletMeshRes.value) : HANDLE_SPHERE;
+  // The projectile is the template's runtime custom-mesh story: its visual
+  // MeshAsset is hand-authored (12F position/normal/uv/tangent), its checker
+  // texture is uploaded through the public GPU store, and G mutates the UV
+  // buffer in place. The collider remains a capsule so visual mesh and physics
+  // shape stay explicit rather than silently sharing an implementation detail.
+  const customProjectile: CustomProjectileMesh | undefined = ctx?.renderer === undefined
+    ? undefined
+    : await createCustomProjectileMesh(world, ctx.renderer);
+  const projectileMesh = customProjectile?.meshHandle ?? bulletMesh;
+  const projectileMaterial = customProjectile?.materialHandle ?? bulletMat;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
   const flashMat = createHitFlashMaterial(world, ctx?.renderer);
@@ -410,6 +503,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     if (target === undefined || flashUntil.has(target)) return;
     world.set(target, MeshRenderer, { materials: [flashMat] });
     flashUntil.set(target, 0.2);
+    chromaticAberration.setIntensity(Math.max(chromaticAberration.snapshot().intensity, 0.035));
   };
   // squared hit radius for bullet→prop scoring (bullet_r 0.12 + avg prop_r 0.5 ≈
   // 0.7, plus frame-step slack since the bullet advances ~0.4/frame). Generous
@@ -417,7 +511,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const HIT2 = 0.9 * 0.9;
 
   // ── gameplay update (▶ Play only — ✎ Edit stays static) ─────────────────────
-  const SPEED = 6;            // walk speed (units/s)
+  const SPEED = 6;            // top-down/orbit walk speed (units/s)
   const PLAYER_RADIUS = 0.3;  // = the kinematic capsule radius (setupPlayerRoot)
   const BOUND = 11;           // keep the character on the 24-wide ground slab
   const JUMP_V = 6.5;         // initial jump velocity
@@ -426,7 +520,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const BULLET_LIFE = 1.5;    // bullet lifetime (s)
   const SHOOT_CD = 0.18;      // fire cooldown (s)
 
-  let jumpY = PLAYER_Y, vy = 0, grounded = true;
+  let jumpY = PLAYER_Y, freeY = PLAYER_Y, vy = 0, grounded = true;
+  const freeCamera = createFreeCameraState();
   let shootCd = 0;
   // Bullets fly THROUGH props rather than despawning on contact. Why: rapier's
   // kinematic-vs-dynamic push is velocity-driven (delta of setNextKinematicTranslation
@@ -440,6 +535,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // on lifetime expiry (BULLET_LIFE) — no leftover ball-shadow because it never
   // sits still.
   const bullets: Array<{ e: EntityHandle; x: number; y: number; z: number; dx: number; dy: number; dz: number; quat: [number, number, number, number]; age: number; hits: Set<EntityHandle> }> = [];
+  let deferredBulletSpawns = 0;
+  let deferredBulletDespawns = 0;
 
   type TransformSnapshot = {
     pos: [number, number, number];
@@ -500,6 +597,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     faceX = 0;
     faceZ = -1;
     jumpY = PLAYER_Y;
+    freeY = PLAYER_Y;
+    resetFreeCamera(freeCamera);
     vy = 0;
     grounded = true;
     shootCd = 0;
@@ -509,8 +608,19 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     gameplayInput.shotDir = null;
     camX = initX;
     camZ = initZ + TOP_DZ;
-    score = 0;
-    hud.setScore(0);
+    panX = initX;
+    panZ = initZ + TOP_DZ;
+    panHalfHeight = PAN_HALF_HEIGHT_INITIAL;
+    perspectiveFov = PERSPECTIVE_FOV_INITIAL;
+    changeDetection.reset();
+    targetDisabling.reset();
+    targetHealth.reset();
+    depthOfField.reset();
+    chromaticAberration.reset();
+    if (customProjectile !== undefined) resetCustomProjectileMesh(customProjectile);
+    resetMeshHandleSwap(world, meshHandleSwap);
+    settingsState.depthOfField = false;
+    appliedDepthOfField = false;
     setMode('topdown');
     if (player !== undefined) {
       world.set(player, Transform, { pos: [px, jumpY, pz], quat: [0, 0, 0, 1] });
@@ -521,32 +631,6 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     if (animatedMaterial) resetAnimatedMaterial(world, animatedMaterial);
   };
   const gameplayState = installGameplayState({ world, reset: resetGameplay });
-  installRenderEvidence({
-    renderer: ctx?.renderer,
-    flashables,
-    triggerFlash: () => triggerFlash(),
-    hitFlashBlendEnabled: () => {
-      const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(flashMat);
-      return material.ok && material.value.passes?.[0]?.renderState?.blend !== undefined;
-    },
-    bloomEnabled: () => settingsState.bloom,
-    toggleBloom: () => { settingsState.bloom = !settingsState.bloom; },
-    viewMode: () => mode,
-    setViewMode: setMode,
-    cameraRadius: () => {
-      const tr = world.get(camera, Transform);
-      if (!tr.ok || mode !== 'orbit') return Number.NaN;
-      return Math.hypot(tr.value.pos[0] - px, tr.value.pos[1] - (jumpY + 0.8), tr.value.pos[2] - pz);
-    },
-    cameraPosition: () => {
-      const tr = world.get(camera, Transform);
-      return tr.ok ? [tr.value.pos[0] ?? 0, tr.value.pos[1] ?? 0, tr.value.pos[2] ?? 0] : null;
-    },
-    isFlashed: (entity) => flashUntil.has(entity),
-    reset: resetGameplay,
-    state: gameplayState,
-    registerCleanup,
-  });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
 
   if (player !== undefined) {
@@ -556,15 +640,37 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         name: 'game-update',
         runIf: inState(GameState, 'Play'),
         queries: [],
-        fn: () => {
+        fn: (_world, _queryResults, commands) => {
           const dt = world.getResource(Time).delta;
           const snap = readInput();
           gameplayAudio?.setMusicPlaying(true);
           gameplayAudio?.rearm();
+          if (customProjectile !== undefined && snap.action('meshUv').justPressed()) {
+            toggleCustomProjectileMesh(customProjectile);
+          }
+          if (meshHandleSwap !== undefined && snap.action('meshHandle').justPressed()) {
+            toggleMeshHandleSwap(world, meshHandleSwap);
+          }
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
       const arrowLeft = snap.action('arrowLeft').isPressed();
       const arrowRight = snap.action('arrowRight').isPressed();
+
+      if (mode === 'pan') {
+        const panXInput = (arrowRight ? 1 : 0) - (arrowLeft ? 1 : 0);
+        const panZInput = (arrowDown ? 1 : 0) - (arrowUp ? 1 : 0);
+        if (panXInput !== 0 || panZInput !== 0) {
+          const length = Math.hypot(panXInput, panZInput) || 1;
+          panX = Math.max(-BOUND, Math.min(BOUND, panX + (panXInput / length) * PAN_SPEED * dt));
+          panZ = Math.max(-BOUND + TOP_DZ, Math.min(BOUND + TOP_DZ, panZ + (panZInput / length) * PAN_SPEED * dt));
+        }
+        if (snap.mouse.wheelDelta !== 0) {
+          panHalfHeight = Math.max(PAN_HALF_HEIGHT_MIN, Math.min(PAN_HALF_HEIGHT_MAX, panHalfHeight + snap.mouse.wheelDelta * 0.5));
+        }
+      }
+      if ((mode === 'fps' || mode === 'orbit') && snap.mouse.wheelDelta !== 0) {
+        perspectiveFov = zoomPerspectiveFov(perspectiveFov, snap.mouse.wheelDelta);
+      }
 
       // — Orbit/FPS look via arrow keys (keyboard fallback: mouse-look needs
       //   pointer lock, which the embedded preview iframe disallows). —
@@ -587,12 +693,23 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       const f = move.y + (am ? ((arrowUp ? 1 : 0) - (arrowDown ? 1 : 0)) : 0);
       const s = move.x + (am ? ((arrowRight ? 1 : 0) - (arrowLeft ? 1 : 0)) : 0);
       let mvx = 0, mvz = 0;
+      if (mode !== 'fps') {
+        freeY = jumpY;
+        resetFreeCamera(freeCamera);
+      }
       if (mode === 'fps') {
         // look-relative; facing = look forward (front = local −Z; yaw 0 → (0,−1))
         const fwdX = -Math.sin(gameplayInput.lookYaw), fwdZ = -Math.cos(gameplayInput.lookYaw);
         const rgtX = -fwdZ, rgtZ = fwdX;          // +90° about Y → strafe right
         faceX = fwdX; faceZ = fwdZ;
-        mvx = fwdX * f + rgtX * s; mvz = fwdZ * f + rgtZ * s;
+        const vertical = Number(snap.action('freeUp').isPressed()) - Number(snap.action('freeDown').isPressed());
+        const dx = fwdX * f + rgtX * s;
+        const dz = fwdZ * f + rgtZ * s;
+        const delta = stepFreeCamera(freeCamera, dt, [dx, vertical, dz], snap.action('freeRun').isPressed(), snap.mouse.wheelDelta);
+        px = Math.max(-BOUND, Math.min(BOUND, px + (delta[0] ?? 0)));
+        pz = Math.max(-BOUND, Math.min(BOUND, pz + (delta[2] ?? 0)));
+        freeY = Math.max(0.2, freeY + (delta[1] ?? 0));
+        mvx = 0; mvz = 0;
       } else {
         // top-down: world-relative; facing = movement direction
         mvx = s; mvz = -f;                          // W → −Z, D → +X
@@ -621,8 +738,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       // — jump (Space, edge-triggered; manual parabolic arc since kinematic) —
       // snap.action('jump').justPressed() is the rising edge (aggregatedPressed
       // && !prevFramePressed), replacing the manual prevSpace edge tracking.
-      if (snap.action('jump').justPressed() && grounded) { vy = JUMP_V; grounded = false; }
-      if (!grounded) {
+      if (mode !== 'fps' && snap.action('jump').justPressed() && grounded) { vy = JUMP_V; grounded = false; }
+      if (mode !== 'fps' && !grounded) {
         vy -= GRAV * dt;
         jumpY += vy * dt;
         if (jumpY <= PLAYER_Y) { jumpY = PLAYER_Y; vy = 0; grounded = true; }
@@ -631,7 +748,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       // — drive the kinematic root: position + facing yaw (front = local −Z) —
       const yaw = Math.atan2(-faceX, -faceZ);
       const q = quat.eulerY(yaw);
-      world.set(root, Transform, { pos: [px, jumpY, pz], quat: [q[0]!, q[1]!, q[2]!, q[3]!]});
+      const playerY = mode === 'fps' ? freeY : jumpY;
+      world.set(root, Transform, { pos: [px, playerY, pz], quat: [q[0]!, q[1]!, q[2]!, q[3]!]});
 
       // — shoot (F, or left-click in FPS): kinematic bullet flies along `face` —
       shootCd -= dt;
@@ -645,26 +763,27 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         //             facing if F was pressed without a recent click.
         // Origin: FPS from the eye, top-down from chest (≈ prop height ~0.5).
         let dirX = faceX, dirY = 0, dirZ = faceZ;
-        let by = jumpY + 0.15;
+        let by = playerY + 0.15;
         if (mode === 'fps') {
           const cp = Math.cos(gameplayInput.lookPitch);
           dirX = -Math.sin(gameplayInput.lookYaw) * cp; dirY = Math.sin(gameplayInput.lookPitch); dirZ = -Math.cos(gameplayInput.lookYaw) * cp;
-          by = jumpY + EYE;
+          by = freeY + EYE;
         } else if (gameplayInput.shotDir) {
           dirX = gameplayInput.shotDir.x; dirZ = gameplayInput.shotDir.z; dirY = 0;
         }
         gameplayInput.shotDir = null;   // one-shot snapshot consumed
         const bx = px + dirX * 0.6, byy = by + dirY * 0.6, bz = pz + dirZ * 0.6;
         const bulletQuat = quat.fromUnitVectors(quat.create(), [0, 1, 0], [dirX, dirY, dirZ]);
-        const e = world.spawn(
+        const e = commands.spawn(
           { component: Transform, data: { pos: [bx, byy, bz], quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!]} },
-          { component: MeshFilter, data: { assetHandle: bulletMesh } },
-          { component: MeshRenderer, data: { materials: [bulletMat] } },
+          { component: MeshFilter, data: { assetHandle: projectileMesh } },
+          { component: MeshRenderer, data: { materials: [projectileMaterial] } },
           // ccdEnabled sweeps the fast kinematic bullet's collider along each
           // step so it reliably contacts props instead of tunneling through.
           { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } },
           { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: BULLET_RADIUS, halfHeight: BULLET_HALF_HEIGHT, friction: 0, restitution: 0.6 } },
-        ).unwrap();
+        );
+        deferredBulletSpawns += 1;
         bullets.push({ e, x: bx, y: byy, z: bz, dx: dirX, dy: dirY, dz: dirZ, quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!], age: 0, hits: new Set<EntityHandle>() });
       }
       // Advance + cull bullets (3D travel). Bullets fly THROUGH props (not
@@ -673,11 +792,11 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       for (let i = bullets.length - 1; i >= 0; i--) {
         const b = bullets[i]!;
         b.age += dt;
-        if (b.age > BULLET_LIFE) { world.despawn(b.e); bullets.splice(i, 1); continue; }
+        if (b.age > BULLET_LIFE) { commands.despawn(b.e); deferredBulletDespawns += 1; bullets.splice(i, 1); continue; }
         b.x += b.dx * BULLET_SPEED * dt;
         b.y += b.dy * BULLET_SPEED * dt;
         b.z += b.dz * BULLET_SPEED * dt;
-        world.set(b.e, Transform, { pos: [b.x, b.y, b.z], quat: b.quat });
+        if (!commands.isDeferred(b.e)) world.set(b.e, Transform, { pos: [b.x, b.y, b.z], quat: b.quat });
       }
 
       // — bullet↔target hit (rapier3d doesn't populate CollidingEntities →
@@ -698,8 +817,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
             b.hits.add(fl.e);
             const pts = scoringPoints(fl.e);
             if (pts !== undefined) {
-              score += pts;
-              hud.setScore(score);
+              changeDetection.recordHit(fl.e, pts);
+              damageTarget(fl.e, pts);
               spawnPopup('+' + pts, fxp, fyp + 0.8, fzp);
               gameplayAudio?.triggerHit();
             }
@@ -714,6 +833,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           flashUntil.delete(e);
         } else flashUntil.set(e, nt);
       }
+      const chromaticIntensity = chromaticAberration.snapshot().intensity;
+      if (chromaticIntensity > 0) chromaticAberration.setIntensity(Math.max(0, chromaticIntensity - dt * 0.14));
 
       // — "+N" hit popups: handled by hud.floatScore (DOM overlay) at hit
       //   time, NOT a per-frame world-space billboard. See spawnPopup above
@@ -724,10 +845,12 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const qy = quat.create(); quat.fromAxisAngle(qy, [0, 1, 0], gameplayInput.lookYaw);
         const qx = quat.create(); quat.fromAxisAngle(qx, [1, 0, 0], gameplayInput.lookPitch);
         const cq = quat.create(); quat.multiply(cq, qy, qx);
-        world.set(camera, Transform, { pos: [px, jumpY + EYE, pz], quat: [cq[0]!, cq[1]!, cq[2]!, cq[3]!]});
+        world.set(camera, Transform, { pos: [px, freeY + EYE, pz], quat: [cq[0]!, cq[1]!, cq[2]!, cq[3]!]});
       } else if (mode === 'orbit') {
         const pose = orbitPose([px, jumpY + 0.8, pz], ORBIT_INITIAL_YAW + gameplayInput.lookYaw, ORBIT_INITIAL_PITCH + gameplayInput.lookPitch, ORBIT_RADIUS);
         world.set(camera, Transform, { pos: pose.pos, quat: pose.quat });
+      } else if (mode === 'pan') {
+        applyPanCamera();
       } else {
         const a = 1 - Math.exp(-CAM_FOLLOW * dt);
         camX += (px - camX) * a;
@@ -737,6 +860,76 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         },
       })
       .unwrap();
+
+    changeDetection = installGameplayChangeDetection({ world, targets: flashables.map((target) => target.e), hud });
+    installRenderEvidence({
+      renderer: ctx?.renderer,
+      flashables,
+      triggerFlash: () => triggerFlash(),
+      triggerScore: () => {
+        const target = flashables[0];
+        const points = target === undefined ? undefined : scoringPoints(target.e);
+        if (target !== undefined && points !== undefined) {
+          changeDetection.recordHit(target.e, points);
+          damageTarget(target.e, points);
+        }
+      },
+      hitFlashBlendEnabled: () => {
+        const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(flashMat);
+        return material.ok && material.value.passes?.[0]?.renderState?.blend !== undefined;
+      },
+      bloomEnabled: () => settingsState.bloom,
+      toggleBloom: () => { settingsState.bloom = !settingsState.bloom; },
+      depthOfField,
+      chromaticAberration,
+      viewMode: () => mode,
+      setViewMode: setMode,
+      cameraRadius: () => {
+        const tr = world.get(camera, Transform);
+        if (!tr.ok || mode !== 'orbit') return Number.NaN;
+        return Math.hypot(tr.value.pos[0] - px, tr.value.pos[1] - (jumpY + 0.8), tr.value.pos[2] - pz);
+      },
+      cameraPosition: () => {
+        const tr = world.get(camera, Transform);
+        return tr.ok ? [tr.value.pos[0] ?? 0, tr.value.pos[1] ?? 0, tr.value.pos[2] ?? 0] : null;
+      },
+      cameraProjection: () => {
+        const data = world.get(camera, Camera);
+        return data.ok && data.value.projection === 1 ? 'orthographic' : 'perspective';
+      },
+      cameraPerspectiveFov: () => {
+        const data = world.get(camera, Camera);
+        return data.ok && data.value.projection === 0 ? data.value.fov : Number.NaN;
+      },
+      cameraOrthoHalfHeight: () => {
+        const data = world.get(camera, Camera);
+        return data.ok && data.value.projection === 1 ? data.value.top : Number.NaN;
+      },
+      animatedMaterial,
+      clearcoatMaterial: () => {
+        const target = flashables.find((candidate) => candidate.clearcoat === true);
+        if (target === undefined) return null;
+        const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(target.mat);
+        if (!material.ok) return null;
+        const values = material.value.paramValues as Record<string, unknown> | undefined;
+        const strength = Number(values?.clearcoat ?? 0);
+        const roughness = Number(values?.clearcoatRoughness ?? 0);
+        return { enabled: strength > 0, strength, roughness };
+      },
+      deferredCommands: () => ({ spawned: deferredBulletSpawns, despawned: deferredBulletDespawns }),
+      customProjectileMesh: customProjectile === undefined ? undefined : () => ({ available: true, uvMode: customProjectile.uvMode, toggles: customProjectile.toggles }),
+      toggleCustomProjectileMesh: customProjectile === undefined ? undefined : () => toggleCustomProjectileMesh(customProjectile),
+      meshHandleSwap: meshHandleSwap === undefined ? undefined : () => ({ active: meshHandleSwap.active, swaps: meshHandleSwap.swaps }),
+      toggleMeshHandleSwap: meshHandleSwap === undefined ? undefined : () => toggleMeshHandleSwap(world, meshHandleSwap),
+      targetHealth: () => targetHealth.snapshot(),
+      targetDisabling: () => targetDisabling.snapshot(),
+      isFlashed: (entity) => flashUntil.has(entity),
+      reset: resetGameplay,
+      state: gameplayState,
+      changeDetection,
+      input: readInput,
+      registerCleanup,
+    });
 
     world
       .addSystem(Update, {

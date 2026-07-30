@@ -96,7 +96,7 @@ function topologyEntries(entries: readonly CatalogEntry[]): CatalogEntry[] {
     })
     .concat({
       guid: EXTRA_GUID,
-      relativeUrl: '/nebula/extra.bin',
+      packageUrl: '/nebula/extra.bin',
       kind: HOST_KIND,
       sourcePath: 'nebula.pack.json',
       packageId: 'pkg/nebula-host',

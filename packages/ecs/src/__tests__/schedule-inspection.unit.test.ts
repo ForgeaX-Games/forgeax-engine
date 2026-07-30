@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FixedUpdate, Update } from '../schedule-token';
+import { FixedUpdate, FrameEnd, Update } from '../schedule-token';
 import { World } from '../world';
 
 describe('schedule-scoped inspection', () => {
@@ -15,6 +15,7 @@ describe('schedule-scoped inspection', () => {
     expect(inspection.schedules).toEqual([
       { schedule: Update, systems: [{ name: 'update-system', sets: [] }] },
       { schedule: FixedUpdate, systems: [{ name: 'fixed-system', sets: [] }] },
+      { schedule: FrameEnd, systems: [] },
     ]);
   });
 });

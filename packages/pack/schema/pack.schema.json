@@ -2,19 +2,18 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/ForgeaX-Games/forgeax-engine/packages/pack/schema/pack.schema.json",
   "title": "InternalTextPackage",
-  "description": "Schema for .pack.json files describing an internal text package (compiled asset payloads + GUID cross-references).",
+  "description": "Schema for authored and cooked internal text packages.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "kind", "assets"],
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "description": "Schema version string, e.g. '1.0.0'."
+      "enum": ["1.0.0", "2.0.0"]
     },
     "kind": {
       "type": "string",
-      "const": "internal-text-package",
-      "description": "Discriminator for the internal text package type."
+      "const": "internal-text-package"
     },
     "packageId": {
       "type": "string",
@@ -33,17 +32,33 @@
     },
     "assets": {
       "type": "array",
-      "description": "Compiled asset entries.",
       "items": {
         "$ref": "#/$defs/asset"
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": { "const": "2.0.0" }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/assetV2" }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "guid36": {
       "type": "string",
-      "format": "uuid",
-      "description": "RFC 4122 36-char dash-form UUID. Sentinel strings like '@builtin/...' are rejected at the schema level (AC-11)."
+      "format": "uuid"
     },
     "asset": {
       "type": "object",
@@ -80,15 +95,62 @@
         },
         "refs": {
           "type": "array",
-          "description": "GUID cross-references. Each element must be an RFC 4122 36-char dash-form UUID. @builtin/ sentinels are explicitly excluded (AC-11).",
-          "items": {
-            "$ref": "#/$defs/guid36"
-          }
+          "items": { "$ref": "#/$defs/guid36" }
         },
-        "relations": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/relation" }
+        "artifacts": { "$ref": "#/$defs/artifacts" }
+      }
+    },
+    "assetV2": {
+      "allOf": [
+        { "$ref": "#/$defs/asset" },
+        {
+          "type": "object",
+          "required": ["artifacts"],
+          "properties": {
+            "artifacts": { "$ref": "#/$defs/artifacts" }
+          }
         }
+      ]
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9._-]*$": {
+          "$ref": "#/$defs/artifactDescriptor"
+        }
+      }
+    },
+    "artifactDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mediaType"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "mediaType": { "type": "string", "minLength": 1 },
+        "assetCodec": { "$ref": "#/$defs/assetCodec" },
+        "contentEncoding": { "enum": ["identity", "zstd"] },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "integrity": { "$ref": "#/$defs/integrity" }
+      }
+    },
+    "assetCodec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "profile": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "digest"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "digest": { "type": "string", "minLength": 1 }
       }
     },
     "provenance": {

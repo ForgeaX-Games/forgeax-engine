@@ -68,7 +68,7 @@ import {
   type SystemDescriptor,
   type SystemSet,
 } from './schedule';
-import { FixedUpdate, Update } from './schedule-token';
+import { FixedUpdate, FrameEnd, Update } from './schedule-token';
 import { SharedRefStore } from './shared-ref-store';
 import {
   createFixedTimeResource,
@@ -311,6 +311,8 @@ export class World {
   private readonly records: EntityRecord[] = [];
   /** Monotonic change-detection clock advanced once per World.update. */
   private changeTick = 0;
+  /** Monotonic revision for successful entity/component structure writes. */
+  private structureEpoch = 0;
   /** Component change ticks keyed by packed entity handle, then component id. */
   private readonly componentChanges = new Map<number, Map<number, ChangeTicks>>();
   /** Resource change ticks keyed by resource name. */
@@ -325,6 +327,7 @@ export class World {
   private readonly schedules = new Map([
     [Update, createSchedule(Update)],
     [FixedUpdate, createSchedule(FixedUpdate)],
+    [FrameEnd, createSchedule(FrameEnd)],
   ]);
   /** Resource store: typed key-value global singletons. */
   private readonly resources: ResourceStore = createResourceStore();
@@ -378,6 +381,7 @@ export class World {
     markComponentAdded: (entity, component) => this._markComponentAdded(entity, component),
     markComponentChanged: (entity, component) => this._markComponentChanged(entity, component),
     removeComponentChange: (entity, component) => this._removeComponentChange(entity, component),
+    markStructureChanged: () => this._markStructureChanged(),
     routeError: (err, ctx) => this._routeError(err as EcsError, ctx),
   });
 
@@ -410,6 +414,16 @@ export class World {
   /** @internal Advance the change clock at the start of each frame. */
   _advanceChangeTick(): void {
     this.changeTick += 1;
+  }
+
+  /** @internal Record one successful structural mutation. */
+  _markStructureChanged(): void {
+    this.structureEpoch += 1;
+  }
+
+  /** Current structural revision for mounted World projections. */
+  getStructureEpoch(): number {
+    return this.structureEpoch;
   }
 
   /** @internal Mark a component as both added and changed at the current tick. */

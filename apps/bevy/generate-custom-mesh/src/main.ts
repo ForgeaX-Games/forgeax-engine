@@ -1,6 +1,9 @@
 import { createApp } from '@forgeax/engine-app';
+import { Update } from '@forgeax/engine-ecs';
+import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import { buildCustomMeshWorld } from './generate-custom-mesh.js';
+import { unwrapHandle } from '@forgeax/engine-types';
+import { buildCustomMeshWorld, makeCustomMeshTexture, stepCustomMesh, type MeshGpuStore } from './generate-custom-mesh.js';
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
@@ -9,9 +12,35 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  buildCustomMeshWorld(app.world);
+  const texture = makeCustomMeshTexture();
+  const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
+  const upload = await app.renderer.store.uploadTexture(textureHandle, texture, {
+    bytes: texture.data,
+    width: texture.width,
+    height: texture.height,
+    mime: 'image/png',
+    colorSpace: 'srgb',
+    mipmap: false,
+  });
+  if (!upload.ok) {
+    console.error('[generate-custom-mesh] texture upload failed:', upload.error.code, upload.error.hint);
+    return;
+  }
+  const state = buildCustomMeshWorld(app.world, unwrapHandle(textureHandle));
+  app.world.addSystem(Update, {
+    name: 'bevy-generate-custom-mesh-input',
+    after: [FRAME_START_SCAN_SYSTEM_NAME],
+    queries: [],
+    fn: (world) => stepCustomMesh(
+      world,
+      state,
+      app.renderer.store as MeshGpuStore,
+      world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY),
+    ),
+  });
   const started = app.start();
   if (!started.ok) console.error('[generate-custom-mesh] app.start() failed:', started.error);
+  Object.assign(globalThis, { __bevyGenerateCustomMeshReady: true, __bevyGenerateCustomMeshState: state });
 }
 
 const canvas = document.getElementById('app') as HTMLCanvasElement | null;

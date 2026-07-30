@@ -929,6 +929,47 @@ export function runSchedule(
   if (schedule.dirty) {
     buildSchedule(schedule);
   }
+  if (
+    selectedNames === undefined &&
+    schedule.sets.size === 0 &&
+    commandsBySystem.size === 0 &&
+    schedule.sortedOrder.every((name) => {
+      const record = schedule.systems.get(name);
+      return (
+        record !== undefined &&
+        record.descriptor.queries.length === 0 &&
+        record.descriptor.params === undefined &&
+        record.descriptor.resources === undefined &&
+        record.descriptor.runIf === undefined &&
+        (schedule.predecessors.get(name)?.size ?? 0) === 0
+      );
+    })
+  ) {
+    for (const name of schedule.sortedOrder) {
+      const record = schedule.systems.get(name);
+      /* istanbul ignore next -- sortedOrder comes from systems Map keys */
+      if (!record) continue;
+
+      const commands = createCommandBuffer(world);
+      commandsBySystem.set(name, commands);
+      const returnValue = record.descriptor.fn(world, [], commands, []);
+      if (returnValue && typeof returnValue === 'object' && 'ok' in returnValue) {
+        const result = returnValue as { ok: boolean; error?: unknown };
+        if (result.ok === false && result.error !== undefined && errorHandler) {
+          errorHandler(result.error, {
+            severity: Severity.Panic,
+            systemName: name,
+          });
+        }
+      }
+    }
+    if (finalDrain) {
+      for (const commands of commandsBySystem.values()) {
+        flushCommands(commands, world);
+      }
+    }
+    return;
+  }
   const selected = selectedNames ? new Set(selectedNames) : undefined;
 
   // Build reverse map: system name → set names it belongs to (D-5).

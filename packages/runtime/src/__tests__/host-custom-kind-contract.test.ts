@@ -103,7 +103,7 @@ describe('AC-02 — host custom kind end-to-end (no refs)', () => {
 
     const guidStr = 'c0000000-0000-4000-a000-000000000003';
     const packIndex = [
-      { guid: guidStr, relativeUrl: '/packs/config.pack.json', kind: 'my-game-config' },
+      { guid: guidStr, packageUrl: '/packs/config.pack.json', kind: 'my-game-config' },
     ];
     const configPayload: Record<string, unknown> = {
       kind: 'my-game-config',
@@ -112,7 +112,7 @@ describe('AC-02 — host custom kind end-to-end (no refs)', () => {
       players: 2,
     };
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -165,10 +165,10 @@ describe('AC-02 — host custom kind end-to-end (no refs)', () => {
 
     // prod path
     const packIndex = [
-      { guid: guidStr, relativeUrl: '/packs/same.pack.json', kind: 'my-game-config' },
+      { guid: guidStr, packageUrl: '/packs/same.pack.json', kind: 'my-game-config' },
     ];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -229,11 +229,11 @@ describe('AC-03 — host custom kind with refs (recursive loadByGuid)', () => {
     const childGuidStr = 'c0000000-0000-4000-a000-000000000011';
 
     const packIndex = [
-      { guid: parentGuidStr, relativeUrl: '/packs/refs.pack.json', kind: 'my-game-config' },
-      { guid: childGuidStr, relativeUrl: '/packs/refs.pack.json', kind: 'my-game-config' },
+      { guid: parentGuidStr, packageUrl: '/packs/refs.pack.json', kind: 'my-game-config' },
+      { guid: childGuidStr, packageUrl: '/packs/refs.pack.json', kind: 'my-game-config' },
     ];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -296,11 +296,11 @@ describe('AC-03 — host custom kind with refs (recursive loadByGuid)', () => {
     const meshGuidStr = 'c0000000-0000-4000-a000-000000000021';
 
     const packIndex = [
-      { guid: hostGuidStr, relativeUrl: '/packs/host-engine.pack.json', kind: 'my-game-config' },
-      { guid: meshGuidStr, relativeUrl: '/packs/host-engine.pack.json', kind: 'mesh' },
+      { guid: hostGuidStr, packageUrl: '/packs/host-engine.pack.json', kind: 'my-game-config' },
+      { guid: meshGuidStr, packageUrl: '/packs/host-engine.pack.json', kind: 'mesh' },
     ];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -366,11 +366,11 @@ describe('AC-03 — host custom kind with refs (recursive loadByGuid)', () => {
     const childGuidStr = 'c0000000-0000-4000-a000-000000000031';
 
     const packIndex = [
-      { guid: meshGuidStr, relativeUrl: '/packs/engine-host.pack.json', kind: 'mesh' },
-      { guid: childGuidStr, relativeUrl: '/packs/engine-host.pack.json', kind: 'my-game-config' },
+      { guid: meshGuidStr, packageUrl: '/packs/engine-host.pack.json', kind: 'mesh' },
+      { guid: childGuidStr, packageUrl: '/packs/engine-host.pack.json', kind: 'my-game-config' },
     ];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -435,12 +435,12 @@ describe('AC-03 — host custom kind with refs (recursive loadByGuid)', () => {
     const cGuidStr = 'c0000000-0000-4000-a000-000000000042';
 
     const packIndex = [
-      { guid: aGuidStr, relativeUrl: '/packs/mixed.pack.json', kind: 'my-game-config' },
-      { guid: bGuidStr, relativeUrl: '/packs/mixed.pack.json', kind: 'mesh' },
-      { guid: cGuidStr, relativeUrl: '/packs/mixed.pack.json', kind: 'my-game-config' },
+      { guid: aGuidStr, packageUrl: '/packs/mixed.pack.json', kind: 'my-game-config' },
+      { guid: bGuidStr, packageUrl: '/packs/mixed.pack.json', kind: 'mesh' },
+      { guid: cGuidStr, packageUrl: '/packs/mixed.pack.json', kind: 'my-game-config' },
     ];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -523,11 +523,11 @@ describe('AC-03 — host custom kind with refs (recursive loadByGuid)', () => {
     const bGuidStr = 'c0000000-0000-4000-a000-000000000051';
 
     const packIndex = [
-      { guid: aGuidStr, relativeUrl: '/packs/cycle.pack.json', kind: 'my-game-config' },
-      { guid: bGuidStr, relativeUrl: '/packs/cycle.pack.json', kind: 'my-game-config' },
+      { guid: aGuidStr, packageUrl: '/packs/cycle.pack.json', kind: 'my-game-config' },
+      { guid: bGuidStr, packageUrl: '/packs/cycle.pack.json', kind: 'my-game-config' },
     ];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {

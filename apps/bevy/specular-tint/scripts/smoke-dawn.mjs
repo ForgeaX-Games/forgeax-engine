@@ -46,13 +46,28 @@ const packIndex = JSON.parse(readFileSync(resolve(distDir, 'pack-index.json'), '
 const hdrEntry = packIndex.find((entry) => entry.guid === hdrGuid);
 const tintEntry = packIndex.find((entry) => entry.guid === tintGuid);
 if (!hdrEntry || !tintEntry) { console.error('[smoke] missing specular tint assets'); process.exit(1); }
-const bytesFor = (entry) => new Uint8Array(readFileSync(resolve(distDir, entry.relativeUrl.replace(/^\//, ''))));
-const hdrBytes = bytesFor(hdrEntry); const tintBytes = bytesFor(tintEntry);
+const packageData = (entry) => {
+  const packagePath = entry.packageUrl.replace(/^\//, '');
+  const packageBytes = new Uint8Array(readFileSync(resolve(distDir, packagePath)));
+  const pack = JSON.parse(new TextDecoder().decode(packageBytes));
+  const asset = pack.assets.find((candidate) => candidate.guid === entry.guid);
+  const artifactPath = asset.artifacts.body.path;
+  return {
+    packageBytes,
+    pack,
+    artifactUrl: `${entry.packageUrl.slice(0, entry.packageUrl.lastIndexOf('/') + 1)}${artifactPath}`,
+    bytes: new Uint8Array(readFileSync(resolve(dirname(resolve(distDir, packagePath)), artifactPath))),
+  };
+};
+const hdrData = packageData(hdrEntry); const tintData = packageData(tintEntry);
+const hdrBytes = hdrData.bytes; const tintBytes = tintData.bytes;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
   if (url === '/pack-index.json') return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
-  if (url === hdrEntry.relativeUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(hdrBytes.buffer.slice(hdrBytes.byteOffset, hdrBytes.byteOffset + hdrBytes.byteLength)) };
-  if (url === tintEntry.relativeUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(tintBytes.buffer.slice(tintBytes.byteOffset, tintBytes.byteOffset + tintBytes.byteLength)) };
+  if (url === hdrEntry.packageUrl) return { ok: true, json: () => Promise.resolve(hdrData.pack), arrayBuffer: () => Promise.resolve(hdrData.packageBytes.buffer.slice(hdrData.packageBytes.byteOffset, hdrData.packageBytes.byteOffset + hdrData.packageBytes.byteLength)) };
+  if (url === hdrData.artifactUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(hdrBytes.buffer.slice(hdrBytes.byteOffset, hdrBytes.byteOffset + hdrBytes.byteLength)) };
+  if (url === tintEntry.packageUrl) return { ok: true, json: () => Promise.resolve(tintData.pack), arrayBuffer: () => Promise.resolve(tintData.packageBytes.buffer.slice(tintData.packageBytes.byteOffset, tintData.packageBytes.byteOffset + tintData.packageBytes.byteLength)) };
+  if (url === tintData.artifactUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(tintBytes.buffer.slice(tintBytes.byteOffset, tintBytes.byteOffset + tintBytes.byteLength)) };
   return originalFetch(url);
 };
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestUrl, importTransport: createDevImportTransport() });

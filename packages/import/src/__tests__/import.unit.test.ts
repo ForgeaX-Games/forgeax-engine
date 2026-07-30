@@ -25,7 +25,7 @@ function stubImporter(key: string): Importer {
     key,
     import: (_ctx: ImportContext): ImportResult => ({
       ok: true,
-      value: { assets: [], artifacts: [], sourceDependencies: [] },
+      value: { assets: [], sourceDependencies: [] },
     }),
   };
 }
@@ -73,7 +73,15 @@ function stubImporter(key: string): Importer {
       key,
       import: async (ctx) => ({
         ok: true,
-        value: { assets: await impl(ctx), artifacts: [], sourceDependencies: [] },
+        value: {
+          assets: (await impl(ctx)).map((asset) => ({
+            ...asset,
+            artifacts:
+              (asset as unknown as { artifacts?: Readonly<Record<string, unknown>> }).artifacts ??
+              {},
+          })),
+          sourceDependencies: [],
+        },
       }),
     });
     return reg;
@@ -83,14 +91,26 @@ function stubImporter(key: string): Importer {
     describe('import runner (w15 / w17)', () => {
       it('(a) happy path: produces a DDC pack with one row per produced asset', async () => {
         const reg = registryWith('gltf', () => [
-          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [] },
-          { guid: GUID_B, kind: 'mesh', payload: MESH_POD, refs: [] },
+          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
+          { guid: GUID_B, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
         ]);
         const res = await runImport(meta('gltf', [GUID_A, GUID_B]), reg, okFs());
         expect(res.ok).toBe(true);
         if (res.ok && !('skipped' in res.value)) {
           expect(res.value.pack.kind).toBe('internal-text-package');
           expect(res.value.pack.assets.map((a) => a.guid)).toEqual([GUID_A, GUID_B]);
+        }
+      });
+
+      it('(a2) product-only mode leaves pack publication to the downstream finalizer', async () => {
+        const reg = registryWith('gltf', () => [
+          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
+        ]);
+        const res = await runImport({ ...meta('gltf', [GUID_A]), buildPack: false }, reg, okFs());
+        expect(res.ok).toBe(true);
+        if (res.ok && !('skipped' in res.value)) {
+          expect(res.value.product.assets).toHaveLength(1);
+          expect('pack' in res.value).toBe(false);
         }
       });
 
@@ -106,7 +126,7 @@ function stubImporter(key: string): Importer {
 
       it('(c) guid-mismatch: produced a GUID not declared in subAssets[]', async () => {
         const reg = registryWith('gltf', () => [
-          { guid: GUID_UNDECLARED, kind: 'mesh', payload: MESH_POD, refs: [] },
+          { guid: GUID_UNDECLARED, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
         ]);
         const res = await runImport(meta('gltf', [GUID_A]), reg, okFs());
         expect(res.ok).toBe(false);
@@ -118,7 +138,7 @@ function stubImporter(key: string): Importer {
 
       it('(d) import-produced-no-assets: a declared GUID is missing from the produced set', async () => {
         const reg = registryWith('gltf', () => [
-          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [] },
+          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
         ]);
         const res = await runImport(meta('gltf', [GUID_A, GUID_B]), reg, okFs());
         expect(res.ok).toBe(false);
@@ -134,7 +154,7 @@ function stubImporter(key: string): Importer {
           key: 'image',
           import: () => ({
             ok: true,
-            value: { assets: [], artifacts: [], sourceDependencies: [] },
+            value: { assets: [], sourceDependencies: [] },
           }),
         });
         const res = await runImport(meta('gltf', [GUID_A]), reg, okFs());
@@ -150,7 +170,7 @@ function stubImporter(key: string): Importer {
 
       it('(f) source-read-failed: readSource rejects', async () => {
         const reg = registryWith('gltf', () => [
-          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [] },
+          { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
         ]);
         const res = await runImport(meta('gltf', [GUID_A]), reg, failFs());
         expect(res.ok).toBe(false);
@@ -191,8 +211,9 @@ function stubImporter(key: string): Importer {
             return {
               ok: true,
               value: {
-                assets: [{ guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [] }],
-                artifacts: [],
+                assets: [
+                  { guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [], artifacts: {} },
+                ],
                 sourceDependencies: [],
               },
             };
@@ -205,8 +226,9 @@ function stubImporter(key: string): Importer {
             return {
               ok: true,
               value: {
-                assets: [{ guid: GUID_A, kind: 'texture', payload: MESH_POD, refs: [] }],
-                artifacts: [],
+                assets: [
+                  { guid: GUID_A, kind: 'texture', payload: MESH_POD, refs: [], artifacts: {} },
+                ],
                 sourceDependencies: [],
               },
             };
@@ -294,7 +316,7 @@ function stubImporter(key: string): Importer {
             key: '',
             import: () => ({
               ok: true,
-              value: { assets: [], artifacts: [], sourceDependencies: [] },
+              value: { assets: [], sourceDependencies: [] },
             }),
           }),
         ).toThrow(TypeError);

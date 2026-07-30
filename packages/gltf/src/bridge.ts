@@ -650,11 +650,13 @@ export interface MaterialBridgeContext {
  * | glTF field               | param key                |
  * |:-------------------------|:-------------------------|
  * | baseColorFactor          | baseColor                |
+ * | emissiveFactor           | emissive + emissiveIntensity=1 |
  * | metallicFactor           | metallic                 |
  * | roughnessFactor          | roughness                |
  * | baseColorTexture (index) | baseColorTexture         |
  * | metallicRoughnessTexture | metallicRoughnessTexture |
  * | normalTexture (index)    | normalTexture            |
+ * | emissiveTexture (index)  | emissiveTexture          |
  *
  * The output MaterialAsset uses `forgeax::default-standard-pbr` shader
  * in a single Forward pass at RenderQueue.Geometry.
@@ -676,6 +678,12 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
     metallic: mat.metallicFactor,
     roughness: mat.roughnessFactor,
   };
+  if (mat.emissiveFactor !== undefined) {
+    paramValues.emissive = mat.emissiveFactor;
+    // glTF has no separate intensity scalar; its emissiveFactor carries the
+    // complete scalar/vector contribution, so the engine multiplier is 1.
+    paramValues.emissiveIntensity = 1;
+  }
 
   if (ctx?.textureHandles !== undefined) {
     if (mat.baseColorTexture !== undefined) {
@@ -689,6 +697,10 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
     if (mat.normalTexture !== undefined) {
       const h = ctx.textureHandles.get(mat.normalTexture);
       if (h !== undefined) paramValues.normalTexture = h;
+    }
+    if (mat.emissiveTexture !== undefined) {
+      const h = ctx.textureHandles.get(mat.emissiveTexture);
+      if (h !== undefined) paramValues.emissiveTexture = h;
     }
   }
 
@@ -747,7 +759,14 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
     shader,
     tags: { LightMode: 'Forward' },
     queue: (isBlend ? 3000 : 2000) as RenderQueue,
-    ...(isBlend ? { renderState: { blend: straightAlphaBlend, depthWriteEnabled: false } } : {}),
+    ...(isBlend || mat.doubleSided === true
+      ? {
+          renderState: {
+            ...(isBlend ? { blend: straightAlphaBlend, depthWriteEnabled: false } : {}),
+            ...(mat.doubleSided === true ? { cullMode: 'none' as const } : {}),
+          },
+        }
+      : {}),
   };
 
   return {

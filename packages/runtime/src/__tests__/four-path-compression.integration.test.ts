@@ -121,11 +121,35 @@ describe('w16: 4-path compressed-fixture loading', () => {
             Promise.resolve([
               {
                 guid: GUID_MESH,
-                relativeUrl: `/ddc/${GUID_MESH}.bin`,
+                packageUrl: `/ddc/${GUID_MESH}.pack.json`,
                 kind: 'mesh',
-                compression: 'zstd',
               },
             ]),
+        });
+      }
+      if (url === `/ddc/${GUID_MESH}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_MESH,
+                  kind: 'mesh',
+                  payload: {},
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_MESH}.bin`,
+                      mediaType: 'application/x-forgeax-mesh',
+                      contentEncoding: 'zstd',
+                    },
+                  },
+                },
+              ],
+            }),
         });
       }
       return Promise.resolve({
@@ -177,18 +201,40 @@ describe('w16: 4-path compressed-fixture loading', () => {
             Promise.resolve([
               {
                 guid: GUID_TEX,
-                relativeUrl: `/ddc/${GUID_TEX}.bin`,
+                packageUrl: `/ddc/${GUID_TEX}.pack.json`,
                 kind: 'texture',
-                compression: 'zstd',
-                metadata: {
-                  kind: 'texture',
-                  width: 4,
-                  height: 4,
-                  format: 'rgba8unorm' as const,
-                  colorSpace: 'srgb' as const,
-                },
               },
             ]),
+        });
+      }
+      if (url === `/ddc/${GUID_TEX}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_TEX,
+                  kind: 'texture',
+                  payload: {
+                    width: 4,
+                    height: 4,
+                    format: 'rgba8unorm',
+                    colorSpace: 'srgb',
+                  },
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_TEX}.bin`,
+                      mediaType: 'application/x-forgeax-rgba8',
+                      contentEncoding: 'zstd',
+                    },
+                  },
+                },
+              ],
+            }),
         });
       }
       return Promise.resolve({
@@ -228,18 +274,35 @@ describe('w16: 4-path compressed-fixture loading', () => {
             Promise.resolve([
               {
                 guid: GUID_EQUI,
-                relativeUrl: `/ddc/${GUID_EQUI}.bin`,
+                packageUrl: `/ddc/${GUID_EQUI}.pack.json`,
                 kind: 'equirect',
-                compression: 'zstd',
-                metadata: {
-                  kind: 'texture',
-                  width: 4,
-                  height: 4,
-                  format: 'rgba16float' as const,
-                  colorSpace: 'linear' as const,
-                },
               },
             ]),
+        });
+      }
+      if (url === `/ddc/${GUID_EQUI}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_EQUI,
+                  kind: 'equirect',
+                  payload: { width: 4, height: 4, format: 'rgba16float', colorSpace: 'linear' },
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_EQUI}.bin`,
+                      mediaType: 'application/x-forgeax-rgba16f',
+                      contentEncoding: 'zstd',
+                    },
+                  },
+                },
+              ],
+            }),
         });
       }
       return Promise.resolve({
@@ -280,11 +343,35 @@ describe('w16: 4-path compressed-fixture loading', () => {
             Promise.resolve([
               {
                 guid: GUID_FONT,
-                relativeUrl: `/ddc/${GUID_FONT}.pack.json`,
+                packageUrl: `/ddc/${GUID_FONT}.pack.json`,
                 kind: 'font',
-                compression: 'zstd',
               },
             ]),
+        });
+      }
+      if (url === `/ddc/${GUID_FONT}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_FONT,
+                  kind: 'font',
+                  payload: {},
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_FONT}.json`,
+                      mediaType: 'application/json',
+                      contentEncoding: 'zstd',
+                    },
+                  },
+                },
+              ],
+            }),
         });
       }
       return Promise.resolve({

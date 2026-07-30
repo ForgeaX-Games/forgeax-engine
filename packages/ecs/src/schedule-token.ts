@@ -16,7 +16,9 @@ function createScheduleToken(name: ScheduleToken['name']): ScheduleToken {
 export const Update = createScheduleToken('Update');
 /** Fixed-rate World schedule and the intrinsic Update ordering anchor. */
 export const FixedUpdate = createScheduleToken('FixedUpdate');
+/** End-of-outer-update schedule, after fixed steps and deferred commands. */
+export const FrameEnd = createScheduleToken('FrameEnd');
 
 export function isScheduleToken(value: unknown): value is ScheduleToken {
-  return value === Update || value === FixedUpdate;
+  return value === Update || value === FixedUpdate || value === FrameEnd;
 }

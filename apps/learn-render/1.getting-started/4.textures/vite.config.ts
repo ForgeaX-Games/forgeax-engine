@@ -46,7 +46,7 @@ export default defineConfig({
     // R-01 guard: the vite-plugin-pack import step emits raw RGBA bytes
     // as `assets/<guid>-<hash>.bin`. Rollup's default
     // `build.assetsInlineLimit` (4 KiB) would inline anything below the
-    // threshold (e.g. a future 32x32 atlas) -> the pack-index `relativeUrl`
+    // threshold (e.g. a future 32x32 atlas) -> the pack-index `packageUrl`
     // would point at a non-existent file, breaking runtime fetch.
     // The callback here actively opts `.bin` out of inlining regardless
     // of size, mirroring plan-strategy section 4 R-01.

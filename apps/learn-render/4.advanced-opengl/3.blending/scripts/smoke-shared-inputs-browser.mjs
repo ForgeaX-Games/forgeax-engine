@@ -69,7 +69,7 @@ async function browserCheck(origin) {
     }));
     const catalog = JSON.parse(payloads[0]);
     const manifest = JSON.parse(payloads[1]);
-    if (!Array.isArray(catalog) || !catalog.some((entry) => typeof entry.relativeUrl === 'string' && entry.relativeUrl.startsWith('/assets/'))) throw new Error('catalog omitted shared asset URL');
+    if (!Array.isArray(catalog) || !catalog.some((entry) => typeof entry.packageUrl === 'string' && entry.packageUrl.startsWith('/assets/'))) throw new Error('catalog omitted shared asset URL');
     const source = JSON.stringify(manifest);
     if (!source.includes('alpha-test.wgsl') || !source.includes('discard')) throw new Error('shader manifest omitted alpha-test marker/discard');
     assertApplicationBootstrap(applicationErrors, `${origin}/blending/`);

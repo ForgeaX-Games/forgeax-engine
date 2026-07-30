@@ -75,3 +75,11 @@ describe('decodeImageBytes structured failure surface (AC-04 / AC-08 / AC-09)', 
     }
   });
 });
+
+describe('runtime-only bytes remain orthogonal to static pack loading', () => {
+  it('keeps the bytes decoder available without accepting static catalog rows', async () => {
+    const result = await decodeImageBytes(new Uint8Array([0]), 'image/gif');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('image-format-unsupported');
+  });
+});

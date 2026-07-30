@@ -940,6 +940,20 @@ import {
               return 'scene collect entity ref out of closure';
             case 'scene-collect-asset-guid-unresolved':
               return 'scene collect asset guid unresolved';
+            case 'render-feature-registration-conflict':
+              return 'render feature registration conflict';
+            case 'render-feature-stage-failed':
+              return 'render feature stage failed';
+            case 'render-feature-capability-missing':
+              return 'render feature capability missing';
+            case 'render-feature-pass-order-conflict':
+              return 'render feature pass order conflict';
+            case 'render-feature-preparation-failed':
+              return 'render feature preparation failed';
+            case 'render-feature-prepared-state-mismatch':
+              return 'render feature prepared state mismatch';
+            case 'render-feature-draw-recording-failed':
+              return 'render feature draw recording failed';
           }
         }
         expect(exhaustive('equirect-projection-failed')).toBe('equirect projection failed');
@@ -1029,6 +1043,20 @@ import {
             case 'scene-collect-entity-ref-out-of-closure':
               return 'ok';
             case 'scene-collect-asset-guid-unresolved':
+              return 'ok';
+            case 'render-feature-registration-conflict':
+              return 'ok';
+            case 'render-feature-stage-failed':
+              return 'ok';
+            case 'render-feature-capability-missing':
+              return 'ok';
+            case 'render-feature-pass-order-conflict':
+              return 'ok';
+            case 'render-feature-preparation-failed':
+              return 'ok';
+            case 'render-feature-prepared-state-mismatch':
+              return 'ok';
+            case 'render-feature-draw-recording-failed':
               return 'ok';
           }
         }

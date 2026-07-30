@@ -74,10 +74,10 @@ function packMeshBinForTest(
   return out;
 }
 
-function makePackIndex(rows: Array<{ guid: string; relativeUrl: string }>) {
+function makePackIndex(rows: Array<{ guid: string; packageUrl: string }>) {
   return rows.map((r) => ({
     guid: r.guid,
-    relativeUrl: r.relativeUrl,
+    packageUrl: r.packageUrl,
     kind: 'mesh' as const,
   }));
 }
@@ -148,9 +148,33 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     const binBytes = packMeshBinForTest(vertices, indices, metaJson);
 
     const packIndexUrl = '/pack-index.json';
-    const binUrl = `/assets/${MESH_BIN_GUID.toLowerCase()}.bin`;
+    const packUrl = `/assets/${MESH_BIN_GUID.toLowerCase()}.pack.json`;
+    const binUrl = `/assets/${MESH_BIN_GUID.toLowerCase()}/body.bin`;
     const routes = new Map<string, FetchRoute>([
-      [packIndexUrl, { json: makePackIndex([{ guid: MESH_BIN_GUID, relativeUrl: binUrl }]) }],
+      [packIndexUrl, { json: makePackIndex([{ guid: MESH_BIN_GUID, packageUrl: packUrl }]) }],
+      [
+        packUrl,
+        {
+          json: {
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: MESH_BIN_GUID,
+                kind: 'mesh',
+                payload: {},
+                refs: [],
+                artifacts: {
+                  body: {
+                    path: `${MESH_BIN_GUID.toLowerCase()}/body.bin`,
+                    mediaType: 'application/x-forgeax-mesh',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
       [binUrl, { bytes: binBytes }],
     ]);
     installFetchMock(routes);
@@ -191,12 +215,12 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     const packIndexUrl = '/pack-index.json';
     const packUrl = '/assets/inline.pack.json';
     const routes = new Map<string, FetchRoute>([
-      [packIndexUrl, { json: makePackIndex([{ guid: MESH_INLINE_GUID, relativeUrl: packUrl }]) }],
+      [packIndexUrl, { json: makePackIndex([{ guid: MESH_INLINE_GUID, packageUrl: packUrl }]) }],
       [
         packUrl,
         {
           json: {
-            schemaVersion: '1.0.0',
+            schemaVersion: '2.0.0',
             kind: 'internal-text-package',
             assets: [
               {
@@ -207,6 +231,8 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
                   indices: indicesArr,
                   attributes: {},
                 },
+                refs: [],
+                artifacts: {},
               },
             ],
           },
@@ -242,9 +268,33 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     new DataView(binBytes.buffer).setUint32(8, 12, true); // floatsPerVertex=12
 
     const packIndexUrl = '/pack-index.json';
-    const binUrl = `/assets/${MESH_EMPTY_GUID.toLowerCase()}.bin`;
+    const packUrl = `/assets/${MESH_EMPTY_GUID.toLowerCase()}.pack.json`;
+    const binUrl = `/assets/${MESH_EMPTY_GUID.toLowerCase()}/body.bin`;
     const routes = new Map<string, FetchRoute>([
-      [packIndexUrl, { json: makePackIndex([{ guid: MESH_EMPTY_GUID, relativeUrl: binUrl }]) }],
+      [packIndexUrl, { json: makePackIndex([{ guid: MESH_EMPTY_GUID, packageUrl: packUrl }]) }],
+      [
+        packUrl,
+        {
+          json: {
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: MESH_EMPTY_GUID,
+                kind: 'mesh',
+                payload: {},
+                refs: [],
+                artifacts: {
+                  body: {
+                    path: `${MESH_EMPTY_GUID.toLowerCase()}/body.bin`,
+                    mediaType: 'application/x-forgeax-mesh',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
       [binUrl, { bytes: binBytes }],
     ]);
     installFetchMock(routes);

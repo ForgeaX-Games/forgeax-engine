@@ -67,7 +67,7 @@ describe('AI recovery from canonical catalog fields', () => {
     expect(decision).toMatchObject({ action: 'repair-input', code: contract.error.code });
     const entries: CatalogEntry[] = outputs.map((output) => ({
       guid: output.guid,
-      relativeUrl: '/duplicate/main.bin',
+      packageUrl: '/duplicate/main.pack.json',
       sourcePath: 'duplicate.pack.json',
       kind: output.kind,
       packageId: 'pkg/ai-recovery',

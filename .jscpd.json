@@ -18,6 +18,13 @@
   "filePairIgnore": [
     {
       "files": [
+        "apps/bevy/bloom-2d/scripts/smoke-dawn.mjs",
+        "apps/bevy/transparency-2d/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260729-212017: both 2D Dawn smokes keep the self-contained WebGPU injection, mock canvas, shared-device capture, copyTextureToBuffer readback, and N-frame gate inline for AI grepability. bloom-2d is unique where it matters: it toggles Camera.bloom, compares bloom-off/on pixel readbacks, and asserts bloom pass names; transparency-2d owns its separate alpha/depth-order verdict. Revisit if a shared 2D smoke helper becomes the explicit front-door contract."
+    },
+    {
+      "files": [
         "apps/hello-multi-uv/scripts/smoke-browser-pipeline.mjs",
         "apps/hello-multi-uv/scripts/smoke-browser-variant.mjs"
       ],
@@ -1577,6 +1584,41 @@
         "apps/hello-multi-uv/scripts/smoke-browser-variant.mjs"
       ],
       "rationale": "solo engine-gauntlet M3 round 20260724-131329: both browser smokes intentionally keep the adaptive Playwright PNG decoder inline for AI grepability, while their assertions are different (combined variant+post+resize+RHI versus standalone variant selection). Extracting a shared decoder at the second consumer would add a traversal concept; revisit only when a third browser PNG smoke needs the same decoder."
+    },
+    {
+      "files": [
+        "apps/bevy/keyboard-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/mouse-input/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260729-163604: keyboard_input and mouse_input are sibling frame-start input examples, so they intentionally keep the canonical Dawn global injection and mock-canvas recipe inline for AI grepability. Their input backends, phase schedules, state proofs, and verdicts are distinct; extract only if a third raw-input smoke repeats the same bootstrap."
+    },
+    {
+      "files": [
+        "apps/bevy/gamepad-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/mouse-input/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260729-182540: gamepad_input and mouse_input are sibling frame-start input examples, so they intentionally keep the canonical Dawn global injection and mock-canvas recipe inline for AI grepability. Their backend fixtures, state proofs, and verdicts are distinct; extract only if a third raw-input smoke repeats the same bootstrap."
+    },
+    {
+      "files": [
+        "apps/bevy/touch-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/keyboard-input/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260729-191752: touch_input and keyboard_input are sibling frame-start input examples, so they intentionally keep the canonical Dawn global injection and mock-canvas recipe inline for AI grepability. Their pointer fixtures, state proofs, and verdicts are distinct; extract only if a third raw-input smoke repeats the same bootstrap."
+    },
+    {
+      "files": [
+        "apps/bevy/touch-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/mouse-input/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260729-191752: touch_input and mouse_input are sibling frame-start input examples, so they intentionally keep the canonical Dawn global injection and mock-canvas recipe inline for AI grepability. Their pointer fixtures, state proofs, and verdicts are distinct; extract only if a third raw-input smoke repeats the same bootstrap."
+    },
+    {
+      "files": [
+        "apps/bevy/touch-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/gamepad-input/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260729-191752: touch_input and gamepad_input are sibling frame-start input examples, so they intentionally keep the canonical Dawn global injection and mock-canvas recipe inline for AI grepability. Their pointer fixtures, state proofs, and verdicts are distinct; extract only if a third raw-input smoke repeats the same bootstrap."
     }
   ]
 }

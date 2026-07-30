@@ -134,6 +134,25 @@
       "betterConsumer": "templates/game-default"
     },
     {
+      "id": "app:bevy/animate-shader",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/animated-target.wgsl",
+        "templates/game-default/src/animated-target-material.ts",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/animate-shader/src/main.ts",
+        "apps/bevy/animate-shader/src/animate-shader.wgsl"
+      ],
+      "reason": "The canonical app remains the standalone time-driven shader/material correctness owner. game-default adopts one authored YellowPillar slice through the public WGSL import/registry and schema-driven time uniform, composing with its existing ECS motion, physics, hit feedback, and reset path; no second gallery or camera is added.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
       "id": "app:bevy/anti-aliasing",
       "classification": "guided",
       "frontDoors": ["preview"],
@@ -406,6 +425,65 @@
       "betterConsumer": "templates/game-default"
     },
     {
+      "id": "app:bevy/depth-of-field",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/depth-of-field.ts",
+        "templates/game-default/src/depth-of-field.wgsl",
+        "templates/game-default/src/depth-of-field.wgsl.meta.json",
+        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/ui/settings.pack.json",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/depth-of-field/src/main.ts",
+        "apps/bevy/depth-of-field/src/depth-of-field.wgsl"
+      ],
+      "reason": "The canonical app remains the isolated focal-distance and aperture reference. game-default composes one depth-aware Bokeh pass into its existing URP target range through public PostProcessParams and Renderer.postProcess APIs, with a settings toggle, reset owner, and browser compositor evidence instead of importing a second scene or private pipeline constant.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/fullscreen-material",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/chromatic-aberration.ts",
+        "templates/game-default/src/chromatic-aberration.wgsl",
+        "templates/game-default/src/chromatic-aberration.wgsl.meta.json",
+        "templates/game-default/src/depth-of-field.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/fullscreen-material/src/main.ts",
+        "apps/bevy/fullscreen-material/src/fullscreen-material.wgsl",
+        ".forgeax-harness/solo/game-default/experiments/20260730-085419-adopt-fullscreen-material-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app remains the standalone fullscreen-material and chromatic-aberration shader oracle. game-default adopts one thin authored slice as a hit-driven transient effect: triggerFlash writes a bounded PostProcessParams pulse, the existing Play system decays it, the ordered effect chain composes it after DoF, and the single R reset owner clears it. This exercises WGSL registration, multiple URP post-effect passes, ECS parameter updates, gameplay feedback, and browser compositor evidence without adding a second scene.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/generate-custom-mesh",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/bevy/generate-custom-mesh/src/generate-custom-mesh.ts",
+        "apps/bevy/generate-custom-mesh/scripts/smoke-dawn.mjs",
+        "apps/preview/scripts/smoke-render-evidence.mjs"
+      ],
+      "reason": "The canonical app remains the focused hand-built 24-vertex mesh and UV mutation proof. game-default composes the same public MeshAsset/TextureAsset/GPU update path with its existing fired projectile, capsule collider, target hit, deferred spawn, and R reset loop; G toggles the UV atlas half and the render-evidence witness exposes semantic state without adding a static mesh gallery.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
       "id": "app:bevy/camera-orbit",
       "classification": "guided",
       "frontDoors": ["preview"],
@@ -421,6 +499,450 @@
       ],
       "reason": "The canonical app remains the isolated fixed-radius orbit correctness proof. game-default composes its spherical position, pitch clamp, and quaternion look-at pose with the existing authored target range, InputSnapshot pointer-lock fallback, HUD view cycle, reset owner, and browser pixel witness instead of adding a parallel scene.",
       "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/camera-pan",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/hud.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/camera-pan/src/camera-pan.ts",
+        "apps/bevy/camera-pan/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "The canonical app remains the focused orthographic pan/zoom correctness proof. game-default composes its bounded X/Z camera target, symmetric orthographic extents, frozen arrow and wheel input, HUD view cycle, reset owner, and browser evidence with the existing authored 3D target range instead of copying a second four-cube scene.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/camera-zoom",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/camera-zoom.ts",
+        "templates/game-default/src/hud.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/camera-zoom/src/camera-zoom.ts",
+        "apps/bevy/camera-zoom/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "The canonical app remains the isolated projection-switch and dual-projection zoom correctness proof. game-default composes its perspective FOV wheel zoom into the existing Orbit/FPS modes while retaining bounded Map orthographic zoom, one HUD/view-cycle/reset owner, and browser evidence without adding a second camera state machine.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/change-detection",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/change-detection.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/change-detection/src/change-detection.ts",
+        "apps/bevy/change-detection/scripts/smoke-dawn.mjs",
+        "apps/bevy/change-detection/scripts/smoke-browser.mjs"
+      ],
+      "reason": "The canonical app remains the focused Changed/Added/resource-tick correctness proof. game-default composes those public ECS filters with its authored target range: Added observes the ten target hit-state components, Changed observes their lifecycle, the score resource is the single numeric source for HUD projection, and the existing hit/reset loop remains the gameplay owner without a parallel demo world.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/clear-color",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/clear-color.ts",
+        "templates/game-default/src/settings.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/assets/ui/settings.pack.json",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/bevy/clear-color/src/clear-color.ts",
+        "apps/bevy/clear-color/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "The canonical app remains the isolated empty-scene blue-to-purple clear-color correctness proof. game-default adopts one typed Sky blue/Purple setting over its existing authored target range through the public Camera.clearColor field and Settings UiAsset, preserving one camera, one game loop, and the canonical reset/scene ownership boundary.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/clearcoat",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/clearcoat-material.ts",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/bevy/clearcoat/src/clearcoat.ts",
+        "apps/bevy/clearcoat/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "The canonical app remains the isolated coated-versus-uncoated PBR contrast proof. game-default composes the public clearcoat and clearcoatRoughness parameters as a private clone of its authored BlueBall, preserving the existing physics, scoring, hit-flash, and reset owners while teaching the authored-scene versus runtime-material boundary without copying a gallery.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/delayed-commands",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/delayed-commands/src/main.ts",
+        "apps/bevy/delayed-commands/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "The canonical app remains the focused CommandBuffer spawn/despawn proof. game-default composes deferred bullet creation and lifetime expiry into its existing physics, scoring, hit-flash, input, and reset loop; commands.isDeferred protects same-system Transform writes and browser evidence proves a real canvas shot crosses the ECS flush boundary.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/contiguous-query",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/target-health.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/contiguous-query/src/contiguous-query.ts",
+        "apps/bevy/contiguous-query/scripts/smoke-dawn.mjs",
+        "apps/bevy/contiguous-query/scripts/smoke-browser.mjs"
+      ],
+      "reason": "The canonical app remains the focused 32-row dense-column proof. game-default composes queryRunContiguous with a resettable TargetHealth component on the authored physics targets: hit damage uses the normal World mutation boundary, per-frame regeneration mutates writable current/max/Entity slices, and render evidence proves the row shape without copying a second health gallery.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/entity-disabling",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/target-disabling.ts",
+        "templates/game-default/src/target-health.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/entity-disabling/src/entity-disabling.ts",
+        "apps/bevy/entity-disabling/scripts/smoke-dawn.mjs",
+        "apps/bevy/entity-disabling/scripts/smoke-browser.mjs"
+      ],
+      "reason": "The canonical app remains the focused Disabled-marker query proof. game-default composes structural disabling with TargetHealth: a depleted authored target leaves default gameplay queries, an explicit Disabled query witnesses the excluded row, and the existing reset owner re-enables the same target without duplicating scene or rendering state.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/gamepad-input",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-gamepad.mjs",
+        "apps/bevy/gamepad-input/src/gamepad-input.ts",
+        "apps/bevy/gamepad-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/gamepad-input/scripts/smoke-browser.mjs"
+      ],
+      "reason": "The canonical app remains the focused standard gamepad button/trigger/stick oracle. game-default composes the public InputMap and frozen InputSnapshot gamepad readpoint with existing movement, jump, shoot, custom-mesh, and reset actions; the focused Preview smoke proves Y toggles the projectile mesh and R2 crosses the deferred bullet spawn boundary without adding a second input listener.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/bloom-2d",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/bloom-2d/src/bloom-2d.ts",
+        "apps/bevy/bloom-2d/src/main.ts",
+        "apps/bevy/bloom-2d/scripts/smoke-dawn.mjs",
+        "apps/bevy/bloom-2d/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260729-230000-p0-classify-bloom-2d-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static six-quad 2D bloom gallery with no gameplay input, reset/re-entry owner, authored asset lifecycle, or feature composition beyond a space-key presentation toggle. game-default already teaches a gameplay-sized 3D bloom toggle on the authored projectile with one settings and reset owner; adding a second gallery would duplicate presentation policy without a public 2D gameplay seam.",
+      "betterConsumer": "apps/bevy/bloom-2d"
+    },
+    {
+      "id": "app:bevy/cubic-splines",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/cubic-splines/src/cubic-splines.ts",
+        "apps/bevy/cubic-splines/src/main.ts",
+        "apps/bevy/cubic-splines/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260729-201721-p0-classify-cubic-splines-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static Catmull-Rom bead gallery with no gameplay input, reset/re-entry owner, or lifecycle state. Adding beads would create a decorative second scene, while moving game-default's physics-owned target would replace rather than compose with its existing hit and reset loop. Keep the canonical app until a public path-following primitive can drive a resettable gameplay behavior.",
+      "betterConsumer": "apps/bevy/cubic-splines"
+    },
+    {
+      "id": "app:bevy/easing",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/easing/src/easing-demo.ts",
+        "apps/bevy/easing/src/main.ts",
+        "apps/bevy/easing/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260729-231500-p0-classify-easing-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static two-cube linear-vs-smoothstep comparison driven by elapsed time, with no input, reset/re-entry owner, gameplay state, or asset lifecycle. Adding it to game-default would duplicate a motion gallery or replace the physics-owned target loop; keep the canonical producer until a public animation/feedback seam can compose easing into resettable gameplay.",
+      "betterConsumer": "apps/bevy/easing"
+    },
+    {
+      "id": "app:bevy/empty",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/empty/src/empty.ts",
+        "apps/bevy/empty/src/main.ts",
+        "apps/bevy/empty/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260729-222409-classify-empty-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is intentionally a camera-only bootstrap oracle with no gameplay input, reset/re-entry owner, authored asset lifecycle, or feature composition. Adding an empty mode to game-default would either replace its richer resettable first-game loop or create a parallel blank scene that teaches no additional public engine concept; keep the minimal host in its canonical consumer.",
+      "betterConsumer": "apps/bevy/empty"
+    },
+    {
+      "id": "app:bevy/fixed-timestep",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/gameplay-state.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-fixed-state.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260727-204740-p5-fixed-state-loop/REPORT.md"
+      ],
+      "reason": "The existing game-default state owner composes Play/Reset with explicit Update and FixedUpdate schedules, deterministic reset cleanup, same-process invalid-variant recovery, and browser semantic/render-regression evidence. It teaches fixed-step simulation through the existing target loop rather than adding a second ticking scene.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/fog",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/fog/src/fog.ts",
+        "apps/bevy/fog/src/main.ts",
+        "apps/bevy/fog/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-023530-classify-fog-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static 50-platform distance-fog correctness gallery with no gameplay input, reset/re-entry owner, authored asset lifecycle, or browser witness. Its public installPipeline call replaces the postEffects list, so adding fog to game-default would displace the guided DoF owner or require an engine-owned multi-effect composition seam; keep the focused fog oracle until that seam exists.",
+      "betterConsumer": "apps/bevy/fog"
+    },
+    {
+      "id": "app:bevy/free-camera",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/free-camera.ts",
+        "templates/game-default/src/hud.ts",
+        "templates/game-default/src/__tests__/free-camera.test.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/bevy/free-camera/src/free-camera.ts",
+        "apps/bevy/free-camera/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-082430-adopt-free-camera-candidate/REPORT.md"
+      ],
+      "reason": "The existing game-default FPS view now owns the canonical free-flight controller semantics: one frozen InputSnapshot drives WASD look-relative movement, Q/E vertical flight, Shift run speed, wheel speed adjustment, and velocity/friction decay. The same target/shoot loop, authored Player, and typed Reset owner remain in place, so the feature teaches a reusable controller composition without adding a second camera or scene.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/alter-mesh",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/src/mesh-handle-swap.ts",
+        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-mesh-handle-swap.mjs",
+        "apps/bevy/alter-mesh/src/alter-mesh.ts",
+        "apps/bevy/alter-mesh/scripts/smoke-dawn.mjs",
+        "apps/bevy/alter-mesh/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-043000-adopt-alter-mesh-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app remains the focused shared MeshAsset mutation and per-instance MeshFilter handle-swap oracle. game-default adds the missing per-instance operation to its existing authored scoring target: H swaps only the visual mesh handle to the built-in sphere, G continues to mutate the shared projectile mesh, and R restores both through the single gameplay reset owner. The target Collider stays explicit so visual identity and physics shape remain separate public concepts.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/plugin-group",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/plugin-group/src/plugin-group.ts",
+        "apps/bevy/plugin-group/src/main.ts",
+        "apps/bevy/plugin-group/scripts/smoke-dawn.mjs",
+        "packages/plugin/README.md",
+        ".forgeax-harness/solo/game-default/experiments/20260730-024656-classify-plugin-group-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a configuration-only ordered PluginGroup proof: its print systems have no gameplay input, reset/re-entry owner, asset/runtime observation, browser witness, or recovery story to compose with game-default. Wrapping Preview's existing plugin list would only rename host wiring and would create no observable template feature; keep the group contract in its focused canonical consumer.",
+      "betterConsumer": "apps/bevy/plugin-group"
+    },
+    {
+      "id": "app:bevy/plugin",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/plugin/src/main.ts",
+        "apps/bevy/plugin/src/plugin.ts",
+        "apps/bevy/plugin/scripts/smoke-dawn.mjs",
+        "packages/plugin/README.md",
+        ".forgeax-harness/solo/game-default/experiments/20260730-040000-classify-plugin-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a print-only custom Plugin proof with no gameplay input, reset/re-entry owner, asset delivery, browser witness, or recovery path. game-default already reaches the public createApp plugin seam through Preview audio and the engine default plugin set; adding another print system would create no observable game feature or distinct composition boundary.",
+      "betterConsumer": "apps/bevy/plugin"
+    },
+    {
+      "id": "app:bevy/generic-system",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/generic-system/src/generic-system.ts",
+        "apps/bevy/generic-system/src/main.ts",
+        "apps/bevy/generic-system/scripts/smoke-dawn.mjs",
+        "apps/bevy/generic-system/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-093237-classify-generic-system-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a focused generic cleanup factory specialized for two state-exit markers, with no gameplay input, reset/re-entry owner, asset lifecycle, failure/recovery path, or independent template-facing behavior. game-default already teaches typed GameState, a single Reset owner, and state-scoped gameplay cleanup; adding a second cleanup gallery or synthetic mode would duplicate that boundary without a new observable feature. Keep the generic-system contract in its canonical consumer until a real gameplay composition requires this abstraction.",
+      "betterConsumer": "apps/bevy/generic-system"
+    },
+    {
+      "id": "app:bevy/iter-combinations",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/iter-combinations/src/iter-combinations.ts",
+        "apps/bevy/iter-combinations/src/main.ts",
+        "apps/bevy/iter-combinations/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-100142-classify-iter-combinations-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a focused queryCombinations N-body gravity gallery: its Dawn proof shows real pairwise motion and ring-to-star clumping, but it has no gameplay input, reset/re-entry owner, asset lifecycle, recovery path, or browser gate. game-default already has a distinct bullet-to-target query and one reset owner; adding a second N-body simulation or artificial target attraction would create a gallery rather than a new public game behavior. Keep the pairwise-query contract in its canonical consumer until genuine gameplay composition needs it.",
+      "betterConsumer": "apps/bevy/iter-combinations"
+    },
+    {
+      "id": "app:bevy/keyboard-input",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/keyboard-input/src/keyboard-input.ts",
+        "apps/bevy/keyboard-input/src/main.ts",
+        "apps/bevy/keyboard-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/keyboard-input/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-103500-classify-keyboard-input-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static physical-vs-logical keyboard edge gallery with no gameplay input owner, reset/re-entry lifecycle, asset delivery, recovery path, or user-facing game behavior. game-default already teaches one frozen InputSnapshot and InputMap boundary for WASD, view controls, one-shot actions, gamepad parity, and typed reset; adding a second low-level keyboard state resource would split the input contract without a distinct mechanic. Keep the physical/logical edge API in its canonical consumer until real gameplay composition needs it.",
+      "betterConsumer": "apps/bevy/keyboard-input"
+    },
+    {
+      "id": "app:bevy/keyboard-modifiers",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/keyboard-modifiers/src/keyboard-modifiers.ts",
+        "apps/bevy/keyboard-modifiers/src/main.ts",
+        "apps/bevy/keyboard-modifiers/scripts/smoke-dawn.mjs",
+        "apps/bevy/keyboard-modifiers/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-120419-classify-keyboard-modifiers-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real Ctrl+Shift+A modifier chord and rejects unmodified A, but remains a static three-marker input gallery with no gameplay, reset/re-entry owner, asset lifecycle, recovery path, or independent template-facing behavior. game-default already owns one frozen InputSnapshot/InputMap boundary, including Shift as the FPS freeRun action, plus one typed Reset owner; adding a synthetic chord action would split the public input story without a natural game mechanic. Keep the modifier primitive in its canonical consumer until concrete gameplay composition justifies a first-class action binding or direct keyboard-code read.",
+      "betterConsumer": "apps/bevy/keyboard-modifiers"
+    },
+    {
+      "id": "app:bevy/lighting",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/lighting/src/lighting.ts",
+        "apps/bevy/lighting/src/main.ts",
+        "apps/bevy/lighting/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-121618-classify-lighting-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static four-light matrix with red and blue PointLights, a shadow-casting green SpotLight, a shadow-casting DirectionalLight, and an orange-red Skylight over primitive geometry. It has no gameplay input, reset/re-entry lifecycle, asset import/delivery path, recovery behavior, or browser-hosted loop. game-default already teaches the higher-value composed contract through GUID-authored PBR content, DirectionalLight and Skylight, emissive hit feedback, bloom, camera settings, and typed reset; copying the static wall-and-light gallery would create a parallel renderer showcase rather than a new feature-loop behavior. Keep the lighting matrix in its canonical consumer.",
+      "betterConsumer": "apps/bevy/lighting"
+    },
+    {
+      "id": "app:bevy/lines",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/lines/src/lines.ts",
+        "apps/bevy/lines/src/main.ts",
+        "apps/bevy/lines/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-133649-classify-lines-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a static green/blue wireframe projection with no gameplay input, reset/re-entry lifecycle, asset delivery, recovery path, or browser smoke. game-default already owns authored mesh/material content, a query-gated public debug-draw axes overlay on live gameplay targets, and one typed reset owner; copying another line gallery would duplicate presentation rather than add a feature-loop behavior. The helper named blueLineStrip currently declares line-list, so the topology naming mismatch remains a canonical-app follow-up rather than a template workaround.",
+      "betterConsumer": "apps/bevy/lines"
+    },
+    {
+      "id": "app:bevy/load-gltf",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/load-gltf/src/main.ts",
+        "apps/bevy/load-gltf/vite.config.ts",
+        "apps/bevy/load-gltf/scripts/smoke-dawn.mjs",
+        "apps/bevy/load-gltf/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-141223-classify-load-gltf-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real .gltf + .meta.json sub-asset chain through parseGltf, GUID catalog, loadByGuid<SceneAsset>, instantiate, Dawn, and Chrome, but its runtime still performs an app-local parse/catalog bridge and renders one static Box scene. game-default already owns a GUID-loaded native SceneAsset, recursive asset loading, authored mesh/material content, a resettable physics/gameplay loop, and an image/HDR source-to-importer-to-pack witness; adding a static imported Box would duplicate the scene without a new feature-loop behavior. Keep the glTF loader proof canonical until a build-time cooked glTF asset can replace or compose with a real gameplay target through the normal pack path; that is an engine/importer follow-up, not a template workaround.",
+      "betterConsumer": "apps/bevy/load-gltf"
+    },
+    {
+      "id": "app:bevy/logs",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/logs/src/logs.ts",
+        "apps/bevy/logs/src/main.ts",
+        "apps/bevy/logs/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-144728-classify-logs-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app is a print-only Update system that emits info, warn, and error every frame plus one once-only message; its 100-frame Dawn proof verifies the console counts but it has no gameplay input, reset/re-entry owner, assets, recovery behavior, or browser witness. game-default already exposes structured Result error codes and hints, targeted console warnings for optional audio/assets, semantic render/audio evidence, and one resettable feature loop; copying per-frame logs would add noise and no public gameplay contract. Keep the logging idiom in its canonical consumer until a real template diagnostics surface needs a bounded, user-facing log sink.",
+      "betterConsumer": "apps/bevy/logs"
+    },
+    {
+      "id": "app:bevy/mesh-picking",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/mesh-picking/src/main.ts",
+        "apps/bevy/mesh-picking/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260730-152916-classify-mesh-picking-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves public AABB picking over four procedural meshes: its 300-frame Dawn smoke hits box/sphere/capsule/torus at known screen coordinates, rejects a corner miss, and reports zero RHI errors. It has no reset/re-entry owner, asset delivery, recovery path, or browser smoke, and click handling only resets four highlight materials before applying one local highlight. game-default already consumes the same pick() primitive for screen-aim/shoot intent, target hit feedback, pointer/camera modes, and one typed reset owner; adding a parallel click-to-highlight gallery would duplicate interaction policy rather than add a feature-loop behavior. Keep the focused picking contract canonical until a distinct gameplay mechanic needs selection state.",
+      "betterConsumer": "apps/bevy/mesh-picking"
     }
   ]
 }

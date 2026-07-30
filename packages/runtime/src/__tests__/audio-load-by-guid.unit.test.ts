@@ -7,7 +7,32 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const AUDIO_GUID = 'db30f00d-0000-4000-8000-000000000001';
 const PACK_INDEX_URL = '/pack-index.json';
-const AUDIO_URL = '/audio/test.wav';
+const PACKAGE_URL = '/assets/audio.pack.json';
+const ARTIFACT_URL = '/assets/audio/source.bin';
+
+function audioPack(byteLength = 16) {
+  return {
+    schemaVersion: '2.0.0',
+    kind: 'internal-text-package',
+    assets: [
+      {
+        guid: AUDIO_GUID,
+        kind: 'audio',
+        payload: { kind: 'audio' },
+        refs: [],
+        artifacts: {
+          source: {
+            path: 'audio/source.bin',
+            mediaType: 'audio/wav',
+            assetCodec: { name: 'browser-audio' },
+            contentEncoding: 'identity',
+            byteLength,
+          },
+        },
+      },
+    ],
+  };
+}
 
 describe('audio loadByGuid', () => {
   const originalFetch = globalThis.fetch;
@@ -20,7 +45,7 @@ describe('audio loadByGuid', () => {
     vi.unstubAllGlobals();
   });
 
-  it('loads and catalogues an audio GUID through the injected catalog-entry loader', async () => {
+  it('loads and catalogues an audio GUID through its Pack v2 artifact', async () => {
     const audioData = new ArrayBuffer(16);
     const buffer = { length: 4, sampleRate: 48_000 } as AudioBuffer;
     const decodeAudioData = vi.fn().mockResolvedValue(buffer);
@@ -32,10 +57,13 @@ describe('audio loadByGuid', () => {
       if (url === PACK_INDEX_URL) {
         return Promise.resolve({
           ok: true,
-          json: async () => [{ guid: AUDIO_GUID, relativeUrl: AUDIO_URL, kind: 'audio' }],
+          json: async () => [{ guid: AUDIO_GUID, packageUrl: PACKAGE_URL, kind: 'audio' }],
         });
       }
-      if (url === AUDIO_URL) {
+      if (url === PACKAGE_URL) {
+        return Promise.resolve({ ok: true, json: async () => audioPack() });
+      }
+      if (url === ARTIFACT_URL) {
         return Promise.resolve({ ok: true, arrayBuffer: async () => audioData });
       }
       return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
@@ -58,7 +86,7 @@ describe('audio loadByGuid', () => {
     expect(first.value).toEqual({ kind: 'audio', buffer });
     expect(second.value).toBe(first.value);
     expect(registry.lookup(parsed.value)).toBe(first.value);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(decodeAudioData).toHaveBeenCalledWith(audioData);
     expect(close).toHaveBeenCalledOnce();
   });
@@ -68,8 +96,11 @@ describe('audio loadByGuid', () => {
       if (url === PACK_INDEX_URL) {
         return Promise.resolve({
           ok: true,
-          json: async () => [{ guid: AUDIO_GUID, relativeUrl: AUDIO_URL, kind: 'audio' }],
+          json: async () => [{ guid: AUDIO_GUID, packageUrl: PACKAGE_URL, kind: 'audio' }],
         });
+      }
+      if (url === PACKAGE_URL) {
+        return Promise.resolve({ ok: true, json: async () => audioPack(8) });
       }
       return Promise.resolve({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) });
     });
@@ -90,8 +121,8 @@ describe('audio loadByGuid', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe('asset-parse-failed');
-      expect(result.error.hint).toContain('valid wav/mp3/ogg/flac');
+      expect(result.error.code).toBe('decode-failed');
+      expect(result.error.hint).toContain('audio artifact mediaType');
     }
   });
 });

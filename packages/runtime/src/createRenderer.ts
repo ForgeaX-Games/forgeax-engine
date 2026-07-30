@@ -12,11 +12,43 @@ export async function createRenderer(
   if (options !== undefined && 'rhi' in options && options.rhi === undefined) {
     throw new EngineEnvironmentError('no usable rendering backend');
   }
+  const rendererOptions: RendererOptions | undefined =
+    options === undefined
+      ? undefined
+      : {
+          ...(options.rhi === undefined ? {} : { rhi: options.rhi }),
+          ...(options.rawDeviceForContextConfigure === undefined
+            ? {}
+            : { rawDeviceForContextConfigure: options.rawDeviceForContextConfigure }),
+          ...(options.features === undefined ? {} : { features: options.features }),
+        };
   try {
-    return await constructRenderer(canvas, options, bundler);
+    return await constructRenderer(canvas, rendererOptions, bundler);
   } catch (cause) {
+    if (isStructuredRenderError(cause)) throw cause;
     if (cause instanceof EngineEnvironmentError) throw cause;
     const detail = cause instanceof Error ? cause : new Error(String(cause));
     throw new EngineEnvironmentError('renderer construction failed', { webgpuError: detail });
   }
+}
+
+function isStructuredRenderError(value: unknown): value is Error & {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: unknown;
+} {
+  if (!(value instanceof Error)) return false;
+  const candidate = value as Partial<{
+    code: unknown;
+    expected: unknown;
+    hint: unknown;
+    detail: unknown;
+  }>;
+  return (
+    typeof candidate.code === 'string' &&
+    typeof candidate.expected === 'string' &&
+    typeof candidate.hint === 'string' &&
+    candidate.detail !== undefined
+  );
 }

@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { gltfDocToSceneAsset, parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { parsePackV2 } from '@forgeax/engine-pack';
 import { HANDLE_CUBE, type MeshAsset } from '@forgeax/engine-assets-runtime';
 import { createRenderer, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
@@ -106,6 +107,39 @@ function meshIrToPod12F(meshIr: { positions: Float32Array }): Float32Array {
 }
 
 describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
+  it('keeps instance source assets addressable by Pack v2 GUID and refs', () => {
+    const parsed = parsePackV2({
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: '019e39e4-dd6a-7afd-8893-f10111360a2f',
+          kind: 'mesh',
+          payload: { kind: 'mesh' },
+          refs: [],
+          artifacts: {
+            body: {
+              path: 'artifacts/mesh.bin',
+              mediaType: 'application/x-forgeax-mesh',
+            },
+          },
+        },
+        {
+          guid: '019e39e4-dd6a-7934-9b8a-2c0bd82be52c',
+          kind: 'scene',
+          payload: { kind: 'scene' },
+          refs: ['019e39e4-dd6a-7afd-8893-f10111360a2f'],
+          artifacts: {},
+        },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.assets[1]?.refs).toEqual([
+      '019e39e4-dd6a-7afd-8893-f10111360a2f',
+    ]);
+  });
+
   it('renders >=3 frames + clear-color-distance >= eps on at least one mesh site', async () => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable) {

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImageMetadata } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { keyFor, read, write } from '../ddc-cache.js';
+import { createLogicalDdcCache, keyFor, read, semanticDdcKey, write } from '../ddc-cache.js';
 
 const SETTINGS_A = { colorSpace: 'srgb', mipmap: true } as const;
 const SETTINGS_B = { colorSpace: 'linear', mipmap: false } as const;
@@ -88,5 +88,79 @@ describe('ddc-cache.unit.test.ts', () => {
       expect(newKey).not.toBe(oldKey);
       expect(read(cwd, newKey)).toBeNull();
     });
+  });
+
+  describe('semantic key', () => {
+    it('does not change when only the publishing environment changes', () => {
+      const semantic = {
+        schemaVersion: '2.0.0',
+        importerVersion: 'importer@1',
+        codecVersion: 'codec@1',
+        sourceDependencies: [{ path: 'a.png', digest: 'a' }],
+        settings: { mipmap: true },
+        declaredGuids: ['g1'],
+        cookProfile: 'dev',
+        publish: { base: '/', path: 'assets/a.bin', hash: 'one' },
+      };
+      expect(semanticDdcKey(semantic)).toBe(
+        semanticDdcKey({
+          ...semantic,
+          publish: { base: '/preview/', path: 'assets/a-other.bin', hash: 'two' },
+        }),
+      );
+    });
+
+    it('changes when a semantic dependency changes', () => {
+      const semantic = {
+        schemaVersion: '2.0.0',
+        importerVersion: 'importer@1',
+        codecVersion: 'codec@1',
+        sourceDependencies: [{ path: 'a.png', digest: 'a' }],
+        settings: { mipmap: true },
+        declaredGuids: ['g1'],
+        cookProfile: 'dev',
+      };
+      expect(semanticDdcKey(semantic)).not.toBe(
+        semanticDdcKey({
+          ...semantic,
+          sourceDependencies: [{ path: 'a.png', digest: 'b' }],
+        }),
+      );
+    });
+  });
+
+  it('logical cache derives one semantic key and round-trips the package body', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'forgeax-logical-ddc-'));
+    try {
+      const input = {
+        schemaVersion: '2.0.0',
+        importerVersion: 'importer@1',
+        codecVersion: 'codec@1',
+        sourceDependencies: ['scene.json'],
+        settings: { profile: 'dev' },
+        declaredGuids: ['g1'],
+        cookProfile: 'dev',
+      } as const;
+      const logicalPackage = {
+        schemaVersion: '2.0.0' as const,
+        kind: 'internal-text-package' as const,
+        assets: [
+          {
+            guid: 'g1',
+            kind: 'scene',
+            payload: { title: 'demo' },
+            refs: [],
+            artifacts: {},
+          },
+        ],
+      };
+      const cache = createLogicalDdcCache(cwd);
+      expect(cache.read(input)).toBeNull();
+      cache.write(input, logicalPackage);
+      expect(cache.key(input)).toBe(semanticDdcKey(input));
+      expect(cache.read(input)).toEqual(logicalPackage);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });

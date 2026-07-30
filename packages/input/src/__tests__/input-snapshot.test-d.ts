@@ -4,10 +4,11 @@
 // - mouse.button(i) accepts the literal union 0 | 1 | 2 (W3C MouseEvent.button:
 //   0=primary, 1=auxiliary, 2=secondary; plan-strategy section 2.10 D-5).
 // - mouse.button(3) is a TS error (literal-narrowing rejects out-of-range).
-// - keyboard.down/up signature returns boolean (not unknown / not Result).
+// - keyboard.down/justPressed/up plus physical-code readers return boolean
+//   (not unknown / not Result).
 //
 // charter awareness:
-// - F2 minimal surface: 4-method shape locked at compile time
+// - F2 minimal surface: keyboard read points are locked at compile time
 // - P3 explicit failure: invalid button index is a compile-time error,
 //   not a silent runtime fallback (no string parsing, no number coercion)
 
@@ -25,6 +26,20 @@ describe('InputSnapshot type surface (AC-07)', () => {
     const snap: InputSnapshot = createInputSnapshot();
     expectTypeOf(snap.keyboard.up).parameter(0).toEqualTypeOf<string>();
     expectTypeOf(snap.keyboard.up('w')).toEqualTypeOf<boolean>();
+  });
+
+  it('keyboard.justPressed accepts string and returns boolean', () => {
+    const snap: InputSnapshot = createInputSnapshot();
+    expectTypeOf(snap.keyboard.justPressed).parameter(0).toEqualTypeOf<string>();
+    expectTypeOf(snap.keyboard.justPressed('w')).toEqualTypeOf<boolean>();
+  });
+
+  it('keyboard code readers accept string and return boolean', () => {
+    const snap: InputSnapshot = createInputSnapshot();
+    expectTypeOf(snap.keyboard.downCode).parameter(0).toEqualTypeOf<string>();
+    expectTypeOf(snap.keyboard.justPressedCode).parameter(0).toEqualTypeOf<string>();
+    expectTypeOf(snap.keyboard.upCode).parameter(0).toEqualTypeOf<string>();
+    expectTypeOf(snap.keyboard.downCode('KeyA')).toEqualTypeOf<boolean>();
   });
 
   it('mouse.movementDelta has shape { x: number; y: number }', () => {
@@ -45,6 +60,12 @@ describe('InputSnapshot type surface (AC-07)', () => {
   it('mouse.pointerLocked returns boolean (required, alongside movementDelta)', () => {
     const snap: InputSnapshot = createInputSnapshot();
     expectTypeOf(snap.mouse.pointerLocked).toEqualTypeOf<boolean>();
+  });
+
+  it('mouse button edge readers accept the literal union and return boolean', () => {
+    const snap: InputSnapshot = createInputSnapshot();
+    expectTypeOf(snap.mouse.justPressed(0)).toEqualTypeOf<boolean>();
+    expectTypeOf(snap.mouse.justReleased(0)).toEqualTypeOf<boolean>();
   });
 
   it('mouse.button(3) is a TS compile error (literal-narrowing rejects out-of-range)', () => {

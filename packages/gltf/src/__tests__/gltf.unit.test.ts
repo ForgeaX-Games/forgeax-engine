@@ -994,7 +994,6 @@ import {
         expect(res.ok).toBe(true);
         if (!res.ok || 'skipped' in res.value) throw new Error('expected a DDC pack');
         const importerPack = res.value.pack;
-        const importerBins = res.value.bins;
 
         const doc = await parseFixture(bytes);
         const meshIr = doc.meshes[0];
@@ -1007,32 +1006,25 @@ import {
         const importerMesh = importerPack.assets.find((a) => a.guid === MESH_GUID);
         const importerMat = importerPack.assets.find((a) => a.guid === MAT_GUID);
 
-        // bug-20260610 Fix A: mesh payload is now the empty sentinel
-        // ({vertices:[], indices:[], data:Uint8Array(0)}); vertex/index bytes
-        // ride along in `bins` keyed by lowercased GUID. Material payload is
-        // unchanged (no typed-array fields to binarize) and stays byte-equal
-        // to the bridge baseline.
-        expect(importerMesh?.payload).toEqual({
-          vertices: [],
-          indices: [],
-          data: new Uint8Array(0),
-        });
-        const meshBin = importerBins?.get(MESH_GUID.toLowerCase());
-        expect(meshBin).toBeInstanceOf(Uint8Array);
-        // Bin must hold the original vertices + indices (the typed-array
-        // bytes that used to be inlined as JSON arrays). Sanity-check the
-        // header so a regression in `packMeshBin` is caught here:
-        // header v2: [0]=version(2), [4]=uvSetCount, [8]=floatsPerVertex,
-        // [12]=vlen, [16]=ilen, [20]=iwidth, [24]=jsonlen.
-        if (meshBin !== undefined) {
-          const view = new DataView(meshBin.buffer, meshBin.byteOffset, meshBin.byteLength);
-          expect(view.getUint32(0, true)).toBe(2); // version
-          expect(view.getUint32(4, true)).toBe(1); // uvSetCount (single UV)
-          expect(view.getUint32(12, true)).toBe(baselineMesh.vertices.length); // vlen
-          const baselineIdx = baselineMesh.indices ?? new Uint16Array(0);
-          expect(view.getUint32(16, true)).toBe(baselineIdx.length); // ilen
-          expect(view.getUint32(20, true)).toBe(baselineIdx.BYTES_PER_ELEMENT); // iwidth
-        }
+        expect(serialize(importerMesh?.payload)).toBe(serialize(baselineMesh));
+        const meshBody = importerMesh?.artifacts.body;
+        expect(meshBody?.mediaType).toBe('application/x-forgeax-mesh');
+        expect(meshBody?.assetCodec).toEqual({ name: 'mesh-binary', version: '2' });
+        expect(meshBody?.bytes).toBeInstanceOf(Uint8Array);
+        const meshHeader = new DataView(
+          (meshBody?.bytes as Uint8Array).buffer,
+          (meshBody?.bytes as Uint8Array).byteOffset,
+          (meshBody?.bytes as Uint8Array).byteLength,
+        );
+        expect(meshHeader.getUint32(0, true)).toBe(2);
+        expect(meshHeader.getUint32(4, true)).toBe(1);
+        expect(meshHeader.getUint32(12, true)).toBe(baselineMesh.vertices.length);
+        expect(meshHeader.getUint32(16, true)).toBe(
+          (baselineMesh.indices ?? new Uint16Array()).length,
+        );
+        expect(meshHeader.getUint32(20, true)).toBe(
+          (baselineMesh.indices ?? new Uint16Array()).BYTES_PER_ELEMENT,
+        );
 
         expect(serialize(importerMat?.payload)).toBe(serialize(baselineMat));
         expect(importerPack.assets.map((a) => a.guid)).toEqual([MESH_GUID, MAT_GUID, SCENE_GUID]);
@@ -1100,7 +1092,13 @@ import {
           ],
         },
       ],
-      materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      materials: [
+        {
+          emissiveFactor: [0.8, 0.4, 0.1],
+          emissiveTexture: { index: 0 },
+          pbrMetallicRoughness: { baseColorTexture: { index: 0 } },
+        },
+      ],
       textures: [{ source: 0, sampler: 0 }],
       samplers: [{}],
       images: [{ uri: `data:image/png;base64,${TINY_PNG_BASE64}` }],
@@ -1182,6 +1180,13 @@ import {
         expect(tex?.kind).toBe('texture');
         const mat = produced.find((p) => p.guid === MAT_GUID);
         expect(mat?.refs.map((r) => r.guid)).toContain(TEX_GUID);
+        expect(mat?.refs.at(-1)?.sourceField?.fieldName).toBe('emissiveTexture');
+        const materialPayload = mat?.payload as {
+          readonly paramValues?: Readonly<Record<string, unknown>>;
+        };
+        expect(materialPayload.paramValues?.emissive).toEqual([0.8, 0.4, 0.1]);
+        expect(materialPayload.paramValues?.emissiveIntensity).toBe(1);
+        expect(materialPayload.paramValues?.emissiveTexture).toBe(1);
       });
     });
   });
@@ -1949,6 +1954,7 @@ import {
                 metallicRoughnessTexture: { index: 1 },
               },
               normalTexture: { index: 2 },
+              doubleSided: true,
             },
           ],
           textures: [{ source: 0 }, { source: 1 }, { source: 2 }],
@@ -1972,6 +1978,7 @@ import {
         expect(mat.roughnessFactor).toBe(0.75);
         expect(mat.metallicRoughnessTexture).toBe(1);
         expect(mat.normalTexture).toBe(2);
+        expect(mat.doubleSided).toBe(true);
         expect(doc.textures).toBeDefined();
         const texs = doc.textures;
         if (!texs) throw new Error('expected textures');
@@ -2006,6 +2013,31 @@ import {
         expect(mat.baseColorTexture).toBeUndefined();
         expect(mat.metallicRoughnessTexture).toBeUndefined();
         expect(mat.normalTexture).toBeUndefined();
+      });
+
+      it('decodes emissiveFactor and emissiveTexture into GltfMaterialIr', async () => {
+        const bufferUri = buildBase64Buffer([0, 0, 0]);
+        const json = {
+          asset: { version: '2.0' },
+          buffers: [{ uri: bufferUri }],
+          bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 12 }],
+          accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 1 }],
+          meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+          materials: [
+            {
+              emissiveFactor: [0.8, 0.4, 0.1],
+              emissiveTexture: { index: 0 },
+            },
+          ],
+          textures: [{ source: 0 }],
+          images: [{ uri: 'emissive.png', mimeType: 'image/png' }],
+        };
+        const result = await parseGltf(json, noopLoader, '/emissive.gltf');
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error('expected ok');
+        const mat = result.value.materials[0];
+        expect(mat?.emissiveFactor).toEqual([0.8, 0.4, 0.1]);
+        expect(mat?.emissiveTexture).toBe(0);
       });
 
       it('resolves texture.index -> textures[ti] -> source two-level hop', async () => {

@@ -1,3 +1,4 @@
+import type { PackV2 } from '@forgeax/engine-types';
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import metaSchemaJson from '../schema/meta.schema.json' with { type: 'json' };
@@ -9,6 +10,26 @@ addFormats(ajv, ['uuid']);
 // Module-top-level compiled validators - compiled once on import, never recreated.
 export const validateMeta = ajv.compile(metaSchemaJson);
 export const validatePack = ajv.compile(packSchemaJson);
+
+export function validatePackV2(value: unknown): value is PackV2 {
+  if (!validatePack(value) || !isPackV2Shape(value)) return false;
+
+  const seenGuids = new Set<string>();
+  for (const asset of value.assets) {
+    if (seenGuids.has(asset.guid)) return false;
+    seenGuids.add(asset.guid);
+  }
+  return true;
+}
+
+function isPackV2Shape(value: unknown): value is PackV2 {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'schemaVersion' in value &&
+    value.schemaVersion === '2.0.0'
+  );
+}
 
 // === SceneAsset payload validator factory (feat-20260514 w5 / D-P4) =============
 //

@@ -22,9 +22,16 @@
 // stamps the meta-declared GUID off `ctx.subAssets[0].guid` (GUID import-stable
 // iron law -- the importer never mints), and returns the parsed blob as the
 // payload. The import runner folds the produced `ImportedAsset` into the DDC
-// `.pack.json` and rewrites the pack-index row's relativeUrl to it.
+// `.pack.json` and rewrites the pack-index row's packageUrl to it.
 
-import type { ImportContext, ImportedAsset, Importer, ImportResult } from '@forgeax/engine-types';
+import {
+  IMPORT_ERROR_HINTS,
+  ImportError,
+  type ImportContext,
+  type ImportedAsset,
+  type Importer,
+  type ImportResult,
+} from '@forgeax/engine-types';
 import { REEL_GAME_BLOB_KIND, type ReelGameBlob } from './reel-game-blob';
 
 /**
@@ -42,19 +49,29 @@ export function reelGameBlobImporter(): Importer {
         // `import-produced-no-assets` rather than a bare throw (charter P3).
         return {
           ok: true,
-          value: { assets: [], artifacts: [], sourceDependencies: [] },
+          value: { assets: [], sourceDependencies: [] },
         };
       }
 
       const read = await ctx.readSource();
       if (!read.ok) {
-        // The runner surfaces ctx.readSource() failures as `source-read-failed`
-        // when the importer returns no assets after a read miss (charter P3 explicit
-        // failure; never parse a thrown .message).
         return {
-          ok: true,
-          value: { assets: [], artifacts: [], sourceDependencies: [] },
+          ok: false,
+          error: new ImportError({
+            code: 'source-read-failed',
+            expected: `readable host source file "${ctx.source}"`,
+            hint: IMPORT_ERROR_HINTS['source-read-failed'],
+            detail: {
+              source: ctx.source,
+              reason: read.error instanceof Error ? read.error.message : String(read.error),
+            },
+          }),
         };
+      }
+      const thumbnailPath = `${ctx.source}.thumb`;
+      const thumbnail = await ctx.readSibling(thumbnailPath);
+      if (!thumbnail.ok) {
+        return { ok: false, error: thumbnail.error };
       }
 
       const text = new TextDecoder().decode(read.value);
@@ -78,10 +95,21 @@ export function reelGameBlobImporter(): Importer {
               name: 'reel-game-level-1',
               payload: payload as unknown as ImportedAsset['payload'],
               refs: [],
+              artifacts: {
+                payload: {
+                  mediaType: 'application/json',
+                  assetCodec: { name: 'reel-game-json', version: '1' },
+                  bytes: read.value,
+                },
+                thumbnail: {
+                  mediaType: 'image/svg+xml',
+                  assetCodec: { name: 'raw', version: '1' },
+                  bytes: thumbnail.value,
+                },
+              },
             },
           ],
-          artifacts: [],
-          sourceDependencies: [],
+          sourceDependencies: [ctx.source, thumbnailPath],
         },
       };
     },

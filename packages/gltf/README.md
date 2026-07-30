@@ -2,6 +2,12 @@
 
 > Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` consumed by build-time CLI plugin bin `forgeax-engine-remote-gltf` (resolved via PATH-prefix scan for `forgeax-engine-remote-`) writing `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
 
+## Evidence and recovery
+
+glTF remains a producer boundary: the `.meta.json` source declaration and importer settings are joined with the producer `CookReceipt`, the catalog `packageUrl`/`cookReceiptUrl`, and the Pack v2 descriptors as `AssetEvidence`. The runtime loader consumes packaged bytes; it does not mint cook facts.
+
+Use `notCooked` when the source has no receipt, `ready/current` when the input fingerprint matches, `ready/stale` when it changed, and `unknown` when a capability is absent. Package and artifact verification are independently `notChecked`, `passed`, or `failed`. Recovery is to repair the meta/source or recook, then run `lookup/verify --guid --project --catalog --json`; do not hide an importer failure with a custom mesh.
+
 ## Tier-C scope (upgraded from Tier-B by feat-20260522-learn-render-3-1-sponza-model-loading-with-multi-l)
 
 This package consumes:
@@ -9,17 +15,19 @@ This package consumes:
 - `scenes` + `nodes` (TRS or matrix decomposed via `mat4.decompose` wrapper)
 - `meshes` with **multiple primitives** -- each primitive produces an independent `MeshIr` with UUIDv7 GUID; `SceneAsset` nodes reference individual primitive-level mesh sub-assets
 - Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional) -- decoded via `decodeAccessor` SoA path; `INDICES` (U8/U16/U32 scalar — U8 widens to U16; U32 preserved, narrowed to U16 by bridge when maxIndex < 65536)
-- `materials` with `pbrMetallicRoughness` 6-field mapping to `MaterialAsset { shadingModel: 'standard' }` (see MaterialIr table below)
+- `materials` with metallic-roughness PBR mapping to pass-based `MaterialAsset` (see MaterialIr table below)
 - `textures` / `images` / `samplers` top-level arrays parsed into `GltfDoc` IR; texture index -> image index -> URI two-hop resolution via `externalLoader`
 - `cameras` of `type: 'perspective'`
 
-### MaterialIr (6-field standard PBR)
+### MaterialIr (standard PBR)
 
 | Field | Type | Required | Notes |
 |:--|:--|:--|:--|
 | `name` | `string` | no | From `material.name` |
 | `baseColorFactor` | `[number, number, number, number]` | yes | Defaults to `[1, 1, 1, 1]` |
+| `emissiveFactor` | `[number, number, number]` | no | Defaults to `[0, 0, 0]`; bridge emits `emissiveIntensity=1` |
 | `baseColorTexture` | `number` (texture index) | no | Resolved via `textures[ti] -> images[si] -> uri` |
+| `emissiveTexture` | `number` (texture index) | no | Resolved via `textures[ti] -> images[si] -> uri`; sampled by the built-in PBR shader |
 | `metallicFactor` | `number` | yes | Defaults to `1.0` |
 | `roughnessFactor` | `number` | yes | Defaults to `1.0` |
 | `metallicRoughnessTexture` | `number` (texture index) | no | Same two-hop resolution |

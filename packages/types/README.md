@@ -4,6 +4,14 @@
 
 > **Material types: `ParamSchemaEntry` + `MaterialAsset`.** feat-20260527-material-registration-unification unified material registration to a single `register<MaterialAsset>` entry point. `MaterialAsset` carries `passes[]` (array of `MaterialPassDescriptor` with per-pass `shader` routing) + `paramValues` (flat parameter record validated at register-time against the union of per-pass `ShaderRegistry` paramSchema entries). See the MaterialAsset section below for full field details; see [`packages/shader/README.md`](../shader/README.md) for the ShaderRegistry catalog and param type reference; see [`packages/pack/README.md`](../pack/README.md) for the .pack.json MaterialAsset shape.
 
+## AssetEvidence schema
+
+`AssetEvidence` is the derived, read-only join for one GUID. Its source of truth remains the producer source declaration, the catalog locator (`packageUrl` and optional `cookReceiptUrl`), the producer-owned `CookReceipt`, and Pack v2 artifact verification. This package owns the TypeScript vocabulary and closed error union; it does not infer facts from a catalog row alone.
+
+Use the explicit states when presenting diagnostics: `notRequired`, `notCooked`, `failed`, `ready` with `current` or `stale` freshness, and `unknown`; artifact/package verification is separately `notChecked`, `passed`, or `failed`. `unknown` means the required evidence capability was unavailable, not that a check passed.
+
+The schema is the SSOT in [`src/asset-evidence.ts`](./src/asset-evidence.ts). Producers and consumers should link to it instead of copying member tables. Offline callers can exercise the same chain with `lookup/verify --guid --project --catalog --json` through `forgeax-engine-remote-asset`.
+
 > [!CAUTION]
 > **shadingModel proposition (feat-20260518-pbr-direct-lighting-mvp / AC-17)** -- legacy `MaterialAsset.shadingModel:'standard'` routes through GGX direct lighting, **0 DirectionalLight produces physically-correct black output**; `'unlit'` is the "ignore lights" entry point (`baseColor x baseColorTexture` direct output). New demos choosing `'standard'` must spawn a `DirectionalLight` in sync. See [`packages/runtime/README.md` Common pitfalls](../runtime/README.md#common-pitfalls) + [AGENTS.md Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-18 row. For pass-based materials (feat-20260527+), use `register<MaterialAsset>` with `passes[]` / `paramValues` — see `AssetRegistry.register` in [`packages/runtime/README.md`](../runtime/README.md).
 
@@ -80,6 +88,59 @@ When a result is not authoritative, callers should reject the update or
 return to the last verified revision. Legacy arrays are projections of a
 canonical result; they are not a second source of truth.
 
+## Particle effect asset identity
+
+`ParticleEffectAsset` is the runtime-ready `particle-effect` arm of the closed
+`Asset` union. Its payload is intentionally small and JSON-safe:
+
+```ts
+interface ParticleEffectAsset {
+  readonly kind: 'particle-effect';
+  readonly schemaVersion: 1;
+  readonly emitters: readonly { readonly id: string; readonly capacity: number }[];
+}
+```
+
+The source, operator registry, and deterministic cook live in
+`@forgeax/engine-vfx-compiler`. The runtime package consumes the cooked payload
+through Pack v2 and `AssetRegistry`; this types package owns only the POD and
+handle vocabulary, not the runtime simulation class. `AssetTagMap['particle-effect']` is
+`'ParticleEffectAsset'`, so `world.allocSharedRef('ParticleEffectAsset', asset)`
+and `ParticleEffectPlayer.effect` use one branded shared-handle identity.
+
+| Need | Public owner | Recovery signal |
+|:--|:--|:--|
+| Author and validate source | `@forgeax/engine-vfx` | `vfx-source-invalid` with `detail.path` |
+| Register operators and cook | `@forgeax/engine-vfx-compiler` | `vfx-operator-*` or `vfx-program-invalid` |
+| Locate a package by GUID | Pack v2 catalog / `AssetRegistry` | catalog and package errors with `packageUrl` |
+| Load a ready payload | `loadParticleEffect` | `vfx-asset-load-failed` with package/artifact/reference stage |
+| Hand off author intent | `ParticleEffectPlayer` from `@forgeax/engine-vfx` | ECS `Result` and schema reflection |
+| Enable simulation | `particleSimulationPlugin` from `@forgeax/engine-vfx` | `runPlugins(world, defaultSet, userPlugins)` and the ECS `FixedUpdate` clock |
+| Observe and replay | `ParticleSimulation` from `@forgeax/engine-vfx` | `read(player)` returns the last committed batch/diagnostics; `replay(player)` requests a fixed-boundary reset |
+
+See [`packages/vfx/README.md`](../vfx/README.md) for the short consumer path and
+[`packages/pack/README.md`](../pack/README.md) for the Pack v2 envelope and
+asset-local artifact contract.
+
+### Particle simulation boundary
+
+`@forgeax/engine-types` keeps the shared identity stable while the focused VFX
+package owns runtime behavior:
+
+| Boundary | Owner | Contract |
+|:--|:--|:--|
+| Asset readiness | `AssetRegistry` | Resolve GUIDs and expose validated payloads before the World receives a shared handle. |
+| Clock | ECS `World` | `FixedUpdate` and `FixedTime` decide which particle ticks execute; Simulation does not privately replay dropped time. |
+| Live state and recovery | `ParticleSimulation` | Own transient emitter state, lifecycle, CPU capability status, and structured `VfxError` diagnostics. |
+| Output | `ParticleRenderBatch` | Publish validated typed-array data and World shared handles for a downstream consumer. |
+| Compiler boundary | `@forgeax/engine-vfx-compiler` | Produce the asset-local program at build time; never become a runtime dependency. |
+| Rendering boundary | Wave 2 Rendering loop | Consume the public batch through its own lane; no RenderFeature, Renderer, RHI, Device, or RenderGraph type enters this contract. |
+
+The public simulation resource is intentionally not a new type union in this
+package. `ParticleEffectAsset` and `Handle<'ParticleEffectAsset', 'shared'>`
+remain the cross-package SSOT; `ParticleEffectPlayer` remains author intent;
+the VFX package derives transient observations from those inputs.
+
 ## Handle
 
 > Cross-package `Handle<T,M>` single physical SSOT (feat-20260517-handle-type-unify). This section is the AI user's mid-level detail reference; top proposition at [`AGENTS.md` Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-18 row; bottom-level fallback at [`src/handle.ts`](./src/handle.ts) IDE hover JSDoc.
@@ -104,17 +165,29 @@ Convenience aliases:
 | `UniqueHandle<T>` | `Handle<T, 'unique'>` | ECS-owned handle; external callers normally write `Handle<T, 'unique'>` |
 | `SharedHandle<T>` | `Handle<T, 'shared'>` | `AssetRegistry.register<T>` return signature / `MeshFilter.assetHandle` column type |
 
-### `AssetTagMap` 5-member table
+### `AssetTagMap` 18-member table
 
-`AssetTagMap` is the closed mapping SSOT from `Asset.kind` literal to brand `target` tag string literal (D-1 path (a)); adding a new Asset variant only requires adding one row to this table + one line to `Asset` union for `register<NewVariant>(asset)` to correctly return `Handle<'XxxAsset','unmanaged'>` (charter F1 single-indexable):
+`AssetTagMap` is the closed mapping SSOT from `Asset.kind` literal to brand `target` tag string literal (D-1 path (a)); adding a new Asset variant only requires adding one row to this table + one line to `Asset` union for `register<NewVariant>(asset)` to correctly return `Handle<'XxxAsset','shared'>` (charter F1 single-indexable):
 
 | `kind` literal | `target` tag |
 |:--|:--|
 | `'mesh'` | `'MeshAsset'` |
 | `'texture'` | `'TextureAsset'` |
+| `'equirect'` | `'EquirectAsset'` |
 | `'sampler'` | `'SamplerAsset'` |
 | `'material'` | `'MaterialAsset'` |
 | `'scene'` | `'SceneAsset'` |
+| `'audio'` | `'AudioClipAsset'` |
+| `'skin'` | `'SkinAsset'` |
+| `'skeleton'` | `'SkeletonAsset'` |
+| `'animation-clip'` | `'AnimationClip'` |
+| `'animation-graph'` | `'AnimationGraph'` |
+| `'shader'` | `'ShaderAsset'` |
+| `'font'` | `'FontAsset'` |
+| `'render-pipeline'` | `'RenderPipelineAsset'` |
+| `'tileset'` | `'TilesetAsset'` |
+| `'video'` | `'VideoAsset'` |
+| `'particle-effect'` | `'ParticleEffectAsset'` |
 
 `MaterialAsset` is a 3-variant sub-union (`UnlitMaterialAsset | SchemaDrivenMaterialAsset | SpriteMaterialAsset`), all branches `kind: 'material'`, so `TagOf<MaterialAsset>` distributive evaluation collapses all three branches to `'MaterialAsset'` (research Finding 2).
 

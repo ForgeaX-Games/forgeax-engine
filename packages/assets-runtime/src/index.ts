@@ -72,9 +72,9 @@ export {
 export {
   equirectLoader,
   fontLoader,
+  PACK_ARTIFACT_LOADERS,
   textureLoader,
-  UPSTREAM_ENTRY_LOADERS,
-} from './loaders/upstream-entry';
+} from './loaders/pack-artifact';
 // ─── Mesh binary container decode ───────────────────────────────────────────
 export { unpackMeshBin } from './mesh-bin';
 // ─── Mipmap generation helpers ──────────────────────────────────────────────
@@ -88,6 +88,11 @@ export {
 } from './mipmap-generator';
 // ─── Register-time payload validation ───────────────────────────────────────
 export { type TilesetValidateOptions, validateTilesetPayload } from './payload-validate';
+export {
+  createRuntimeAssetEvidenceAdapter,
+  type RuntimeAssetEvidenceAdapter,
+  type RuntimeEvidenceSource,
+} from './registry/asset-evidence';
 export type { PostSpawnHook, SkinJointResolver } from './registry/instantiate';
 // ─── Scene instantiate collaboration contract types (D-1 injected hook) ─────
 export { buildSceneChildContext } from './registry/instantiate';

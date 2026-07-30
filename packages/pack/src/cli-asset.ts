@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // @forgeax/engine-pack/src/cli-asset — `forgeax-engine-remote-asset`
 // plugin bin (feat-20260516-console-dependency-inversion plan-strategy
 // section 2.9). Discovered by the base bin via the kubectl 4th-path
@@ -10,10 +11,20 @@
 // `hint`; `detail` is included when the underlying error supplied one.
 // Exit codes: 0 success, 1 any error.
 
+import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import type { ArtifactDescriptor, AssetEvidence, CookReceipt } from '@forgeax/engine-types';
+import { validateArtifactPath } from './artifact-path.js';
 import { runAtlas } from './atlas/run-atlas.js';
+import {
+  buildOfflineAssetEvidence,
+  type OfflineArtifactInput,
+} from './evidence/offline-evidence.js';
+import { readSourceInventory } from './evidence/source-inventory.js';
+import { parsePackV2 } from './index.js';
 import { scan } from './scanner.js';
 
 interface PackEntry {
@@ -118,6 +129,8 @@ function helpBody(): string {
     '  forgeax-engine-remote-asset scan [--roots <dir>]',
     '  forgeax-engine-remote-asset lookup <guid>',
     '  forgeax-engine-remote-asset verify',
+    '  forgeax-engine-remote-asset lookup --guid <guid> --project <dir> --catalog <path> --json',
+    '  forgeax-engine-remote-asset verify --guid <guid> --project <dir> --catalog <path> --json',
     '  forgeax-engine-remote-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
     '',
   ].join('\n');
@@ -174,6 +187,7 @@ async function runScan(rest: string[], ctx: AssetCtx): Promise<number> {
 }
 
 async function runLookup(rest: string[], ctx: AssetCtx): Promise<number> {
+  if (rest.some((value) => value === '--guid')) return runEvidence(rest, ctx);
   const [guid] = rest;
   if (typeof guid !== 'string') {
     return emitError(ctx, {
@@ -208,6 +222,7 @@ async function runLookup(rest: string[], ctx: AssetCtx): Promise<number> {
 }
 
 async function runVerify(rest: string[], ctx: AssetCtx): Promise<number> {
+  if (rest.some((value) => value === '--guid')) return runEvidence(rest, ctx);
   try {
     parseArgs({
       args: rest,
@@ -296,6 +311,191 @@ async function runVerify(rest: string[], ctx: AssetCtx): Promise<number> {
   const shaderCount = result.value.filter((e) => e.kind === 'material-shader').length;
   ctx.stdoutWrite(`material-validated: ${materialCount}`);
   ctx.stdoutWrite(`shader-validated: ${shaderCount}`);
+  return 0;
+}
+
+interface EvidenceCliOptions {
+  readonly guid: string;
+  readonly project: string;
+  readonly catalog: string;
+}
+
+/** Parse the machine-oriented evidence probe flags shared by lookup and verify. */
+function parseEvidenceOptions(rest: string[], ctx: AssetCtx): EvidenceCliOptions | undefined {
+  try {
+    const parsed = parseArgs({
+      args: rest,
+      allowPositionals: false,
+      strict: true,
+      options: {
+        guid: { type: 'string' },
+        project: { type: 'string' },
+        catalog: { type: 'string' },
+        json: { type: 'boolean' },
+      },
+    });
+    const guid = parsed.values.guid;
+    const project = parsed.values.project;
+    const catalog = parsed.values.catalog;
+    if (typeof guid !== 'string' || typeof project !== 'string' || typeof catalog !== 'string') {
+      emitError(ctx, {
+        code: 'cli-parse-error',
+        expected: '--guid <guid> --project <dir> --catalog <path> --json',
+        hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      });
+      return undefined;
+    }
+    return { guid, project, catalog };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    emitError(ctx, {
+      code: 'cli-parse-error',
+      expected: '--guid <guid> --project <dir> --catalog <path> --json',
+      hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      detail: { message },
+    });
+    return undefined;
+  }
+}
+
+function absolutePath(path: string, cwd: string): string {
+  return isAbsolute(path) ? path : resolve(cwd, path);
+}
+
+async function readJson(path: string, ctx: AssetCtx): Promise<unknown | undefined> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as unknown;
+  } catch (e) {
+    emitError(ctx, {
+      code: 'asset-evidence-input-invalid',
+      expected: `readable JSON evidence input at ${path}`,
+      hint: 'restore the catalog or cook receipt JSON, then rerun lookup or verify',
+      detail: { path, message: e instanceof Error ? e.message : String(e) },
+    });
+    return undefined;
+  }
+}
+
+function catalogRows(value: unknown): readonly Record<string, unknown>[] | undefined {
+  if (Array.isArray(value)) return value.filter(isRecord);
+  if (!isRecord(value) || !Array.isArray(value.entries)) return undefined;
+  return value.entries.filter(isRecord);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function packagePath(projectRoot: string, packageUrl: string): string {
+  const relative = packageUrl.replace(/^\/+/, '');
+  return resolve(projectRoot, relative);
+}
+
+function artifactInputs(
+  pack: { readonly guid: string; readonly artifacts: Readonly<Record<string, ArtifactDescriptor>> },
+  packagePathValue: string,
+): Promise<Readonly<Record<string, OfflineArtifactInput>>> {
+  return Promise.all(
+    Object.entries(pack.artifacts).map(async ([key, descriptor]) => {
+      const pathResult = validateArtifactPath(descriptor.path, {
+        packageRoot: dirname(packagePathValue),
+        guid: pack.guid,
+        artifactKey: key,
+      });
+      if (!pathResult.ok) return [key, { ...descriptor, verification: 'failed' as const }] as const;
+      const artifactPath = resolve(dirname(packagePathValue), pathResult.value);
+      try {
+        const bytes = await readFile(artifactPath);
+        const lengthOk =
+          descriptor.byteLength === undefined || descriptor.byteLength === bytes.byteLength;
+        const digestOk =
+          descriptor.integrity === undefined ||
+          createHash('sha256').update(bytes).digest('base64') === descriptor.integrity.digest;
+        return [
+          key,
+          {
+            ...descriptor,
+            verification: lengthOk && digestOk ? ('passed' as const) : ('failed' as const),
+          },
+        ] as const;
+      } catch {
+        return [key, { ...descriptor, verification: 'failed' as const }] as const;
+      }
+    }),
+  ).then((entries) => Object.fromEntries(entries));
+}
+
+/** Join offline source, catalog, receipt, and Pack v2 facts into one JSON result. */
+async function runEvidence(rest: string[], ctx: AssetCtx): Promise<number> {
+  const options = parseEvidenceOptions(rest, ctx);
+  if (options === undefined) return 1;
+  if (!UUID_RE.test(options.guid)) {
+    return emitError(ctx, {
+      code: 'pack-guid-malformed',
+      expected: '36-char RFC 4122 dash-form GUID (8-4-4-4-12 lowercase hex)',
+      hint: 'use AssetGuid.random() or a UUIDv7 generator; all GUID fields must be 36-char RFC 4122 dash-form',
+      detail: { raw: options.guid, reason: 'invalid-format' },
+    });
+  }
+  const projectRoot = absolutePath(options.project, ctx.cwd ?? process.cwd());
+  const catalogValue = await readJson(absolutePath(options.catalog, ctx.cwd ?? process.cwd()), ctx);
+  if (catalogValue === undefined) return 1;
+  const rows = catalogRows(catalogValue);
+  if (rows === undefined) {
+    return emitError(ctx, {
+      code: 'asset-evidence-input-invalid',
+      expected: 'catalog JSON array or {entries: []} object',
+      hint: 'rebuild the catalog and rerun lookup or verify',
+      detail: { path: options.catalog },
+    });
+  }
+  const row = rows.find(
+    (candidate) => candidate.guid?.toString().toLowerCase() === options.guid.toLowerCase(),
+  );
+  if (row === undefined || typeof row.packageUrl !== 'string') {
+    return emitError(ctx, {
+      code: 'asset-not-found',
+      expected: 'catalog row with GUID and packageUrl',
+      hint: 'rebuild the catalog or verify the GUID came from the project source inventory',
+      detail: { guid: options.guid },
+    });
+  }
+  const packageUrl = row.packageUrl;
+  const packageFile = packagePath(projectRoot, packageUrl);
+  const packageValue = await readJson(packageFile, ctx);
+  if (packageValue === undefined) return 1;
+  const parsedPack = parsePackV2(packageValue);
+  if (!parsedPack.ok) return emitError(ctx, parsedPack.error);
+  const asset = parsedPack.value.assets.find(
+    (candidate) => candidate.guid.toLowerCase() === options.guid.toLowerCase(),
+  );
+  if (asset === undefined) {
+    return emitError(ctx, {
+      code: 'asset-evidence-input-invalid',
+      expected: 'Pack v2 package asset with the requested GUID',
+      hint: 'recook the package and rebuild the catalog so the GUID and package agree',
+      detail: { guid: options.guid, packageUrl },
+    });
+  }
+  const source = await readSourceInventory({ projectRoot, guid: options.guid });
+  const receipt =
+    typeof row.cookReceiptUrl === 'string'
+      ? await readJson(packagePath(projectRoot, row.cookReceiptUrl), ctx)
+      : undefined;
+  if (row.cookReceiptUrl !== undefined && receipt === undefined) return 1;
+  const packageArtifacts = await artifactInputs(asset, packageFile);
+  const result = await buildOfflineAssetEvidence({
+    guid: options.guid,
+    ...(source === undefined ? {} : { source }),
+    locator: {
+      packageUrl,
+      ...(typeof row.cookReceiptUrl === 'string' ? { cookReceiptUrl: row.cookReceiptUrl } : {}),
+    },
+    ...(receipt !== undefined ? { receipt: receipt as CookReceipt } : {}),
+    package: { guid: asset.guid, artifacts: packageArtifacts },
+  });
+  if (!result.ok) return emitError(ctx, result.error);
+  ctx.stdoutWrite(JSON.stringify(result.value satisfies AssetEvidence));
   return 0;
 }
 

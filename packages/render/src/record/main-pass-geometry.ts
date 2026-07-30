@@ -106,14 +106,6 @@ export function recordGeometryDraws(
     // (they are drawn in the blend sub-pass instead).
     if (splitLdrSprite && isEntityFullyTransparent(entry.source)) continue;
 
-    // tweak-20260701 M1: MaterialSnapshot.shadingModel deleted. Pipeline
-    // tag is always 'unlit' -- sprite materials flow through the same
-    // materialShaderId pipeline cache PBR / unlit use (plan-strategy D-7).
-    const materialShaderId =
-      entry.source.skin !== undefined
-        ? SKIN_MATERIAL_SHADER_ID
-        : entry.source.material.materialShaderId;
-
     const pipelineTag: 'unlit' = 'unlit';
 
     // w10: setStencilReference per draw when the dispatch entry carries
@@ -216,7 +208,7 @@ export function recordGeometryDraws(
         ? (runtime.getMaterialShaderPipeline?.(
             SKIN_MATERIAL_SHADER_ID,
             tonemapActive,
-            entry.renderState,
+            entry.source.material.renderState,
             entry.mesh.submeshes[0]?.topology ?? 'triangle-list',
             entry.mesh.indexFormat,
             skinVariantSet,
@@ -362,61 +354,61 @@ export function recordGeometryDraws(
     for (let smIdx = 0; smIdx < entry.mesh.submeshes.length; smIdx++) {
       const sm = entry.mesh.submeshes[smIdx];
       if (sm === undefined) continue;
+      const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
+      const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
       // feat-city-glb Bug 5 (per-submesh transparency): in the LDR split, a
       // transparent submesh is drawn in the blend sub-pass (non-sRGB view),
       // NOT here in the sRGB geometry pass. Skip it. Opaque submeshes of the
       // same (mixed) mesh still draw here. Single-material / fully-opaque
       // meshes are unaffected (their submesh materials are not transparent).
-      if (
-        splitLdrSprite &&
-        matsForRebind[smIdx < matsForRebind.length ? smIdx : 0]?.transparent === true
-      ) {
+      if (splitLdrSprite && submeshMaterial.transparent === true) {
         continue;
       }
-      {
-        // bug-20260610 layer 7d: per-submesh BG construction. Texture
-        // views resolve from `matsForRebind[smIdx]` so the j-th submesh
-        // sees its own materials[j] textures (baseColor / MR / normal /
-        // emissive / occlusion). Pick slot j when materials.length covers
-        // smIdx; otherwise fall back to slot 0 (count-mismatch already
-        // filtered by extract; this guard handles the materials.length=1
-        // single-material path mapped over multi-submesh meshes safely).
-        // This BG drops entityKey: identical-texture-set submeshes
-        // (whether on the same entity or different ones) share one BG via
-        // the shaderId-outer `materialBgShared` cache. The 14 handle
-        // objects form the WeakMap chain and fully discriminate the
-        // binding state since sampler/textureView/buffer handle identities
-        // are stable across frames.
-        //
-        // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13:
-        // sprite materials now use the same per-submesh BG construction
-        // (the sprite-specific BG branch above is deleted; sprite per-
-        // submesh single-slot is still enforced via materialSlotStart
-        // and the sprite-shaped paramSnapshot fills the PBR-shaped BGL
-        // bindings via fallback textures for the 4 unused slots).
-        const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
-        const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
-        // feat-city-glb Bug 5: per-submesh material BG assembly extracted to
-        // the shared `buildPerSubmeshMaterialBg` closure (also called by the
-        // LDR blend sub-pass). Resolves the shader's user-region textures
-        // (baseColor/MR/normal + any custom Nth texture), emissive/occlusion
-        // injection, and Skylight merge; deduped cross-entity via the
-        // shaderId-outer `materialBgShared` cache.
-        perSubmeshBg = buildPerSubmeshMaterialBg(submeshMaterial, entry.source.entityKey);
-        pass.setBindGroup(1, perSubmeshBg, [
-          entityMatBaseOffset + matSlotIdx * MATERIAL_PER_ENTITY_STRIDE,
-        ]);
-      }
+      // bug-20260610 layer 7d: per-submesh BG construction. Texture
+      // views resolve from `matsForRebind[smIdx]` so the j-th submesh
+      // sees its own materials[j] textures (baseColor / MR / normal /
+      // emissive / occlusion). Pick slot j when materials.length covers
+      // smIdx; otherwise fall back to slot 0 (count-mismatch already
+      // filtered by extract; this guard handles the materials.length=1
+      // single-material path mapped over multi-submesh meshes safely).
+      // This BG drops entityKey: identical-texture-set submeshes
+      // (whether on the same entity or different ones) share one BG via
+      // the shaderId-outer `materialBgShared` cache. The 14 handle
+      // objects form the WeakMap chain and fully discriminate the
+      // binding state since sampler/textureView/buffer handle identities
+      // are stable across frames.
+      //
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13:
+      // sprite materials now use the same per-submesh BG construction
+      // (the sprite-specific BG branch above is deleted; sprite per-
+      // submesh single-slot is still enforced via materialSlotStart
+      // and the sprite-shaped paramSnapshot fills the PBR-shaped BGL
+      // bindings via fallback textures for the 4 unused slots).
+      // feat-city-glb Bug 5: per-submesh material BG assembly extracted to
+      // the shared `buildPerSubmeshMaterialBg` closure (also called by the
+      // LDR blend sub-pass). Resolves the shader's user-region textures
+      // (baseColor/MR/normal + any custom Nth texture), emissive/occlusion
+      // injection, and Skylight merge; deduped cross-entity via the
+      // shaderId-outer `materialBgShared` cache.
+      perSubmeshBg = buildPerSubmeshMaterialBg(submeshMaterial, entry.source.entityKey);
+      pass.setBindGroup(1, perSubmeshBg, [
+        entityMatBaseOffset + matSlotIdx * MATERIAL_PER_ENTITY_STRIDE,
+      ]);
       const smTopology = sm.topology;
+      const smMaterialShaderId =
+        entry.source.skin !== undefined
+          ? SKIN_MATERIAL_SHADER_ID
+          : submeshMaterial.materialShaderId;
       let smPipelineHandle: typeof pipelineState.unlitPipeline;
       const nonDefaultTopology = smTopology !== 'triangle-list';
-      if (materialShaderId === undefined || materialShaderId === 'forgeax::default-unlit') {
+      if (smMaterialShaderId === undefined || smMaterialShaderId === 'forgeax::default-unlit') {
         const unlitRsp =
-          (entry.renderState !== undefined || nonDefaultTopology) && materialShaderId !== undefined
+          (submeshMaterial.renderState !== undefined || nonDefaultTopology) &&
+          smMaterialShaderId !== undefined
             ? runtime.getMaterialShaderPipeline?.(
-                materialShaderId,
+                smMaterialShaderId,
                 tonemapActive,
-                entry.renderState,
+                submeshMaterial.renderState,
                 smTopology,
                 entry.mesh.indexFormat,
                 undefined, // variantSet — unlit path has no variant
@@ -427,7 +419,7 @@ export function recordGeometryDraws(
             : undefined;
         smPipelineHandle =
           unlitRsp ?? selectGeometryPipeline(pipelineState, tonemapActive, msaaActive);
-      } else if (materialShaderId !== undefined) {
+      } else if (smMaterialShaderId !== undefined) {
         // feat-20260609 M4.5 / w38 (D-11): the variantSet handed to
         // getMaterialShaderPipeline MUST mirror the boot-time
         // `definesKey` rule at createRenderer.ts:2483-2485 (sortedEntries
@@ -466,9 +458,9 @@ export function recordGeometryDraws(
             : undefined;
         const cachedPipeline =
           runtime.getMaterialShaderPipeline?.(
-            materialShaderId,
+            smMaterialShaderId,
             tonemapActive,
-            entry.renderState,
+            submeshMaterial.renderState,
             smTopology,
             entry.mesh.indexFormat,
             variantSet,

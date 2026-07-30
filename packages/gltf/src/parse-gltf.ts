@@ -268,7 +268,11 @@ export interface GltfSamplerIr {
 export interface GltfMaterialIr {
   readonly name?: string;
   readonly baseColorFactor: readonly [number, number, number, number];
+  /** glTF emissiveFactor; omitted means the glTF default [0, 0, 0]. */
+  readonly emissiveFactor?: readonly [number, number, number];
   readonly baseColorTexture?: number;
+  /** Index into the parent document's textures array for the emissive map. */
+  readonly emissiveTexture?: number;
   readonly metallicFactor: number;
   readonly roughnessFactor: number;
   readonly metallicRoughnessTexture?: number;
@@ -280,6 +284,12 @@ export interface GltfMaterialIr {
   readonly alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
   /** glTF `alphaCutoff` (MASK-mode threshold; glTF spec default 0.5). */
   readonly alphaCutoff?: number;
+  /**
+   * glTF `doubleSided`. Absent -> false (the glTF spec default). The bridge
+   * maps this to a no-cull material pass so reverse-facing glass and cards
+   * remain visible without changing their authored winding.
+   */
+  readonly doubleSided?: boolean;
   /**
    * baseColorTexture UV-set index (glTF `baseColorTexture.texCoord`). Absent
    * -> 0. Selects which interleaved UV set the base-color sampler reads.
@@ -389,8 +399,11 @@ interface RootGltfJson extends GltfExtensionsJson {
       readonly metallicRoughnessTexture?: { readonly index: number };
     };
     readonly normalTexture?: { readonly index: number };
+    readonly emissiveFactor?: readonly number[];
+    readonly emissiveTexture?: { readonly index: number; readonly texCoord?: number };
     readonly alphaMode?: string;
     readonly alphaCutoff?: number;
+    readonly doubleSided?: boolean;
   }>;
   readonly textures?: ReadonlyArray<{
     readonly sampler?: number;
@@ -884,7 +897,7 @@ async function parseGltfWithBin(
     });
   }
 
-  // Materials (Tier-C subset: pbrMetallicRoughness 6 fields + normalTexture).
+  // Materials (Tier-C subset: metallic-roughness PBR + normal/emissive maps).
   const materialsJson = json.materials ?? [];
   const materials: GltfMaterialIr[] = [];
   for (const matJson of materialsJson) {
@@ -900,9 +913,16 @@ async function parseGltfWithBin(
     const alphaMode =
       matJson.alphaMode === 'MASK' || matJson.alphaMode === 'BLEND' ? matJson.alphaMode : undefined;
     const baseColorTexCoord = pbr?.baseColorTexture?.texCoord;
+    const emissiveFactor = matJson.emissiveFactor;
+    const emissiveFactor3: readonly [number, number, number] = [
+      emissiveFactor?.[0] ?? 0,
+      emissiveFactor?.[1] ?? 0,
+      emissiveFactor?.[2] ?? 0,
+    ];
     materials.push({
       ...(matJson.name === undefined ? {} : { name: matJson.name }),
       baseColorFactor: baseColor4,
+      ...(emissiveFactor === undefined ? {} : { emissiveFactor: emissiveFactor3 }),
       metallicFactor: pbr?.metallicFactor ?? 1.0,
       roughnessFactor: pbr?.roughnessFactor ?? 1.0,
       ...(pbr?.baseColorTexture === undefined
@@ -914,8 +934,12 @@ async function parseGltfWithBin(
       ...(matJson.normalTexture === undefined
         ? {}
         : { normalTexture: matJson.normalTexture.index }),
+      ...(matJson.emissiveTexture === undefined
+        ? {}
+        : { emissiveTexture: matJson.emissiveTexture.index }),
       ...(alphaMode === undefined ? {} : { alphaMode }),
       ...(matJson.alphaCutoff === undefined ? {} : { alphaCutoff: matJson.alphaCutoff }),
+      ...(matJson.doubleSided === true ? { doubleSided: true } : {}),
       ...(baseColorTexCoord === undefined || baseColorTexCoord === 0 ? {} : { baseColorTexCoord }),
     });
   }

@@ -1,15 +1,34 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 export const SUT_ATTRIBUTABLE_CODES: ReadonlySet<string> = new Set([
-  // render-loop / runtime onError surface
+  // Renderer.ready failure surface (renderer.ts).
+  'manifest-malformed',
+  'shader-not-found',
   'shader-compile-failed',
   'feature-not-enabled',
   'limit-exceeded',
+  'webgpu-runtime-error',
+
+  // Renderer.draw failure surface (renderer.ts).
+  'rhi-not-available',
   'queue-submit-failed',
   'queue-write-buffer-out-of-bounds',
+  'render-system-empty-worlds',
+  'render-system-owner-out-of-range',
   'render-system-no-camera',
   'render-system-multi-camera',
   'render-system-multi-light',
+
+  // Wave 2 RenderFeature failures emitted through Renderer.onError.
+  'render-feature-registration-conflict',
+  'render-feature-stage-failed',
+  'render-feature-capability-missing',
+  'render-feature-pass-order-conflict',
+  'render-feature-preparation-failed',
+  'render-feature-prepared-state-mismatch',
+  'render-feature-draw-recording-failed',
+
+  // Render-loop / runtime onError surface.
   'asset-not-registered',
   'hierarchy-broken',
   'material-resolved-empty-passes',

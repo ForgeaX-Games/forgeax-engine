@@ -151,13 +151,13 @@ describe('M3 invalidate(guid) (AC-03) [w6]', () => {
     const targetUrl = '/packs/mesh-target.pack.json';
     const bystanderUrl = '/packs/mesh-bystander.pack.json';
     const packIndex = [
-      { guid: targetGuid, relativeUrl: targetUrl, kind: 'mesh' },
-      { guid: bystanderGuid, relativeUrl: bystanderUrl, kind: 'mesh' },
+      { guid: targetGuid, packageUrl: targetUrl, kind: 'mesh' },
+      { guid: bystanderGuid, packageUrl: bystanderUrl, kind: 'mesh' },
     ];
 
     function makePackFile(g: string): unknown {
       return {
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         kind: 'internal-text-package',
         assets: [
           {
@@ -204,7 +204,7 @@ describe('M3 invalidate(guid) (AC-03) [w6]', () => {
 
     try {
       // Prod-load both GUIDs so packIndexCache holds both entries and
-      // packFileCache holds both bodies (keyed by relativeUrl).
+      // packFileCache holds both bodies (keyed by packageUrl).
       const rt = await reg.loadByGuid<MeshAsset>(parseGuid(targetGuid));
       const rb = await reg.loadByGuid<MeshAsset>(parseGuid(bystanderGuid));
       expect(rt.ok).toBe(true);
@@ -284,9 +284,9 @@ describe('M3 invalidateAll() (AC-05 + AC-06) [w7]', () => {
     reg.configurePackIndex('/pack-index.json');
 
     const guid = 'a0000000-0000-4000-a000-000000000040';
-    const packIndex = [{ guid, relativeUrl: '/packs/mesh-all.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: '/packs/mesh-all.pack.json', kind: 'mesh' }];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -371,9 +371,9 @@ describe('M3 generation drop: invalidate(guid) drops in-flight (AC-11) [w8]', ()
     reg.configurePackIndex('/pack-index.json');
 
     const guid = 'a0000000-0000-4000-a000-000000000010';
-    const packIndex = [{ guid, relativeUrl: '/packs/test-mesh.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: '/packs/test-mesh.pack.json', kind: 'mesh' }];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -459,14 +459,14 @@ describe('M3 generation drop: invalidateAll drops all in-flight (AC-12) [w9]', (
     const guidC = 'a0000000-0000-4000-a000-000000000012';
 
     const packIndex = [
-      { guid: guidA, relativeUrl: '/packs/mesh-a.pack.json', kind: 'mesh' },
-      { guid: guidB, relativeUrl: '/packs/mesh-b.pack.json', kind: 'mesh' },
-      { guid: guidC, relativeUrl: '/packs/mesh-c.pack.json', kind: 'mesh' },
+      { guid: guidA, packageUrl: '/packs/mesh-a.pack.json', kind: 'mesh' },
+      { guid: guidB, packageUrl: '/packs/mesh-b.pack.json', kind: 'mesh' },
+      { guid: guidC, packageUrl: '/packs/mesh-c.pack.json', kind: 'mesh' },
     ];
 
     function makePackFile(g: string): unknown {
       return {
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         kind: 'internal-text-package',
         assets: [
           {
@@ -567,7 +567,7 @@ describe('M3 integration: invalidate reload + generation match (AC-04 + AC-13) [
 
     const guid = 'a0000000-0000-4000-a000-000000000020';
     const packUrl = '/packs/mesh-reload.pack.json';
-    const packIndex = [{ guid, relativeUrl: packUrl, kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: packUrl, kind: 'mesh' }];
 
     // The service changes its response body between the two loads: the first
     // pack-file request serves body-v1 (vertices[0] === 0), every subsequent
@@ -575,7 +575,7 @@ describe('M3 integration: invalidate reload + generation match (AC-04 + AC-13) [
     // invalidate must observe body-v2; a stale-cache hit would still see v1.
     function makePackBody(firstX: number): unknown {
       return {
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         kind: 'internal-text-package',
         assets: [
           {
@@ -681,9 +681,9 @@ describe('M3 integration: invalidate reload + generation match (AC-04 + AC-13) [
     reg.configurePackIndex('/pack-index.json');
 
     const guid = 'a0000000-0000-4000-a000-000000000021';
-    const packIndex = [{ guid, relativeUrl: '/packs/mesh-genmatch.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: '/packs/mesh-genmatch.pack.json', kind: 'mesh' }];
     const packFile = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -755,7 +755,7 @@ describe('M3 integration: generation discard error shape (AC-11 + AC-12) [w13]',
     reg.configurePackIndex('/pack-index.json');
 
     const guid = 'a0000000-0000-4000-a000-000000000030';
-    const packIndex = [{ guid, relativeUrl: '/packs/err-shape.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: '/packs/err-shape.pack.json', kind: 'mesh' }];
 
     let resolvePackFile!: (value: unknown) => void;
     const packFilePromise = new Promise<unknown>((resolve) => {
@@ -778,7 +778,7 @@ describe('M3 integration: generation discard error shape (AC-11 + AC-12) [w13]',
       (reg as unknown as { invalidate: (g: string) => void }).invalidate(guid);
 
       resolvePackFile({
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         kind: 'internal-text-package',
         assets: [
           {
@@ -818,7 +818,7 @@ describe('M3 integration: generation discard error shape (AC-11 + AC-12) [w13]',
     reg.configurePackIndex('/pack-index.json');
 
     const guid = 'a0000000-0000-4000-a000-000000000031';
-    const packIndex = [{ guid, relativeUrl: '/packs/err-all.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: '/packs/err-all.pack.json', kind: 'mesh' }];
 
     let resolvePackFile!: (value: unknown) => void;
     const packFilePromise = new Promise<unknown>((resolve) => {
@@ -841,7 +841,7 @@ describe('M3 integration: generation discard error shape (AC-11 + AC-12) [w13]',
       (reg as unknown as { invalidateAll: () => { clearedCount: number } }).invalidateAll();
 
       resolvePackFile({
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         kind: 'internal-text-package',
         assets: [
           {
@@ -932,7 +932,7 @@ describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
     reg.configurePackIndex('/pack-index.json');
 
     const guid = 'b0000000-0000-4000-a000-000000000010';
-    const packIndex = [{ guid, relativeUrl: '/packs/ac06-mesh.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid, packageUrl: '/packs/ac06-mesh.pack.json', kind: 'mesh' }];
 
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url === '/pack-index.json') {
@@ -943,7 +943,7 @@ describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
           ok: true,
           json: () =>
             Promise.resolve({
-              schemaVersion: '1.0.0',
+              schemaVersion: '2.0.0',
               kind: 'internal-text-package',
               assets: [
                 {
@@ -981,7 +981,7 @@ describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
 
     const guid = 'b0000000-0000-4000-a000-000000000011';
     const customPayload = { fieldA: 42, fieldB: 'hello' };
-    const packIndex = [{ guid, relativeUrl: '/packs/ac06-unknown.pack.json', kind: 'host-custom' }];
+    const packIndex = [{ guid, packageUrl: '/packs/ac06-unknown.pack.json', kind: 'host-custom' }];
 
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url === '/pack-index.json') {
@@ -992,7 +992,7 @@ describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
           ok: true,
           json: () =>
             Promise.resolve({
-              schemaVersion: '1.0.0',
+              schemaVersion: '2.0.0',
               kind: 'internal-text-package',
               assets: [{ guid, kind: 'host-custom', payload: customPayload }],
             }),
@@ -1003,12 +1003,7 @@ describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
     const result = await reg.loadByGuid(parseGuid(guid));
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const snap = reg.inspect();
-    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
-    expect(entry).toBeDefined();
-    expect(entry?.kind).toBe('host-custom');
+    expect(result.ok).toBe(false);
   });
 
   it('dev-path catalog stores payload with kind faithfully', () => {

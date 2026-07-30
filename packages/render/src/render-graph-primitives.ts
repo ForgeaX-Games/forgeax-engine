@@ -72,8 +72,8 @@
 //   });
 //
 // The `'fxaa'` id is the engine-built-in special case: dispatcher delegates
-// to `recordFxaaPass` to preserve R-COLORSPACE non-srgb storage view +
-// dualPassDiff byte-equivalence. `addFullscreenPass(g, 'fxaa', ...)` is the
+// to `recordFxaaPass`, which samples graph-owned LDR and writes the surface.
+// `addFullscreenPass(g, 'fxaa', ...)` is the
 // canonical engine call site (used by urp-pipeline.buildGraph),
 // not an AI user customisation lever.
 
@@ -109,6 +109,7 @@ import {
   recordShadowPass,
   recordSkyboxPass,
   recordSpotShadowPass,
+  resolveGraphColorAttachmentView,
 } from './record';
 import type {
   _InternalRenderPipelineContext,
@@ -994,6 +995,8 @@ export interface AddTonemapPassOptions {
    * unwritten hdrComposited target (bug-20260625).
    */
   readonly hdrColorWhenBloomOff?: string;
+  /** Logical LDR output; defaults to the swap-chain. */
+  readonly color?: string;
 }
 
 /**
@@ -1018,9 +1021,8 @@ export const TONEMAP_POST_PROCESS_ID = 'forgeax::tonemap';
  *     `forgeax::tonemap` was never registered (Camera-only world, no manifest)
  *     fire a structured `shader-compile-failed` instead of letting the
  *     dispatcher throw `post-process-not-found`.
- * `writes: []` (not `['swapchain']`) keeps the graph dependency ordering
- * byte-identical to the pre-M-A3 pass; the swap-chain write target is resolved
- * inside `dispatchFullscreenPass` via the `'swapchain'` color key -> `ctx.view`.
+ * The output is a graph resource when FXAA is active, otherwise the reserved
+ * `'swapchain'` key resolves to the current surface view.
  */
 export function addTonemapPass(
   graph: RenderGraph<RenderPipelineContext>,
@@ -1038,7 +1040,7 @@ export function addTonemapPass(
       : [opts.hdrComposited, hdrColorWhenBloomOff];
   graph.addPass(name, {
     reads: tonemapReads,
-    writes: [],
+    writes: [opts.color ?? 'swapchain'],
     execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
       // tonemapActive SSOT: derived from camera.tonemap (mirrors recordFrame's
       // `camera.tonemap !== 'none'`); the `'none'` path is a zero-overhead skip.
@@ -1060,7 +1062,14 @@ export function addTonemapPass(
       // the main-rendered hdrColor instead (bug-20260625). Same texture for
       // pipelines that pass identical keys (e.g. HDRP).
       const src = ctx.camera.bloom === 'on' ? opts.hdrComposited : hdrColorWhenBloomOff;
-      dispatchFullscreenPass(ctx, name, TONEMAP_POST_PROCESS_ID, 'swapchain', [src], resolveCtx);
+      dispatchFullscreenPass(
+        ctx,
+        name,
+        TONEMAP_POST_PROCESS_ID,
+        opts.color ?? 'swapchain',
+        [src],
+        resolveCtx,
+      );
     },
   });
 }
@@ -1077,7 +1086,7 @@ export interface AddFullscreenPassOptions {
   readonly shader: string;
   /** Graph resource key the pass writes (intermediate scratch RT for FXAA / the composite scratch). */
   readonly color: string;
-  /** Graph resource keys the pass samples. Empty = sample swap-chain via copyTextureToTexture. */
+  /** Graph resource keys the pass samples. Empty = use the current surface view. */
   readonly reads?: readonly string[] | undefined;
   /**
    * feat-20260621 M4': composite-over-swap-chain mode. When true, the pass
@@ -1105,11 +1114,11 @@ export interface AddFullscreenPassOptions {
  * looked up from `renderer.postProcess.register(shader, …)`; the primitive
  * builds the input-texture BGL + sampler + pipeline + ping-pong wiring. For
  * the FXAA case the implementation detail is `recordFxaaPass`
- * (package-private), which preserves the R-COLORSPACE non-srgb storage view
- * that AC-09 zero-visual-change requires.
+ * (package-private), which owns the graph-input-to-surface-output attachment
+ * route.
  *
- * If `opts.reads` is empty the pass samples the swap-chain (default) — the
- * current FXAA case. Future post-processes that read a graph-owned texture
+ * If `opts.reads` is empty the pass uses the current surface view (default).
+ * Post-processes that read a graph-owned texture
  * (e.g. tonemap rebuilt as a fullscreen pass, OOS-3) will declare reads
  * explicitly.
  *
@@ -1118,8 +1127,7 @@ export interface AddFullscreenPassOptions {
  * `recordFxaaPass`). The two-branch dispatcher is the load-bearing AC-09
  * "FXAA refactored as the first post-process instance" claim: at the
  * topology layer FXAA is a special-cased shader id; at the record layer
- * recordFxaaPass's body is unchanged to preserve the R-COLORSPACE
- * non-srgb storage view + dualPassDiff=1069 / 768 byte-equivalence. The
+ * recordFxaaPass owns the backend-aware output attachment. The
  * dispatcher is extracted as a named function (`dispatchFullscreenPass`)
  * so an AI user reading the per-pass execute closure sees a single call
  * site — the if/else fan-out is in one place, not duplicated across
@@ -1154,9 +1162,8 @@ export function addFullscreenPass(
  *
  * Two-branch fan-out by shader id:
  * - `'fxaa'` (engine-built-in hardwire): delegate to `recordFxaaPass`. The
- *   FXAA implementation owns its own swap-chain `copyTextureToTexture` +
- *   non-srgb storage-view write (R-COLORSPACE), pipeline cache, and
- *   bindgroup-resize invalidation; that mechanics is engine-internal and
+ *   FXAA implementation owns its graph input view, surface output attachment,
+ *   pipeline cache, and bindgroup-resize invalidation; that mechanics is engine-internal and
  *   not expressible through the generic public primitive. recordFxaaPass's
  *   body is intentionally unchanged across this refactor to preserve the
  *   AC-09 dualPassDiff=1069 (hello-fxaa) / 768 (learn-render-4-10-MSAA)
@@ -1198,7 +1205,13 @@ function dispatchFullscreenPass(
   compositeOverSwapchain = false,
 ): void {
   if (shader === 'fxaa') {
-    recordFxaaPass(ctx as unknown as _InternalRenderPipelineContext);
+    if (resolveCtx === undefined) {
+      throw new PostProcessError({
+        code: 'fullscreen-input-not-found',
+        detail: { readsKey: reads[0] ?? 'ldrColor', passName: name },
+      });
+    }
+    recordFxaaPass(ctx as unknown as _InternalRenderPipelineContext, resolveCtx);
     return;
   }
   const lookup = ctx.runtime.lookupPostProcess;
@@ -1252,10 +1265,12 @@ function dispatchFullscreenPass(
   if (inputView === null) return;
 
   // ── BGL/Pipeline build (before depth resolution so built.depthSampler is
-  //    available for the depth threading block below) ────────────────────────
+  //    available for the depth threading block below; ctx.msaaActive selects
+  //    the multisampled depth BGL when the scene target uses sample=4) ───────
   const built = buildFullscreenPostProcessPass(
     { device: ctx.runtime.device, errorRegistry: ctx.runtime.errorRegistry },
     entry,
+    ctx.msaaActive,
   );
   if (built === null) return;
 
@@ -1308,7 +1323,18 @@ function dispatchFullscreenPass(
     writeView = storageViewRes.value;
     writeFormat = ctx.pipelineState?.format ?? 'rgba8unorm';
   } else {
-    writeView = (resolveCtx?.resolve(color) as TextureView | undefined) ?? ctx.view;
+    const internalCtx = ctx as unknown as Partial<_InternalRenderPipelineContext>;
+    const resolvedColor = (resolveCtx?.resolve(color) as TextureView | undefined) ?? null;
+    writeView =
+      (internalCtx.frameState === undefined
+        ? resolvedColor
+        : resolveGraphColorAttachmentView(
+            ctx.runtime,
+            internalCtx.frameState,
+            ctx.pipelineState,
+            color,
+            resolvedColor,
+          )) ?? ctx.view;
   }
   if (writeView === null || writeView === undefined) return;
 

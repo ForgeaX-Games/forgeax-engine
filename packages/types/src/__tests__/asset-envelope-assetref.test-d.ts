@@ -7,8 +7,7 @@
 // (b) AssetRef.sourceField allows undefined for texture edges (D-2).
 // (c) AssetRef.sourceField structured triple fields are correctly typed
 //     (componentName/fieldName: string, arrayIndex?: number).
-// (d) AssetEnvelope is assignable to legacy ImportedAsset shape (backward
-//     structural check for importer consumers).
+// (d) ImportedAsset adds the asset-local artifact map to the envelope shape.
 // (e) Asset union still satisfies AssetEnvelope.payload constraint
 //     (AC-01 envelope type exists).
 //
@@ -59,10 +58,8 @@ describe('AssetEnvelope + AssetRef type-level contract (w2)', () => {
     expectTypeOf(sf.arrayIndex).toEqualTypeOf<number | undefined>();
   });
 
-  it('(d) AssetEnvelope is structurally assignable to ImportedAsset', () => {
-    // ImportedAsset.refs is now readonly AssetRef[] (upgraded from string[]),
-    // and AssetEnvelope matches the same shape.
-    expectTypeOf<AssetEnvelope>().toMatchTypeOf<ImportedAsset>();
+  it('(d) ImportedAsset adds asset-local artifacts to AssetEnvelope', () => {
+    expectTypeOf<ImportedAsset['artifacts']>().toMatchTypeOf<Readonly<Record<string, unknown>>>();
   });
 
   it('(e) Asset union satisfies AssetEnvelope.payload constraint', () => {

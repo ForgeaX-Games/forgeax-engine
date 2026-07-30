@@ -1546,7 +1546,7 @@ describe('PackIndexEntry - 4 core fields + optional metadata', () => {
   it('legacy 4-field row (kind: pack) stays assignable without metadata', () => {
     const legacy: PackIndexEntry = {
       guid: '01890000-0000-7000-8000-000000000001',
-      relativeUrl: '/apps/demo/assets/cube.pack.json',
+      packageUrl: '/apps/demo/assets/cube.pack.json',
       kind: 'mesh',
       sourcePath: 'apps/demo/assets/cube.pack.json',
     };
@@ -1557,7 +1557,7 @@ describe('PackIndexEntry - 4 core fields + optional metadata', () => {
   it('texture row carries metadata sub-structure with all 5 fields', () => {
     const row: PackIndexEntry = {
       guid: '0198abcd-0000-7000-8000-000000000002',
-      relativeUrl: '/apps/demo/assets/wood-container.jpg',
+      packageUrl: '/apps/demo/assets/wood-container.jpg',
       kind: 'texture',
       sourcePath: 'apps/demo/assets/wood-container.jpg',
       metadata: {
@@ -1581,7 +1581,7 @@ describe('PackIndexEntry - 4 core fields + optional metadata', () => {
   it('metadata may omit width / height (dev-mode pre-decode rows)', () => {
     const row: PackIndexEntry = {
       guid: '0198abcd-0000-7000-8000-000000000003',
-      relativeUrl: '/apps/demo/assets/banner.png',
+      packageUrl: '/apps/demo/assets/banner.png',
       kind: 'texture',
       sourcePath: 'apps/demo/assets/banner.png',
       metadata: {

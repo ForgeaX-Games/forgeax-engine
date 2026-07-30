@@ -18,7 +18,29 @@
 // idempotent on a repeated kind (last write wins, no throw) so re-wiring a
 // registry across hot reloads is safe.
 
-import type { Loader } from '@forgeax/engine-types';
+import type { ArtifactDescriptor, LoadContext, Loader } from '@forgeax/engine-types';
+
+export interface PackArtifactInput {
+  readonly descriptor: ArtifactDescriptor;
+  readonly bytes: Uint8Array;
+}
+
+export interface PackLoaderInput {
+  readonly guid: string;
+  readonly kind: string;
+  readonly payload: Record<string, unknown>;
+  readonly refs: readonly string[];
+  readonly artifacts: Readonly<Record<string, PackArtifactInput>>;
+}
+
+export interface PackLoader {
+  readonly kind: string;
+  load(input: PackLoaderInput, ctx: LoadContext): unknown;
+}
+
+export type PackLoadResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: unknown };
 
 /**
  * Injectable `asset.kind` -> {@link Loader} table held by `AssetRegistry`.
@@ -36,6 +58,7 @@ export class LoaderRegistry {
   // (Loader<MyPayload>) are accepted. The P in Loader<P> is covariant (output
   // only: load() returns P), so Loader<Asset> is assignable to Loader<unknown>.
   private readonly loaders = new Map<string, Loader<unknown>>();
+  private readonly packLoaders = new Map<string, PackLoader>();
 
   /**
    * Register a loader for its `loader.kind`. Fail-fast on a malformed loader
@@ -59,6 +82,39 @@ export class LoaderRegistry {
     this.loaders.set(loader.kind, loader);
   }
 
+  registerPackLoader(loader: PackLoader): void {
+    if (typeof loader.kind !== 'string' || loader.kind.length === 0) {
+      throw new TypeError('LoaderRegistry.registerPackLoader: kind must be non-empty');
+    }
+    if (typeof loader.load !== 'function') {
+      throw new TypeError(
+        `LoaderRegistry.registerPackLoader: load must be a function for ${loader.kind}`,
+      );
+    }
+    this.packLoaders.set(loader.kind, loader);
+  }
+
+  async loadPack(input: PackLoaderInput, ctx: LoadContext): Promise<PackLoadResult> {
+    const packLoader = this.packLoaders.get(input.kind);
+    if (packLoader !== undefined) {
+      const output = await packLoader.load(input, ctx);
+      if (isPackLoadResult(output)) return output;
+      return { ok: true, value: output };
+    }
+    const loader = this.loaders.get(input.kind);
+    if (loader === undefined) {
+      return { ok: false, error: new Error(`no loader registered for ${input.kind}`) };
+    }
+    if (loader.loadPack !== undefined) {
+      const output = await loader.loadPack(input, ctx);
+      if (isPackLoadResult(output)) return output;
+      return { ok: true, value: output };
+    }
+    const output = await loader.load(input.payload, input.refs, ctx);
+    if (isPackLoadResult(output)) return output;
+    return { ok: true, value: output };
+  }
+
   /**
    * Look up the loader registered for `kind`. Returns `undefined` when no
    * loader is wired — the `AssetRegistry` consumer maps that to a structured
@@ -77,4 +133,13 @@ export class LoaderRegistry {
   registeredKinds(): readonly string[] {
     return [...this.loaders.keys()];
   }
+}
+
+function isPackLoadResult(value: unknown): value is PackLoadResult {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'ok' in value &&
+    typeof (value as { ok?: unknown }).ok === 'boolean'
+  );
 }

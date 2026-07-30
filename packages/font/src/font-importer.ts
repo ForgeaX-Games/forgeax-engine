@@ -42,7 +42,7 @@ import type {
   TextureAsset,
 } from '@forgeax/engine-types';
 import type { BakeAtlas, MsdfGenerator } from './cli-font.js';
-import { realGeneratorFactory } from './cli-font.js';
+import { encodePng, realGeneratorFactory } from './cli-font.js';
 
 /** Map the @zappar atlas glyphs into the FontAsset glyph-metrics record. */
 function atlasGlyphsToMetrics(atlas: BakeAtlas): Record<number, GlyphMetric> {
@@ -122,13 +122,32 @@ async function importFont(ctx: ImportContext): Promise<ImportResult> {
   const atlasSub = ctx.subAssets.find((s) => s.kind === 'texture');
   const samplerSub = ctx.subAssets.find((s) => s.kind === 'sampler');
   const fontSub = ctx.subAssets.find((s) => s.kind === 'font');
+  const atlasBytes = encodePng(atlas.texture.width, atlas.texture.height, atlas.texture.data);
 
   const out: ImportedAsset[] = [];
   if (atlasSub !== undefined) {
-    out.push({ guid: atlasSub.guid, kind: 'texture', payload: makeAtlasTexture(atlas), refs: [] });
+    out.push({
+      guid: atlasSub.guid,
+      kind: 'texture',
+      payload: makeAtlasTexture(atlas),
+      refs: [],
+      artifacts: {
+        atlas: {
+          mediaType: 'image/png',
+          assetCodec: { name: 'msdf' },
+          bytes: atlasBytes,
+        },
+      },
+    });
   }
   if (samplerSub !== undefined) {
-    out.push({ guid: samplerSub.guid, kind: 'sampler', payload: makeAtlasSampler(), refs: [] });
+    out.push({
+      guid: samplerSub.guid,
+      kind: 'sampler',
+      payload: makeAtlasSampler(),
+      refs: [],
+      artifacts: {},
+    });
   }
   if (fontSub !== undefined) {
     // The runtime font loader reads atlasGuid / samplerGuid / glyphs / common
@@ -152,9 +171,10 @@ async function importFont(ctx: ImportContext): Promise<ImportResult> {
         ...(atlasSub !== undefined ? [{ guid: atlasSub.guid }] : []),
         ...(samplerSub !== undefined ? [{ guid: samplerSub.guid }] : []),
       ],
+      artifacts: {},
     });
   }
-  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
+  return { ok: true, value: { assets: out, sourceDependencies: [] } };
 }
 
 /**

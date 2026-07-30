@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { uiArtifactMimeType } from '../ui-artifact-finalizer.js';
+import { uiArtifactMimeType } from '../ui-pack-finalizer.js';
 
 describe('UI artifact MIME mapping', () => {
   it.each([

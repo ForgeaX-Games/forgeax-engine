@@ -3,8 +3,9 @@
  *
  * Validates that:
  *  - compressArtifact lives in the NEW file compress-artifact.ts, not index.ts (D-7)
- *  - dev `/__import` handler and build `generateBundle` both import the SAME
- *    compressArtifact export (single SSOT, analogous to importTextureEntry)
+ *  - every remaining compression decision imports the SAME compressArtifact
+ *    export (single SSOT, analogous to importTextureEntry); Pack v2 source-meta
+ *    publication forwards producer-owned artifact bytes to the shared finalizer
  *  - the real STRATEGY_TABLE behavior is exercised (mesh -> zstd, texture ->
  *    none, packJson -> none), not a drifting local stand-in
  *
@@ -30,9 +31,9 @@ describe('compress-artifact SSOT structural check (AC-08)', () => {
     expect(indexSource).toMatch(
       /import\s*\{\s*compressArtifact\s*\}\s*from\s*['"]\.\/compress-artifact\.js['"]/,
     );
-    // All 4 injection points reference the one imported symbol.
+    // The three live compression points reference the one imported symbol.
     const uses = indexSource.match(/compressArtifact\s*\(/g) ?? [];
-    expect(uses.length).toBeGreaterThanOrEqual(4);
+    expect(uses.length).toBeGreaterThanOrEqual(3);
   });
 
   it('mesh -> zstd: real STRATEGY_TABLE compresses and round-trips (M3 flip active)', async () => {

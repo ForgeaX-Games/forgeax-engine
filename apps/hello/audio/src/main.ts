@@ -17,8 +17,8 @@
 //     Independent of tick system; no manual registration needed (D-7/D-8).
 //   - Overlay text readout (distance + L/R pan) as spatial audio
 //     verification anchor (charter F2 -- AC-11)
-//   - Pack-index asset resolution: sfx GUID -> relativeUrl -> decode ->
-//     registerWithGuid -> AudioSource.clip (AC-06 round-trip)
+//   - Pack-index asset resolution: sfx GUID -> packageUrl -> Pack v2 body ->
+//     audio loader -> AudioSource.clip (AC-06 round-trip)
 //
 // D-3 one-shot edge mapping (unchanged from original):
 //   audioTickSystem reads AudioSource.playing once per frame. A one-shot
@@ -52,7 +52,7 @@ import {
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -63,7 +63,7 @@ if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.ht
 // signals the app layer to auto-create the WebAudioBackend before runPlugins.
 const appRes = await createApp(canvas, {
   plugins: [audioPlugin(), physicsPlugin('rapier-3d')],
-}, forgeaxBundlerAdapter());
+}, { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() });
 if (!appRes.ok) {
   if (appRes.error instanceof EngineEnvironmentError) {
     console.error('[hello-audio] EngineEnvironmentError creating renderer');

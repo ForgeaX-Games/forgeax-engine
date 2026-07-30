@@ -91,9 +91,32 @@ const reelRow = Array.isArray(packIndex)
         row?.kind === REEL_GAME_BLOB_KIND,
     )
   : undefined;
-const structuralOk = reelRow !== undefined;
+const structuralOk =
+  reelRow !== undefined &&
+  typeof reelRow.packageUrl === 'string' &&
+  !Object.hasOwn(reelRow, 'relative' + 'Url');
+let packageV2Ok = false;
+if (structuralOk) {
+  const packagePath = resolveDistUrl(reelRow.packageUrl);
+  if (existsSync(packagePath)) {
+    const pack = JSON.parse(readFileSync(packagePath, 'utf8'));
+    const asset = pack.assets?.find((entry) => entry.guid === REEL_GAME_LEVEL_1_GUID);
+    const payloadArtifact = asset?.artifacts?.payload;
+    const thumbnailArtifact = asset?.artifacts?.thumbnail;
+    packageV2Ok =
+      pack.schemaVersion === '2.0.0' &&
+      pack.kind === 'internal-text-package' &&
+      asset?.kind === REEL_GAME_BLOB_KIND &&
+      payloadArtifact?.mediaType === 'application/json' &&
+      thumbnailArtifact?.mediaType === 'image/svg+xml' &&
+      typeof payloadArtifact?.path === 'string' &&
+      typeof thumbnailArtifact?.path === 'string' &&
+      payloadArtifact.path !== thumbnailArtifact.path &&
+      !Object.hasOwn(asset, 'relative' + 'Url');
+  }
+}
 console.log(
-  `[smoke] pack-index reel-game-blob row=${JSON.stringify(reelRow ?? null)}`,
+  `[smoke] pack-index reel-game-blob row=${JSON.stringify(reelRow ?? null)} packV2=${packageV2Ok}`,
 );
 
 // --- 1. dawn.node binding setup ----------------------------------------------
@@ -128,7 +151,7 @@ gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 // --- fetch shim: serve the built dist/ artefacts off disk --------------------
 // loadByGuidProd needs globalThis.fetch. dawn-node has no HTTP server, so we
-// map the production fetch URLs (/pack-index.json + the .pack.json relativeUrl)
+// map the production fetch URLs (/pack-index.json + the Pack v2 packageUrl)
 // onto the on-disk dist/ tree. This is the SAME chain a browser drives -- the
 // importer ran at vite build time and the runtime never re-imports.
 function resolveDistUrl(url) {
@@ -448,6 +471,7 @@ if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserve
 if (!structuralOk) {
   failures.push(`(c) pack-index has no '${REEL_GAME_BLOB_KIND}' row for GUID ${REEL_GAME_LEVEL_1_GUID}`);
 }
+if (!packageV2Ok) failures.push('(c) reel-game-blob package is not an asset-local Pack v2 envelope');
 if (!loadOk) {
   failures.push('(d) loadByGuid did not return a typed reel-game blob with title + 3 reels (REAL load)');
 }

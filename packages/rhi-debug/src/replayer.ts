@@ -2051,10 +2051,12 @@ async function readbackRtImpl(
   // This is correct because the replay has been stepped through all events
   // by the time the caller invokes readbackRt.
   let lastColorAttachmentHandleIds: string[] | undefined;
+  let lastColorAttachmentResolveTargetHandleIds: readonly (string | undefined)[] | undefined;
   for (let i = tape.events.length - 1; i >= 0; i--) {
     const ev = tape.events[i];
     if (ev !== undefined && ev.kind === 'beginRenderPass') {
       lastColorAttachmentHandleIds = ev.colorAttachmentViewHandleIds as string[];
+      lastColorAttachmentResolveTargetHandleIds = ev.colorAttachmentResolveTargetHandleIds;
       break;
     }
   }
@@ -2069,7 +2071,11 @@ async function readbackRtImpl(
     );
   }
 
-  const viewHandleId = lastColorAttachmentHandleIds[rtIdx];
+  // A multisample attachment cannot be copied directly to a buffer. When the
+  // pass records a resolve target, read back that single-sample texture while
+  // retaining the source view as the fallback for ordinary render passes.
+  const viewHandleId =
+    lastColorAttachmentResolveTargetHandleIds?.[rtIdx] ?? lastColorAttachmentHandleIds[rtIdx];
   if (viewHandleId === undefined) {
     return err(
       new DebugError({

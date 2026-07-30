@@ -1,0 +1,34 @@
+import { describe, expectTypeOf, it } from 'vitest';
+import type { CatalogDelta, CatalogEntry } from '../catalog.js';
+
+describe('Catalog v2 POD contract', () => {
+  it('uses packageUrl as the only package navigation field', () => {
+    const entry = null as unknown as CatalogEntry;
+
+    expectTypeOf(entry.guid).toEqualTypeOf<string>();
+    expectTypeOf(entry.packageUrl).toEqualTypeOf<string>();
+    expectTypeOf(entry.kind).toEqualTypeOf<string>();
+    expectTypeOf(entry.sourcePath).toEqualTypeOf<string>();
+    expectTypeOf(entry.cookReceiptUrl).toEqualTypeOf<string | undefined>();
+  });
+
+  it('does not expose content facts or legacy navigation fields', () => {
+    expectTypeOf<'packageUrl' extends keyof CatalogEntry ? true : false>().toEqualTypeOf<true>();
+    expectTypeOf<'metadata' extends keyof CatalogEntry ? true : false>().toEqualTypeOf<false>();
+    expectTypeOf<'compression' extends keyof CatalogEntry ? true : false>().toEqualTypeOf<false>();
+    expectTypeOf<'artifacts' extends keyof CatalogEntry ? true : false>().toEqualTypeOf<false>();
+    expectTypeOf<
+      'contentEncoding' extends keyof CatalogEntry ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<'assetCodec' extends keyof CatalogEntry ? true : false>().toEqualTypeOf<false>();
+  });
+
+  it('keeps GUID changes neutral and keyed by the new entry shape', () => {
+    type EntryGuid = CatalogEntry['guid'];
+    type RemovedGuid = CatalogDelta['removed'][number];
+
+    expectTypeOf<CatalogDelta['added']>().toEqualTypeOf<readonly CatalogEntry[]>();
+    expectTypeOf<CatalogDelta['changed']>().toEqualTypeOf<readonly CatalogEntry[]>();
+    expectTypeOf<RemovedGuid>().toEqualTypeOf<EntryGuid>();
+  });
+});

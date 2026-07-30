@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import { calculateCatalogDelta } from '../catalog-watch.js';
 
-const entry = (guid: string, relativeUrl = `/assets/${guid}.bin`): PackIndexEntry => ({
+const entry = (guid: string, packageUrl = `/assets/${guid}.bin`): PackIndexEntry => ({
   guid,
   kind: 'texture',
-  relativeUrl,
+  packageUrl,
   sourcePath: `${guid}.png`,
 });
 

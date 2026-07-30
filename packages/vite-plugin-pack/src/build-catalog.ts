@@ -4,7 +4,7 @@
 //  feat-20260521-unify-sidecar-meta-dispatch-by-content unified sidecar dispatch).
 //
 // Two arms; image / gltf / audio split keyed on top-level `importer` field
-// inside the .meta.json (not on filename suffix; suffix is uniformly
+// inside the .meta.json (not on filename form; sidecars are uniformly
 // `<source>.meta.json`). `importer` is the open string key the
 // @forgeax/engine-import runner dispatches on (feat-20260603-asset-import-loader-injection
 // M2; replaces the former closed `assetType` enum, one-cut migration):
@@ -17,7 +17,7 @@
 //      'scene' + a 5-field row per 'texture' with ImageMetadata defaults
 //      (linear colorSpace / no mipmap -- enriched at import time, M4 AC-16).
 //      'audio' emits a 4-field row per `subAssets[]` of kind 'audio'
-//      with `metadata: undefined` (feat-20260527-audio-system M4 w32). 'font'
+//      with no catalog-side artifact facts (feat-20260527-audio-system M4 w32). 'font'
 //      emits a 5-field atlas texture row + a thin font row. The reserved
 //      'shader' key never reaches here (shader sidecars are `.wgsl.meta.json`
 //      consumed by vite-plugin-shader, not scanned into the pack catalog).
@@ -53,11 +53,24 @@ import { validateMeta } from '@forgeax/engine-pack/schema';
 import type {
   AssetRelation,
   CatalogDiagnostic,
-  ImageMetadata,
   PackIndexEntry,
   ProviderProvenance,
   ResourceRevision,
 } from '@forgeax/engine-types';
+
+export function projectPackageCatalog(
+  entries: readonly Pick<PackIndexEntry, 'guid' | 'kind' | 'sourcePath' | 'name' | 'refs'>[],
+  packageUrl: string,
+): PackIndexEntry[] {
+  return entries.map((entry) => ({
+    guid: entry.guid,
+    kind: entry.kind,
+    sourcePath: entry.sourcePath,
+    packageUrl: packageUrl,
+    ...(entry.name === undefined ? {} : { name: entry.name }),
+    ...(entry.refs === undefined ? {} : { refs: entry.refs }),
+  }));
+}
 
 interface PackJson {
   readonly schemaVersion?: string;
@@ -79,7 +92,7 @@ interface PackJson {
 }
 
 // Prefix a root-absolute source path with the Vite `base`. The runtime fetches
-// each catalog `relativeUrl` verbatim from the page origin, so when the engine
+// each catalog `packageUrl` verbatim from the page origin, so when the engine
 // is hosted under a non-root base (e.g. forgeax-studio mounts the engine at
 // `base: '/preview/'` and the interface dev server only proxies `/preview/*`),
 // the catalog URL MUST carry that prefix — otherwise the fetch falls through to
@@ -90,6 +103,11 @@ function withBase(base: string, sourceRel: string): string {
   const rootAbs = posix.resolve('/', sourceRel);
   const prefix = base.replace(/\/$/, ''); // '/preview/' -> '/preview', '/' -> ''
   return prefix ? `${prefix}${rootAbs}` : rootAbs;
+}
+
+function metaPackageUrl(base: string, firstGuid: string | undefined): string {
+  const packageName = firstGuid === undefined ? 'pack' : firstGuid.toLowerCase();
+  return withBase(base, `__forgeax-ddc/${packageName}.pack.json`);
 }
 
 interface ExternalAssetMetaJson {
@@ -109,11 +127,6 @@ interface ExternalAssetMetaJson {
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
     readonly mipmap?: 'auto' | 'none';
-    // feat-20260707 M5 / w38: the per-slot block-compression mode. Carried
-    // through into ImageMetadata so importTextureEntry can honour an explicit
-    // sidecar opt-out (`'none'`, the R-9 per-fixture escape hatch) or the
-    // 'auto' default flip. Absent -> importTextureEntry defaults to 'auto'.
-    readonly compressionMode?: 'auto' | 'etc1s' | 'uastc' | 'none';
     readonly downscaleMaxDimension?: number;
   };
   readonly subAssets: ReadonlyArray<{
@@ -199,6 +212,7 @@ export interface CatalogBuildError {
     | 'catalog-meta-schema-invalid'
     | 'catalog-scan-failed'
     | 'catalog-provider-unregistered'
+    | 'catalog-raw-source-unsupported'
     // P2 (feat-20260629 D-7): a registered host importer declared a sub.kind
     // that collides with an engine-owned kind. Reported, never silently
     // shadowing the engine kind.
@@ -281,39 +295,6 @@ const ENGINE_BUILTIN_KINDS: ReadonlySet<string> = new Set([
   'audio',
   'font',
 ]);
-
-function mipmapTokenToBoolean(token: 'auto' | 'none' | undefined): boolean {
-  // D-5 mapping. Unknown / missing tokens fall back to `false` -- single mip
-  // level is the safe default; consumers with explicit auto-mipmap intent
-  // declare it in the sidecar (charter P3 explicit failure: silent default
-  // would mask an importer bug).
-  return token === 'auto';
-}
-
-function colorSpaceToFormat(colorSpace: 'srgb' | 'linear' | undefined): GPUTextureFormat {
-  // D-2 + plan-strategy section 2.5 D Open Q-4 (c): TextureAsset.format
-  // family pairs 1:1 with TextureAsset.colorSpace (`'*-srgb'` family <==>
-  // `'srgb'`); the catalog builder embeds the GPU literal so runtime
-  // never re-derives.
-  return colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm';
-}
-
-function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
-  const colorSpace: 'srgb' | 'linear' = meta.importSettings.colorSpace ?? 'linear';
-  const compressionMode = meta.importSettings.compressionMode;
-  const downscaleMaxDimension = meta.importSettings.downscaleMaxDimension;
-  return {
-    kind: 'texture',
-    format: colorSpaceToFormat(colorSpace),
-    colorSpace,
-    mipmap: mipmapTokenToBoolean(meta.importSettings.mipmap),
-    // feat-20260707 M5 / w38: pass the sidecar compressionMode through so the
-    // importer's default flip ('auto') and the R-9 per-fixture 'none' opt-out
-    // both take effect. Omitted when absent (importTextureEntry defaults 'auto').
-    ...(compressionMode !== undefined ? { compressionMode } : {}),
-    ...(downscaleMaxDimension !== undefined ? { downscaleMaxDimension } : {}),
-  };
-}
 
 /**
  * D-7 host-kind conflict check: a registered host importer must not declare a
@@ -429,28 +410,21 @@ async function processMetaSidecar(
     // Normalize `..` segments so the URL resolves against the Vite
     // root, then prefix the configured base.  Use posix.resolve so Windows
     // does not produce a drive-prefixed backslash path (issue #191).
-    const normalizedUrl = withBase(base, sourceRel);
-    const metadata = buildImageMetadata(meta);
+    const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
     for (const sub of meta.subAssets) {
       if (sub.kind === 'equirect') {
         // feat-20260630: an .hdr equirect sub-asset folds to a kind:'equirect'
         // row carrying rgba16float ImageMetadata. The runtime equirectLoader
-        // (UPSTREAM_ENTRY_KINDS, derived) fetches the build-time .bin; the
+        // (Pack artifact loader set, derived) fetches cooked artifact bytes; the
         // cube-to-cube IBL projection is a GPU-side pass driven by the record
         // arm (no build-time face cook, no cubeFaceSize / specularMipLevels).
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: 'equirect',
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
-          metadata: {
-            kind: 'texture',
-            format: 'rgba16float',
-            colorSpace: 'linear',
-            mipmap: false,
-          },
         });
       } else {
         // P1: default passthrough — sub.kind (e.g. 'texture') becomes the
@@ -459,31 +433,30 @@ async function processMetaSidecar(
         // the real kind directly.
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
-          metadata,
         });
       }
     }
   }
 
   // importer === 'audio': fold each subAsset of kind 'audio' into a thin
-  // 4-field PackIndexEntry (guid / relativeUrl / kind='audio' / sourcePath).
+  // 4-field PackIndexEntry (guid / packageUrl / kind='audio' / sourcePath).
   // metadata is intentionally undefined -- audio clips have no image metadata
   // (no width/height/format/colorSpace/mipmap per plan-strategy D-8).
   // (feat-20260527-audio-system M4 w32).
   if (meta.importer === 'audio') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-    const normalizedUrl = withBase(base, sourceRel);
+    const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
 
     for (const sub of meta.subAssets) {
       if (sub.kind === 'audio') {
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: 'audio',
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
@@ -510,13 +483,11 @@ async function processMetaSidecar(
   // sub.kind values flow through verbatim (no remap) per requirements AC-03.
   if (meta.importer === 'gltf') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-    const normalizedUrl = withBase(base, sourceRel);
+    const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
 
     // Build a memoized metadata for texture rows in this sidecar. The gltf
     // sidecar does not carry per-texture colorSpace / mipmap, so we default
     // to linear + no mipmap; the importer enriches these at import time.
-    let gltfTextureMetadata: ImageMetadata | undefined;
-
     for (const sub of meta.subAssets) {
       // tweak-20260611 M6: skeleton / skin / animation-clip are emitted by
       // gltfImporter (M4) alongside the existing mesh / material / scene
@@ -533,32 +504,20 @@ async function processMetaSidecar(
       ) {
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
         });
       } else if (sub.kind === 'texture') {
-        if (gltfTextureMetadata === undefined) {
-          gltfTextureMetadata = {
-            kind: 'texture',
-            format: 'rgba8unorm',
-            colorSpace: 'linear',
-            mipmap: false,
-            ...(meta.importSettings.downscaleMaxDimension !== undefined
-              ? { downscaleMaxDimension: meta.importSettings.downscaleMaxDimension }
-              : {}),
-          };
-        }
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
-          metadata: gltfTextureMetadata,
         });
       }
     }
@@ -573,9 +532,7 @@ async function processMetaSidecar(
   // (feat-20260615-fbx-importer-via-sdk M3-M5).
   if (meta.importer === 'fbx') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-    const normalizedUrl = withBase(base, sourceRel);
-
-    let fbxTextureMetadata: ImageMetadata | undefined;
+    const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
 
     for (const sub of meta.subAssets) {
       if (
@@ -588,29 +545,20 @@ async function processMetaSidecar(
       ) {
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
         });
       } else if (sub.kind === 'texture') {
-        if (fbxTextureMetadata === undefined) {
-          fbxTextureMetadata = {
-            kind: 'texture',
-            format: 'rgba8unorm',
-            colorSpace: 'linear',
-            mipmap: false,
-          };
-        }
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
-          metadata: fbxTextureMetadata,
         });
       }
     }
@@ -627,24 +575,21 @@ async function processMetaSidecar(
   // sampler handles + glyph metrics at consumption time (plan-strategy D-10).
   if (meta.importer === 'font') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-    const normalizedUrl = posix.resolve('/', sourceRel);
-    const atlasMetadata = buildImageMetadata(meta);
-
+    const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
     for (const sub of meta.subAssets) {
       if (sub.kind === 'texture') {
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
           name: subName(sub),
-          metadata: atlasMetadata,
         });
       } else if (sub.kind === 'font') {
         out.push({
           guid: sub.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: 'font',
           sourcePath: sourceRel,
           ...producerFields(meta, sub),
@@ -660,12 +605,12 @@ async function processMetaSidecar(
   // dev transport can upgrade the row after POST /__import/:guid.
   if (meta.importer === 'ui') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-    const normalizedUrl = withBase(base, sourceRel);
+    const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
     for (const sub of meta.subAssets) {
       if (sub.kind !== 'ui') continue;
       out.push({
         guid: sub.guid,
-        relativeUrl: normalizedUrl,
+        packageUrl: normalizedUrl,
         kind: 'ui',
         sourcePath: sourceRel,
         ...producerFields(meta, sub),
@@ -695,9 +640,9 @@ async function processMetaSidecar(
       if (conflict) return conflict;
     } else {
       return {
-        code: 'catalog-provider-unregistered',
+        code: 'catalog-raw-source-unsupported',
         path: rawPath,
-        message: `sidecar importer ${JSON.stringify(meta.importer)} is not registered; register the provider before building the catalog`,
+        message: `sidecar importer ${JSON.stringify(meta.importer)} is not registered; provide a cooked package before publishing catalog navigation`,
         expected: 'the sidecar importer must be present in the registered provider set',
         actual: meta.importer,
         hint: 'wire the provider through pluginPack({ importers }) and rebuild',
@@ -708,7 +653,7 @@ async function processMetaSidecar(
     for (const sub of meta.subAssets) {
       out.push({
         guid: sub.guid,
-        relativeUrl: normalizedUrl,
+        packageUrl: normalizedUrl,
         kind: sub.kind,
         sourcePath: sourceRel,
         ...producerFields(meta, sub),
@@ -772,7 +717,7 @@ async function foldPaths(
       for (const [sourceIndex, asset] of assetList.entries()) {
         catalog.push({
           guid: asset.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl: normalizedUrl,
           kind: asset.kind,
           sourcePath: rel,
           ...producerFields(

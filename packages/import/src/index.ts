@@ -28,8 +28,10 @@ export {
 export {
   type DdcPack,
   type ImportRunnerFs,
+  normaliseForPack,
   type RunImportMeta,
   type RunImportOk,
+  type RunImportProductResult,
   type RunImportResult,
   runImport,
   SHADER_RESERVED_IMPORTER_KEY,

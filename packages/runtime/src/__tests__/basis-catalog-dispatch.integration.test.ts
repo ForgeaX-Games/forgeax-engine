@@ -25,7 +25,7 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 // encoder to mint a Basis KTX2 fixture, so it uses a DYNAMIC import inside the
 // pkg-gated beforeAll — build-time-only, never reached in shipped runtime code.
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { AssetCompression, TranscodeCaps } from '@forgeax/engine-types';
+import type { TranscodeCaps } from '@forgeax/engine-types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -36,7 +36,7 @@ const pkgBuilt =
 
 const GUID_TEX = 'c0000000-0000-4000-a000-0000626173a1';
 const PACK_INDEX_URL = '/basis-catalog-dispatch-pack-index.json';
-const BIN_URL = `/ddc/${GUID_TEX}.ktx2`;
+const PACK_URL = `/ddc/${GUID_TEX}.pack.json`;
 const W = 16;
 const H = 16;
 const NO_CAPS: TranscodeCaps = { bc: false, etc2: false, astc: false };
@@ -79,7 +79,7 @@ beforeAll(async () => {
   basisKtx2 = enc.value;
 });
 
-function wireFetch(rowCompression: AssetCompression | undefined): void {
+function wireFetch(rowCompression: 'basis-etc1s' | undefined): void {
   globalThis.fetch = ((input: string) => {
     const url = typeof input === 'string' ? input : String(input);
     if (url === PACK_INDEX_URL) {
@@ -89,25 +89,45 @@ function wireFetch(rowCompression: AssetCompression | undefined): void {
           Promise.resolve([
             {
               guid: GUID_TEX,
-              relativeUrl: BIN_URL,
+              packageUrl: PACK_URL,
               kind: 'texture',
-              ...(rowCompression !== undefined ? { compression: rowCompression } : {}),
-              metadata: {
-                kind: 'texture',
-                width: W,
-                height: H,
-                format: 'rgba8unorm-srgb',
-                colorSpace: 'srgb',
-                mipmap: false,
-                // The importer always records the resolved discriminant here;
-                // the bug was that the ROW-level field (above) did not mirror it.
-                compression: 'basis-etc1s',
-              },
             },
           ]),
       });
     }
-    // Serve the real Basis KTX2 bytes for the .ktx2 URL.
+    if (url === PACK_URL) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: GUID_TEX,
+                kind: 'texture',
+                payload: {
+                  width: W,
+                  height: H,
+                  format: 'rgba8unorm-srgb',
+                  colorSpace: 'srgb',
+                },
+                refs: [],
+                artifacts: {
+                  body: {
+                    path: `${GUID_TEX}.ktx2`,
+                    mediaType: 'image/ktx2',
+                    ...(rowCompression === undefined
+                      ? {}
+                      : { assetCodec: { name: 'basis', profile: 'etc1s' } }),
+                  },
+                },
+              },
+            ],
+          }),
+      });
+    }
+    // Serve the real Basis KTX2 bytes for the artifact URL.
     return Promise.resolve({
       ok: true,
       arrayBuffer: () =>
@@ -118,7 +138,7 @@ function wireFetch(rowCompression: AssetCompression | undefined): void {
   }) as unknown as typeof globalThis.fetch;
 }
 
-async function loadWith(rowCompression: AssetCompression | undefined) {
+async function loadWith(rowCompression: 'basis-etc1s' | undefined) {
   wireFetch(rowCompression);
   const reg = new AssetRegistry(makeMockShaderRegistry());
   reg.configurePackIndex(PACK_INDEX_URL);
@@ -134,17 +154,15 @@ describe.skipIf(!pkgBuilt)('Basis catalog dispatch round-trip (M6 fix)', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('bug witness: a row missing the basis-* discriminant does NOT load the Basis texture', async () => {
-    // Without the resolved basis-* discriminant on the ROW the loader never
-    // enters the transcode arm; the real ETC1S (scheme=1) Basis KTX2 cannot come
-    // through as a texture. (In the shipped path this surfaces as the codec's
-    // `ktx2-unsupported-scheme` reject; the exact error depends on transport
-    // gating, so the load-bearing invariant is simply: no successful load.)
-    const result = await loadWith('none');
-    expect(result.ok).toBe(false);
+  it('loads a Basis texture when the artifact has no optional codec hint', async () => {
+    // Catalog v2 carries package navigation only. The optional codec hint is
+    // owned by the artifact descriptor, so a valid KTX2 artifact remains
+    // loadable when that hint is absent from the package row.
+    const result = await loadWith(undefined);
+    expect(result.ok).toBe(true);
   });
 
-  it('fix: row compression=basis-etc1s takes the transcode arm and loads', async () => {
+  it('artifact codec=basis-etc1s takes the transcode arm and loads', async () => {
     const result = await loadWith('basis-etc1s');
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`load failed: ${result.error.code}`);

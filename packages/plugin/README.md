@@ -11,6 +11,10 @@
 | Export | Kind | Purpose |
 |:--|:--|:--|
 | `Plugin` | interface | `{ readonly name: string; build(world: World): Result<void, PluginError> \| Promise<Result<void, PluginError>> }` |
+| `PluginGroup` / `PluginGroupBuilder` | interface / class | Named group definition with ordered `add`, `disable`, `addBefore`, and `addAfter` composition |
+| `PluginSource` | type | `Plugin \| PluginGroup` accepted by the host-neutral runner and `createApp` |
+| `definePluginGroup` | function | Builds a frozen group snapshot while preserving the normal Plugin protocol |
+| `flattenPluginSources` | function | Expands groups into the one ordered plugin stream consumed by `runPlugins` |
 | `PluginErrorCode` | type | `'duplicate-plugin' \| 'plugin-build-failed'` — 2-member closed union |
 | `PluginError` | class | Structured 4-field error (`.code` / `.expected` / `.hint` / `.detail`), discriminated by `code` |
 | `PluginErrorDetail` | type | Tagged union of `PluginDetailDuplicatePlugin \| PluginDetailBuildFailed` |
@@ -37,6 +41,21 @@ if (!result.ok) {
   }
 }
 ```
+
+Groups are configuration, not a second execution path. Define the order and optional membership
+changes once, then pass the group anywhere a `PluginSource` is accepted:
+
+```ts
+const helloWorldPlugins = definePluginGroup('hello-world', (group) => {
+  group.add(printHelloPlugin()).add(printWorldPlugin());
+});
+
+const result = await runPlugins(world, [], [helloWorldPlugins]);
+```
+
+`disable`, `addBefore`, and `addAfter` operate on plugin names and preserve the final order.
+After expansion, duplicate detection, build ordering, failure accumulation, and registry output
+remain owned by `runPlugins`; groups do not create a parallel lifecycle or error model.
 
 ## Who imports from here?
 

@@ -141,6 +141,8 @@ export interface RenderFrameState {
    * unchanged; only the topology build is hoisted out of the hot path.
    */
   perFrameGraph: RenderGraph<RenderPipelineContext> | null;
+  /** Topology inputs that shape the memoized graph's color route. */
+  perFrameGraphTopologyKey: string | null;
   /** Graphs detached from the active pipeline while GPU work may still use them. */
   readonly retiredPerFrameGraphs: Set<RenderGraph<RenderPipelineContext>>;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
@@ -268,7 +270,7 @@ export interface RenderFrameState {
    * Post-process bind group cache: nested WeakMap chain root shared by the
    * built-in bloom (bright / blur-H / blur-V / composite), FXAA, and HDRP SSAO
    * (calc / blur) fullscreen passes. Each of these passes samples graph-owned
-   * transient render targets (hdrColor / bloom* / fxaaIntermediate / ssaoRaw /
+   * transient render targets (hdrColor / ldrColor / bloom* / ssaoRaw /
    * gbuf0 / hdrDepth); on canvas resize the graph retires the old physical
    * textures and allocates new ones, so the bind group must be rebuilt to
    * reference the new TextureView identity. Keying the cache on the physical
@@ -381,6 +383,7 @@ export function retirePerFrameGraph(frameState: RenderFrameState): void {
   if (graph === null) return;
   graph.retire();
   frameState.perFrameGraph = null;
+  frameState.perFrameGraphTopologyKey = null;
   frameState.retiredPerFrameGraphs.add(graph);
   graph
     .reclaimRetiredTransients()

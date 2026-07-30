@@ -58,11 +58,17 @@ const distDir = resolve(appRoot, 'dist');
 const packIndex = JSON.parse(readFileSync(resolve(distDir, 'pack-index.json'), 'utf8'));
 const hdrEntry = packIndex.find((entry) => entry.guid === hdrGuid);
 if (!hdrEntry) { console.error(`[smoke] missing HDR GUID ${hdrGuid}`); process.exit(1); }
-const hdrBytes = new Uint8Array(readFileSync(resolve(distDir, hdrEntry.relativeUrl.replace(/^\//, ''))));
+const hdrPackagePath = hdrEntry.packageUrl.replace(/^\//, '');
+const hdrPackageBytes = new Uint8Array(readFileSync(resolve(distDir, hdrPackagePath)));
+const hdrPackage = JSON.parse(new TextDecoder().decode(hdrPackageBytes));
+const hdrArtifactPath = hdrPackage.assets.find((asset) => asset.guid === hdrGuid).artifacts.body.path;
+const hdrArtifactUrl = `${hdrEntry.packageUrl.slice(0, hdrEntry.packageUrl.lastIndexOf('/') + 1)}${hdrArtifactPath}`;
+const hdrBytes = new Uint8Array(readFileSync(resolve(dirname(resolve(distDir, hdrPackagePath)), hdrArtifactPath)));
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
   if (url === '/pack-index.json') return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
-  if (url === hdrEntry.relativeUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(hdrBytes.buffer.slice(hdrBytes.byteOffset, hdrBytes.byteOffset + hdrBytes.byteLength)) };
+  if (url === hdrEntry.packageUrl) return { ok: true, json: () => Promise.resolve(hdrPackage), arrayBuffer: () => Promise.resolve(hdrPackageBytes.buffer.slice(hdrPackageBytes.byteOffset, hdrPackageBytes.byteOffset + hdrPackageBytes.byteLength)) };
+  if (url === hdrArtifactUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(hdrBytes.buffer.slice(hdrBytes.byteOffset, hdrBytes.byteOffset + hdrBytes.byteLength)) };
   return originalFetch(url);
 };
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestUrl, importTransport: createDevImportTransport() });

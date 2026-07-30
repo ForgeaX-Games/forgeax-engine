@@ -23,6 +23,8 @@ const selectedVariant = process.env.FORGEAX_M3_VARIANT === 'true' ? 'true' : 'fa
 const selectedPost = process.env.FORGEAX_M3_POST === 'inversion' ? 'inversion' : 'passthrough';
 const switchVariantAfterPipeline = process.env.FORGEAX_M3_SWITCH_VARIANT === '1';
 const switchPostAfterPipeline = process.env.FORGEAX_M3_SWITCH_POST === '1';
+const resizeChurn = process.env.FORGEAX_M3_RESIZE_CHURN === '1';
+const doubleResizeChurn = process.env.FORGEAX_M3_DOUBLE_RESIZE_CHURN === '1';
 const expectedVariant = switchVariantAfterPipeline
   ? selectedVariant === 'true'
     ? 'false'
@@ -124,21 +126,37 @@ try {
   await page.waitForTimeout(2500);
   const canvas = page.locator('#app');
   const initialCanvasSize = await canvas.evaluate((element) => ({ width: element.width, height: element.height }));
-  await canvas.evaluate((element) => {
-    element.width = 640;
-    element.height = 360;
-    element.style.width = '640px';
-    element.style.height = '360px';
-  });
-  await page.waitForFunction(
-    () => {
-      const element = document.querySelector('#app');
-      return element?.width === 640 && element.height === 360;
-    },
-    undefined,
-    { timeout: 30_000 },
-  );
-  await page.waitForTimeout(1000);
+  const resizeHistory = [];
+  const resizeCanvas = async (width, height) => {
+    await canvas.evaluate((element, size) => {
+      element.width = size.width;
+      element.height = size.height;
+      element.style.width = `${size.width}px`;
+      element.style.height = `${size.height}px`;
+    }, { width, height });
+    await page.waitForFunction(
+      (size) => {
+        const element = document.querySelector('#app');
+        return element?.width === size.width && element.height === size.height;
+      },
+      { width, height },
+      { timeout: 30_000 },
+    );
+    await page.waitForTimeout(700);
+    const current = await canvas.evaluate((element) => ({ width: element.width, height: element.height }));
+    resizeHistory.push(`${current.width}x${current.height}`);
+  };
+  await resizeCanvas(640, 360);
+  if (resizeChurn) {
+    await resizeCanvas(480, 270);
+    await resizeCanvas(720, 405);
+    await resizeCanvas(640, 360);
+    if (doubleResizeChurn) {
+      await resizeCanvas(480, 270);
+      await resizeCanvas(720, 405);
+      await resizeCanvas(640, 360);
+    }
+  }
   const resizedCanvasSize = await canvas.evaluate((element) => ({ width: element.width, height: element.height }));
   if (initialCanvasSize.width === resizedCanvasSize.width && initialCanvasSize.height === resizedCanvasSize.height) {
     throw new Error(`canvas did not resize: ${initialCanvasSize.width}x${initialCanvasSize.height}`);
@@ -178,7 +196,7 @@ try {
     for (const element of elements) element.style.visibility = 'hidden';
   });
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'custom-live.png'), clip: box });
-  const captured = await page.evaluate(async ({ falsifyPipeline: shouldFalsify, shouldSwitchVariant, shouldSwitchPost, selectedVariant: startupVariant, selectedPost: startupPost }) => ({
+  const captured = await page.evaluate(async ({ falsifyPipeline: shouldFalsify, shouldSwitchVariant, shouldSwitchPost, selectedVariant: startupVariant, selectedPost: startupPost, resizeHistory: capturedResizeHistory }) => ({
     pipeline: document.querySelector('#pipeline-status')?.textContent ?? '',
     variant: document.querySelector('#variant-status')?.textContent ?? '',
     post: document.querySelector('#post-status')?.textContent ?? '',
@@ -187,12 +205,13 @@ try {
     texture: document.querySelector('#texture-status')?.textContent ?? '',
     antialias: document.querySelector('#antialias-status')?.textContent ?? '',
     canvas: { width: document.querySelector('#app')?.width ?? 0, height: document.querySelector('#app')?.height ?? 0 },
+    resizeHistory: capturedResizeHistory,
     pipelineSwitchedAfterResize: true,
     variantSwitchedAfterPipeline: shouldSwitchVariant,
     postSwitchedAfterPipeline: shouldSwitchPost,
     falsifyPipeline: shouldFalsify,
     tape: await globalThis.__forgeax?.captureFrame(1),
-  }), { falsifyPipeline, shouldSwitchVariant: switchVariantAfterPipeline, shouldSwitchPost: switchPostAfterPipeline, selectedVariant, selectedPost: initialPostStatus });
+  }), { falsifyPipeline, shouldSwitchVariant: switchVariantAfterPipeline, shouldSwitchPost: switchPostAfterPipeline, selectedVariant, selectedPost: initialPostStatus, resizeHistory });
   writeFileSync(resolve(ARTIFACT_DIR, 'capture.json'), `${JSON.stringify(captured, null, 2)}\n`);
   await browser.close();
   browser = undefined;
@@ -209,6 +228,14 @@ try {
   if (captured.antialias !== `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}`) throw new Error(`wrong antialias status: ${captured.antialias}`);
   if (captured.canvas.width !== 640 || captured.canvas.height !== 360) {
     throw new Error(`wrong resized canvas: ${captured.canvas.width}x${captured.canvas.height}`);
+  }
+  const expectedResizeHistory = doubleResizeChurn
+    ? '640x360>480x270>720x405>640x360>480x270>720x405>640x360'
+    : resizeChurn
+      ? '640x360>480x270>720x405>640x360'
+      : '640x360';
+  if (captured.resizeHistory.join('>') !== expectedResizeHistory) {
+    throw new Error(`wrong resize history: ${captured.resizeHistory.join('>')}`);
   }
   const tape = captured.tape;
   if (tape === undefined || typeof tape !== 'object') throw new Error('captureFrame returned no tape result');
@@ -306,6 +333,7 @@ try {
     msaaTextureResourceCount,
     resolveTargetCount,
     canvas: captured.canvas,
+    resizeHistory: captured.resizeHistory,
     pipelineSwitchedAfterResize: captured.pipelineSwitchedAfterResize,
     variantSwitchedAfterPipeline: captured.variantSwitchedAfterPipeline,
     falsifyPipeline: captured.falsifyPipeline,
@@ -323,11 +351,11 @@ try {
       throw new Error(`MSAA resolve falsifier unexpectedly retained a resolve target: ${resolveTargetCount}`);
     }
     console.log(
-      `[m3-browser-rhi] PASS_FALSIFY - sampleCount=4 scene target had no resolve target and was offered to the single-sample fullscreen input; resolveTargetCount=0 dawnReadbackSha256=${dawnReadbackSha256} artifacts=${ARTIFACT_DIR}`,
+      `[m3-browser-rhi] PASS_FALSIFY - sampleCount=4 scene target had no resolve target and was offered to the single-sample fullscreen input; textureResourceCount=${textureResourceCount} msaaTextureResourceCount=${msaaTextureResourceCount} draws=${drawCount} resolveTargetCount=0 resizeHistory=${captured.resizeHistory.join('>')} dawnReadbackSha256=${dawnReadbackSha256} artifacts=${ARTIFACT_DIR}`,
     );
     process.exit(0);
   }
-  console.log(`[m3-browser-rhi] PASS - pipeline=${captured.pipeline} variant=${captured.variant} texture=${captured.texture} post=${captured.post} antialias=${captured.antialias} textureResourceCount=${textureResourceCount} msaaTextureResourceCount=${msaaTextureResourceCount} resolveTargetCount=${resolveTargetCount} draws=${drawCount} events=${parsedTape.events.length} variantSwitch=${captured.variantSwitchedAfterPipeline} postSwitch=${captured.postSwitchedAfterPipeline} dawnReadbackSha256=${dawnReadbackSha256} artifacts=${ARTIFACT_DIR}`);
+  console.log(`[m3-browser-rhi] PASS - pipeline=${captured.pipeline} variant=${captured.variant} texture=${captured.texture} post=${captured.post} antialias=${captured.antialias} textureResourceCount=${textureResourceCount} msaaTextureResourceCount=${msaaTextureResourceCount} resolveTargetCount=${resolveTargetCount} draws=${drawCount} events=${parsedTape.events.length} variantSwitch=${captured.variantSwitchedAfterPipeline} postSwitch=${captured.postSwitchedAfterPipeline} resizeHistory=${captured.resizeHistory.join('>')} dawnReadbackSha256=${dawnReadbackSha256} artifacts=${ARTIFACT_DIR}`);
 } catch (error) {
   if (browser !== undefined) await browser.close();
   viteProc.kill('SIGTERM');

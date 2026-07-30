@@ -135,6 +135,8 @@ export interface AssetTagMap {
   tileset: 'TilesetAsset';
   /** feat-20260623-world-space-video-asset M1 / w2 */
   video: 'VideoAsset';
+  /** feat-20260728-wave1-vfx-contract-and-asset-cook M1 / m1-i1 */
+  'particle-effect': 'ParticleEffectAsset';
 }
 
 /**

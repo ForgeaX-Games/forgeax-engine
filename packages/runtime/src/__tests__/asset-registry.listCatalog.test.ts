@@ -43,7 +43,7 @@ describe('D-1 listCatalog() (TDD: red before w2 impl)', () => {
     expect(list.length).toBeGreaterThan(0);
 
     const found = list.find(
-      (e: { guid: string; kind: string; name?: string; relativeUrl: string }) =>
+      (e: { guid: string; kind: string; name?: string; packageUrl: string }) =>
         e.guid === guid.toLowerCase(),
     );
     expect(found).toBeDefined();
@@ -51,7 +51,7 @@ describe('D-1 listCatalog() (TDD: red before w2 impl)', () => {
     expect(found?.kind).toBe('mesh');
     // name derived via resolveName (empty for no-package catalogued asset)
     expect(found).toHaveProperty('name');
-    expect(found).toHaveProperty('relativeUrl');
+    expect(found).toHaveProperty('packageUrl');
   });
 
   it('returns empty array for a registry with zero catalogued assets (boundary E3)', () => {
@@ -106,13 +106,13 @@ describe('D-1 listCatalog() (TDD: red before w2 impl)', () => {
 
 // Prod path: sourcePath is only present on the pack-index (fetchPackIndex ->
 // packIndexCache), never on dev-path catalog() envelopes. Editors need it to
-// locate the `.meta.json` sidecar for external-asset CRUD; `relativeUrl`
-// points at the runtime load artefact (DDC `.bin` / `.pack.json`) and cannot
+// locate the `.meta.json` sidecar for external-asset CRUD; `packageUrl`
+// points at the Pack v2 package and cannot
 // be reversed to the source path.
 describe('listCatalog() prod-path sourcePath (editor CRUD sidecar lookup)', () => {
   const PACK_INDEX_URL = '/pack-index.json';
   const MESH_GUID = 'a0000000-0000-4000-a000-000000000001';
-  const MESH_URL = '/assets/arrow_bow.fbx.a0000000.bin';
+  const MESH_URL = '/assets/arrow_bow.fbx.a0000000.pack.json';
   const MESH_SOURCE = 'games/marscraft/assets/arrow_bow.fbx';
   // A row that omits sourcePath (legacy / malformed pack-index) must surface as
   // undefined, not '', so consumers can distinguish "no source" from "empty".
@@ -138,8 +138,8 @@ describe('listCatalog() prod-path sourcePath (editor CRUD sidecar lookup)', () =
     reg.configurePackIndex(PACK_INDEX_URL);
 
     const packIndex = [
-      { guid: MESH_GUID, relativeUrl: MESH_URL, kind: 'mesh', sourcePath: MESH_SOURCE },
-      { guid: INLINE_GUID, relativeUrl: '/assets/other.bin', kind: 'mesh' },
+      { guid: MESH_GUID, packageUrl: MESH_URL, kind: 'mesh', sourcePath: MESH_SOURCE },
+      { guid: INLINE_GUID, packageUrl: '/assets/other.pack.json', kind: 'mesh' },
     ];
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url === PACK_INDEX_URL) {

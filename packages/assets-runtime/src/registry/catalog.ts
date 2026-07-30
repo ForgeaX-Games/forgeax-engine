@@ -2,12 +2,10 @@ import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
   type Asset,
-  type AssetCompression,
   type AssetEnvelope,
   AssetError,
   type AssetRelation,
   type CatalogDiagnostic,
-  type ImageMetadata,
   type ProviderProvenance,
   type ResourceRevision,
 } from '@forgeax/engine-types';
@@ -15,13 +13,12 @@ import type { AssetRegistry } from '../asset-registry';
 
 /** Runtime catalog row parsed from the shared pack-index POD shape. */
 export interface CatalogRecord {
-  readonly relativeUrl: string;
+  readonly packageUrl: string;
   readonly kind: string;
   readonly name?: string;
-  readonly metadata?: ImageMetadata | undefined;
   readonly refs?: readonly string[];
-  readonly compression?: AssetCompression;
   readonly sourcePath?: string;
+  readonly cookReceiptUrl?: string;
   readonly packageId?: string;
   readonly provenance?: ProviderProvenance;
   readonly revision?: ResourceRevision;
@@ -37,7 +34,7 @@ export function createInlineCatalogRecord(
   name: string,
 ): CatalogRecord {
   return {
-    relativeUrl: '',
+    packageUrl: '',
     kind: envelope.payload.kind,
     name,
     ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((ref) => ref.guid) } : {}),
@@ -92,27 +89,28 @@ function checkExpectedRevision(
 }
 
 /** Resolve a catalog entry URL against the configured pack-index URL. */
-export function resolveCatalogAssetUrl(registry: AssetRegistry, relativeUrl: string): string {
+export function resolveCatalogAssetUrl(registry: AssetRegistry, packageUrl: string): string {
   const packIndexUrl = registry.packIndexUrl;
-  if (packIndexUrl === undefined) return relativeUrl;
+  if (packIndexUrl === undefined) return packageUrl;
 
   try {
     const baseUrl = new URL(packIndexUrl, globalThis.location?.href).href;
-    return new URL(relativeUrl, baseUrl).href;
+    return new URL(packageUrl, baseUrl).href;
   } catch {
-    return relativeUrl;
+    return packageUrl;
   }
 }
 
-/**
- * Parse the shared pack-index/catalog wire shape without loading payloads.
- *
- * The returned map is keyed by normalized GUID; all producer facts and
- * structured diagnostics remain data for AI-readable callers.
- */
+function isRawSourceLocator(packageUrl: string): boolean {
+  const path = packageUrl.split(/[?#]/, 1)[0]?.toLowerCase() ?? packageUrl.toLowerCase();
+  if (path.endsWith('.pack.json')) return false;
+  return /\.(bin|fbx|gltf|glb|hdr|jpg|jpeg|png|wav|mp3|ogg|ttf|otf|woff|woff2|svg)$/.test(path);
+}
+
+/** Parse the shared pack-index/catalog wire shape without loading payloads. */
 export function parseCatalog(
   raw: unknown,
-  resolveUrl: (relativeUrl: string) => string = (relativeUrl) => relativeUrl,
+  resolveUrl: (packageUrl: string) => string = (packageUrl) => packageUrl,
   expectedRevision?: ResourceRevision,
 ): Result<Map<string, CatalogRecord>, AssetError> {
   if (!Array.isArray(raw)) {
@@ -120,77 +118,81 @@ export function parseCatalog(
   }
 
   const catalog = new Map<string, CatalogRecord>();
-  for (const item of raw as Array<{
-    guid?: unknown;
-    relativeUrl?: unknown;
-    kind?: unknown;
-    name?: unknown;
-    metadata?: unknown;
-    refs?: unknown;
-    compression?: unknown;
-    sourcePath?: unknown;
-    packageId?: unknown;
-    provenance?: unknown;
-    revision?: unknown;
-    sourceKey?: unknown;
-    sourceIndex?: unknown;
-    relations?: unknown;
-    diagnostics?: unknown;
-  }>) {
-    if (typeof item.guid !== 'string' || item.guid.length === 0) {
-      return err(parseError('each catalog entry to contain a non-empty guid'));
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') {
+      return err(parseError('each catalog row to be an object'));
     }
-    if (typeof item.relativeUrl !== 'string' || item.relativeUrl.length === 0) {
-      return err(parseError(`catalog entry ${item.guid} to contain a non-empty relativeUrl`));
+    const rawRow = item as Record<string, unknown>;
+    const legacyLocator = ['relative', 'Url'].join('');
+    if (
+      legacyLocator in rawRow ||
+      'metadata' in rawRow ||
+      'compression' in rawRow ||
+      'artifacts' in rawRow ||
+      'assetCodec' in rawRow ||
+      'contentEncoding' in rawRow
+    ) {
+      return err(parseError('catalog rows to expose navigation fields only'));
     }
-    if (typeof item.kind !== 'string' || item.kind.length === 0) {
-      return err(parseError(`catalog entry ${item.guid} to contain a non-empty kind`));
+    if (
+      typeof rawRow.guid !== 'string' ||
+      rawRow.guid.length === 0 ||
+      typeof rawRow.packageUrl !== 'string' ||
+      rawRow.packageUrl.length === 0 ||
+      typeof rawRow.kind !== 'string' ||
+      rawRow.kind.length === 0
+    ) {
+      return err(parseError('each catalog row to contain guid, packageUrl, and kind strings'));
     }
-
-    const compression =
-      item.compression === 'none' ||
-      item.compression === 'zstd' ||
-      item.compression === 'basis-etc1s' ||
-      item.compression === 'basis-uastc' ||
-      item.compression === 'basis-uastc-hdr'
-        ? item.compression
-        : undefined;
+    if (isRawSourceLocator(rawRow.packageUrl)) {
+      return err(
+        parseError(`catalog packageUrl ${rawRow.packageUrl} to identify a cooked package`),
+      );
+    }
+    const guid = rawRow.guid.toLowerCase();
+    if (catalog.has(guid)) return err(parseError(`catalog GUID ${rawRow.guid} to be unique`));
+    const refs = rawRow.refs;
+    if (
+      refs !== undefined &&
+      (!Array.isArray(refs) || !refs.every((ref) => typeof ref === 'string'))
+    ) {
+      return err(parseError(`catalog refs for GUID ${rawRow.guid} to be a string array`));
+    }
     let resolvedUrl: string;
     try {
-      resolvedUrl = resolveUrl(item.relativeUrl);
+      resolvedUrl = resolveUrl(rawRow.packageUrl);
     } catch (error) {
       return err(
-        parseError(`catalog entry ${item.guid} to resolve its relativeUrl`, {
-          relativeUrl: item.relativeUrl,
+        parseError(`catalog entry ${rawRow.guid} to resolve its packageUrl`, {
+          packageUrl: rawRow.packageUrl,
           reason: error instanceof Error ? error.message : String(error),
         }),
       );
     }
     const row: CatalogRecord = {
-      relativeUrl: resolvedUrl,
-      kind: item.kind,
-      metadata: item.metadata as ImageMetadata | undefined,
-      ...(typeof item.name === 'string' ? { name: item.name } : {}),
-      ...(typeof item.sourcePath === 'string' ? { sourcePath: item.sourcePath } : {}),
-      ...(Array.isArray(item.refs) && item.refs.every((ref) => typeof ref === 'string')
-        ? { refs: item.refs as readonly string[] }
+      packageUrl: resolvedUrl,
+      kind: rawRow.kind,
+      ...(typeof rawRow.name === 'string' ? { name: rawRow.name } : {}),
+      ...(typeof rawRow.sourcePath === 'string' ? { sourcePath: rawRow.sourcePath } : {}),
+      ...(refs !== undefined ? { refs: refs as readonly string[] } : {}),
+      ...(typeof rawRow.cookReceiptUrl === 'string'
+        ? { cookReceiptUrl: rawRow.cookReceiptUrl }
         : {}),
-      ...(compression !== undefined ? { compression } : {}),
-      ...(typeof item.packageId === 'string' ? { packageId: item.packageId } : {}),
-      ...(item.provenance !== undefined
-        ? { provenance: item.provenance as ProviderProvenance }
+      ...(typeof rawRow.packageId === 'string' ? { packageId: rawRow.packageId } : {}),
+      ...(rawRow.provenance !== undefined
+        ? { provenance: rawRow.provenance as ProviderProvenance }
         : {}),
-      ...(item.revision !== undefined ? { revision: item.revision as ResourceRevision } : {}),
-      ...(typeof item.sourceKey === 'string' ? { sourceKey: item.sourceKey } : {}),
-      ...(typeof item.sourceIndex === 'number' ? { sourceIndex: item.sourceIndex } : {}),
-      ...(Array.isArray(item.relations)
-        ? { relations: item.relations as readonly AssetRelation[] }
+      ...(rawRow.revision !== undefined ? { revision: rawRow.revision as ResourceRevision } : {}),
+      ...(typeof rawRow.sourceKey === 'string' ? { sourceKey: rawRow.sourceKey } : {}),
+      ...(typeof rawRow.sourceIndex === 'number' ? { sourceIndex: rawRow.sourceIndex } : {}),
+      ...(Array.isArray(rawRow.relations)
+        ? { relations: rawRow.relations as readonly AssetRelation[] }
         : {}),
-      ...(Array.isArray(item.diagnostics)
-        ? { diagnostics: item.diagnostics as readonly CatalogDiagnostic[] }
+      ...(Array.isArray(rawRow.diagnostics)
+        ? { diagnostics: rawRow.diagnostics as readonly CatalogDiagnostic[] }
         : {}),
     };
-    catalog.set(item.guid.toLowerCase(), row);
+    catalog.set(guid, row);
   }
   const revisionError = checkExpectedRevision([...catalog.values()], expectedRevision);
   if (revisionError !== undefined) return err(revisionError);
@@ -201,7 +203,7 @@ export function parseCatalog(
 export async function fetchCatalog(
   url: string,
   fetch: CatalogFetch,
-  resolveUrl?: (relativeUrl: string) => string,
+  resolveUrl?: (packageUrl: string) => string,
   expectedRevision?: ResourceRevision,
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
   let raw: unknown;
@@ -232,7 +234,7 @@ export async function fetchCatalog(
 export function fetchPackIndex(
   registry: AssetRegistry,
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
-  return fetchCatalog(registry.packIndexUrl as string, globalThis.fetch, (relativeUrl) =>
-    resolveCatalogAssetUrl(registry, relativeUrl),
+  return fetchCatalog(registry.packIndexUrl as string, globalThis.fetch, (packageUrl) =>
+    resolveCatalogAssetUrl(registry, packageUrl),
   );
 }

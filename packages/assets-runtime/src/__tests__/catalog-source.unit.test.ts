@@ -7,7 +7,7 @@ const entry: CatalogEntry = {
   guid: '11111111-1111-4111-8111-111111111111',
   kind: 'mesh',
   name: 'unloaded',
-  relativeUrl: '/assets/unloaded.pack.json',
+  packageUrl: '/assets/unloaded.pack.json',
   sourcePath: 'assets/unloaded.glb',
 };
 
@@ -79,7 +79,7 @@ describe('CatalogSource', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('asset-parse-failed');
-      expect(result.error.expected).toContain('relativeUrl');
+      expect(result.error.expected).toContain('packageUrl');
       expect(result.error.hint).toBeTruthy();
     }
   });

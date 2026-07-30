@@ -49,8 +49,8 @@ import {
 } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
-import type { Plugin } from '@forgeax/engine-plugin';
-import { runPlugins } from '@forgeax/engine-plugin';
+import type { Plugin, PluginSource } from '@forgeax/engine-plugin';
+import { flattenPluginSources, runPlugins } from '@forgeax/engine-plugin';
 import type { RendererError } from '@forgeax/engine-render';
 import { CAMERA_PROJECTION_PERSPECTIVE, Camera, type Renderer } from '@forgeax/engine-render';
 import { createDebugDrawOnReady } from '@forgeax/engine-render/internal';
@@ -170,6 +170,12 @@ async function createAppFromCanvas(
       ),
     );
   }
+
+  // The DOM canvas starts with a 300x150 drawing buffer even when CSS lays it
+  // out at a different size. Set the physical buffer before the renderer
+  // configures its swap chain; the same helper runs before each frame so a CSS
+  // resize remains visible to both rendering and camera policy.
+  syncCanvasDrawingBuffer(canvas);
 
   // Step 2: createRenderer try/catch -> Result.err(EngineEnvironmentError)
   //   (AC-01 / research section 2.2). createRenderer throws at
@@ -512,8 +518,8 @@ async function createAppFromCanvas(
   // only does world-registration; the backend lifecycle stays in the app layer).
   // M3 (w15): opts.audio flag deleted — detection is by plugin name.
   let audioBackend: AudioBackend | undefined;
-  const userPlugins: Plugin[] = [...(opts?.plugins ?? [])];
-  const hasAudioPlugin = userPlugins.some((p) => p.name === 'audio');
+  const userPlugins: readonly PluginSource[] = opts?.plugins ?? [];
+  const hasAudioPlugin = flattenPluginSources(userPlugins).some((p) => p.name === 'audio');
   if (hasAudioPlugin) {
     audioBackend = createWebAudioBackend();
     world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
@@ -626,6 +632,7 @@ async function createAppFromCanvas(
         name: 'app-sync-camera-aspect',
         queries: [],
         fn: () => {
+          syncCanvasDrawingBuffer(canvas);
           syncCameraAspect(world, canvas.width, canvas.height);
         },
       })
@@ -724,6 +731,70 @@ async function createAppFromCanvas(
   }
   return built;
 }
+
+/**
+ * Synchronize a DOM canvas drawing buffer with its CSS size and device pixel
+ * ratio. Detached or zero-sized hosts are left untouched so a hidden canvas
+ * cannot be converted into a 1x1 render target accidentally.
+ */
+export function syncCanvasDrawingBuffer(
+  canvas: Pick<HTMLCanvasElement, 'clientWidth' | 'clientHeight' | 'width' | 'height'> & {
+    readonly style?: Pick<CSSStyleDeclaration, 'width' | 'height'>;
+  },
+): void {
+  if (
+    !Number.isFinite(canvas.clientWidth) ||
+    !Number.isFinite(canvas.clientHeight) ||
+    canvas.clientWidth <= 0 ||
+    canvas.clientHeight <= 0
+  )
+    return;
+  // An intrinsic canvas with no CSS dimensions already has an explicit
+  // drawing-buffer contract. `clientWidth` mirrors `width` for this shape;
+  // multiplying it by DPR would change the caller's requested pixel size and
+  // can feed that new width back as the next layout measurement. CSS-sized
+  // canvases take the DPR path below (including stylesheet-sized canvases
+  // whose layout width differs from the initial intrinsic width).
+  const hasExplicitCssSize =
+    (canvas.style?.width ?? '') !== '' || (canvas.style?.height ?? '') !== '';
+  if (
+    !hasExplicitCssSize &&
+    canvas.clientWidth === canvas.width &&
+    canvas.clientHeight === canvas.height
+  ) {
+    return;
+  }
+  const dpr = Math.max(1, globalThis.devicePixelRatio || 1);
+  const previous = syncedCanvasSizes.get(canvas);
+  const drawingBufferIsTheLayoutMeasurement =
+    previous !== undefined &&
+    canvas.width === previous.drawingWidth &&
+    canvas.height === previous.drawingHeight &&
+    canvas.clientWidth === previous.drawingWidth &&
+    canvas.clientHeight === previous.drawingHeight;
+  const cssWidth = drawingBufferIsTheLayoutMeasurement ? previous.cssWidth : canvas.clientWidth;
+  const cssHeight = drawingBufferIsTheLayoutMeasurement ? previous.cssHeight : canvas.clientHeight;
+  const width = Math.max(1, Math.round(cssWidth * dpr));
+  const height = Math.max(1, Math.round(cssHeight * dpr));
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  syncedCanvasSizes.set(canvas, {
+    cssWidth,
+    cssHeight,
+    drawingWidth: width,
+    drawingHeight: height,
+  });
+}
+
+const syncedCanvasSizes = new WeakMap<
+  object,
+  {
+    readonly cssWidth: number;
+    readonly cssHeight: number;
+    readonly drawingWidth: number;
+    readonly drawingHeight: number;
+  }
+>();
 
 /**
  * Per-frame aspect-sync body for the createApp(canvas) path (feat-20260617

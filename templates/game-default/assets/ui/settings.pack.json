@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "kind": "internal-text-package",
   "assets": [
     {
@@ -7,10 +7,11 @@
       "kind": "ui",
       "payload": {
         "guid": "019f8354-6386-4387-849d-f2ab4b9622a0",
-        "html": "<section class=\"settings\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"settings-title\" hidden>\n  <div class=\"backdrop\" data-ui-action=\"close-settings\"></div>\n  <div class=\"panel\" role=\"document\" tabindex=\"-1\">\n    <h2 id=\"settings-title\">Game settings</h2>\n    <label>Music volume <input data-ui-setting=\"music\" type=\"range\" min=\"0\" max=\"100\" value=\"70\"></label>\n    <label><input data-ui-setting=\"music-muted\" type=\"checkbox\"> Mute music bus</label>\n    <label>Anti-aliasing <select data-ui-setting=\"antialias\"><option value=\"none\">None</option><option value=\"msaa\">MSAA</option><option value=\"fxaa\" selected>FXAA</option></select></label>\n    <label><input data-ui-setting=\"bloom\" type=\"checkbox\" checked> Bloom post-processing</label>\n    <label><input data-ui-setting=\"high-contrast\" type=\"checkbox\"> High contrast</label>\n    <button type=\"button\" data-ui-action=\"close-settings\">Done</button>\n  </div>\n</section>\n",
-        "css": ":host { display: block; color: #fff; font: 14px ui-sans-serif, system-ui, sans-serif; }\n.settings[hidden] { display: none; }\n.settings { position: absolute; inset: 0; z-index: 1; }\n.backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 60%); pointer-events: auto; }\n.panel { position: absolute; top: 50%; left: 50%; min-width: 260px; padding: 24px; background: #1b2235; border-radius: 12px; transform: translate(-50%, -50%); }\nlabel { display: block; margin: 16px 0; }\n"
+        "html": "<section class=\"settings\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"settings-title\" hidden><div class=\"backdrop\" data-ui-action=\"close-settings\"></div><div class=\"panel\" role=\"document\" tabindex=\"-1\"><h2 id=\"settings-title\">Game settings</h2><label>Music volume <input data-ui-setting=\"music\" type=\"range\" min=\"0\" max=\"100\" value=\"70\"></label><label><input data-ui-setting=\"music-muted\" type=\"checkbox\"> Mute music bus</label><label>Anti-aliasing <select data-ui-setting=\"antialias\"><option value=\"none\">None</option><option value=\"msaa\">MSAA</option><option value=\"fxaa\" selected>FXAA</option></select></label><label><input data-ui-setting=\"bloom\" type=\"checkbox\" checked> Bloom post-processing</label><label><input data-ui-setting=\"depth-of-field\" type=\"checkbox\"> Depth of field (Bokeh)</label><label>Clear color <select data-ui-setting=\"clear-color\"><option value=\"sky\" selected>Sky blue</option><option value=\"purple\">Purple</option></select></label><label><input data-ui-setting=\"high-contrast\" type=\"checkbox\"> High contrast</label><button type=\"button\" data-ui-action=\"close-settings\">Done</button></div></section>",
+        "css": ":host { display: block; color: #fff; font: 14px ui-sans-serif, system-ui, sans-serif; } .settings[hidden] { display: none; } .settings { position: absolute; inset: 0; z-index: 1; } .backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 60%); pointer-events: auto; } .panel { position: absolute; top: 50%; left: 50%; min-width: 260px; padding: 24px; background: #1b2235; border-radius: 12px; transform: translate(-50%, -50%); } label { display: block; margin: 16px 0; }"
       },
-      "refs": []
+      "refs": [],
+      "artifacts": {}
     }
   ]
 }

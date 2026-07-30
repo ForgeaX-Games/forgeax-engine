@@ -136,3 +136,47 @@ describe('ASSET_ERROR_HINTS - texture-source-not-imported entry (feat-20260604 M
     expect(hint).toContain('import');
   });
 });
+
+describe('asset contract errors', () => {
+  it('keeps artifact, pack, and evidence errors closed', () => {
+    expectTypeOf<'asset-artifact-path-invalid'>().toExtend<
+      import('../asset-errors.js').AssetArtifactErrorCode
+    >();
+    expectTypeOf<'asset-artifact-integrity-mismatch'>().toExtend<
+      import('../asset-errors.js').AssetArtifactErrorCode
+    >();
+    expectTypeOf<'pack-v2-duplicate-guid'>().toExtend<
+      import('../asset-errors.js').PackV2ErrorCode
+    >();
+    expectTypeOf<'pack-v2-duplicate-artifact-key'>().toExtend<
+      import('../asset-errors.js').PackV2ErrorCode
+    >();
+    expectTypeOf<'asset-evidence-capability-missing'>().toExtend<
+      import('../asset-errors.js').AssetEvidenceErrorCode
+    >();
+    expectTypeOf<'asset-evidence-digest-mismatch'>().toExtend<
+      import('../asset-errors.js').AssetEvidenceErrorCode
+    >();
+  });
+
+  it('uses code, expected, hint, and detail as machine fields', () => {
+    expectTypeOf<import('../asset-errors.js').AssetArtifactError>().toMatchTypeOf<{
+      readonly code: import('../asset-errors.js').AssetArtifactErrorCode;
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: object;
+    }>();
+    expectTypeOf<import('../asset-errors.js').PackV2Error>().toMatchTypeOf<{
+      readonly code: import('../asset-errors.js').PackV2ErrorCode;
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: object;
+    }>();
+    expectTypeOf<import('../asset-errors.js').AssetEvidenceError>().toMatchTypeOf<{
+      readonly code: import('../asset-errors.js').AssetEvidenceErrorCode;
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: object;
+    }>();
+  });
+});

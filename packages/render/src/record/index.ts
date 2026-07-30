@@ -1,6 +1,7 @@
 // @forgeax/engine-runtime - RenderSystem record cluster barrel (feat-20260704 M3/w17).
 export * from './frame';
 export * from './frame-snapshot';
+export * from './frame-targets';
 export * from './helpers';
 export * from './main-pass';
 export * from './main-pass-material';

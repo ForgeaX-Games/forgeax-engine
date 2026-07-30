@@ -32,8 +32,7 @@ describe('import runner dependency observation', () => {
         return {
           ok: true,
           value: {
-            assets: [{ guid: GUID, kind: 'mesh', payload: MESH, refs: [] }],
-            artifacts: [],
+            assets: [{ guid: GUID, kind: 'mesh', payload: MESH, refs: [], artifacts: {} }],
             sourceDependencies: [],
           },
         };

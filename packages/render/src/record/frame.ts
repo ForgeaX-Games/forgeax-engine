@@ -91,11 +91,14 @@ export function recordFrame(
   // pre-split single-world identity path (worldId always 0) byte-for-byte and
   // the existing unit-test callers (which pass a single mock world) valid.
   worlds: readonly World[] = [world],
-): void {
+): boolean {
   // The `try / finally` wrapper advances `frameState.frameNumber` exactly
   // once per `recordFrame` invocation regardless of which early-return
   // branch is taken (camera missing, cap exceeded, pipeline pending,
   // swap-chain unavailable, etc).
+  // The boolean result reports whether the shared frame encoder reached queue
+  // submission; prepared graphics uses it to distinguish in-flight from
+  // unsubmitted buffer leases.
   // Case B: 0 Camera => fire onError diagnostic. After
   // feat-20260608-create-app-param-surface-trim / M1 / D-8, the frame
   // is NOT skipped: a synthetic CameraSnapshot is injected so the
@@ -130,7 +133,7 @@ export function recordFrame(
       );
     }
     const camera = activeCameras[0];
-    if (!camera) return;
+    if (!camera) return false;
 
     // Record-stage fold operator linear scan (groups transparent-sort entries
     // into fold buckets + records the fold-eligible count metric). Extracted to
@@ -213,7 +216,7 @@ export function recordFrame(
     // conditional on `validatedOrdered.length > 0` further down.
 
     const pipelineState = internals.getPipelineState();
-    if (pipelineState === null) return;
+    if (pipelineState === null) return false;
 
     // Point-shadow params UBO write (per-layer near/far/invSpan). Extracted to
     // writeShadowParamsBuffer (M3/w18).
@@ -232,7 +235,7 @@ export function recordFrame(
     // (context null / double getCurrentTexture fail / view creation fail), in
     // which case recordFrame bails after the finally-block frame advance.
     const swapTarget = acquireSwapChainTarget(internals, pipelineState);
-    if (swapTarget === null) return;
+    if (swapTarget === null) return false;
     const currentTexture = swapTarget.currentTexture;
     const view = swapTarget.view;
     const targetW = swapTarget.targetW;
@@ -275,7 +278,7 @@ export function recordFrame(
       targetH,
       effectiveShadowMapSize,
     );
-    if (perFrameGraph === null) return;
+    if (perFrameGraph === null) return false;
 
     // M1 / w7: depth texture owned by render-graph (addColorTarget('depth', ...)).
     // The graph allocates + recompiles on resize; recordFrame reads the resolved
@@ -419,7 +422,7 @@ export function recordFrame(
       const unormViewRes = internals.device.createTextureView(currentTexture, {});
       if (!unormViewRes.ok) {
         internals.errorRegistry.fire(unormViewRes.error);
-        return;
+        return false;
       }
       ldrSpriteUnormView = unormViewRes.value;
     }
@@ -464,7 +467,7 @@ export function recordFrame(
     const encoderResult = internals.device.createCommandEncoder({ label: 'render-system-frame' });
     if (!encoderResult.ok) {
       internals.errorRegistry.fire(encoderResult.error);
-      return;
+      return false;
     }
     const encoder: RhiCommandEncoder = encoderResult.value;
 
@@ -566,7 +569,7 @@ export function recordFrame(
     // Build (memoized) + execute the per-frame graph, then finish + submit the
     // shared encoder + reclaim retired transients. Extracted to
     // executeFrameGraph (M3/w18).
-    executeFrameGraph(internals, frameState, passCtx, passData, encoder);
+    return executeFrameGraph(internals, frameState, passCtx, passData, encoder);
   } finally {
     frameState.frameNumber += 1;
     // feat-20260608-cluster-lighting M5 / w22: clear HDRP once-per-frame fired

@@ -24,6 +24,20 @@ export { SortKey } from './components/sort-key';
 export { SpotLight } from './components/spot-light';
 export * from './errors/index';
 export * from './errors/recover';
+/**
+ * Public producer seam: RenderFeature, its narrow stage contexts, structured
+ * diagnostics, graph contribution vocabulary, and prepared graphics facade.
+ * This root declaration is the AI-discoverable API authority; host
+ * construction details remain under the internal entry.
+ */
+export * from './features';
+/** Explicit prepared-graphics aliases keep the five-kind surface indexable. */
+export type {
+  PreparedKind,
+  RenderFeatureDrawRecord,
+  RenderFeatureGraphicsPassDescriptor,
+  RenderFeaturePreparedRef,
+} from './features/prepared-graphics';
 export * from './fullscreen-post-process-pass';
 export { Materials } from './materials';
 export * from './pipeline-errors';

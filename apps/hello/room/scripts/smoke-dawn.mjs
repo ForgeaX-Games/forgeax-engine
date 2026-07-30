@@ -238,6 +238,14 @@ assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
 // to Handle numbers via the guidToHandle index populated by
 // catalog calls above.
 const roomPack = JSON.parse(readFileSyncFs(ROOM_PACK_PATH, 'utf8'));
+if (
+  roomPack.schemaVersion !== '2.0.0' ||
+  roomPack.kind !== 'internal-text-package' ||
+  roomPack.assets.some((asset) => asset.artifacts === undefined)
+) {
+  console.error('[smoke] FAIL - room.pack.json is not a Pack v2 package with asset-local artifacts');
+  process.exit(1);
+}
 const sceneEntry = roomPack.assets.find((a) => a.kind === 'scene');
 if (!sceneEntry) {
   console.error('[smoke] FAIL - room.pack.json has no scene entry');

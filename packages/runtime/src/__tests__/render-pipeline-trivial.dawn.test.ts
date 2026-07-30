@@ -370,10 +370,9 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     // early-returns when frameState.pointShadowSnapshots.length === 0 so the
     // zero-shadow scene pays no GPU cost — pass name still surfaces because
     // the graph node is declared at topology-build time).
-    // feat-20260615-debug-draw M5: debug-overlay joins the chain after
-    // fxaa (declared unconditionally in urp-pipeline.ts buildGraph;
-    // attachDebugOverlayPass no-ops when no DebugDraw is registered so
-    // the zero-draw scene pays no GPU cost).
+    // feat-20260615-debug-draw M5: debug-overlay is the final pass. FXAA and
+    // tonemap are topology-owned camera features, so the default camera in
+    // this zero-post-process scene does not declare either pass.
     // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): 'spot-shadow'
     // joins the chain after 'point-shadow' (declared unconditionally in
     // urp-pipeline.ts buildGraph; recordSpotShadowPass early-returns when no
@@ -389,8 +388,6 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
       'bloom-blur-h',
       'bloom-blur-v',
       'bloom-composite',
-      'tonemap',
-      'fxaa',
       'debug-overlay',
     ]);
 

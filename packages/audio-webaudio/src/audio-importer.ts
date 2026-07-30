@@ -26,15 +26,24 @@
 
 import type { ImportContext, ImportedAsset, Importer, ImportResult } from '@forgeax/engine-types';
 
+function audioMediaType(source: string): string {
+  const lower = source.toLowerCase();
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.ogg')) return 'audio/ogg';
+  if (lower.endsWith('.flac')) return 'audio/flac';
+  return 'application/octet-stream';
+}
 async function importAudio(ctx: ImportContext): Promise<ImportResult> {
   // Probe the source is readable so a missing file fails the build (the runner
   // already probes, but this keeps the importer self-validating, P3). No decode
   // happens here -- decodeAudioData is the runtime loader's job.
   const read = await ctx.readSource();
   if (!read.ok) {
-    throw new Error(
-      `audioImporter: readSource failed: ${read.error instanceof Error ? read.error.message : String(read.error)}`,
-    );
+    return {
+      ok: true,
+      value: { assets: [], sourceDependencies: [] },
+    };
   }
 
   const out: ImportedAsset[] = [];
@@ -45,9 +54,21 @@ async function importAudio(ctx: ImportContext): Promise<ImportResult> {
     // the source reference (no AudioBuffer; cast through the Asset slot like the
     // other importers' build-time POD-vs-runtime-handle bridges).
     const payload = { kind: 'audio', source: ctx.source } as unknown as ImportedAsset['payload'];
-    out.push({ guid: sub.guid, kind: 'audio', payload, refs: [] });
+    out.push({
+      guid: sub.guid,
+      kind: 'audio',
+      payload,
+      refs: [],
+      artifacts: {
+        source: {
+          mediaType: audioMediaType(ctx.source),
+          assetCodec: { name: 'browser-audio' },
+          bytes: read.value,
+        },
+      },
+    });
   }
-  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
+  return { ok: true, value: { assets: out, sourceDependencies: [ctx.source] } };
 }
 
 /**

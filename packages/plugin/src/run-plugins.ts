@@ -19,16 +19,23 @@
 
 import type { Result, World } from '@forgeax/engine-ecs';
 import { err, ok } from '@forgeax/engine-ecs';
-import { PLUGIN_ERROR_HINTS, PLUGIN_EXPECTED, type Plugin, PluginError } from './index';
+import {
+  flattenPluginSources,
+  PLUGIN_ERROR_HINTS,
+  PLUGIN_EXPECTED,
+  type Plugin,
+  PluginError,
+  type PluginSource,
+} from './index';
 
 export async function runPlugins(
   world: World,
-  defaultSet: readonly Plugin[],
-  userPlugins: readonly Plugin[],
+  defaultSet: readonly PluginSource[],
+  userPlugins: readonly PluginSource[],
 ): Promise<Result<Map<string, Plugin>, PluginError>> {
   const merged: Map<string, Plugin> = new Map();
 
-  for (const plugin of [...defaultSet, ...userPlugins]) {
+  for (const plugin of flattenPluginSources([...defaultSet, ...userPlugins])) {
     const name = plugin.name;
     if (typeof name !== 'string' || name.length === 0) {
       return err(

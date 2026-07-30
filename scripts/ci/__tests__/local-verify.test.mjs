@@ -304,9 +304,9 @@ test('local PR CI projection expands the actual Bevy smoke matrix', () => {
     return substituteLocalMatrix(step.command, plan.matrix);
   });
   assert.deepEqual(smokeCommand, [
-    'pnpm bevy:smokes -- --group 0 --groups 3',
-    'pnpm bevy:smokes -- --group 1 --groups 3',
-    'pnpm bevy:smokes -- --group 2 --groups 3',
+    'pnpm bevy:smokes -- --group 0 --groups 3 --concurrency auto',
+    'pnpm bevy:smokes -- --group 1 --groups 3 --concurrency auto',
+    'pnpm bevy:smokes -- --group 2 --groups 3 --concurrency auto',
   ]);
   assert.equal(isMatrixStepEnabled('matrix.group == 0', { group: '0' }), true);
   assert.equal(isMatrixStepEnabled('matrix.group == 0', { group: '1' }), false);

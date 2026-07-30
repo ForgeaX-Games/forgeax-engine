@@ -379,6 +379,24 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         expect(asset.paramValues?.roughness).toBe(0.7);
       });
 
+      it('maps glTF emissiveFactor and emissiveTexture', () => {
+        const mat: GltfMaterialIr = {
+          name: 'EmissiveMat',
+          baseColorFactor: [1, 1, 1, 1],
+          metallicFactor: 0,
+          roughnessFactor: 0.5,
+          emissiveFactor: [0.8, 0.4, 0.1],
+          emissiveTexture: 1,
+        };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map([[1, FAKE_TEXTURE_HANDLE]]),
+        });
+
+        expect(asset.paramValues?.emissive).toEqual([0.8, 0.4, 0.1]);
+        expect(asset.paramValues?.emissiveIntensity).toBe(1);
+        expect(asset.paramValues?.emissiveTexture).toBe(FAKE_TEXTURE_HANDLE);
+      });
+
       it('standard material without textures produces paramValues with null-defaulted texture params', () => {
         const { baseColorTexture: _, ...rest } = STANDARD_MATERIAL;
         const mat: GltfMaterialIr = rest;
@@ -491,6 +509,34 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         expect(pass?.renderState?.blend).toBeDefined();
         expect(pass?.renderState?.depthWriteEnabled).toBe(false);
         expect(pass?.queue).toBe(3000);
+      });
+
+      it('double-sided material disables face culling without changing its queue', () => {
+        const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, doubleSided: true };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        const pass = asset.passes?.[0];
+        expect(pass?.queue).toBe(2000);
+        expect(pass?.renderState?.cullMode).toBe('none');
+        expect(pass?.renderState?.blend).toBeUndefined();
+      });
+
+      it('double-sided BLEND material keeps both blend and no-cull state', () => {
+        const mat: GltfMaterialIr = {
+          ...STANDARD_MATERIAL,
+          alphaMode: 'BLEND',
+          doubleSided: true,
+        };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        const pass = asset.passes?.[0];
+        expect(pass?.renderState?.blend).toBeDefined();
+        expect(pass?.renderState?.depthWriteEnabled).toBe(false);
+        expect(pass?.renderState?.cullMode).toBe('none');
       });
     });
   });

@@ -267,6 +267,17 @@ function recover(code: RemoteErrorCode): string {
 
 plugin bin 是各能力包自带的独立可执行文件，进程外直接调用：
 
+### Offline AssetEvidence probe
+
+`forgeax-engine-remote-asset lookup` and `verify` have a machine-readable evidence form:
+
+```bash
+forgeax-engine-remote-asset lookup --guid <guid> --project <project> --catalog <catalog.json> --json
+forgeax-engine-remote-asset verify --guid <guid> --project <project> --catalog <catalog.json> --json
+```
+
+The probe joins source inventory, catalog `packageUrl`/`cookReceiptUrl`, the producer `CookReceipt`, Pack v2 descriptors, and artifact bytes. Success writes one `AssetEvidence` JSON object. Failure writes exactly one structured JSON object to stderr with `code`, `expected`, `hint`, and optional `detail`; there is no WS connection. Read `notCooked`, `ready/current`, `ready/stale`, `unknown`, `notChecked`, `passed`, and `failed` literally and follow the `.hint` recovery action. A catalog row by itself is navigation, not proof.
+
 ```bash
 # ECS 查询
 forgeax-engine-remote-ecs entities

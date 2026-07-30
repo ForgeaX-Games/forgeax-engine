@@ -69,7 +69,7 @@ describe('catalog failure result', () => {
     expect(result.authority).toBe('degraded');
     expect(result.entries).toEqual([]);
     expect(result.diagnostics[0]).toMatchObject({
-      code: 'catalog-provider-unregistered',
+      code: 'catalog-raw-source-unsupported',
       expected: expect.any(String),
       actual: 'missing-provider',
       hint: expect.any(String),

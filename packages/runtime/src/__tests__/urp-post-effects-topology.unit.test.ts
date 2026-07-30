@@ -60,7 +60,7 @@ function mockCtx(runtime: RenderSystemRuntime): RenderPipelineContext {
     targetW: 800,
     targetH: 600,
     currentTexture: {},
-    camera: {},
+    camera: { antialias: 'fxaa', tonemap: 'none' },
     validated: [],
     validatedOrdered: [],
     viewBindGroup: null,
@@ -77,9 +77,15 @@ function mockCtx(runtime: RenderSystemRuntime): RenderPipelineContext {
   } as unknown as RenderPipelineContext;
 }
 
-function mockData(config: RenderPipelineData['config']): RenderPipelineData {
+function mockData(
+  config: RenderPipelineData['config'],
+  camera: { antialias: 'none' | 'fxaa'; tonemap: 'none' | 'reinhard' } = {
+    antialias: 'fxaa',
+    tonemap: 'none',
+  },
+): RenderPipelineData {
   return {
-    camera: {},
+    camera,
     validated: [],
     validatedOrdered: [],
     targetW: 800,
@@ -130,6 +136,10 @@ describe('feat-20260621 M4′: URP config.postEffects topology (AUGMENT, not REP
     // The built-in chain is intact.
     expect(names).toContain('fxaa');
     expect(names).toContain('debug-overlay');
+    expect(graph.listResources().map((resource) => resource.key)).toContain('ldrColor');
+    const fxaa = graph.listPasses().find((pass) => pass.name === 'fxaa');
+    expect(fxaa?.reads).toEqual(['ldrColor']);
+    expect(fxaa?.writes).toEqual(['swapchain']);
   });
 
   it('postEffects: [a, b] -> two post-effect passes, AFTER fxaa, BEFORE debug-overlay', () => {
@@ -154,6 +164,20 @@ describe('feat-20260621 M4′: URP config.postEffects topology (AUGMENT, not REP
     expect(idx0).toBeGreaterThan(idxFxaa);
     expect(idx1).toBeGreaterThan(idx0);
     expect(idxOverlay).toBeGreaterThan(idx1);
+  });
+
+  it('FXAA routes tonemap output through graph-owned LDR before writing the surface', () => {
+    const graph = urpPipeline.buildGraph(
+      mockCtx(mockRuntime()),
+      mockData(undefined, { antialias: 'fxaa', tonemap: 'reinhard' }),
+    );
+    expect(graph).not.toBeNull();
+    if (graph === null) return;
+    const byName = new Map(graph.listPasses().map((pass) => [pass.name, pass]));
+    expect(byName.get('main')?.writes).toContain('hdrColor');
+    expect(byName.get('tonemap')?.writes).toEqual(['ldrColor']);
+    expect(byName.get('fxaa')?.reads).toEqual(['ldrColor']);
+    expect(byName.get('fxaa')?.writes).toEqual(['swapchain']);
   });
 
   it('AUGMENT: all 4 shadow cascades survive alongside the post-effect pass', () => {

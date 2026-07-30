@@ -11,7 +11,7 @@ const row = (
 ): PackIndexEntry => ({
   guid: guid(id),
   kind: 'host/blob',
-  relativeUrl: `/assets/${id}.bin`,
+  packageUrl: `/assets/${id}.bin`,
   sourcePath: `${id}.source`,
   ...options,
 });

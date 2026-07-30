@@ -33,5 +33,8 @@ describe('game-default UI asset manifest', () => {
       expect(asset?.payload.html).toContain('data-ui');
       expect(asset?.payload.css).toContain(':host');
     }
+    const settingsHtml = (settings.assets as Array<{ payload: { html: string } }>)[0]?.payload.html;
+    expect(settingsHtml).toContain('data-ui-setting="clear-color"');
+    expect(settingsHtml).toContain('value="purple"');
   });
 });

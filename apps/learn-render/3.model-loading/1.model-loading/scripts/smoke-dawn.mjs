@@ -127,11 +127,13 @@ try {
   process.exit(1);
 }
 
-// Build: URL -> disk path.
+// Build: URL -> disk path. Artifact URLs are registered from the pack
+// descriptor when that pack is fetched; the smoke therefore exercises the
+// same package-relative resolution contract as the runtime.
 const urlToPath = new Map();
 for (const entry of packIndexJson) {
-  if (!urlToPath.has(entry.relativeUrl)) {
-    urlToPath.set(entry.relativeUrl, resolve(DIST_DIR, entry.relativeUrl.replace(/^\//, '')));
+  if (!urlToPath.has(entry.packageUrl)) {
+    urlToPath.set(entry.packageUrl, resolve(DIST_DIR, entry.packageUrl.replace(/^\//, '')));
   }
 }
 console.log(`[smoke] pack-index: ${packIndexJson.length} entries, ${urlToPath.size} URLs`);
@@ -191,6 +193,7 @@ globalThis.fetch = async (url) => {
 
   const filePath = urlToPath.get(urlStr);
   if (!filePath) {
+    console.error(`[smoke] fetch miss: ${urlStr}`);
     return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
 
@@ -203,9 +206,21 @@ globalThis.fetch = async (url) => {
       return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
     }
     const text = new TextDecoder().decode(buf);
+    const pack = JSON.parse(text);
+    const packageDirectory = urlStr.slice(0, urlStr.lastIndexOf('/') + 1);
+    const packageDirectoryPath = dirname(filePath);
+    for (const asset of pack.assets ?? []) {
+      for (const descriptor of Object.values(asset.artifacts ?? {})) {
+        if (descriptor === null || typeof descriptor !== 'object' || typeof descriptor.path !== 'string') {
+          continue;
+        }
+        const artifactUrl = `${packageDirectory}${descriptor.path.replace(/^\/+/, '')}`;
+        urlToPath.set(artifactUrl, resolve(packageDirectoryPath, descriptor.path));
+      }
+    }
     return {
       ok: true,
-      json: () => Promise.resolve(JSON.parse(text)),
+      json: () => Promise.resolve(pack),
       arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
     };
   }

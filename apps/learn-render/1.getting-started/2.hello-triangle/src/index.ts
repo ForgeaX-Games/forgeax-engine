@@ -53,6 +53,23 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
+type LearnRenderError = { code: string; hint?: string };
+type CaptureHook = () => Promise<Uint8Array>;
+
+function reportBootstrapError(
+  label: string,
+  error: { readonly code: string; readonly hint?: string },
+): void {
+  console.error(label, error);
+  const bus = window.__learnRenderErrors;
+  if (bus !== undefined) {
+    bus.push({
+      code: error.code,
+      ...(error.hint !== undefined ? { hint: error.hint } : {}),
+    });
+  }
+}
+
 // 2. example-specific glue - LO 1.2 lands the first visible triangle.
 // Color matches the LO 1.2 fragment shader literal
 // `FragColor = vec4(1.0, 0.5, 0.2, 1.0)` (orange). The engine v1 frag
@@ -60,24 +77,26 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 // is the on-screen pixel color (no light contribution). The clear color
 // matches LO 1.1 / 1.3 teal so the captured frame is comparable across
 // the seven learn-render examples.
-function spawnTriangleScene(world: World): void {
+function spawnTriangleScene(world: World, clearOnly: boolean): void {
   // Triangle entity (Transform + MeshFilter + MeshRenderer) at origin /
   // identity rotation / unit scale. Color = LO 1.2 frag literal orange
   // (1.0, 0.5, 0.2). metallic / roughness are unused on the engine v1
   // frag path (the fallback shader outputs baseColor directly) but the
   // schema requires the fields.
-  world.spawn(
-    {
-      component: Transform,
-      data: {
-        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
-    },
-    { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
-    {
-      component: MeshRenderer,
-      data: {},
-    },
-  );
+  if (!clearOnly) {
+    world.spawn(
+      {
+        component: Transform,
+        data: {
+          pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
+      },
+      { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
+      {
+        component: MeshRenderer,
+        data: {},
+      },
+    );
+  }
   // Camera entity (Transform + Camera) at z=3 looking down -z (RH
   // identity quaternion convention). Frustum (fov 45 deg, aspect 1,
   // near 0.1, far 100) keeps the unit-scale triangle visible.
@@ -87,7 +106,10 @@ function spawnTriangleScene(world: World): void {
       data: {
         pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
-    { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
+    {
+      component: Camera,
+      data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100, clearColor: [0.2, 0.3, 0.3, 1] },
+    },
   );
 }
 
@@ -111,17 +133,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
     const renderer = await Engine.create(target, {}, forgeaxBundlerAdapter());
     renderer.onError((e) => {
-      console.error('[learn-render 1.2 hello-triangle] renderer.onError:', e.code, e.hint);
-      const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
-      if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
+      reportBootstrapError('[learn-render 1.2 hello-triangle] renderer.onError:', e);
     });
     const ready = await renderer.ready;
     if (!ready.ok) {
-      console.error('[learn-render 1.2 hello-triangle] renderer.ready failed:', ready.error);
+      reportBootstrapError(
+        '[learn-render 1.2 hello-triangle] renderer.ready failed:',
+        ready.error,
+      );
       return;
     }
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
+    const clearOnly = params.get('clearOnly') === '1';
+    let drawCalls = 0;
+    Object.assign(window, {
+      __learnRenderTriangleClearOnly: clearOnly,
+      __learnRenderTriangleDrawCalls: () => drawCalls,
+    });
     const world = new World();
-    spawnTriangleScene(world);
+    spawnTriangleScene(world, clearOnly);
     // rAF-driven render loop - one `renderer.draw(world)` per compositor
     // tick. The engine-internal RenderSystem walks the World query graph
     // (Extract / Prepare / Record three stages) and submits one GPU
@@ -131,10 +161,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const tick = (): void => {
       const drawn = renderer.draw([world], { owner: 0 });
       if (!drawn.ok) {
-        console.error('[learn-render 1.2 hello-triangle] draw failed:', drawn.error);
+        reportBootstrapError('[learn-render 1.2 hello-triangle] draw failed:', drawn.error);
         return;
       }
+      drawCalls += 1;
       requestAnimationFrame(tick);
+      // The positive marker is deliberately later than renderer.ready: the
+      // scene, probes, render loop, and one successful draw must all exist.
+      window.__learnRenderBootstrapComplete = true;
     };
     requestAnimationFrame(tick);
     // Capture hook for downstream readback paths (bench-screenshot
@@ -144,10 +178,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // 2026-05-17; AGENTS.md §Breaking changes) -- the recipe lives in
     // packages/runtime/src/createRenderer.ts now (architecture
     // principle 1 SSOT).
-    type CaptureHook = () => Promise<Uint8Array>;
-    const win = window as unknown as { __captureHelloTriangle?: CaptureHook };
-    win.__captureHelloTriangle = async (): Promise<Uint8Array> => {
-      renderer.draw([world], { owner: 0 });
+    window.__captureHelloTriangle = async (): Promise<Uint8Array> => {
+      const drawn = renderer.draw([world], { owner: 0 });
+      if (!drawn.ok) {
+        reportBootstrapError(
+          '[learn-render 1.2 hello-triangle] capture draw failed:',
+          drawn.error,
+        );
+        throw new Error(
+          `[learn-render 1.2 hello-triangle] capture draw failed: ${drawn.error.code}`,
+        );
+      }
       const r = await renderer.readPixels();
       if (!r.ok) throw new Error(`[learn-render 1.2 hello-triangle] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
       return r.value;
@@ -159,5 +200,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     } else {
       console.error('[learn-render 1.2 hello-triangle] bootstrap error:', err);
     }
+  }
+}
+
+declare global {
+  interface Window {
+    __learnRenderErrors?: LearnRenderError[];
+    __learnRenderTriangleClearOnly?: boolean;
+    __learnRenderTriangleDrawCalls?: () => number;
+    __learnRenderBootstrapComplete?: boolean;
+    __captureHelloTriangle?: CaptureHook;
   }
 }

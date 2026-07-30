@@ -7,7 +7,7 @@ const previous: PackIndexEntry[] = [
   {
     guid: '018e7a4d-1234-7abc-8def-000000000020',
     kind: 'host/blob',
-    relativeUrl: '/assets/old.bin',
+    packageUrl: '/assets/old.bin',
     sourcePath: 'old.source',
   },
 ];
@@ -16,7 +16,7 @@ const next: PackIndexEntry[] = [
   {
     guid: '018e7a4d-1234-7abc-8def-000000000020',
     kind: 'host/blob',
-    relativeUrl: '/assets/new.bin',
+    packageUrl: '/assets/new.bin',
     sourcePath: 'new.source',
   },
 ];

@@ -1,0 +1,89 @@
+import { createQueryState, queryRun, World } from '@forgeax/engine-ecs';
+import type { Handle, ParticleEffectAsset } from '@forgeax/engine-types';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import { ParticleEffectPlayer, type ParticleEffectPlayerData } from '../index.js';
+
+const asset: ParticleEffectAsset = {
+  kind: 'particle-effect',
+  schemaVersion: 1,
+  emitters: [],
+};
+
+describe('ParticleEffectPlayer ECS contract', () => {
+  it('exposes exactly the four author-intent fields with stable defaults', () => {
+    expect(Object.keys(ParticleEffectPlayer.schema)).toEqual([
+      'effect',
+      'playing',
+      'seed',
+      'timeScale',
+    ]);
+    expect(ParticleEffectPlayer.schema).toEqual({
+      effect: 'shared<ParticleEffectAsset>',
+      playing: 'bool',
+      seed: 'u32',
+      timeScale: 'f32',
+    });
+    expect(ParticleEffectPlayer.defaults).toEqual({
+      playing: true,
+      seed: 0,
+      timeScale: 1,
+    });
+    expect(ParticleEffectPlayer.fields.effect.type).toBe('shared<ParticleEffectAsset>');
+    expect(ParticleEffectPlayer.fields.playing.default).toBe(true);
+    expect(ParticleEffectPlayer.fields.seed.default).toBe(0);
+    expect(ParticleEffectPlayer.fields.timeScale.default).toBe(1);
+  });
+
+  it('round-trips a scene-compatible player payload without changing intent', () => {
+    const world = new World();
+    const effect = world.allocSharedRef('ParticleEffectAsset', asset);
+    const payload: ParticleEffectPlayerData = {
+      effect,
+      playing: false,
+      seed: 42,
+      timeScale: 0.5,
+    };
+    const roundTrip: unknown = JSON.parse(JSON.stringify(payload));
+
+    expect(roundTrip).toEqual(payload);
+  });
+
+  it('uses the shared asset identity in a real spawn and queryRun callback', () => {
+    const world = new World();
+    const effect = world.allocSharedRef('ParticleEffectAsset', asset);
+    const entity = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect, playing: true, seed: 7, timeScale: 0.25 },
+      })
+      .unwrap();
+    const state = createQueryState({ with: [ParticleEffectPlayer] });
+    let observed = false;
+
+    queryRun(state, world, (bundle) => {
+      expectTypeOf(bundle.ParticleEffectPlayer.effect).toEqualTypeOf<
+        import('@forgeax/engine-ecs').ManagedColumnReader<'shared<ParticleEffectAsset>'>
+      >();
+      expectTypeOf(bundle.ParticleEffectPlayer.playing).toEqualTypeOf<Uint8Array>();
+      expectTypeOf(bundle.ParticleEffectPlayer.seed).toEqualTypeOf<Uint32Array>();
+      expectTypeOf(bundle.ParticleEffectPlayer.timeScale).toEqualTypeOf<Float32Array>();
+      expect(bundle.ParticleEffectPlayer.effect.get(0)).toBe(effect);
+      observed = true;
+    });
+
+    expect(entity).toBeDefined();
+    expect(observed).toBe(true);
+  });
+
+  it('keeps the shared-ref data shape assignable to the public handle contract', () => {
+    const world = new World();
+    const effect: Handle<'ParticleEffectAsset', 'shared'> = world.allocSharedRef(
+      'ParticleEffectAsset',
+      asset,
+    );
+    expectTypeOf<ParticleEffectPlayerData['effect']>().toEqualTypeOf<
+      Handle<'ParticleEffectAsset', 'shared'>
+    >();
+    expect(effect).toBeGreaterThan(0);
+  });
+});

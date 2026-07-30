@@ -33,7 +33,7 @@ const MESH_A = '70000000-0000-4000-7000-000000000001';
 const MESH_B = '70000000-0000-4000-7000-000000000002';
 const TEX = '70000000-0000-4000-7000-0000000000aa';
 const SHARED_PACK_URL = '/packs/char.pack.json';
-const TEX_URL = '/assets/diffuse.bin';
+const TEX_URL = '/assets/diffuse.pack.json';
 
 function parseGuid(s: string): AssetGuid {
   const r = AssetGuid.parse(s);
@@ -66,11 +66,11 @@ const MESH_PAYLOAD_B = {
 
 function makeSharedPack(): unknown {
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
-      { guid: MESH_A, kind: 'mesh', payload: MESH_PAYLOAD_A },
-      { guid: MESH_B, kind: 'mesh', payload: MESH_PAYLOAD_B },
+      { guid: MESH_A, kind: 'mesh', payload: MESH_PAYLOAD_A, refs: [], artifacts: {} },
+      { guid: MESH_B, kind: 'mesh', payload: MESH_PAYLOAD_B, refs: [], artifacts: {} },
     ],
   };
 }
@@ -90,24 +90,23 @@ function makePackIndex(includeNames: boolean): unknown[] {
   return [
     {
       guid: MESH_A,
-      relativeUrl: SHARED_PACK_URL,
+      packageUrl: SHARED_PACK_URL,
       kind: 'mesh',
       sourcePath: 'char.glb',
       ...named('Body'),
     },
     {
       guid: MESH_B,
-      relativeUrl: SHARED_PACK_URL,
+      packageUrl: SHARED_PACK_URL,
       kind: 'mesh',
       sourcePath: 'char.glb',
       ...named('Head'),
     },
     {
       guid: TEX,
-      relativeUrl: TEX_URL,
+      packageUrl: TEX_URL,
       kind: 'texture',
       sourcePath: 'diffuse.png',
-      metadata: TEX_METADATA,
       ...named('Diffuse'),
     },
   ];
@@ -132,6 +131,26 @@ function installFetch(includeNames: boolean): void {
       return new Response(JSON.stringify(sharedPack), { status: 200 });
     }
     if (u === TEX_URL) {
+      return new Response(
+        JSON.stringify({
+          schemaVersion: '2.0.0',
+          kind: 'internal-text-package',
+          assets: [
+            {
+              guid: TEX,
+              kind: 'texture',
+              payload: TEX_METADATA,
+              refs: [],
+              artifacts: {
+                body: { path: 'diffuse.bin', mediaType: 'application/x-forgeax-rgba8' },
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (u === '/assets/diffuse.bin') {
       return new Response(texBytes, { status: 200 });
     }
     return new Response('', { status: 404 });
@@ -169,9 +188,10 @@ describe('loader name survival (AC-08)', () => {
 
     const r = await reg.loadByGuid(parseGuid(TEX));
     expect(r.ok).toBe(true);
-    // Single-asset texture package -> basename(authored sourcePath). The
-    // replaceable DDC relativeUrl must not become package identity.
-    expect(reg.resolveName(TEX)).toBe('diffuse.png');
+    // Single-asset texture package -> basename(path) (AC-01). The wiring is what
+    // makes this non-empty: without entry -> Package the texture lands in a null
+    // package and resolveName would be ''.
+    expect(reg.resolveName(TEX)).toBe('diffuse.pack.json');
   });
 
   it('FALSIFY: stripped entry.name degrades to basename, proving name-sensitivity', async () => {
@@ -184,10 +204,10 @@ describe('loader name survival (AC-08)', () => {
     expect(rA.ok).toBe(true);
     expect(rB.ok).toBe(true);
 
-    // Multi-asset package with no stored names -> basename(authored
-    // sourcePath), NOT the original 'Body' / 'Head'. If the assertion still
+    // Multi-asset package with no stored names -> basename(cooked packageUrl),
+    // NOT the original 'Body' / 'Head'. If the assertion still
     // saw 'Body', the name path would be a tautology.
-    expect(reg.resolveName(MESH_A)).toBe('char.glb');
-    expect(reg.resolveName(MESH_B)).toBe('char.glb');
+    expect(reg.resolveName(MESH_A)).toBe('char.pack.json');
+    expect(reg.resolveName(MESH_B)).toBe('char.pack.json');
   });
 });

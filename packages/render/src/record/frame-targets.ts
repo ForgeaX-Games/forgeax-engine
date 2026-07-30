@@ -2,21 +2,47 @@
 // feat-20260704 M5/w31: further-split from frame.ts (AC-05 <=1500 lines/file).
 // Pure leaf helpers invoked once each from recordFrame; behavior verbatim.
 
-import type { RenderGraph } from '@forgeax/engine-render-graph';
+import type { RenderGraph, ResolveContext } from '@forgeax/engine-render-graph';
 import {
+  type BindGroup,
+  type Buffer,
   type CommandBuffer,
+  type RenderPipeline,
   type RhiCanvasContext,
   type RhiCommandEncoder,
   RhiError,
   type Texture,
   type TextureView,
 } from '@forgeax/engine-rhi';
+import { err, ok, type Result } from '@forgeax/engine-types';
+import { type RenderError, RenderFeatureStageFailedError } from '../errors/render';
+import {
+  composeRenderFeatureGraph,
+  type RenderFeatureContributionPass,
+} from '../features/graph-contribution';
+import {
+  type RenderFeatureGraphicsPassDescriptor,
+  type RenderFeaturePreparedGraphicsState,
+  type RenderFeaturePreparedRef,
+  validateRenderFeatureGraphicsPass,
+} from '../features/prepared-graphics';
+import type { RenderFeaturePassContext } from '../features/types';
+import type {
+  PreparedGraphicsResolvedResource,
+  PreparedGraphicsResolvedSnapshot,
+} from '../prepare/prepared-graphics-resolver';
 import type {
   _InternalRenderPipelineContext,
   RenderPipelineContext,
   RenderPipelineData,
 } from '../render-pipeline-context';
-import { configureSurface, type PipelineState, type RenderSystemInternals } from '../render-system';
+import {
+  configureSurface,
+  getRenderFeatureGraphState,
+  type PipelineState,
+  type RenderSystemInternals,
+  type RenderSystemRuntime,
+} from '../render-system';
 import type {
   CameraSnapshot,
   ExtractedLights,
@@ -25,6 +51,39 @@ import type {
 } from '../render-system-extract';
 
 import { type RenderFrameState, retirePerFrameGraph } from './frame-snapshot';
+
+/**
+ * Resolve a graph color target in the format required by a render attachment.
+ * The native swap-chain path stores LDR targets in the storage format and
+ * attaches an sRGB view; WebGL2 uses the target's default sRGB view because
+ * it cannot reinterpret the texture format.
+ *
+ * @internal
+ */
+export function resolveGraphColorAttachmentView(
+  runtime: Pick<RenderSystemRuntime, 'device' | 'errorRegistry'>,
+  frameState: RenderFrameState,
+  pipelineState: PipelineState,
+  key: string,
+  fallback: TextureView | null,
+): TextureView | null {
+  const graph = frameState.perFrameGraph;
+  const graphView = (graph?.getColorTargetView(key) as TextureView | undefined) ?? fallback;
+  if (graphView === null || graphView === undefined) return null;
+  if (key !== 'ldrColor' || !runtime.device.caps.storageBuffer) {
+    return graphView;
+  }
+  const graphTexture = graph?.getColorTargetTexture(key);
+  if (graphTexture === undefined) return graphView;
+  const srgbViewRes = runtime.device.createTextureView(graphTexture as never, {
+    format: pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat,
+  });
+  if (!srgbViewRes.ok) {
+    runtime.errorRegistry.fire(srgbViewRes.error);
+    return null;
+  }
+  return srgbViewRes.value;
+}
 
 /**
  * feat-20260704 M3/w18: resolve the geometry pass colour / depth / resolve /
@@ -122,6 +181,14 @@ export function resolveGeometryTargetViews(
     geometryDepthView = frameState.perFrameGraph?.getColorTargetView('msaaDepth') as TextureView;
     geometryColorResolveView = view;
     ldrSpriteColorView = msaaColorView;
+  } else if (camera.antialias === 'fxaa') {
+    geometryColorView = resolveGraphColorAttachmentView(
+      internals,
+      frameState,
+      pipelineState,
+      'ldrColor',
+      view,
+    );
   }
 
   // M1 / w7: write back MSAA-dependent graph-resolved views to perPassResources.
@@ -181,7 +248,7 @@ export function resolveGeometryTargetViews(
 
 /**
  * feat-20260704 M3/w18: write back graph-resolved TextureViews (depth / shadow
- * / fxaa-intermediate / hdrColor) into `pipelineState.perPassResources` so
+ * / hdrColor) into `pipelineState.perPassResources` so
  * downstream pass closures (recordMainPass / recordTonemapPass /
  * recordFxaaPass / recordShadowPass / recordSkyboxPass) and the view BG cache
  * read them without signature changes. Extracted verbatim from `recordFrame`.
@@ -223,7 +290,7 @@ export function writebackGraphViews(
     // pre-w7 ensureLazyTexture path wrote both view + texture; w7 only
     // wrote the view, leaving `shadowTexture` null forever and breaking
     // `debugReadbackShadowDepth` (it copies from the texture, not the
-    // view). Mirrors the fxaaIntermediateTexture writeback below.
+    // view).
     const graphShadowTex = frameState.perFrameGraph?.getColorTargetTexture('shadowDepth');
     // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
     pipelineState.perPassResources.shadowTexture = graphShadowTex as any;
@@ -255,20 +322,6 @@ export function writebackGraphViews(
     pipelineState.perPassResources.shadowCascadeCount = 0;
     pipelineState.perPassResources.shadowLightSpaceMatrix = null;
     pipelineState.perPassResources.shadowCsmLightViewProj = null;
-  }
-  const graphFxaaView = frameState.perFrameGraph?.getColorTargetView('fxaaIntermediate') as
-    | TextureView
-    | undefined;
-  if (graphFxaaView !== undefined) {
-    // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-    pipelineState.perPassResources.fxaaIntermediateView = graphFxaaView as any;
-    pipelineState.perPassResources.fxaaIntermediateWidth = targetW;
-    pipelineState.perPassResources.fxaaIntermediateHeight = targetH;
-    // Also write back the GPU Texture handle (needed by recordFxaaPass
-    // for encoder.copyTextureToTexture from swap-chain to intermediate).
-    const graphFxaaTex = frameState.perFrameGraph?.getColorTargetTexture('fxaaIntermediate');
-    // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-    pipelineState.perPassResources.fxaaIntermediateTexture = graphFxaaTex as any;
   }
   const graphHdrView = frameState.perFrameGraph?.getColorTargetView('hdrColor') as
     | TextureView
@@ -400,6 +453,7 @@ export function ensurePerFrameGraph(
   shadowMapSizeOverride?: number,
 ): RenderGraph<RenderPipelineContext> | null {
   const earlyTonemapActive = camera.tonemap !== 'none';
+  const earlyTopologyKey = `${camera.antialias}:${earlyTonemapActive ? 'tonemap' : 'ldr'}`;
   const earlyShadowMapSize = shadowMapSizeOverride ?? lights.shadowMapSize;
   const earlyCascadeCount = lights.cascadeCount;
   // Drift-rebuild: if the installed shadow map size or cascade count has
@@ -410,7 +464,8 @@ export function ensurePerFrameGraph(
   // pipeline swap.
   if (
     frameState.perFrameGraph !== null &&
-    (pipelineState.perPassResources.shadowMapSize !== (earlyShadowMapSize ?? 0) ||
+    (frameState.perFrameGraphTopologyKey !== earlyTopologyKey ||
+      pipelineState.perPassResources.shadowMapSize !== (earlyShadowMapSize ?? 0) ||
       pipelineState.perPassResources.shadowCascadeCount !== (earlyCascadeCount ?? 0))
   ) {
     retirePerFrameGraph(frameState);
@@ -451,9 +506,92 @@ export function ensurePerFrameGraph(
       earlyCtx as unknown as RenderPipelineContext,
       earlyData,
     );
+    frameState.perFrameGraphTopologyKey = earlyTopologyKey;
+    getRenderFeatureGraphState(internals).composition = undefined;
   }
   const perFrameGraph = frameState.perFrameGraph;
   if (perFrameGraph === null) return null;
+
+  const featureGraphState = getRenderFeatureGraphState(internals);
+  const hasFeatureGraphWork = featureGraphState.contributions.some(
+    (contribution) => contribution.resources.length > 0 || contribution.passes.length > 0,
+  );
+  if (featureGraphState.composition === undefined && hasFeatureGraphWork) {
+    const composed = composeRenderFeatureGraph(
+      perFrameGraph,
+      featureGraphState.contributions,
+      (context, contributionPass, resolveContext, execute) =>
+        executeGraphOwnedRenderFeaturePass(context, contributionPass, resolveContext, execute),
+      (identity, order, failure) =>
+        reportRenderFeatureExecutionError(internals, { featureIdentity: identity, order }, failure),
+    );
+    if (!composed.ok) {
+      reportRenderFeatureExecutionError(
+        internals,
+        {
+          featureIdentity:
+            'detail' in composed.error &&
+            composed.error.detail !== undefined &&
+            'featureIdentity' in composed.error.detail
+              ? composed.error.detail.featureIdentity
+              : 'render-feature-unknown',
+          order:
+            'detail' in composed.error &&
+            composed.error.detail !== undefined &&
+            'order' in composed.error.detail
+              ? composed.error.detail.order
+              : -1,
+        },
+        composed.error,
+      );
+      featureGraphState.composition = undefined;
+      return null;
+    }
+    featureGraphState.composition = composed.value;
+    const finalCompile = perFrameGraph.compile({
+      backendKind: internals.device.caps.backendKind,
+      caps: internals.device.caps,
+      device: internals.device,
+    });
+    if (!finalCompile.ok) {
+      const owner = graphCompileOwner(featureGraphState.contributions, finalCompile.error.detail);
+      if (owner !== undefined) {
+        reportRenderFeatureExecutionError(
+          internals,
+          owner,
+          new RenderFeatureStageFailedError(
+            owner.featureIdentity,
+            owner.order,
+            'contribute',
+            'next-frame',
+          ),
+        );
+        featureGraphState.composition = undefined;
+        return null;
+      }
+      internals.errorRegistry.fire(
+        new RhiError({
+          code: 'webgpu-runtime-error',
+          expected: 'render feature graph contribution compile succeeds',
+          hint: 'inspect detail.error for the render-graph compile failure code',
+          detail: {
+            error: {
+              code: finalCompile.error.code,
+              message: `${finalCompile.error.code}: ${finalCompile.error.expected}`,
+            },
+          },
+        }),
+      );
+      return null;
+    }
+  } else if (featureGraphState.composition !== undefined) {
+    const updated = featureGraphState.composition.update(featureGraphState.contributions);
+    if (updated.topologyChanged) {
+      retirePerFrameGraph(frameState);
+      featureGraphState.composition = undefined;
+      return null;
+    }
+  }
 
   // Update swap-chain size + recompile on resize.
   const needsRecompile = perFrameGraph.setSwapChainSize(targetW, targetH);
@@ -464,6 +602,21 @@ export function ensurePerFrameGraph(
       device: internals.device,
     });
     if (!rcRes.ok) {
+      const owner = graphCompileOwner(featureGraphState.contributions, rcRes.error.detail);
+      if (owner !== undefined) {
+        reportRenderFeatureExecutionError(
+          internals,
+          owner,
+          new RenderFeatureStageFailedError(
+            owner.featureIdentity,
+            owner.order,
+            'contribute',
+            'next-frame',
+          ),
+        );
+        featureGraphState.composition = undefined;
+        return null;
+      }
       internals.errorRegistry.fire(
         new RhiError({
           code: 'webgpu-runtime-error',
@@ -481,6 +634,283 @@ export function ensurePerFrameGraph(
     }
   }
   return perFrameGraph;
+}
+
+function executeGraphOwnedRenderFeaturePass(
+  context: RenderPipelineContext,
+  contributionPass: RenderFeatureContributionPass<RenderFeaturePassContext>,
+  resolveContext: ResolveContext,
+  execute: (context: RenderFeaturePassContext) => void,
+): void {
+  const resolvedWrites = contributionPass.descriptor.writes
+    .map((name) => resolveContext.resolve(name))
+    .filter((view): view is unknown => view !== undefined);
+  const resolvedDepth = contributionPass.descriptor.reads
+    .map((name) => resolveContext.resolve(name))
+    .find((view): view is unknown => view !== undefined);
+  const colorViews = resolvedWrites.length > 0 ? resolvedWrites : [context.view];
+  if (
+    contributionPass.graphics !== undefined &&
+    (contributionPass.graphicsState === undefined ||
+      contributionPass.resolvedGraphics === undefined)
+  ) {
+    throw new RenderFeatureStageFailedError(
+      contributionPass.featureIdentity,
+      contributionPass.order,
+      'record',
+      'next-frame',
+    );
+  }
+  const activePass = context.encoder.beginRenderPass({
+    label: contributionPass.name,
+    colorAttachments: colorViews.map((view) => ({
+      view: view as unknown as GPUTextureView,
+      loadOp: 'load',
+      storeOp: 'store',
+    })),
+    ...(resolvedDepth !== undefined
+      ? {
+          depthStencilAttachment: {
+            view: resolvedDepth as unknown as GPUTextureView,
+            depthLoadOp: 'load',
+            depthStoreOp: 'store',
+            stencilLoadOp: 'load',
+            stencilStoreOp: 'store',
+          },
+        }
+      : {}),
+  });
+  try {
+    if (contributionPass.graphics !== undefined) {
+      const state = contributionPass.graphicsState;
+      const resolvedGraphics = contributionPass.resolvedGraphics;
+      if (state === undefined || resolvedGraphics === undefined) return;
+      const ledger: RenderFeatureGraphicsRecordingLedger = {
+        pipeline: 0,
+        binding: 0,
+        vertex: 0,
+        index: 0,
+        draw: 0,
+        setPipeline: (handle) => activePass.setPipeline(handle as RenderPipeline),
+        setBindGroupAt: (index, handle) => activePass.setBindGroup(index, handle as BindGroup),
+        setVertexBuffer: (slot, handle) => activePass.setVertexBuffer(slot, handle as Buffer),
+        setIndexBuffer: (handle, format) => activePass.setIndexBuffer(handle as Buffer, format),
+        recordDraw: (command) =>
+          activePass.draw(
+            command.vertexCount,
+            command.instanceCount,
+            command.firstVertex,
+            command.firstInstance,
+          ),
+        recordDrawIndexed: (command) =>
+          activePass.drawIndexed(
+            command.indexCount,
+            command.instanceCount,
+            command.firstIndex,
+            command.baseVertex,
+            command.firstInstance,
+          ),
+      };
+      const recorded = recordResolvedRenderFeatureGraphicsPass(
+        contributionPass.featureIdentity,
+        contributionPass.graphics,
+        state,
+        resolvedGraphics,
+        ledger,
+      );
+      if (!recorded.ok) throw recorded.error;
+    } else {
+      execute({
+        frame: { frameNumber: context.frameState.frameNumber },
+        pass: {
+          name: contributionPass.name,
+          reads: contributionPass.descriptor.reads,
+          writes: contributionPass.descriptor.writes,
+        },
+      });
+    }
+  } finally {
+    activePass.end();
+  }
+}
+
+export interface RenderFeatureGraphicsRecordingLedger {
+  pipeline: number;
+  binding: number;
+  vertex: number;
+  index: number;
+  draw: number;
+  setPipeline?: (handle: unknown) => void;
+  setBindGroup?: (handle: unknown) => void;
+  setBindGroupAt?: (index: number, handle: unknown) => void;
+  setVertexBuffer?: (slot: number, handle: unknown) => void;
+  setIndexBuffer?: (handle: unknown, format: 'uint16' | 'uint32') => void;
+  recordDraw?: (
+    command: Extract<
+      RenderFeatureGraphicsPassDescriptor['draws'][number],
+      { kind: 'draw' }
+    >['command'],
+  ) => void;
+  recordDrawIndexed?: (
+    command: Extract<
+      RenderFeatureGraphicsPassDescriptor['draws'][number],
+      { kind: 'draw-indexed' }
+    >['command'],
+  ) => void;
+}
+
+function resolvedResource(
+  snapshot: PreparedGraphicsResolvedSnapshot,
+  reference: RenderFeaturePreparedRef,
+  kind: PreparedGraphicsResolvedResource['kind'],
+): PreparedGraphicsResolvedResource | undefined {
+  const resource = snapshot.resolve(reference);
+  return resource?.kind === kind ? resource : undefined;
+}
+
+export function recordResolvedRenderFeatureGraphicsPass(
+  featureIdentity: string,
+  descriptor: RenderFeatureGraphicsPassDescriptor,
+  state: RenderFeaturePreparedGraphicsState,
+  resolved: PreparedGraphicsResolvedSnapshot,
+  ledger: RenderFeatureGraphicsRecordingLedger,
+): Result<{ readonly acceptedDrawCount: number }, RenderError> {
+  const validated = validateRenderFeatureGraphicsPass(featureIdentity, descriptor, state);
+  if (!validated.ok) return validated;
+  const resolvedDraws: Array<{
+    readonly pipeline: PreparedGraphicsResolvedResource;
+    readonly bindings: readonly PreparedGraphicsResolvedResource[];
+    readonly vertexData: readonly {
+      readonly slot: number;
+      readonly resource: PreparedGraphicsResolvedResource;
+    }[];
+    readonly indexData: PreparedGraphicsResolvedResource | undefined;
+    readonly draw: (typeof descriptor.draws)[number];
+  }> = [];
+  for (const draw of descriptor.draws) {
+    const pipeline = resolvedResource(resolved, draw.pipeline, 'pipeline');
+    const bindings = draw.bindings.map((binding) =>
+      resolvedResource(resolved, binding, 'bindings'),
+    );
+    const vertexData = draw.vertexData.map((vertex) => ({
+      slot: vertex.slot,
+      resource: resolvedResource(resolved, vertex.resource, 'vertex-data'),
+    }));
+    const indexData =
+      draw.indexData === undefined
+        ? undefined
+        : resolvedResource(resolved, draw.indexData.resource, 'index-data');
+    if (
+      pipeline === undefined ||
+      bindings.some((binding) => binding === undefined) ||
+      vertexData.some((vertex) => vertex.resource === undefined) ||
+      (draw.indexData !== undefined && indexData === undefined)
+    ) {
+      return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+    }
+    resolvedDraws.push({
+      pipeline,
+      bindings: bindings as PreparedGraphicsResolvedResource[],
+      vertexData: vertexData as {
+        readonly slot: number;
+        readonly resource: PreparedGraphicsResolvedResource;
+      }[],
+      indexData,
+      draw,
+    });
+  }
+  for (const resolvedDraw of resolvedDraws) {
+    ledger.pipeline += 1;
+    ledger.setPipeline?.(resolvedDraw.pipeline.handle);
+    for (const [index, binding] of resolvedDraw.bindings.entries()) {
+      ledger.binding += 1;
+      if (ledger.setBindGroupAt !== undefined) {
+        ledger.setBindGroupAt(index, binding.handle);
+      } else {
+        ledger.setBindGroup?.(binding.handle);
+      }
+    }
+    for (const vertex of resolvedDraw.vertexData) {
+      ledger.vertex += 1;
+      ledger.setVertexBuffer?.(vertex.slot, vertex.resource.handle);
+    }
+    if (resolvedDraw.draw.kind === 'draw-indexed') {
+      const indexData = resolvedDraw.draw.indexData;
+      const indexHandle = resolvedDraw.indexData?.handle;
+      if (indexData === undefined || indexHandle === undefined) {
+        return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+      }
+      ledger.index += 1;
+      ledger.setIndexBuffer?.(indexHandle, indexData.format);
+      ledger.draw += 1;
+      ledger.recordDrawIndexed?.(resolvedDraw.draw.command);
+    } else {
+      ledger.draw += 1;
+      ledger.recordDraw?.(resolvedDraw.draw.command);
+    }
+  }
+  return ok(validated.value);
+}
+
+export function recordRenderFeatureGraphicsPass(
+  featureIdentity: string,
+  descriptor: RenderFeatureGraphicsPassDescriptor,
+  state: RenderFeaturePreparedGraphicsState,
+  ledger: RenderFeatureGraphicsRecordingLedger,
+): Result<{ readonly acceptedDrawCount: number }, RenderError> {
+  const validated = validateRenderFeatureGraphicsPass(featureIdentity, descriptor, state);
+  if (!validated.ok) return validated;
+  for (const draw of descriptor.draws) {
+    ledger.pipeline += 1;
+    ledger.setPipeline?.(draw.pipeline);
+    for (const binding of draw.bindings) {
+      ledger.binding += 1;
+      ledger.setBindGroup?.(binding);
+    }
+    for (const vertex of draw.vertexData) {
+      ledger.vertex += 1;
+      ledger.setVertexBuffer?.(vertex.slot, vertex.resource);
+    }
+    if (draw.kind === 'draw-indexed') {
+      if (draw.indexData === undefined) {
+        return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+      }
+      ledger.index += 1;
+      ledger.setIndexBuffer?.(draw.indexData.resource, draw.indexData.format);
+      ledger.draw += 1;
+      ledger.recordDrawIndexed?.(draw.command);
+    } else {
+      ledger.draw += 1;
+      ledger.recordDraw?.(draw.command);
+    }
+  }
+  return ok(validated.value);
+}
+
+function reportRenderFeatureExecutionError(
+  internals: RenderSystemInternals,
+  owner: { readonly featureIdentity: string; readonly order: number },
+  failure: unknown,
+): void {
+  const candidate =
+    failure instanceof Error && typeof (failure as Partial<RenderError>).code === 'string'
+      ? (failure as RenderError)
+      : new RenderFeatureStageFailedError(
+          owner.featureIdentity,
+          owner.order,
+          'contribute',
+          'next-frame',
+        );
+  const error = internals.featureHost?.recordError(owner.featureIdentity, candidate) ?? candidate;
+  internals.errorRegistry.fire(error);
+}
+
+function graphCompileOwner(
+  contributions: readonly { readonly featureIdentity: string; readonly order: number }[],
+  detail: unknown,
+): { readonly featureIdentity: string; readonly order: number } | undefined {
+  const text = JSON.stringify(detail);
+  return contributions.find((contribution) => text.includes(contribution.featureIdentity));
 }
 
 /**
@@ -511,7 +941,9 @@ export function resolveShadowMapSize(
 /**
  * feat-20260704 M3/w18: build (memoized) + execute the per-frame render graph,
  * then finish + submit the shared frame encoder and reclaim retired transient
- * textures. Extracted verbatim from `recordFrame`.
+ * textures. Extracted verbatim from `recordFrame`. Returns whether that shared
+ * encoder was actually submitted so callers can protect resources until the
+ * queue completion barrier.
  *
  * feat-20260601 M1 / w7: the graph is built through the currently installed
  * RenderPipeline (forgeax::urp by default); `draw` nulls perFrameGraph on a
@@ -531,24 +963,25 @@ export function executeFrameGraph(
   passCtx: _InternalRenderPipelineContext,
   passData: RenderPipelineData,
   encoder: RhiCommandEncoder,
-): void {
+): boolean {
   if (frameState.perFrameGraph === null) {
     frameState.perFrameGraph = frameState.activePipeline.buildGraph(passCtx, passData);
   }
   const graph = frameState.perFrameGraph;
-  if (graph === null) return;
+  if (graph === null) return false;
   graph.execute(passCtx);
 
   const finishResult = encoder.finish();
   if (!finishResult.ok) {
     internals.errorRegistry.fire(finishResult.error);
-    return;
+    return false;
   }
   const cmd: CommandBuffer = finishResult.value;
   const submitResult = internals.device.queue.submit([cmd]);
   if (!submitResult.ok) {
     internals.errorRegistry.fire(submitResult.error);
-    return;
+    return false;
   }
   graph.reclaimRetiredTransients().catch(() => {});
+  return true;
 }

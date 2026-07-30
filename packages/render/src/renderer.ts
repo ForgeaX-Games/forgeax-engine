@@ -21,6 +21,7 @@ import type { ImageError, RenderPipelineAsset } from '@forgeax/engine-types';
 import type { EngineMetrics } from './engine-metrics';
 import type { RecoverError } from './errors/recover';
 import type { RenderError } from './errors/render';
+import type { RenderFeature, RenderFeatureDiagnostics } from './features/types';
 import type { PipelineError } from './pipeline-errors';
 import type { PostProcessError } from './post-process-errors';
 import type { RenderPipeline } from './render-pipeline';
@@ -136,6 +137,8 @@ export type RendererErrorListener = (error: RendererError) => void;
 
 /** First-version options bag (intentionally empty; reserved for v0.1). */
 export interface RendererOptions {
+  /** Producer-owned features installed by the renderer host. */
+  readonly features?: readonly RenderFeature<unknown>[] | undefined;
   // feat-20260608-create-app-param-surface-trim / M1 / AC-02: `clearColor`
   // was deleted as a one-cut breaking change (AGENTS.md Change stance +
   // requirements constraint #1: no deprecation window, no shim). Scene
@@ -539,6 +542,16 @@ export interface Renderer {
    * into engine internals.
    */
   readonly perFramePassNames: readonly string[];
+  /**
+   * Return the host-owned lifecycle snapshot for every registered feature.
+   *
+   * Consumers branch on `status` and `latestError?.code`; they do not parse
+   * log text or reach into the feature host. A failed feature retries on the
+   * next eligible frame, a disabled feature waits for `recover()`, and a
+   * disposed feature is terminal. Pipeline switches preserve registrations
+   * while rebuilding the active graph.
+   */
+  renderFeatureDiagnostics(): readonly RenderFeatureDiagnostics[];
   /**
    * feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
    * createBindGroup counter. Reset to 0 on every `draw([world], { owner: 0 })` call,

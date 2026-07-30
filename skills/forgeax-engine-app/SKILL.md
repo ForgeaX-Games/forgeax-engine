@@ -37,6 +37,95 @@ app.start().unwrap();
 
 The canvas form creates its World, renderer, default plugins, browser input backend, and frame loop. `app.start()` only arms the browser loop after the factory Result is successful.
 
+## Renderer feature assembly
+
+When a producer owns an optional render contribution, pass it through the
+single renderer assembly seam. `RenderFeature` and its `FrameData` type come
+from `@forgeax/engine-render`; `createRenderer` comes from
+`@forgeax/engine-runtime`.
+
+```ts
+import { ok } from '@forgeax/engine-types';
+import type { RenderFeature } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+
+type FrameData = { readonly visibleCount: number };
+const feature = {
+  identity: 'package.feature',
+  extract: ({ owner }) => ok<FrameData>({ visibleCount: owner }),
+  prepare: (data) => {
+    void data.visibleCount;
+    return ok(undefined);
+  },
+  contribute: (data, context) => {
+    void data.visibleCount;
+    context.staging.addPass('named-pass', {
+      reads: [],
+      writes: [],
+      execute: ({ pass }) => void pass,
+    }).unwrap();
+    return ok(undefined);
+  },
+} satisfies RenderFeature<FrameData>;
+
+const renderer = await createRenderer(canvas, { features: [feature] });
+```
+
+### Prepared graphics and recovery
+
+For a producer that needs prepared graphics, keep the public imports split by
+owner: `RenderFeature` and prepared declarations come from
+`@forgeax/engine-render`, `createRenderer` comes from
+`@forgeax/engine-runtime`, and producer data such as `ParticleRenderBatch`
+comes from `@forgeax/engine-vfx`.
+
+```ts
+import { ok } from '@forgeax/engine-types';
+import type { RenderFeature } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import type { ParticleRenderBatch } from '@forgeax/engine-vfx';
+
+const batch: ParticleRenderBatch = { batches: [] };
+const feature = {
+  identity: 'package.prepared-feature',
+  extract: () => ok(batch),
+  prepare: (_data, context) => {
+    const pipeline = context.graphics.preparePipeline('package.pipeline', {
+      shader: 'package.shader',
+      vertexLayout: 'package.vertices',
+      colorFormats: ['rgba8unorm-srgb'],
+    });
+    if (!pipeline.ok) return pipeline;
+    void pipeline.value;
+    return ok(undefined);
+  },
+  contribute: () => ok(undefined),
+} satisfies RenderFeature<ParticleRenderBatch>;
+
+const renderer = await createRenderer(canvas, { features: [feature] });
+```
+
+This prepares an opaque host reference only. It does not add a visible
+particle draw path, simulation, VFX production branch, manifest, RPC/CLI
+surface, or private import; those are explicit Wave 2 out-of-scope items.
+
+Use `renderer.renderFeatureDiagnostics()` as the first recovery signal. The
+snapshot has `identity`, `order`, `status`, and `latestError`. Branch on the
+closed `latestError.code` union and read its `hint`/`detail`; do not parse
+console messages or import `@forgeax/engine-render/internal`. Correct a
+`failed` feature for the next frame, call `renderer.recover()` for a
+`disabled` feature after capability/device recovery, fix registration or pass
+order conflicts at the producer boundary, and treat `disposed` as terminal.
+`renderer.dispose()` is idempotent. A pipeline switch preserves registration
+and rebuilds the active graph.
+
+For terminology and the public context boundary, use
+[`@forgeax/engine-render`](../../packages/render/README.md) and its
+[`prepared graphics declaration`](../../packages/render/src/features/prepared-graphics.ts).
+For the runtime host contract, use
+[`packages/runtime/README.md`](../../packages/runtime/README.md). For producer
+batch data, use [`packages/vfx/README.md`](../../packages/vfx/README.md).
+
 ## Frame-loop contract
 
 Each frame has one host-owned sequence:

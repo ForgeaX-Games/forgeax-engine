@@ -36,7 +36,10 @@
 // single-entry indexability; AC-03 grep gate).
 
 import type { Handle } from './handle';
+import type { ParticleEffectAsset } from './vfx';
 
+export * from './asset.js';
+export * from './asset-errors.js';
 export * from './handle';
 
 // === Result<T, E> SSOT (tweak-20260612-result-into-types) ======================
@@ -47,6 +50,7 @@ export * from './handle';
 // AI users import the binary success/failure carrier via `@forgeax/engine-types`
 // (or via the rhi/ecs package barrels which re-export this same module).
 export * from './result';
+export * from './vfx';
 
 // === Sub-asset POD SSOT (feat-20260615-fbx-importer-via-sdk M1 / t9) ===========
 //
@@ -1140,7 +1144,8 @@ export type Asset =
   | TilesetAsset
   // === 1 new variant (feat-20260623-world-space-video-asset M1) ===
   // runtime-only { url } descriptor; no width/height/duration in payload.
-  | VideoAsset;
+  | VideoAsset
+  | ParticleEffectAsset;
 
 // === Tileset asset POD shape (feat-20260608 M0 baseline rebuild) =================
 //
@@ -2010,7 +2015,7 @@ export function countExtraUvSets(attrs: UvAttributeSource | undefined): number {
 | `'material-circular-inheritance'` | material resolve detected a cycle in the parent chain; `.hint` carries the full cycle path (e.g. "A -> B -> A") via `err.detail.cycle`. |
  * | `'loader-not-registered'` | `loadByGuid` dispatched on `asset.kind` but the injected `LoaderRegistry` has no loader for that kind; `.detail.kind` is the missing kind and `.detail.registeredKinds` lists the kinds currently wired (feat-20260603-asset-import-loader-injection M1; charter P3 — AI users read `.detail.registeredKinds` to know what to inject). |
  * | `'asset-not-imported'` | `loadByGuid` found the GUID in the catalog but its DDC is absent and no `ImportTransport` is wired (shipped form); `.hint` points back to build-time pre-import rather than a runtime workaround (feat-20260603-asset-import-loader-injection M4; logic wired in M4 w31). |
- * | `'texture-source-not-imported'` | `loadTextureAsset` resolved a catalog texture row whose `relativeUrl` is a raw source (not a build-time-imported `.bin`); the runtime carries no decoder. This is an `AssetError` (not the `ImageError` `image-decode-failed`) so it is transport-eligible in `loadByGuidProd` -- the studio form lazily imports the `.bin` via the injected `ImportTransport`, the shipped form fails fast with `asset-not-imported`. A genuinely corrupt imported `.bin` still surfaces as `image-decode-failed` and is never routed through transport (feat-20260604-hdr-equirect-cube-importer-loader M2 / D-1). |
+ * | `'texture-source-not-imported'` | `loadTextureAsset` received an uncooked source locator instead of a Pack v2 artifact; the runtime carries no source decoder. |
  */
 export type AssetErrorCode =
   | 'asset-not-found'
@@ -2036,7 +2041,7 @@ export type AssetErrorCode =
   | 'texture-source-not-imported'
   // === 1 new code (perf-20260706-raw-container-failfast) ===
   // A mesh/material/scene/skeleton/skin/animation-clip catalog row whose
-  // relativeUrl is still a raw source container (.glb/.gltf/.fbx), not an
+  // packageUrl is still a raw source container (.glb/.gltf/.fbx), not an
   // importer-produced artifact (.bin/.pack.json). Like texture-source-not-imported
   // this is transport-eligible: the studio form lazily imports via the injected
   // ImportTransport; the shipped form fails fast. Distinct from the generic
@@ -4415,16 +4420,13 @@ export type {
  *
  * Core fields (4) stay flat for AI users to grep one identifier:
  *   - `guid`: UUIDv5/v7 lowercase string (asset identity SSOT)
- *   - `relativeUrl`: dev path `<rel-path-from-cwd-to-source-jpg>`; build path
- *     `assets/<guid>-[hash].bin` (imported RGBA artefact name; see D-2 selected
- *     scheme `name: '<guid-lowercase>'` + Rollup `output.assetFileNames`
- *     default template).
+ *   - `packageUrl`: cooked Pack v2 package navigation URL.
  *   - `kind`: closed-string discriminator (`'texture'` / `'mesh'` / `'scene'`
  *     / `'material'` / future arms); narrowed by runtime `parseAssetPayload`
  *     via exhaustive switch.
  *   - `sourcePath`: relative path to the on-disk source artefact for
  *     debugging + grep (dev: source JPG path; build: same source JPG path
- *     even though `relativeUrl` points to the import artefact).
+ *     even though `packageUrl` points to the cooked package).
  *
  * Optional 5th field:
  *   - `metadata`: `ImageMetadata | undefined` -- present when `kind ===
@@ -4627,13 +4629,33 @@ export interface LoadContext {
  */
 export interface Loader<P = Asset> {
   readonly kind: string;
-  /**
-   * `true` when `load` consumes the pack-index catalog entry rather than a
-   * parsed `.pack.json` payload. The registry supplies `guidKey` and
-   * `relativeUrl` in that entry and awaits this loader before cataloguing its
-   * resulting POD; omitted loaders consume a pack payload synchronously.
-   */
-  readonly fromCatalogEntry?: true;
+  /** Optional Pack v2 dispatch that retains asset-local artifact bytes. */
+  readonly loadPack?: (
+    input: {
+      readonly guid: string;
+      readonly kind: string;
+      readonly payload: Record<string, unknown>;
+      readonly refs: readonly string[];
+      readonly artifacts: Readonly<
+        Record<
+          string,
+          {
+            readonly descriptor: {
+              readonly path: string;
+              readonly mediaType: string;
+              readonly assetCodec?: {
+                readonly name: string;
+                readonly profile?: string;
+                readonly version?: string;
+              };
+            };
+            readonly bytes: Uint8Array;
+          }
+        >
+      >;
+    },
+    ctx: LoadContext,
+  ) => LoaderOutput<P>;
   load(
     payload: Record<string, unknown>,
     refs: readonly string[] | undefined,
@@ -4647,7 +4669,7 @@ export type {
   ImportDiagnosticLocation,
   ImportErrorCode,
   ImportErrorDetail,
-  ImportedArtifact,
+  ImportedArtifactBody,
   ImportedAsset,
   Importer,
   ImportProduct,

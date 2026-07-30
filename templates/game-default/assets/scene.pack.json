@@ -1,5 +1,5 @@
 {
- "schemaVersion": "1.0.0",
+ "schemaVersion": "2.0.0",
  "kind": "internal-text-package",
  "assets": [
   {
@@ -660,7 +660,8 @@
     "c0a7e000-0001-5000-8000-0000000000c1",
     "c0a7e000-0002-5000-8000-0000000000c2",
     "81eec382-392f-5a93-8998-0ecf11ef7990"
-   ]
+   ],
+   "artifacts": {}
   },
   {
    "guid": "4e3206e4-f2ac-5d05-b879-2c667168dc27",
@@ -695,7 +696,8 @@
      "roughness": 0.95
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "423f2ea4-a8f2-504f-a1b5-323e3adf94d1",
@@ -730,7 +732,8 @@
      "roughness": 0.9
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "4b077814-3cc4-51b5-8e76-e3d273dad53b",
@@ -765,7 +768,8 @@
      "roughness": 0.85
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "f6205ca9-71c6-54b2-946c-45b3154931a4",
@@ -800,7 +804,8 @@
      "roughness": 0.7
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "7d718b8e-9fac-5301-b5cb-e0bc940bae67",
@@ -835,7 +840,8 @@
      "roughness": 0.4
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "65a4a1d4-2abf-535b-923e-bd066a9ab475",
@@ -870,7 +876,8 @@
      "roughness": 0.6
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "a1b2c3d4-0001-5000-8000-000000000001",
@@ -905,7 +912,8 @@
      "roughness": 0.8
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "a1b2c3d4-0002-5000-8000-000000000002",
@@ -940,7 +948,8 @@
      "roughness": 0.8
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "a1b2c3d4-0003-5000-8000-000000000003",
@@ -975,7 +984,8 @@
      "roughness": 0.8
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "c0a7e000-0001-5000-8000-0000000000c1",
@@ -1010,7 +1020,8 @@
      "roughness": 0.8
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   },
   {
    "guid": "c0a7e000-0002-5000-8000-0000000000c2",
@@ -1045,7 +1056,8 @@
      "roughness": 0.35
     }
    },
-   "refs": []
+   "refs": [],
+   "artifacts": {}
   }
  ]
 }

@@ -32,6 +32,7 @@
     { "path": "../pack" },
     { "path": "../plugin" },
     { "path": "../state" },
+    { "path": "../vfx" },
     { "path": "../vite-plugin-shader" },
     { "path": "../import" },
     { "path": "../render" },

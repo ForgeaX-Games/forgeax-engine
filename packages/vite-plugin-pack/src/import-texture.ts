@@ -5,7 +5,7 @@
 // POST /__import path both need the same "decode source -> imported bytes ->
 // folded ImageMetadata" step. This module is that one SSOT (plan-strategy
 // D-1). Both call sites import `importTextureEntry`; each then does its own
-// emitFile / writeFile + relativeUrl rewrite (D-1 rejects yielding a full
+// emitFile / writeFile + packageUrl rewrite (D-1 rejects yielding a full
 // imported row from the shared fn).
 //
 // Package home (plan-strategy D-6 / section 5.6): this fn lives in the
@@ -79,7 +79,7 @@ export interface ImportTextureOptions {
  * `bytes` are the imported, tight-packed texel bytes (rgba8 for image arm,
  * rgba16float for the .hdr arm). `metadata` folds the
  * width / height / format / colorSpace / mipmap fields the caller writes
- * into the catalog row. The shared fn never returns a `relativeUrl`
+ * into the catalog row. The shared fn never returns a `packageUrl`
  * (D-1): the build arm rewrites it from `emitFile` + `getFileName`, and
  * the dev arm from the written `.bin` path -- each call site owns that.
  *
@@ -114,15 +114,16 @@ export async function importTextureEntry(
   entry: PackIndexEntry,
   opts: ImportTextureOptions,
 ): Promise<ImportTextureResult> {
-  if (
-    (entry.kind !== 'texture' && entry.kind !== 'equirect') ||
-    entry.metadata === undefined ||
-    entry.metadata.kind !== 'texture'
-  ) {
+  if (entry.kind !== 'texture' && entry.kind !== 'equirect') {
     return { skipped: 'non-importable kind or missing texture metadata', real: false };
   }
-  const meta = entry.metadata;
   const sourceAbs = resolve(opts.cwd, entry.sourcePath);
+  const meta: ImageMetadata = {
+    kind: 'texture',
+    format: sourceAbs.toLowerCase().endsWith('.hdr') ? 'rgba16float' : 'rgba8unorm',
+    colorSpace: 'linear',
+    mipmap: false,
+  };
 
   // mime discrimination: standard image extensions import directly; .hdr
   // dispatches to the imageImporter HDR arm (R-6, byte-for-byte preserved);

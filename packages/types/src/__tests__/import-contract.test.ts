@@ -3,7 +3,12 @@ import {
   IMPORT_ERROR_HINTS as DIRECT_IMPORT_ERROR_HINTS,
   ImportError as DirectImportError,
 } from '../import.js';
-import type { ImportedArtifact, ImportProduct, ImportResult, SourceDependency } from '../index.js';
+import type {
+  ImportedArtifactBody,
+  ImportProduct,
+  ImportResult,
+  SourceDependency,
+} from '../index.js';
 import { IMPORT_ERROR_HINTS, ImportError } from '../index.js';
 
 describe('generic import contract', () => {
@@ -12,10 +17,9 @@ describe('generic import contract', () => {
     expect(IMPORT_ERROR_HINTS).toBe(DIRECT_IMPORT_ERROR_HINTS);
   });
 
-  it('models a product with assets, artifacts, and normalized source dependencies', () => {
+  it('models a product with asset-local artifacts and normalized source dependencies', () => {
     const product: ImportProduct = {
       assets: [],
-      artifacts: [],
       sourceDependencies: ['ui/main.html', 'ui/main.css'],
     };
     expect(product.sourceDependencies).toEqual(['ui/main.html', 'ui/main.css']);
@@ -23,20 +27,36 @@ describe('generic import contract', () => {
     expect(dependency).toBe('ui/main.css');
   });
 
-  it('models artifacts without coupling them to a specific asset kind', () => {
-    const artifact: ImportedArtifact = {
-      path: 'ui/icon.svg',
-      mimeType: 'image/svg+xml',
+  it('models logical artifact bytes without publish facts', () => {
+    const artifact: ImportedArtifactBody = {
+      mediaType: 'image/svg+xml',
       bytes: new Uint8Array([60, 115, 118, 103, 62]),
     };
-    expect(artifact.path).toContain('icon.svg');
+    expect(artifact.mediaType).toContain('image');
     expect(artifact.bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  it('keeps artifact ownership on the logical asset envelope', () => {
+    const product: ImportProduct = {
+      assets: [
+        {
+          guid: 'texture-guid',
+          kind: 'texture',
+          payload: { kind: 'texture' },
+          refs: [],
+          artifacts: { source: artifactFixture() },
+        },
+      ],
+      sourceDependencies: [],
+    } as never;
+    expect(product.assets[0]?.artifacts).toHaveProperty('source');
+    expect(product).not.toHaveProperty('bins');
   });
 
   it('supports structured success and failure results without legacy arrays', () => {
     const success: ImportResult = {
       ok: true,
-      value: { assets: [], artifacts: [], sourceDependencies: [] },
+      value: { assets: [], sourceDependencies: [] },
     };
     const failure: ImportResult = {
       ok: false,
@@ -51,3 +71,7 @@ describe('generic import contract', () => {
     expect(failure.ok).toBe(false);
   });
 });
+
+function artifactFixture(): ImportedArtifactBody {
+  return { mediaType: 'image/png', bytes: Uint8Array.of(1, 2, 3) };
+}

@@ -16,6 +16,7 @@ import type {
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
 import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
+import { unpackMeshBin } from '../mesh-bin';
 import { parseScenePayload } from '../scene-payload';
 
 // === Inline pack-payload loader bodies (feat-20260603-asset-import-loader-injection
@@ -142,6 +143,25 @@ export const meshLoader: Loader = {
       aabb: new Float32Array(6),
       submeshes,
     };
+  },
+  loadPack(input, ctx) {
+    const artifact = input.artifacts.body;
+    if (artifact === undefined) return meshLoader.load(input.payload, input.refs, ctx);
+    const decoded = unpackMeshBin(artifact.bytes);
+    if (decoded === undefined) return undefined;
+    return meshLoader.load(
+      {
+        vertices: decoded.vertices,
+        ...(decoded.indices !== undefined ? { indices: decoded.indices } : {}),
+        ...(decoded.submeshes !== undefined ? { submeshes: decoded.submeshes } : {}),
+        attributes: {
+          ...(decoded.skinIndex !== undefined ? { skinIndex: decoded.skinIndex } : {}),
+          ...(decoded.skinWeight !== undefined ? { skinWeight: decoded.skinWeight } : {}),
+        },
+      },
+      input.refs,
+      ctx,
+    );
   },
 };
 

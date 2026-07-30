@@ -22,6 +22,7 @@ import { dirname } from 'node:path';
 
 const url = process.argv[2] ?? 'http://localhost:5173/';
 const outPath = process.argv[3];
+const minimumFrames = 300;
 if (!outPath) {
   console.error('usage: node visual-sanity.mjs <url> <out-path>');
   process.exit(2);
@@ -46,19 +47,34 @@ const context = await browser.newContext({
   deviceScaleFactor: 1,
 });
 const page = await context.newPage();
+const pageErrors = [];
 page.on('console', (msg) => {
   const type = msg.type();
   if (type === 'error' || type === 'warning') {
     console.log(`[browser:${type}]`, msg.text());
   }
+  if (type === 'error' && !msg.text().includes('favicon.ico')) pageErrors.push(msg.text());
 });
-page.on('pageerror', (err) => console.log('[pageerror]', err.message));
+page.on('pageerror', (err) => {
+  pageErrors.push(err.message);
+  console.log('[pageerror]', err.message);
+});
 
 await page.goto(url, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('canvas#app');
-await page.waitForTimeout(800); // canvas first-frame readiness (requirements §4.3.6 notes)
+await page.waitForFunction(
+  (minimumFrames) =>
+    typeof globalThis.__forgeax_smoke_frames__ === 'function' &&
+    globalThis.__forgeax_smoke_frames__() >= minimumFrames,
+  minimumFrames,
+  { timeout: 8000 },
+);
 
 await page.screenshot({ path: outPath, fullPage: false });
 console.log(`wrote screenshot: ${outPath}`);
+
+if (pageErrors.length > 0) {
+  throw new Error(`hello-triangle baseline emitted browser errors: ${pageErrors.join(' | ')}`);
+}
 
 await browser.close();

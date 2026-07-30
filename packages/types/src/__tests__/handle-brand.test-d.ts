@@ -139,6 +139,10 @@ describe('AssetTagMap — 11-member closed map aligned with Asset.kind tags', ()
   it('render-pipeline -> RenderPipelineAsset (feat-20260601 N+1 member)', () => {
     expectTypeOf<AssetTagMap['render-pipeline']>().toEqualTypeOf<'RenderPipelineAsset'>();
   });
+
+  it('particle-effect -> ParticleEffectAsset', () => {
+    expectTypeOf<AssetTagMap['particle-effect']>().toEqualTypeOf<'ParticleEffectAsset'>();
+  });
 });
 
 describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)', () => {
@@ -212,6 +216,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
       | 'RenderPipelineAsset'
       | 'TilesetAsset'
       | 'VideoAsset'
+      | 'ParticleEffectAsset'
     >();
   });
 });

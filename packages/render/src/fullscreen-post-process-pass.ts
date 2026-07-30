@@ -220,7 +220,8 @@ function createDepthSampler(device: RhiDevice): Sampler | null {
 /**
  * Check whether the entry's {@link PostProcessShaderEntry.reads} declares a read
  * with `sampleType: 'depth'`. Used by {@link buildFullscreenPostProcessPass} to
- * select between the depth BGL variant and the existing color-only kinds.
+ * select between the single-sample and multisample depth BGL variants and the
+ * existing color-only kinds.
  */
 export function entryHasDepthRead(entry: PostProcessShaderEntry): boolean {
   if (!entry.reads) return false;
@@ -270,6 +271,7 @@ export interface FullscreenPostProcessPassHandle {
 export function buildFullscreenPostProcessPass(
   ctx: FullscreenPostProcessDeviceContext,
   entry: PostProcessShaderEntry,
+  depthMultisampled = false,
 ): {
   bindGroupLayout: BindGroupLayout;
   sampler: Sampler | null;
@@ -290,12 +292,14 @@ export function buildFullscreenPostProcessPass(
   // 'fullscreen-post-with-params' kind (adds buffer@2 uniform); otherwise the
   // 2-entry 'fullscreen-post' kind (param-less zero-regression, R-A7).
   // plan-strategy D-3: when entry.reads declares sampleType:'depth', use the
-  // 5-entry 'fullscreen-post-with-scene-depth' kind (color@0 + sampler@1 +
-  // params@2 + depthTex@3 + depthSampler@4). params@2 is always present to
+  // 5-entry scene-depth kind; depthMultisampled selects its multisampled
+  // texture variant for a 4-sample scene target. params@2 is always present to
   // avoid 2x2 kind explosion.
   const hasDepth = entryHasDepthRead(entry);
   const bglKind: BglKind = hasDepth
-    ? 'fullscreen-post-with-scene-depth'
+    ? depthMultisampled
+      ? 'fullscreen-post-with-scene-depth-msaa'
+      : 'fullscreen-post-with-scene-depth'
     : entry.params !== undefined
       ? 'fullscreen-post-with-params'
       : 'fullscreen-post';

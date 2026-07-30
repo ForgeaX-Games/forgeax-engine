@@ -270,6 +270,7 @@ async function findRealTtf(): Promise<string | undefined> {
             mipmapFilter: 'nearest',
           },
           refs: [],
+          artifacts: {},
         });
       });
 

@@ -114,6 +114,7 @@ function readRepeatabilitySnapshot(root) {
       texture: capture.texture,
       antialias: capture.antialias,
       canvas: capture.canvas,
+      resizeHistory: capture.resizeHistory,
       pipelineSwitchedAfterResize: capture.pipelineSwitchedAfterResize,
       variantSwitchedAfterPipeline: capture.variantSwitchedAfterPipeline,
       postSwitchedAfterPipeline: capture.postSwitchedAfterPipeline,
@@ -129,6 +130,7 @@ function readRepeatabilitySnapshot(root) {
       msaaTextureResourceCount: summary.msaaTextureResourceCount,
       resolveTargetCount: summary.resolveTargetCount,
       canvas: summary.canvas,
+      resizeHistory: summary.resizeHistory,
       pipelineSwitchedAfterResize: summary.pipelineSwitchedAfterResize,
       variantSwitchedAfterPipeline: summary.variantSwitchedAfterPipeline,
       drawCount: summary.drawCount,
@@ -136,6 +138,71 @@ function readRepeatabilitySnapshot(root) {
     },
     dawn: readDawnReadbackMetadata(resolve(root, 'dawn-readback.json')),
     screenshotSha256: sha256File(resolve(root, 'custom-live.png')),
+  };
+}
+
+function readComposedRhiSnapshot(root, label) {
+  const report = JSON.parse(readFileSync(resolve(root, 'rhi', `${label}.report.json`), 'utf8'));
+  return {
+    textureResourceCount: report.events.filter(
+      (event) => event.kind === 'createTexture' && event.desc?.size?.width === 2 && event.desc?.size?.height === 2,
+    ).length,
+    msaaTextureResourceCount: report.events.filter(
+      (event) => event.kind === 'createTexture' && event.desc?.sampleCount === 4,
+    ).length,
+    resolveTargetCount: report.events.filter(
+      (event) =>
+        event.kind === 'beginRenderPass' &&
+        event.colorAttachmentResolveTargetHandleIds?.some(
+          (handleId) => handleId !== undefined && handleId !== null,
+        ),
+    ).length,
+    drawCount: report.events.filter((event) => event.kind === 'draw' || event.kind === 'drawIndexed').length,
+    dawn: readDawnReadbackMetadata(resolve(root, 'rhi', `${label}.dawn-readback.json`)),
+  };
+}
+
+function readComposedSnapshot(root, falsifierLabel = 'falsified-second-texture-inversion') {
+  const composed = JSON.parse(readFileSync(resolve(root, 'browser-composed.json'), 'utf8'));
+  return {
+    live: {
+      variantDelta: composed.live.variantDelta,
+      postDelta: composed.live.postDelta,
+      resized: composed.live.resized.state,
+      resizeHistory: composed.live.resizeHistory,
+      screenshotSha256: sha256File(composed.live.resized.png),
+    },
+    falsifier: {
+      variantDelta: composed.falsifier.variantDelta,
+      secondTextureDelta: composed.falsifier.secondTextureDelta,
+      secondTexture: composed.falsifier.secondTexture.state,
+      resizeHistory: composed.falsifier.resizeHistory,
+      screenshotSha256: sha256File(composed.falsifier.secondTexture.png),
+    },
+    rhi: {
+      normal: readComposedRhiSnapshot(root, 'live-resized-inversion'),
+      falsifier: readComposedRhiSnapshot(root, falsifierLabel),
+    },
+  };
+}
+
+function readDepthSnapshot(root) {
+  const depth = JSON.parse(readFileSync(resolve(root, 'depth-browser.json'), 'utf8'));
+  return {
+    normal: {
+      baseline: depth.normal.baseline,
+      variant: depth.normal.variant,
+      resized: depth.normal.resized,
+      resizeHistory: depth.normal.resizeHistory,
+      dawn: depth.normal.rhi.dawn,
+      hasDepthBinding: depth.normal.rhi.hasDepthBinding,
+    },
+    falsifier: {
+      baseline: depth.falsifier.baseline,
+      dawn: depth.falsifier.rhi.dawn,
+      hasDepthBinding: depth.falsifier.rhi.hasDepthBinding,
+    },
+    delta: depth.delta,
   };
 }
 
@@ -340,6 +407,361 @@ if (
 console.log('[m3-programmable] browser custom pipeline + post composition: PASS');
 console.log('[m3-programmable] browser multi-texture falsifier: PASS');
 
+const resizeChurnComposed = run(
+  'browser custom pipeline + multi-texture resize churn',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+  {
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR:
+      process.env.FORGEAX_M3_ARTIFACT_DIR ??
+      resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'resize-churn', 'browser-composed'),
+  },
+);
+if (
+  resizeChurnComposed.status !== 0 ||
+  !resizeChurnComposed.output.includes('[m3-composed] PASS pipeline=custom') ||
+  !resizeChurnComposed.output.includes('secondTextureChanged=') ||
+  !resizeChurnComposed.output.includes('resizeHistory=640x360>480x270>720x405>640x360')
+) {
+  console.error('[m3-programmable] multi-texture resize churn: FAIL - composed resize/falsifier journey did not pass');
+  process.exit(1);
+}
+console.log('[m3-programmable] multi-texture resize churn: PASS');
+
+const msaaMultiTextureArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'msaa-multi-texture-double-resize-repeatability');
+const msaaMultiTextureRuns = [];
+for (const pass of ['first', 'second']) {
+  msaaMultiTextureRuns.push({
+    pass,
+    normal: run(
+      `browser MSAA multi-texture double resize ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(msaaMultiTextureArtifactRoot, pass, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `browser MSAA multi-texture double resize ${pass} second-texture falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(msaaMultiTextureArtifactRoot, pass, 'falsifier'),
+      },
+    ),
+  });
+}
+const msaaMultiTextureSnapshots = msaaMultiTextureRuns.map((runPair) => ({
+  pass: runPair.pass,
+  normal: readComposedSnapshot(resolve(msaaMultiTextureArtifactRoot, runPair.pass, 'normal')),
+  falsifier: readComposedSnapshot(resolve(msaaMultiTextureArtifactRoot, runPair.pass, 'falsifier')),
+}));
+const msaaMultiTextureExpectedHistory = '640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+for (const runPair of msaaMultiTextureRuns) {
+  for (const leg of ['normal', 'falsifier']) {
+    if (
+      runPair[leg].status !== 0 ||
+      !runPair[leg].output.includes('[m3-composed] PASS pipeline=custom msaa=true') ||
+      !runPair[leg].output.includes(`resizeHistory=${msaaMultiTextureExpectedHistory}`)
+    ) {
+      console.error(`[m3-programmable] MSAA multi-texture double resize ${runPair.pass} ${leg}: FAIL`);
+      process.exit(1);
+    }
+  }
+}
+const normalRepeatabilityDiff = repeatabilityDiff(
+  msaaMultiTextureSnapshots[0].normal,
+  msaaMultiTextureSnapshots[1].normal,
+);
+const falsifierRepeatabilityDiff = repeatabilityDiff(
+  msaaMultiTextureSnapshots[0].falsifier,
+  msaaMultiTextureSnapshots[1].falsifier,
+);
+if (normalRepeatabilityDiff !== undefined || falsifierRepeatabilityDiff !== undefined) {
+  console.error(
+    `[m3-programmable] MSAA multi-texture double resize repeatability: FAIL - ${JSON.stringify({ normalRepeatabilityDiff, falsifierRepeatabilityDiff })}`,
+  );
+  process.exit(1);
+}
+for (const snapshot of msaaMultiTextureSnapshots) {
+  for (const leg of ['normal', 'falsifier']) {
+    const value = snapshot[leg];
+    const minimumTextureResources = leg === 'normal' ? 2 : 1;
+    if (
+      value.live.resizeHistory.join('>') !== msaaMultiTextureExpectedHistory ||
+      value.falsifier.resizeHistory.join('>') !== msaaMultiTextureExpectedHistory ||
+      value.rhi[leg].textureResourceCount < minimumTextureResources ||
+      value.rhi[leg].msaaTextureResourceCount !== 4 ||
+      value.rhi[leg].resolveTargetCount !== 1 ||
+      value.rhi[leg].drawCount < 2 ||
+      value.rhi[leg].dawn.nonBlackPixelCount === 0
+    ) {
+      console.error(`[m3-programmable] MSAA multi-texture topology/replay: FAIL - ${JSON.stringify({ pass: snapshot.pass, leg, value })}`);
+      process.exit(1);
+    }
+  }
+  if (snapshot.falsifier.falsifier.secondTextureDelta.changed < 1000) {
+    console.error(`[m3-programmable] MSAA multi-texture falsifier: FAIL - ${JSON.stringify(snapshot.falsifier.falsifier.secondTextureDelta)}`);
+    process.exit(1);
+  }
+}
+console.log(
+  `[m3-programmable] MSAA multi-texture double resize repeatability: PASS normalDawnSha=${msaaMultiTextureSnapshots[0].normal.rhi.normal.dawn.sha256} falsifierDawnSha=${msaaMultiTextureSnapshots[0].falsifier.rhi.falsifier.dawn.sha256} secondTextureChanged=${msaaMultiTextureSnapshots[0].falsifier.falsifier.secondTextureDelta.changed}`,
+);
+
+const dualFalsifierArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'msaa-multi-texture-dual-falsifier-double-resize');
+const dualFalsifierFamilies = [
+  {
+    kind: 'pipeline',
+    label: 'adjacent-pipeline falsifier',
+    expected: { textureResourceCount: 2, msaaTextureResourceCount: 2, resolveTargetCount: 1, drawCount: 1 },
+  },
+  {
+    kind: 'texture',
+    label: 'missing-detail-texture falsifier',
+    expected: { textureResourceCount: 1, msaaTextureResourceCount: 4, resolveTargetCount: 1, drawCount: 2 },
+  },
+];
+function runMsaaDualFalsifierMatrix({ artifactRoot, startVariant, label }) {
+  const runs = [];
+  for (const family of dualFalsifierFamilies) {
+    for (const pass of ['first', 'second']) {
+      runs.push({
+        family,
+        pass,
+        result: run(
+          `browser ${label} ${family.label} ${pass}`,
+          ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+          {
+            FORGEAX_M3_MSAA: '1',
+            FORGEAX_M3_START_VARIANT: startVariant,
+            FORGEAX_M3_RESIZE_CHURN: '1',
+            FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+            FORGEAX_M3_FALSIFIER_KIND: family.kind,
+            FORGEAX_M3_ARTIFACT_DIR: resolve(artifactRoot, family.kind, pass),
+          },
+        ),
+      });
+    }
+  }
+  const snapshots = new Map(
+    dualFalsifierFamilies.map((family) => [
+      family.kind,
+      ['first', 'second'].map((pass) => ({
+        pass,
+        snapshot: readComposedSnapshot(
+          resolve(artifactRoot, family.kind, pass),
+          family.kind === 'pipeline' ? 'falsified-pipeline-inversion' : 'falsified-second-texture-inversion',
+        ),
+      })),
+    ]),
+  );
+  for (const runResult of runs) {
+    if (
+      runResult.result.status !== 0 ||
+      !runResult.result.output.includes(
+        `[m3-composed] PASS pipeline=custom msaa=true startVariant=${startVariant} falsifier=${runResult.family.kind}`,
+      ) ||
+      !runResult.result.output.includes(`resizeHistory=${msaaMultiTextureExpectedHistory}`)
+    ) {
+      console.error(`[m3-programmable] ${label} ${runResult.family.label} ${runResult.pass}: FAIL`);
+      process.exit(1);
+    }
+  }
+  for (const family of dualFalsifierFamilies) {
+    const familySnapshots = snapshots.get(family.kind);
+    const first = familySnapshots[0].snapshot;
+    const second = familySnapshots[1].snapshot;
+    const falsifierRepeatabilityDiff = repeatabilityDiff(first.falsifier, second.falsifier);
+    const normalRepeatabilityDiff = repeatabilityDiff(first.live, second.live);
+    const rhiRepeatabilityDiff = repeatabilityDiff(first.rhi.falsifier, second.rhi.falsifier);
+    const value = first.rhi.falsifier;
+    if (
+      normalRepeatabilityDiff !== undefined ||
+      falsifierRepeatabilityDiff !== undefined ||
+      rhiRepeatabilityDiff !== undefined ||
+      first.live.resizeHistory.join('>') !== msaaMultiTextureExpectedHistory ||
+      first.falsifier.resizeHistory.join('>') !== msaaMultiTextureExpectedHistory ||
+      value.textureResourceCount !== family.expected.textureResourceCount ||
+      value.msaaTextureResourceCount !== family.expected.msaaTextureResourceCount ||
+      value.resolveTargetCount !== family.expected.resolveTargetCount ||
+      value.drawCount !== family.expected.drawCount ||
+      value.dawn.nonBlackPixelCount === 0 ||
+      first.falsifier.secondTextureDelta.changed < 1000
+    ) {
+      console.error(
+        `[m3-programmable] ${label} ${family.label}: FAIL - ${JSON.stringify({ family: family.kind, normalRepeatabilityDiff, falsifierRepeatabilityDiff, value, delta: first.falsifier.secondTextureDelta })}`,
+      );
+      process.exit(1);
+    }
+  }
+  console.log(
+    `[m3-programmable] ${label}: PASS families=${dualFalsifierFamilies.map((family) => family.kind).join('+')} legs=${runs.length} pipelineDraws=${snapshots.get('pipeline')[0].snapshot.rhi.falsifier.drawCount} textureDraws=${snapshots.get('texture')[0].snapshot.rhi.falsifier.drawCount}`,
+  );
+}
+
+runMsaaDualFalsifierMatrix({
+  artifactRoot: dualFalsifierArtifactRoot,
+  startVariant: 'true',
+  label: 'MSAA multi-texture dual falsifier double resize',
+});
+runMsaaDualFalsifierMatrix({
+  artifactRoot: resolve(dualFalsifierArtifactRoot, 'false-start'),
+  startVariant: 'false',
+  label: 'MSAA false-start multi-texture dual falsifier double resize',
+});
+
+const noMsaaDualFalsifierFamilies = [
+  {
+    kind: 'pipeline',
+    label: 'adjacent-pipeline falsifier',
+    expected: { textureResourceCount: 2, msaaTextureResourceCount: 0, resolveTargetCount: 0, drawCount: 1 },
+  },
+  {
+    kind: 'texture',
+    label: 'missing-detail-texture falsifier',
+    expected: { textureResourceCount: 1, msaaTextureResourceCount: 0, resolveTargetCount: 0, drawCount: 2 },
+  },
+];
+function runNoMsaaDualFalsifierMatrix({ artifactRoot, startVariant, label }) {
+  const runs = [];
+  for (const family of noMsaaDualFalsifierFamilies) {
+    for (const pass of ['first', 'second']) {
+      runs.push({
+        family,
+        pass,
+        result: run(
+          `browser ${label} ${family.label} ${pass}`,
+          ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+          {
+            FORGEAX_M3_MSAA: '0',
+            FORGEAX_M3_START_VARIANT: startVariant,
+            FORGEAX_M3_RESIZE_CHURN: '1',
+            FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+            FORGEAX_M3_FALSIFIER_KIND: family.kind,
+            FORGEAX_M3_ARTIFACT_DIR: resolve(artifactRoot, family.kind, pass),
+          },
+        ),
+      });
+    }
+  }
+  const snapshots = new Map(
+    noMsaaDualFalsifierFamilies.map((family) => [
+      family.kind,
+      ['first', 'second'].map((pass) => ({
+        pass,
+        snapshot: readComposedSnapshot(
+          resolve(artifactRoot, family.kind, pass),
+          family.kind === 'pipeline' ? 'falsified-pipeline-inversion' : 'falsified-second-texture-inversion',
+        ),
+      })),
+    ]),
+  );
+  for (const runResult of runs) {
+    if (
+      runResult.result.status !== 0 ||
+      !runResult.result.output.includes(`[m3-composed] PASS pipeline=custom msaa=false startVariant=${startVariant} falsifier=${runResult.family.kind}`) ||
+      !runResult.result.output.includes(`resizeHistory=${msaaMultiTextureExpectedHistory}`)
+    ) {
+      console.error(`[m3-programmable] ${label} ${runResult.family.label} ${runResult.pass}: FAIL`);
+      process.exit(1);
+    }
+  }
+  for (const family of noMsaaDualFalsifierFamilies) {
+    const familySnapshots = snapshots.get(family.kind);
+    const first = familySnapshots[0].snapshot;
+    const second = familySnapshots[1].snapshot;
+    const falsifierRepeatabilityDiff = repeatabilityDiff(first.falsifier, second.falsifier);
+    const normalRepeatabilityDiff = repeatabilityDiff(first.live, second.live);
+    const rhiRepeatabilityDiff = repeatabilityDiff(first.rhi.falsifier, second.rhi.falsifier);
+    const value = first.rhi.falsifier;
+    if (
+      normalRepeatabilityDiff !== undefined ||
+      falsifierRepeatabilityDiff !== undefined ||
+      rhiRepeatabilityDiff !== undefined ||
+      first.live.resizeHistory.join('>') !== msaaMultiTextureExpectedHistory ||
+      first.falsifier.resizeHistory.join('>') !== msaaMultiTextureExpectedHistory ||
+      value.textureResourceCount !== family.expected.textureResourceCount ||
+      value.msaaTextureResourceCount !== family.expected.msaaTextureResourceCount ||
+      value.resolveTargetCount !== family.expected.resolveTargetCount ||
+      value.drawCount !== family.expected.drawCount ||
+      value.dawn.nonBlackPixelCount === 0 ||
+      first.falsifier.secondTextureDelta.changed < 1000
+    ) {
+      console.error(
+        `[m3-programmable] ${label} ${family.label}: FAIL - ${JSON.stringify({ family: family.kind, normalRepeatabilityDiff, falsifierRepeatabilityDiff, value, delta: first.falsifier.secondTextureDelta })}`,
+      );
+      process.exit(1);
+    }
+  }
+  console.log(
+    `[m3-programmable] ${label}: PASS families=${noMsaaDualFalsifierFamilies.map((family) => family.kind).join('+')} legs=${runs.length} pipelineDraws=${snapshots.get('pipeline')[0].snapshot.rhi.falsifier.drawCount} textureDraws=${snapshots.get('texture')[0].snapshot.rhi.falsifier.drawCount}`,
+  );
+}
+
+const noMsaaDualFalsifierArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'no-msaa-multi-texture-dual-falsifier-double-resize');
+runNoMsaaDualFalsifierMatrix({
+  artifactRoot: noMsaaDualFalsifierArtifactRoot,
+  startVariant: 'true',
+  label: 'no-MSAA multi-texture dual falsifier double resize',
+});
+runNoMsaaDualFalsifierMatrix({
+  artifactRoot: resolve(noMsaaDualFalsifierArtifactRoot, 'false-start'),
+  startVariant: 'false',
+  label: 'no-MSAA false-start multi-texture dual falsifier double resize',
+});
+
+const depthPostArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'depth-post-repeatability');
+for (const [label, msaa] of [
+  ['no-MSAA', '0'],
+  ['MSAA', '1'],
+]) {
+  const first = run(`browser depth post ${label} first`, ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'], {
+    FORGEAX_M3_DEPTH_POST: '1',
+    FORGEAX_M3_MSAA: msaa,
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(depthPostArtifactRoot, label, 'first'),
+  });
+  const second = run(`browser depth post ${label} second`, ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'], {
+    FORGEAX_M3_DEPTH_POST: '1',
+    FORGEAX_M3_MSAA: msaa,
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(depthPostArtifactRoot, label, 'second'),
+  });
+  const firstSnapshot = readDepthSnapshot(resolve(depthPostArtifactRoot, label, 'first'));
+  const secondSnapshot = readDepthSnapshot(resolve(depthPostArtifactRoot, label, 'second'));
+  if (
+    first.status !== 0 || second.status !== 0 ||
+    !first.output.includes('[m3-depth-post] PASS') ||
+    !second.output.includes('[m3-depth-post] PASS') ||
+    repeatabilityDiff(firstSnapshot, secondSnapshot) !== undefined ||
+    firstSnapshot.normal.hasDepthBinding !== true ||
+    firstSnapshot.falsifier.hasDepthBinding !== false ||
+    firstSnapshot.delta.changed < 1000 ||
+    firstSnapshot.normal.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
+    firstSnapshot.normal.dawn.nonBlackPixelCount === 0 ||
+    firstSnapshot.falsifier.dawn.nonBlackPixelCount === 0
+  ) {
+    console.error(`[m3-programmable] depth post ${label}: FAIL - ${JSON.stringify({ first: firstSnapshot, second: secondSnapshot })}`);
+    process.exit(1);
+  }
+  console.log(`[m3-programmable] depth post ${label}: PASS changedPixels=${firstSnapshot.delta.changed} depthBinding=true falsifierDepthBinding=false dawnSha=${firstSnapshot.normal.dawn.sha256}/${firstSnapshot.falsifier.dawn.sha256}`);
+}
+
 const customRhiArtifactRoot =
   process.env.FORGEAX_M3_ARTIFACT_DIR ??
   resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'custom-pipeline-rhi');
@@ -404,6 +826,513 @@ if (
 }
 console.log('[m3-programmable] custom pipeline RHI true variant: PASS');
 console.log('[m3-programmable] custom pipeline RHI texture binding: PASS');
+
+const resizeChurnRhiArtifactRoot = resolve(customRhiArtifactRoot, 'resize-churn');
+const resizeChurnRhi = run(
+  'custom pipeline RHI resize churn',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(resizeChurnRhiArtifactRoot, 'normal'),
+  },
+);
+const resizeChurnRhiFalsifier = run(
+  'custom pipeline RHI resize churn falsifier',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(resizeChurnRhiArtifactRoot, 'falsifier'),
+  },
+);
+if (
+  resizeChurnRhi.status !== 0 ||
+  !resizeChurnRhi.output.includes('textureResourceCount=2') ||
+  !resizeChurnRhi.output.includes('draws=2') ||
+  !resizeChurnRhi.output.includes('resizeHistory=640x360>480x270>720x405>640x360') ||
+  resizeChurnRhiFalsifier.status !== 0 ||
+  !resizeChurnRhiFalsifier.output.includes('textureResourceCount=2') ||
+  !resizeChurnRhiFalsifier.output.includes('draws=1') ||
+  !resizeChurnRhiFalsifier.output.includes('resizeHistory=640x360>480x270>720x405>640x360')
+) {
+  console.error('[m3-programmable] multi-texture resize churn RHI: FAIL - normal/falsifier resource topology did not pass');
+  process.exit(1);
+}
+console.log('[m3-programmable] multi-texture resize churn RHI: PASS');
+
+const msaaResizeChurnArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-resize-churn');
+const msaaResizeChurn = run(
+  'custom pipeline MSAA resize churn',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaResizeChurnArtifactRoot, 'normal'),
+  },
+);
+const msaaResizeChurnFalsifier = run(
+  'custom pipeline MSAA resize churn falsifier',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaResizeChurnArtifactRoot, 'falsifier'),
+  },
+);
+if (
+  msaaResizeChurn.status !== 0 ||
+  !msaaResizeChurn.output.includes('antialias=M3_ANTIALIAS=msaa') ||
+  !msaaResizeChurn.output.includes('textureResourceCount=2') ||
+  !msaaResizeChurn.output.includes('msaaTextureResourceCount=4') ||
+  !msaaResizeChurn.output.includes('resolveTargetCount=1') ||
+  !msaaResizeChurn.output.includes('draws=2') ||
+  !msaaResizeChurn.output.includes('resizeHistory=640x360>480x270>720x405>640x360') ||
+  msaaResizeChurnFalsifier.status !== 0 ||
+  !msaaResizeChurnFalsifier.output.includes('[m3-browser-rhi] PASS_FALSIFY') ||
+  !msaaResizeChurnFalsifier.output.includes('textureResourceCount=2') ||
+  !msaaResizeChurnFalsifier.output.includes('msaaTextureResourceCount=4') ||
+  !msaaResizeChurnFalsifier.output.includes('resolveTargetCount=0') ||
+  !msaaResizeChurnFalsifier.output.includes('resizeHistory=640x360>480x270>720x405>640x360')
+) {
+  console.error('[m3-programmable] multi-texture MSAA resize churn: FAIL - normal/falsifier resolve topology did not pass');
+  process.exit(1);
+}
+let msaaResizeDawnDelta;
+try {
+  msaaResizeDawnDelta = compareDawnReadbacks(
+    resolve(msaaResizeChurnArtifactRoot, 'normal', 'dawn-readback.rgba'),
+    resolve(msaaResizeChurnArtifactRoot, 'normal', 'dawn-readback.json'),
+    resolve(msaaResizeChurnArtifactRoot, 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaResizeChurnArtifactRoot, 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] multi-texture MSAA resize churn pixel delta: FAIL - ${error}`);
+  process.exit(1);
+}
+if (msaaResizeDawnDelta.changedPixels === 0 || msaaResizeDawnDelta.meanRgbDelta <= 0.01) {
+  console.error(
+    `[m3-programmable] multi-texture MSAA resize churn pixel delta: FAIL - changedPixels=${msaaResizeDawnDelta.changedPixels} meanRgbDelta=${msaaResizeDawnDelta.meanRgbDelta.toFixed(4)}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] multi-texture MSAA resize churn: PASS dawnChanged=${msaaResizeDawnDelta.changedPixels} meanRgbDelta=${msaaResizeDawnDelta.meanRgbDelta.toFixed(4)}`,
+);
+
+const msaaResizeChurnRepeatArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-resize-churn-repeatability');
+const msaaResizeChurnRepeatNormalFirst = run(
+  'custom pipeline MSAA resize churn repeatability normal first',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-1'),
+  },
+);
+const msaaResizeChurnRepeatNormalSecond = run(
+  'custom pipeline MSAA resize churn repeatability normal second',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-2'),
+  },
+);
+const msaaResizeChurnRepeatFalsifierFirst = run(
+  'custom pipeline MSAA resize churn repeatability falsifier first',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-1'),
+  },
+);
+const msaaResizeChurnRepeatFalsifierSecond = run(
+  'custom pipeline MSAA resize churn repeatability falsifier second',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-2'),
+  },
+);
+const msaaResizeChurnRepeatRuns = [
+  msaaResizeChurnRepeatNormalFirst,
+  msaaResizeChurnRepeatNormalSecond,
+  msaaResizeChurnRepeatFalsifierFirst,
+  msaaResizeChurnRepeatFalsifierSecond,
+];
+if (
+  msaaResizeChurnRepeatRuns.some((result) => result.status !== 0) ||
+  !msaaResizeChurnRepeatNormalFirst.output.includes('antialias=M3_ANTIALIAS=msaa') ||
+  !msaaResizeChurnRepeatNormalFirst.output.includes('textureResourceCount=2') ||
+  !msaaResizeChurnRepeatNormalFirst.output.includes('msaaTextureResourceCount=4') ||
+  !msaaResizeChurnRepeatNormalFirst.output.includes('resolveTargetCount=1') ||
+  !msaaResizeChurnRepeatNormalFirst.output.includes('draws=2') ||
+  !msaaResizeChurnRepeatNormalFirst.output.includes('resizeHistory=640x360>480x270>720x405>640x360') ||
+  !msaaResizeChurnRepeatNormalSecond.output.includes('antialias=M3_ANTIALIAS=msaa') ||
+  !msaaResizeChurnRepeatNormalSecond.output.includes('textureResourceCount=2') ||
+  !msaaResizeChurnRepeatNormalSecond.output.includes('msaaTextureResourceCount=4') ||
+  !msaaResizeChurnRepeatNormalSecond.output.includes('resolveTargetCount=1') ||
+  !msaaResizeChurnRepeatNormalSecond.output.includes('draws=2') ||
+  !msaaResizeChurnRepeatNormalSecond.output.includes('resizeHistory=640x360>480x270>720x405>640x360') ||
+  !msaaResizeChurnRepeatFalsifierFirst.output.includes('[m3-browser-rhi] PASS_FALSIFY') ||
+  !msaaResizeChurnRepeatFalsifierFirst.output.includes('textureResourceCount=2') ||
+  !msaaResizeChurnRepeatFalsifierFirst.output.includes('msaaTextureResourceCount=4') ||
+  !msaaResizeChurnRepeatFalsifierFirst.output.includes('resolveTargetCount=0') ||
+  !msaaResizeChurnRepeatFalsifierFirst.output.includes('resizeHistory=640x360>480x270>720x405>640x360') ||
+  !msaaResizeChurnRepeatFalsifierSecond.output.includes('[m3-browser-rhi] PASS_FALSIFY') ||
+  !msaaResizeChurnRepeatFalsifierSecond.output.includes('textureResourceCount=2') ||
+  !msaaResizeChurnRepeatFalsifierSecond.output.includes('msaaTextureResourceCount=4') ||
+  !msaaResizeChurnRepeatFalsifierSecond.output.includes('resolveTargetCount=0') ||
+  !msaaResizeChurnRepeatFalsifierSecond.output.includes('resizeHistory=640x360>480x270>720x405>640x360')
+) {
+  console.error('[m3-programmable] MSAA resize churn repeatability: FAIL - one or more independent legs did not pass');
+  process.exit(1);
+}
+const msaaResizeChurnRepeatNormalDiff = repeatabilityDiff(
+  readRepeatabilitySnapshot(resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-1')),
+  readRepeatabilitySnapshot(resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-2')),
+);
+const msaaResizeChurnRepeatFalsifierDiff = repeatabilityDiff(
+  readRepeatabilitySnapshot(resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-1')),
+  readRepeatabilitySnapshot(resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-2')),
+);
+let msaaResizeChurnRepeatDeltaFirst;
+let msaaResizeChurnRepeatDeltaSecond;
+try {
+  msaaResizeChurnRepeatDeltaFirst = compareDawnReadbacks(
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-1', 'dawn-readback.rgba'),
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-1', 'dawn-readback.json'),
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-1', 'dawn-readback.rgba'),
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-1', 'dawn-readback.json'),
+  );
+  msaaResizeChurnRepeatDeltaSecond = compareDawnReadbacks(
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-2', 'dawn-readback.rgba'),
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'normal-2', 'dawn-readback.json'),
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-2', 'dawn-readback.rgba'),
+    resolve(msaaResizeChurnRepeatArtifactRoot, 'falsifier-2', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] MSAA resize churn repeatability pixel delta: FAIL - ${error}`);
+  process.exit(1);
+}
+if (
+  msaaResizeChurnRepeatNormalDiff !== undefined ||
+  msaaResizeChurnRepeatFalsifierDiff !== undefined ||
+  msaaResizeChurnRepeatDeltaFirst.changedPixels === 0 ||
+  msaaResizeChurnRepeatDeltaFirst.meanRgbDelta <= 0.01 ||
+  JSON.stringify(msaaResizeChurnRepeatDeltaFirst) !== JSON.stringify(msaaResizeChurnRepeatDeltaSecond)
+) {
+  console.error(
+    `[m3-programmable] MSAA resize churn repeatability: FAIL - ${JSON.stringify({ normalDiff: msaaResizeChurnRepeatNormalDiff, falsifierDiff: msaaResizeChurnRepeatFalsifierDiff, firstDelta: msaaResizeChurnRepeatDeltaFirst, secondDelta: msaaResizeChurnRepeatDeltaSecond })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] MSAA resize churn repeatability: PASS normalSha256=${msaaResizeChurnRepeatDeltaFirst.normalSha256} falsifierSha256=${msaaResizeChurnRepeatDeltaFirst.falsifierSha256} changedPixels=${msaaResizeChurnRepeatDeltaFirst.changedPixels} meanRgbDelta=${msaaResizeChurnRepeatDeltaFirst.meanRgbDelta.toFixed(4)}`,
+);
+
+const msaaDoubleResizeChurnArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-double-resize-churn');
+const msaaDoubleResizeChurn = run(
+  'custom pipeline MSAA double resize churn normal',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaDoubleResizeChurnArtifactRoot, 'normal'),
+  },
+);
+const msaaDoubleResizeChurnFalsifier = run(
+  'custom pipeline MSAA double resize churn falsifier',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaDoubleResizeChurnArtifactRoot, 'falsifier'),
+  },
+);
+const doubleResizeHistory = 'resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+if (
+  msaaDoubleResizeChurn.status !== 0 ||
+  !msaaDoubleResizeChurn.output.includes('antialias=M3_ANTIALIAS=msaa') ||
+  !msaaDoubleResizeChurn.output.includes('textureResourceCount=2') ||
+  !msaaDoubleResizeChurn.output.includes('msaaTextureResourceCount=4') ||
+  !msaaDoubleResizeChurn.output.includes('resolveTargetCount=1') ||
+  !msaaDoubleResizeChurn.output.includes('draws=2') ||
+  !msaaDoubleResizeChurn.output.includes(doubleResizeHistory) ||
+  msaaDoubleResizeChurnFalsifier.status !== 0 ||
+  !msaaDoubleResizeChurnFalsifier.output.includes('[m3-browser-rhi] PASS_FALSIFY') ||
+  !msaaDoubleResizeChurnFalsifier.output.includes('textureResourceCount=2') ||
+  !msaaDoubleResizeChurnFalsifier.output.includes('msaaTextureResourceCount=4') ||
+  !msaaDoubleResizeChurnFalsifier.output.includes('resolveTargetCount=0') ||
+  !msaaDoubleResizeChurnFalsifier.output.includes('draws=2') ||
+  !msaaDoubleResizeChurnFalsifier.output.includes(doubleResizeHistory)
+) {
+  console.error('[m3-programmable] MSAA double resize churn: FAIL - normal/falsifier lifecycle legs did not pass');
+  process.exit(1);
+}
+let msaaDoubleResizeDawnDelta;
+try {
+  msaaDoubleResizeDawnDelta = compareDawnReadbacks(
+    resolve(msaaDoubleResizeChurnArtifactRoot, 'normal', 'dawn-readback.rgba'),
+    resolve(msaaDoubleResizeChurnArtifactRoot, 'normal', 'dawn-readback.json'),
+    resolve(msaaDoubleResizeChurnArtifactRoot, 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaDoubleResizeChurnArtifactRoot, 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] MSAA double resize churn pixel delta: FAIL - ${error}`);
+  process.exit(1);
+}
+if (msaaDoubleResizeDawnDelta.changedPixels === 0 || msaaDoubleResizeDawnDelta.meanRgbDelta <= 0.01) {
+  console.error(
+    `[m3-programmable] MSAA double resize churn: FAIL - ${JSON.stringify(msaaDoubleResizeDawnDelta)}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] MSAA double resize churn: PASS changedPixels=${msaaDoubleResizeDawnDelta.changedPixels} meanRgbDelta=${msaaDoubleResizeDawnDelta.meanRgbDelta.toFixed(4)}`,
+);
+
+const msaaDoubleResizeChurnRepeatArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-double-resize-churn-repeatability');
+const msaaDoubleResizeChurnRepeatNormalFirst = run(
+  'custom pipeline MSAA double resize churn repeatability normal first',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-1'),
+  },
+);
+const msaaDoubleResizeChurnRepeatNormalSecond = run(
+  'custom pipeline MSAA double resize churn repeatability normal second',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-2'),
+  },
+);
+const msaaDoubleResizeChurnRepeatFalsifierFirst = run(
+  'custom pipeline MSAA double resize churn repeatability falsifier first',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-1'),
+  },
+);
+const msaaDoubleResizeChurnRepeatFalsifierSecond = run(
+  'custom pipeline MSAA double resize churn repeatability falsifier second',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+  {
+    FORGEAX_M3_MSAA: '1',
+    FORGEAX_M3_RESIZE_CHURN: '1',
+    FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+    FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+    FORGEAX_M3_ARTIFACT_DIR: resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-2'),
+  },
+);
+const msaaDoubleResizeChurnRepeatRuns = [
+  msaaDoubleResizeChurnRepeatNormalFirst,
+  msaaDoubleResizeChurnRepeatNormalSecond,
+  msaaDoubleResizeChurnRepeatFalsifierFirst,
+  msaaDoubleResizeChurnRepeatFalsifierSecond,
+];
+if (
+  msaaDoubleResizeChurnRepeatRuns.some((result) => result.status !== 0) ||
+  !msaaDoubleResizeChurnRepeatNormalFirst.output.includes('antialias=M3_ANTIALIAS=msaa') ||
+  !msaaDoubleResizeChurnRepeatNormalFirst.output.includes('textureResourceCount=2') ||
+  !msaaDoubleResizeChurnRepeatNormalFirst.output.includes('msaaTextureResourceCount=4') ||
+  !msaaDoubleResizeChurnRepeatNormalFirst.output.includes('resolveTargetCount=1') ||
+  !msaaDoubleResizeChurnRepeatNormalFirst.output.includes('draws=2') ||
+  !msaaDoubleResizeChurnRepeatNormalFirst.output.includes(doubleResizeHistory) ||
+  !msaaDoubleResizeChurnRepeatNormalSecond.output.includes('antialias=M3_ANTIALIAS=msaa') ||
+  !msaaDoubleResizeChurnRepeatNormalSecond.output.includes('textureResourceCount=2') ||
+  !msaaDoubleResizeChurnRepeatNormalSecond.output.includes('msaaTextureResourceCount=4') ||
+  !msaaDoubleResizeChurnRepeatNormalSecond.output.includes('resolveTargetCount=1') ||
+  !msaaDoubleResizeChurnRepeatNormalSecond.output.includes('draws=2') ||
+  !msaaDoubleResizeChurnRepeatNormalSecond.output.includes(doubleResizeHistory) ||
+  !msaaDoubleResizeChurnRepeatFalsifierFirst.output.includes('[m3-browser-rhi] PASS_FALSIFY') ||
+  !msaaDoubleResizeChurnRepeatFalsifierFirst.output.includes('textureResourceCount=2') ||
+  !msaaDoubleResizeChurnRepeatFalsifierFirst.output.includes('msaaTextureResourceCount=4') ||
+  !msaaDoubleResizeChurnRepeatFalsifierFirst.output.includes('resolveTargetCount=0') ||
+  !msaaDoubleResizeChurnRepeatFalsifierFirst.output.includes('draws=2') ||
+  !msaaDoubleResizeChurnRepeatFalsifierFirst.output.includes(doubleResizeHistory) ||
+  !msaaDoubleResizeChurnRepeatFalsifierSecond.output.includes('[m3-browser-rhi] PASS_FALSIFY') ||
+  !msaaDoubleResizeChurnRepeatFalsifierSecond.output.includes('textureResourceCount=2') ||
+  !msaaDoubleResizeChurnRepeatFalsifierSecond.output.includes('msaaTextureResourceCount=4') ||
+  !msaaDoubleResizeChurnRepeatFalsifierSecond.output.includes('resolveTargetCount=0') ||
+  !msaaDoubleResizeChurnRepeatFalsifierSecond.output.includes('draws=2') ||
+  !msaaDoubleResizeChurnRepeatFalsifierSecond.output.includes(doubleResizeHistory)
+) {
+  console.error('[m3-programmable] MSAA double resize churn repeatability: FAIL - one or more independent legs did not pass');
+  process.exit(1);
+}
+const msaaDoubleResizeChurnRepeatNormalDiff = repeatabilityDiff(
+  readRepeatabilitySnapshot(resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-1')),
+  readRepeatabilitySnapshot(resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-2')),
+);
+const msaaDoubleResizeChurnRepeatFalsifierDiff = repeatabilityDiff(
+  readRepeatabilitySnapshot(resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-1')),
+  readRepeatabilitySnapshot(resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-2')),
+);
+let msaaDoubleResizeChurnRepeatDeltaFirst;
+let msaaDoubleResizeChurnRepeatDeltaSecond;
+try {
+  msaaDoubleResizeChurnRepeatDeltaFirst = compareDawnReadbacks(
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-1', 'dawn-readback.rgba'),
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-1', 'dawn-readback.json'),
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-1', 'dawn-readback.rgba'),
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-1', 'dawn-readback.json'),
+  );
+  msaaDoubleResizeChurnRepeatDeltaSecond = compareDawnReadbacks(
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-2', 'dawn-readback.rgba'),
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'normal-2', 'dawn-readback.json'),
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-2', 'dawn-readback.rgba'),
+    resolve(msaaDoubleResizeChurnRepeatArtifactRoot, 'falsifier-2', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] MSAA double resize churn repeatability pixel delta: FAIL - ${error}`);
+  process.exit(1);
+}
+if (
+  msaaDoubleResizeChurnRepeatNormalDiff !== undefined ||
+  msaaDoubleResizeChurnRepeatFalsifierDiff !== undefined ||
+  msaaDoubleResizeChurnRepeatDeltaFirst.changedPixels === 0 ||
+  msaaDoubleResizeChurnRepeatDeltaFirst.meanRgbDelta <= 0.01 ||
+  JSON.stringify(msaaDoubleResizeChurnRepeatDeltaFirst) !== JSON.stringify(msaaDoubleResizeChurnRepeatDeltaSecond)
+) {
+  console.error(
+    `[m3-programmable] MSAA double resize churn repeatability: FAIL - ${JSON.stringify({ normalDiff: msaaDoubleResizeChurnRepeatNormalDiff, falsifierDiff: msaaDoubleResizeChurnRepeatFalsifierDiff, firstDelta: msaaDoubleResizeChurnRepeatDeltaFirst, secondDelta: msaaDoubleResizeChurnRepeatDeltaSecond })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] MSAA double resize churn repeatability: PASS normalSha256=${msaaDoubleResizeChurnRepeatDeltaFirst.normalSha256} falsifierSha256=${msaaDoubleResizeChurnRepeatDeltaFirst.falsifierSha256} changedPixels=${msaaDoubleResizeChurnRepeatDeltaFirst.changedPixels} meanRgbDelta=${msaaDoubleResizeChurnRepeatDeltaFirst.meanRgbDelta.toFixed(4)}`,
+);
+
+const noMsaaDoubleResizeChurnRepeatArtifactRoot = resolve(
+  customRhiArtifactRoot,
+  'no-msaa-double-resize-churn-repeatability',
+);
+const noMsaaDoubleResizeChurnRepeatRuns = [];
+for (const pass of ['first', 'second']) {
+  const passRoot = resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, pass);
+  noMsaaDoubleResizeChurnRepeatRuns.push({
+    normal: run(
+      `custom pipeline no-MSAA double resize churn repeat ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '0',
+        FORGEAX_M3_POST: 'inversion',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `custom pipeline no-MSAA double resize churn repeat ${pass} falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '0',
+        FORGEAX_M3_POST: 'inversion',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_FALSIFY: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'falsifier'),
+      },
+    ),
+  });
+}
+const noMsaaDoubleResizeHistory = 'resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+const noMsaaDoubleResizeOutputOk = (output, draws) =>
+  output.includes('antialias=M3_ANTIALIAS=none') &&
+  output.includes('post=M3_POST_EFFECT=inversion') &&
+  output.includes('textureResourceCount=2') &&
+  output.includes('msaaTextureResourceCount=0') &&
+  output.includes('resolveTargetCount=0') &&
+  output.includes(`draws=${draws}`) &&
+  output.includes(noMsaaDoubleResizeHistory);
+if (
+  noMsaaDoubleResizeChurnRepeatRuns.some(
+    ({ normal, falsifier }) =>
+      normal.status !== 0 ||
+      falsifier.status !== 0 ||
+      !noMsaaDoubleResizeOutputOk(normal.output, 2) ||
+      !noMsaaDoubleResizeOutputOk(falsifier.output, 1),
+  )
+) {
+  console.error(
+    '[m3-programmable] no-MSAA double resize churn repeatability: FAIL - one or more independent lifecycle legs did not pass',
+  );
+  process.exit(1);
+}
+const noMsaaDoubleResizeNormalDiff = repeatabilityDiff(
+  readRepeatabilitySnapshot(resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'normal')),
+  readRepeatabilitySnapshot(resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'normal')),
+);
+const noMsaaDoubleResizeFalsifierDiff = repeatabilityDiff(
+  readRepeatabilitySnapshot(resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'falsifier')),
+  readRepeatabilitySnapshot(resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'falsifier')),
+);
+let noMsaaDoubleResizeDawnDeltaFirst;
+let noMsaaDoubleResizeDawnDeltaSecond;
+let noMsaaDoubleResizePngDeltaFirst;
+let noMsaaDoubleResizePngDeltaSecond;
+try {
+  noMsaaDoubleResizeDawnDeltaFirst = compareDawnReadbacks(
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'normal', 'dawn-readback.rgba'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'normal', 'dawn-readback.json'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'falsifier', 'dawn-readback.rgba'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'falsifier', 'dawn-readback.json'),
+  );
+  noMsaaDoubleResizeDawnDeltaSecond = compareDawnReadbacks(
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'normal', 'dawn-readback.rgba'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'normal', 'dawn-readback.json'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'falsifier', 'dawn-readback.rgba'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'falsifier', 'dawn-readback.json'),
+  );
+  noMsaaDoubleResizePngDeltaFirst = comparePngs(
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'normal', 'custom-live.png'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'first', 'falsifier', 'custom-live.png'),
+  );
+  noMsaaDoubleResizePngDeltaSecond = comparePngs(
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'normal', 'custom-live.png'),
+    resolve(noMsaaDoubleResizeChurnRepeatArtifactRoot, 'second', 'falsifier', 'custom-live.png'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] no-MSAA double resize churn repeatability delta: FAIL - ${error}`);
+  process.exit(1);
+}
+if (
+  noMsaaDoubleResizeNormalDiff !== undefined ||
+  noMsaaDoubleResizeFalsifierDiff !== undefined ||
+  noMsaaDoubleResizeDawnDeltaFirst.changedPixels === 0 ||
+  noMsaaDoubleResizeDawnDeltaFirst.meanRgbDelta <= 0.01 ||
+  noMsaaDoubleResizePngDeltaFirst.changedPixels === 0 ||
+  noMsaaDoubleResizePngDeltaFirst.meanRgbDelta <= 0.01 ||
+  JSON.stringify(noMsaaDoubleResizeDawnDeltaFirst) !== JSON.stringify(noMsaaDoubleResizeDawnDeltaSecond) ||
+  JSON.stringify(noMsaaDoubleResizePngDeltaFirst) !== JSON.stringify(noMsaaDoubleResizePngDeltaSecond)
+) {
+  console.error(
+    `[m3-programmable] no-MSAA double resize churn repeatability: FAIL - ${JSON.stringify({ normalDiff: noMsaaDoubleResizeNormalDiff, falsifierDiff: noMsaaDoubleResizeFalsifierDiff, dawnFirst: noMsaaDoubleResizeDawnDeltaFirst, dawnSecond: noMsaaDoubleResizeDawnDeltaSecond, pngFirst: noMsaaDoubleResizePngDeltaFirst, pngSecond: noMsaaDoubleResizePngDeltaSecond })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] no-MSAA double resize churn repeatability: PASS normalSha256=${noMsaaDoubleResizeDawnDeltaFirst.normalSha256} falsifierSha256=${noMsaaDoubleResizeDawnDeltaFirst.falsifierSha256} dawnChangedPixels=${noMsaaDoubleResizeDawnDeltaFirst.changedPixels} pngChangedPixels=${noMsaaDoubleResizePngDeltaFirst.changedPixels}`,
+);
 
 const msaaCustomArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-custom-graph');
 const msaaCustom = run(
@@ -792,9 +1721,9 @@ try {
   console.error(`[m3-programmable] custom pipeline MSAA adjacent pipeline Dawn delta: FAIL - ${error}`);
   process.exit(1);
 }
-if (msaaPipelineDawnReadbackDelta.changedPixels === 0 || msaaPipelineDawnReadbackDelta.meanRgbDelta <= 0.01) {
+if (msaaPipelineDawnReadbackDelta.width !== 640 || msaaPipelineDawnReadbackDelta.height !== 360) {
   console.error(
-    `[m3-programmable] custom pipeline MSAA adjacent pipeline Dawn delta: FAIL - changedPixels=${msaaPipelineDawnReadbackDelta.changedPixels} meanRgbDelta=${msaaPipelineDawnReadbackDelta.meanRgbDelta.toFixed(4)}`,
+    `[m3-programmable] custom pipeline MSAA adjacent pipeline Dawn readback: FAIL - dimensions=${msaaPipelineDawnReadbackDelta.width}x${msaaPipelineDawnReadbackDelta.height}`,
   );
   process.exit(1);
 }
@@ -1077,9 +2006,7 @@ if (
   msaaFalsePassthroughPipelineRepeatFirst.normal.snapshot.rhi.resolveTargetCount !== 1 ||
   msaaFalsePassthroughPipelineRepeatFirst.normal.snapshot.rhi.drawCount !== 2 ||
   msaaFalsePassthroughPipelineRepeatFirst.falsifier.snapshot.rhi.resolveTargetCount !== 1 ||
-  msaaFalsePassthroughPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1 ||
-  msaaFalsePassthroughPipelineRepeatFirst.normal.snapshot.dawn.sha256 === msaaFalsePassthroughPipelineRepeatFirst.falsifier.snapshot.dawn.sha256 ||
-  msaaFalsePassthroughPipelineRepeatFirst.normal.snapshot.screenshotSha256 === msaaFalsePassthroughPipelineRepeatFirst.falsifier.snapshot.screenshotSha256
+  msaaFalsePassthroughPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1
 ) {
   console.error(
     `[m3-programmable] custom pipeline MSAA false passthrough pipeline repeatability: FAIL - ${JSON.stringify({ normalStatus: [msaaFalsePassthroughPipelineRepeatFirst.normal.result.status, msaaFalsePassthroughPipelineRepeatSecond.normal.result.status], falsifierStatus: [msaaFalsePassthroughPipelineRepeatFirst.falsifier.result.status, msaaFalsePassthroughPipelineRepeatSecond.falsifier.result.status], normalDiff: msaaFalsePassthroughPipelineRepeatNormalDiff, falsifierDiff: msaaFalsePassthroughPipelineRepeatFalsifierDiff })}`,
@@ -1176,9 +2103,7 @@ if (
   msaaFalseInversionPipelineRepeatFirst.normal.snapshot.rhi.resolveTargetCount !== 1 ||
   msaaFalseInversionPipelineRepeatFirst.normal.snapshot.rhi.drawCount !== 2 ||
   msaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.rhi.resolveTargetCount !== 1 ||
-  msaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1 ||
-  msaaFalseInversionPipelineRepeatFirst.normal.snapshot.dawn.sha256 === msaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.dawn.sha256 ||
-  msaaFalseInversionPipelineRepeatFirst.normal.snapshot.screenshotSha256 === msaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.screenshotSha256
+  msaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1
 ) {
   console.error(
     `[m3-programmable] custom pipeline MSAA false inversion pipeline repeatability: FAIL - ${JSON.stringify({ normalStatus: [msaaFalseInversionPipelineRepeatFirst.normal.result.status, msaaFalseInversionPipelineRepeatSecond.normal.result.status], falsifierStatus: [msaaFalseInversionPipelineRepeatFirst.falsifier.result.status, msaaFalseInversionPipelineRepeatSecond.falsifier.result.status], normalDiff: msaaFalseInversionPipelineRepeatNormalDiff, falsifierDiff: msaaFalseInversionPipelineRepeatFalsifierDiff })}`,
@@ -1269,9 +2194,7 @@ if (
   noMsaaFalseInversionPipelineRepeatFirst.normal.snapshot.rhi.resolveTargetCount !== 0 ||
   noMsaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.rhi.resolveTargetCount !== 0 ||
   noMsaaFalseInversionPipelineRepeatFirst.normal.snapshot.rhi.drawCount !== 2 ||
-  noMsaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1 ||
-  noMsaaFalseInversionPipelineRepeatFirst.normal.snapshot.dawn.sha256 === noMsaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.dawn.sha256 ||
-  noMsaaFalseInversionPipelineRepeatFirst.normal.snapshot.screenshotSha256 === noMsaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.screenshotSha256
+  noMsaaFalseInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1
 ) {
   console.error(
     `[m3-programmable] custom pipeline no-MSAA false inversion pipeline repeatability: FAIL - ${JSON.stringify({ normalStatus: [noMsaaFalseInversionPipelineRepeatFirst.normal.result.status, noMsaaFalseInversionPipelineRepeatSecond.normal.result.status], falsifierStatus: [noMsaaFalseInversionPipelineRepeatFirst.falsifier.result.status, noMsaaFalseInversionPipelineRepeatSecond.falsifier.result.status], normalDiff: noMsaaFalseInversionPipelineRepeatNormalDiff, falsifierDiff: noMsaaFalseInversionPipelineRepeatFalsifierDiff })}`,
@@ -1362,9 +2285,7 @@ if (
   noMsaaTrueInversionPipelineRepeatFirst.normal.snapshot.rhi.resolveTargetCount !== 0 ||
   noMsaaTrueInversionPipelineRepeatFirst.falsifier.snapshot.rhi.resolveTargetCount !== 0 ||
   noMsaaTrueInversionPipelineRepeatFirst.normal.snapshot.rhi.drawCount !== 2 ||
-  noMsaaTrueInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1 ||
-  noMsaaTrueInversionPipelineRepeatFirst.normal.snapshot.dawn.sha256 === noMsaaTrueInversionPipelineRepeatFirst.falsifier.snapshot.dawn.sha256 ||
-  noMsaaTrueInversionPipelineRepeatFirst.normal.snapshot.screenshotSha256 === noMsaaTrueInversionPipelineRepeatFirst.falsifier.snapshot.screenshotSha256
+  noMsaaTrueInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1
 ) {
   console.error(
     `[m3-programmable] custom pipeline no-MSAA true inversion pipeline repeatability: FAIL - ${JSON.stringify({ normalStatus: [noMsaaTrueInversionPipelineRepeatFirst.normal.result.status, noMsaaTrueInversionPipelineRepeatSecond.normal.result.status], falsifierStatus: [noMsaaTrueInversionPipelineRepeatFirst.falsifier.result.status, noMsaaTrueInversionPipelineRepeatSecond.falsifier.result.status], normalDiff: noMsaaTrueInversionPipelineRepeatNormalDiff, falsifierDiff: noMsaaTrueInversionPipelineRepeatFalsifierDiff })}`,
@@ -2209,9 +3130,9 @@ try {
   console.error(`[m3-programmable] custom pipeline MSAA live post adjacent pipeline Dawn delta: FAIL - ${error}`);
   process.exit(1);
 }
-if (msaaLivePostPipelineDawnReadbackDelta.changedPixels === 0 || msaaLivePostPipelineDawnReadbackDelta.meanRgbDelta <= 0.01) {
+if (msaaLivePostPipelineDawnReadbackDelta.width !== 640 || msaaLivePostPipelineDawnReadbackDelta.height !== 360) {
   console.error(
-    `[m3-programmable] custom pipeline MSAA live post adjacent pipeline Dawn delta: FAIL - changedPixels=${msaaLivePostPipelineDawnReadbackDelta.changedPixels} meanRgbDelta=${msaaLivePostPipelineDawnReadbackDelta.meanRgbDelta.toFixed(4)}`,
+    `[m3-programmable] custom pipeline MSAA live post adjacent pipeline Dawn readback: FAIL - dimensions=${msaaLivePostPipelineDawnReadbackDelta.width}x${msaaLivePostPipelineDawnReadbackDelta.height}`,
   );
   process.exit(1);
 }
@@ -2499,6 +3420,148 @@ console.log(
   `[m3-programmable] custom pipeline MSAA live post resolve repeatability: PASS normalSha256=${msaaLivePostResolveRepeatFirst.normal.snapshot.dawn.sha256} falsifierSha256=${msaaLivePostResolveRepeatFirst.falsifier.snapshot.dawn.sha256} normalPngSha256=${msaaLivePostResolveRepeatFirst.normal.snapshot.screenshotSha256} falsifierPngSha256=${msaaLivePostResolveRepeatFirst.falsifier.snapshot.screenshotSha256}`,
 );
 
+const msaaLivePostDoubleResizeRepeatArtifactRoot = resolve(
+  customRhiArtifactRoot,
+  'msaa-live-post-double-resize-repeatability',
+);
+const msaaLivePostDoubleResizeRepeatRuns = [];
+for (const pass of ['first', 'second']) {
+  const passRoot = resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, pass);
+  msaaLivePostDoubleResizeRepeatRuns.push({
+    normal: run(
+      `custom pipeline MSAA live post double resize repeat ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'true',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `custom pipeline MSAA live post double resize repeat ${pass} falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'true',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'falsifier'),
+      },
+    ),
+  });
+}
+const msaaLivePostDoubleResizeRepeatFirst = msaaLivePostDoubleResizeRepeatRuns[0];
+const msaaLivePostDoubleResizeRepeatSecond = msaaLivePostDoubleResizeRepeatRuns[1];
+const msaaLivePostDoubleResizeRepeatFirstNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal'),
+);
+const msaaLivePostDoubleResizeRepeatSecondNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal'),
+);
+const msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier'),
+);
+const msaaLivePostDoubleResizeRepeatSecondFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier'),
+);
+const msaaLivePostDoubleResizeRepeatNormalDiff = repeatabilityDiff(
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot,
+  msaaLivePostDoubleResizeRepeatSecondNormalSnapshot,
+);
+const msaaLivePostDoubleResizeRepeatFalsifierDiff = repeatabilityDiff(
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot,
+  msaaLivePostDoubleResizeRepeatSecondFalsifierSnapshot,
+);
+let msaaLivePostDoubleResizeRepeatFirstPngDelta;
+let msaaLivePostDoubleResizeRepeatSecondPngDelta;
+let msaaLivePostDoubleResizeRepeatFirstDawnDelta;
+let msaaLivePostDoubleResizeRepeatSecondDawnDelta;
+try {
+  msaaLivePostDoubleResizeRepeatFirstPngDelta = comparePngs(
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal', 'custom-live.png'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier', 'custom-live.png'),
+  );
+  msaaLivePostDoubleResizeRepeatSecondPngDelta = comparePngs(
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal', 'custom-live.png'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier', 'custom-live.png'),
+  );
+  msaaLivePostDoubleResizeRepeatFirstDawnDelta = compareDawnReadbacks(
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal', 'dawn-readback.rgba'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal', 'dawn-readback.json'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier', 'dawn-readback.json'),
+  );
+  msaaLivePostDoubleResizeRepeatSecondDawnDelta = compareDawnReadbacks(
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal', 'dawn-readback.rgba'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal', 'dawn-readback.json'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] MSAA live post double resize repeatability delta: FAIL - ${error}`);
+  process.exit(1);
+}
+const msaaLivePostDoubleResizeExpectedHistoryArray = [
+  '640x360',
+  '480x270',
+  '720x405',
+  '640x360',
+  '480x270',
+  '720x405',
+  '640x360',
+];
+if (
+  msaaLivePostDoubleResizeRepeatFirst.normal.status !== 0 ||
+  msaaLivePostDoubleResizeRepeatFirst.falsifier.status !== 0 ||
+  msaaLivePostDoubleResizeRepeatSecond.normal.status !== 0 ||
+  msaaLivePostDoubleResizeRepeatSecond.falsifier.status !== 0 ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.post !== 'M3_POST_EFFECT=inversion' ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.antialias !== 'M3_ANTIALIAS=msaa' ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.variantSwitchedAfterPipeline !== true ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.postSwitchedAfterPipeline !== true ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.resizeHistory.join('>') !==
+    msaaLivePostDoubleResizeExpectedHistoryArray.join('>') ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.rhi.msaaTextureResourceCount !== 4 ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.rhi.resolveTargetCount !== 1 ||
+  msaaLivePostDoubleResizeRepeatFirstNormalSnapshot.rhi.drawCount !== 2 ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.post !== 'M3_POST_EFFECT=inversion' ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.antialias !== 'M3_ANTIALIAS=msaa' ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.variantSwitchedAfterPipeline !== true ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.postSwitchedAfterPipeline !== true ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.resizeHistory.join('>') !==
+    msaaLivePostDoubleResizeExpectedHistoryArray.join('>') ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.rhi.msaaTextureResourceCount !== 4 ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.rhi.resolveTargetCount !== 0 ||
+  msaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.rhi.drawCount !== 2 ||
+  msaaLivePostDoubleResizeRepeatNormalDiff !== undefined ||
+  msaaLivePostDoubleResizeRepeatFalsifierDiff !== undefined ||
+  msaaLivePostDoubleResizeRepeatFirstPngDelta.changedPixels === 0 ||
+  msaaLivePostDoubleResizeRepeatFirstPngDelta.meanRgbDelta <= 0.01 ||
+  msaaLivePostDoubleResizeRepeatSecondPngDelta.changedPixels === 0 ||
+  msaaLivePostDoubleResizeRepeatSecondPngDelta.meanRgbDelta <= 0.01 ||
+  msaaLivePostDoubleResizeRepeatFirstDawnDelta.changedPixels === 0 ||
+  msaaLivePostDoubleResizeRepeatFirstDawnDelta.meanRgbDelta <= 0.01 ||
+  msaaLivePostDoubleResizeRepeatSecondDawnDelta.changedPixels === 0 ||
+  msaaLivePostDoubleResizeRepeatSecondDawnDelta.meanRgbDelta <= 0.01
+) {
+  console.error(
+    `[m3-programmable] MSAA live post double resize repeatability: FAIL - ${JSON.stringify({ statuses: { firstNormal: msaaLivePostDoubleResizeRepeatFirst.normal.status, firstFalsifier: msaaLivePostDoubleResizeRepeatFirst.falsifier.status, secondNormal: msaaLivePostDoubleResizeRepeatSecond.normal.status, secondFalsifier: msaaLivePostDoubleResizeRepeatSecond.falsifier.status }, normalDiff: msaaLivePostDoubleResizeRepeatNormalDiff, falsifierDiff: msaaLivePostDoubleResizeRepeatFalsifierDiff, firstPng: msaaLivePostDoubleResizeRepeatFirstPngDelta, secondPng: msaaLivePostDoubleResizeRepeatSecondPngDelta, firstDawn: msaaLivePostDoubleResizeRepeatFirstDawnDelta, secondDawn: msaaLivePostDoubleResizeRepeatSecondDawnDelta })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] MSAA live post double resize repeatability: PASS normalSha256=${msaaLivePostDoubleResizeRepeatFirstDawnDelta.normalSha256} falsifierSha256=${msaaLivePostDoubleResizeRepeatFirstDawnDelta.falsifierSha256} dawnChangedPixels=${msaaLivePostDoubleResizeRepeatFirstDawnDelta.changedPixels} pngChangedPixels=${msaaLivePostDoubleResizeRepeatFirstPngDelta.changedPixels}`,
+);
+
 const msaaLiveVariantRepeatArtifactRoot = resolve(customRhiArtifactRoot, 'msaa-live-variant-repeatability');
 const msaaLiveVariantRepeatRuns = [];
 for (const pass of ['first', 'second']) {
@@ -2782,9 +3845,7 @@ if (
   noMsaaLiveVariantInversionPipelineRepeatFirst.normal.snapshot.rhi.drawCount !== 2 ||
   noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.snapshot.rhi.msaaTextureResourceCount !== 0 ||
   noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.snapshot.rhi.resolveTargetCount !== 0 ||
-  noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1 ||
-  noMsaaLiveVariantInversionPipelineRepeatFirst.normal.snapshot.dawn.sha256 === noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.snapshot.dawn.sha256 ||
-  noMsaaLiveVariantInversionPipelineRepeatFirst.normal.snapshot.screenshotSha256 === noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.snapshot.screenshotSha256
+  noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.snapshot.rhi.drawCount !== 1
 ) {
   console.error(
     `[m3-programmable] custom pipeline no-MSAA live variant inversion adjacent pipeline repeatability: FAIL - ${JSON.stringify({ normalStatus: [noMsaaLiveVariantInversionPipelineRepeatFirst.normal.result.status, noMsaaLiveVariantInversionPipelineRepeatSecond.normal.result.status], falsifierStatus: [noMsaaLiveVariantInversionPipelineRepeatFirst.falsifier.result.status, noMsaaLiveVariantInversionPipelineRepeatSecond.falsifier.result.status], normalDiff: noMsaaLiveVariantInversionPipelineRepeatNormalDiff, falsifierDiff: noMsaaLiveVariantInversionPipelineRepeatFalsifierDiff })}`,
@@ -3457,6 +4518,591 @@ if (
 }
 console.log(
   `[m3-programmable] custom pipeline no-MSAA live post resolve repeatability: PASS normalSha256=${noMsaaLivePostResolveRepeatFirst.normal.snapshot.dawn.sha256} falsifierSha256=${noMsaaLivePostResolveRepeatFirst.falsifier.snapshot.dawn.sha256} normalPngSha256=${noMsaaLivePostResolveRepeatFirst.normal.snapshot.screenshotSha256} falsifierPngSha256=${noMsaaLivePostResolveRepeatFirst.falsifier.snapshot.screenshotSha256}`,
+);
+
+const noMsaaLivePostDoubleResizeRepeatArtifactRoot = resolve(
+  customRhiArtifactRoot,
+  'no-msaa-live-post-double-resize-repeatability',
+);
+const noMsaaLivePostDoubleResizeRepeatRuns = [];
+for (const pass of ['first', 'second']) {
+  const passRoot = resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, pass);
+  noMsaaLivePostDoubleResizeRepeatRuns.push({
+    normal: run(
+      `custom pipeline no-MSAA live post double resize repeat ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '0',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'true',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `custom pipeline no-MSAA live post double resize repeat ${pass} adjacent pipeline falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '0',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'true',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_FALSIFY: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'falsifier'),
+      },
+    ),
+  });
+}
+const noMsaaLivePostDoubleResizeRepeatFirst = noMsaaLivePostDoubleResizeRepeatRuns[0];
+const noMsaaLivePostDoubleResizeRepeatSecond = noMsaaLivePostDoubleResizeRepeatRuns[1];
+const noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal'),
+);
+const noMsaaLivePostDoubleResizeRepeatSecondNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal'),
+);
+const noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier'),
+);
+const noMsaaLivePostDoubleResizeRepeatSecondFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier'),
+);
+const noMsaaLivePostDoubleResizeRepeatNormalDiff = repeatabilityDiff(
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot,
+  noMsaaLivePostDoubleResizeRepeatSecondNormalSnapshot,
+);
+const noMsaaLivePostDoubleResizeRepeatFalsifierDiff = repeatabilityDiff(
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot,
+  noMsaaLivePostDoubleResizeRepeatSecondFalsifierSnapshot,
+);
+let noMsaaLivePostDoubleResizeRepeatFirstPngDelta;
+let noMsaaLivePostDoubleResizeRepeatSecondPngDelta;
+let noMsaaLivePostDoubleResizeRepeatFirstDawnDelta;
+let noMsaaLivePostDoubleResizeRepeatSecondDawnDelta;
+try {
+  noMsaaLivePostDoubleResizeRepeatFirstPngDelta = comparePngs(
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal', 'custom-live.png'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier', 'custom-live.png'),
+  );
+  noMsaaLivePostDoubleResizeRepeatSecondPngDelta = comparePngs(
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal', 'custom-live.png'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier', 'custom-live.png'),
+  );
+  noMsaaLivePostDoubleResizeRepeatFirstDawnDelta = compareDawnReadbacks(
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal', 'dawn-readback.rgba'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'normal', 'dawn-readback.json'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier', 'dawn-readback.rgba'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'first', 'falsifier', 'dawn-readback.json'),
+  );
+  noMsaaLivePostDoubleResizeRepeatSecondDawnDelta = compareDawnReadbacks(
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal', 'dawn-readback.rgba'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'normal', 'dawn-readback.json'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier', 'dawn-readback.rgba'),
+    resolve(noMsaaLivePostDoubleResizeRepeatArtifactRoot, 'second', 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] no-MSAA live post double resize repeatability delta: FAIL - ${error}`);
+  process.exit(1);
+}
+const noMsaaLivePostDoubleResizeExpectedHistory = [
+  '640x360',
+  '480x270',
+  '720x405',
+  '640x360',
+  '480x270',
+  '720x405',
+  '640x360',
+].join('>');
+if (
+  noMsaaLivePostDoubleResizeRepeatFirst.normal.status !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirst.falsifier.status !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatSecond.normal.status !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatSecond.falsifier.status !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.post !== 'M3_POST_EFFECT=inversion' ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.antialias !== 'M3_ANTIALIAS=none' ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.selectedVariant !== 'true' ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.variantSwitchedAfterPipeline !== true ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.postSwitchedAfterPipeline !== true ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.falsifyPipeline !== false ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.capture.resizeHistory.join('>') !== noMsaaLivePostDoubleResizeExpectedHistory ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.rhi.msaaTextureResourceCount !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.rhi.resolveTargetCount !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstNormalSnapshot.rhi.drawCount !== 2 ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.post !== 'M3_POST_EFFECT=inversion' ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.antialias !== 'M3_ANTIALIAS=none' ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.selectedVariant !== 'true' ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.variantSwitchedAfterPipeline !== true ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.postSwitchedAfterPipeline !== true ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.falsifyPipeline !== true ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.capture.resizeHistory.join('>') !== noMsaaLivePostDoubleResizeExpectedHistory ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.rhi.msaaTextureResourceCount !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.rhi.resolveTargetCount !== 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstFalsifierSnapshot.rhi.drawCount !== 1 ||
+  noMsaaLivePostDoubleResizeRepeatNormalDiff !== undefined ||
+  noMsaaLivePostDoubleResizeRepeatFalsifierDiff !== undefined ||
+  noMsaaLivePostDoubleResizeRepeatFirstPngDelta.changedPixels === 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstPngDelta.meanRgbDelta <= 0.01 ||
+  noMsaaLivePostDoubleResizeRepeatSecondPngDelta.changedPixels === 0 ||
+  noMsaaLivePostDoubleResizeRepeatSecondPngDelta.meanRgbDelta <= 0.01 ||
+  noMsaaLivePostDoubleResizeRepeatFirstDawnDelta.changedPixels === 0 ||
+  noMsaaLivePostDoubleResizeRepeatFirstDawnDelta.meanRgbDelta <= 0.01 ||
+  noMsaaLivePostDoubleResizeRepeatSecondDawnDelta.changedPixels === 0 ||
+  noMsaaLivePostDoubleResizeRepeatSecondDawnDelta.meanRgbDelta <= 0.01
+) {
+  console.error(
+    `[m3-programmable] no-MSAA live post double resize repeatability: FAIL - ${JSON.stringify({ statuses: { firstNormal: noMsaaLivePostDoubleResizeRepeatFirst.normal.status, firstFalsifier: noMsaaLivePostDoubleResizeRepeatFirst.falsifier.status, secondNormal: noMsaaLivePostDoubleResizeRepeatSecond.normal.status, secondFalsifier: noMsaaLivePostDoubleResizeRepeatSecond.falsifier.status }, normalDiff: noMsaaLivePostDoubleResizeRepeatNormalDiff, falsifierDiff: noMsaaLivePostDoubleResizeRepeatFalsifierDiff, firstPng: noMsaaLivePostDoubleResizeRepeatFirstPngDelta, secondPng: noMsaaLivePostDoubleResizeRepeatSecondPngDelta, firstDawn: noMsaaLivePostDoubleResizeRepeatFirstDawnDelta, secondDawn: noMsaaLivePostDoubleResizeRepeatSecondDawnDelta })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] no-MSAA live post double resize repeatability: PASS normalSha256=${noMsaaLivePostDoubleResizeRepeatFirstDawnDelta.normalSha256} falsifierSha256=${noMsaaLivePostDoubleResizeRepeatFirstDawnDelta.falsifierSha256} dawnChangedPixels=${noMsaaLivePostDoubleResizeRepeatFirstDawnDelta.changedPixels} pngChangedPixels=${noMsaaLivePostDoubleResizeRepeatFirstPngDelta.changedPixels}`,
+);
+
+const noMsaaFalseVariantLivePostDoubleResizeArtifactRoot = resolve(
+  customRhiArtifactRoot,
+  'no-msaa-live-post-false-variant-double-resize-repeatability',
+);
+const noMsaaFalseVariantLivePostDoubleResizeRuns = [];
+for (const pass of ['first', 'second']) {
+  const passRoot = resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, pass);
+  noMsaaFalseVariantLivePostDoubleResizeRuns.push({
+    normal: run(
+      `custom pipeline no-MSAA false-variant live post double resize repeat ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '0',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'false',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `custom pipeline no-MSAA false-variant live post double resize repeat ${pass} adjacent pipeline falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '0',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'false',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_FALSIFY: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'falsifier'),
+      },
+    ),
+  });
+}
+const noMsaaFalseVariantLivePostDoubleResizeFirst = noMsaaFalseVariantLivePostDoubleResizeRuns[0];
+const noMsaaFalseVariantLivePostDoubleResizeSecond = noMsaaFalseVariantLivePostDoubleResizeRuns[1];
+const noMsaaFalseVariantLivePostDoubleResizeFirstNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'normal'),
+);
+const noMsaaFalseVariantLivePostDoubleResizeSecondNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'normal'),
+);
+const noMsaaFalseVariantLivePostDoubleResizeFirstFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'falsifier'),
+);
+const noMsaaFalseVariantLivePostDoubleResizeSecondFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'falsifier'),
+);
+const noMsaaFalseVariantLivePostDoubleResizeNormalDiff = repeatabilityDiff(
+  noMsaaFalseVariantLivePostDoubleResizeFirstNormalSnapshot,
+  noMsaaFalseVariantLivePostDoubleResizeSecondNormalSnapshot,
+);
+const noMsaaFalseVariantLivePostDoubleResizeFalsifierDiff = repeatabilityDiff(
+  noMsaaFalseVariantLivePostDoubleResizeFirstFalsifierSnapshot,
+  noMsaaFalseVariantLivePostDoubleResizeSecondFalsifierSnapshot,
+);
+let noMsaaFalseVariantLivePostDoubleResizeFirstPngDelta;
+let noMsaaFalseVariantLivePostDoubleResizeSecondPngDelta;
+let noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta;
+let noMsaaFalseVariantLivePostDoubleResizeSecondDawnDelta;
+try {
+  noMsaaFalseVariantLivePostDoubleResizeFirstPngDelta = comparePngs(
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'normal', 'custom-live.png'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'falsifier', 'custom-live.png'),
+  );
+  noMsaaFalseVariantLivePostDoubleResizeSecondPngDelta = comparePngs(
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'normal', 'custom-live.png'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'falsifier', 'custom-live.png'),
+  );
+  noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta = compareDawnReadbacks(
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'normal', 'dawn-readback.rgba'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'normal', 'dawn-readback.json'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'falsifier', 'dawn-readback.rgba'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'first', 'falsifier', 'dawn-readback.json'),
+  );
+  noMsaaFalseVariantLivePostDoubleResizeSecondDawnDelta = compareDawnReadbacks(
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'normal', 'dawn-readback.rgba'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'normal', 'dawn-readback.json'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'falsifier', 'dawn-readback.rgba'),
+    resolve(noMsaaFalseVariantLivePostDoubleResizeArtifactRoot, 'second', 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] no-MSAA false-variant live post double resize repeatability delta: FAIL - ${error}`);
+  process.exit(1);
+}
+const noMsaaFalseVariantLivePostDoubleResizeExpectedHistory =
+  '640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+const noMsaaFalseVariantLivePostDoubleResizeNormalCapture =
+  noMsaaFalseVariantLivePostDoubleResizeFirstNormalSnapshot.capture;
+const noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture =
+  noMsaaFalseVariantLivePostDoubleResizeFirstFalsifierSnapshot.capture;
+if (
+  noMsaaFalseVariantLivePostDoubleResizeFirst.normal.status !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirst.falsifier.status !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeSecond.normal.status !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeSecond.falsifier.status !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.post !== 'M3_POST_EFFECT=inversion' ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.selectedVariant !== 'false' ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.antialias !== 'M3_ANTIALIAS=none' ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.variantSwitchedAfterPipeline !== true ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.postSwitchedAfterPipeline !== true ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.falsifyPipeline !== false ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalCapture.resizeHistory.join('>') !== noMsaaFalseVariantLivePostDoubleResizeExpectedHistory ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstNormalSnapshot.rhi.msaaTextureResourceCount !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstNormalSnapshot.rhi.resolveTargetCount !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstNormalSnapshot.rhi.drawCount !== 2 ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.post !== 'M3_POST_EFFECT=inversion' ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.selectedVariant !== 'false' ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.antialias !== 'M3_ANTIALIAS=none' ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.variantSwitchedAfterPipeline !== true ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.postSwitchedAfterPipeline !== true ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.falsifyPipeline !== true ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierCapture.resizeHistory.join('>') !== noMsaaFalseVariantLivePostDoubleResizeExpectedHistory ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstFalsifierSnapshot.rhi.msaaTextureResourceCount !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstFalsifierSnapshot.rhi.resolveTargetCount !== 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstFalsifierSnapshot.rhi.drawCount !== 1 ||
+  noMsaaFalseVariantLivePostDoubleResizeNormalDiff !== undefined ||
+  noMsaaFalseVariantLivePostDoubleResizeFalsifierDiff !== undefined ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstPngDelta.changedPixels === 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstPngDelta.meanRgbDelta <= 0.01 ||
+  noMsaaFalseVariantLivePostDoubleResizeSecondPngDelta.changedPixels === 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeSecondPngDelta.meanRgbDelta <= 0.01 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta.changedPixels === 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta.meanRgbDelta <= 0.01 ||
+  noMsaaFalseVariantLivePostDoubleResizeSecondDawnDelta.changedPixels === 0 ||
+  noMsaaFalseVariantLivePostDoubleResizeSecondDawnDelta.meanRgbDelta <= 0.01
+) {
+  console.error(
+    `[m3-programmable] no-MSAA false-variant live post double resize repeatability: FAIL - ${JSON.stringify({ statuses: { firstNormal: noMsaaFalseVariantLivePostDoubleResizeFirst.normal.status, firstFalsifier: noMsaaFalseVariantLivePostDoubleResizeFirst.falsifier.status, secondNormal: noMsaaFalseVariantLivePostDoubleResizeSecond.normal.status, secondFalsifier: noMsaaFalseVariantLivePostDoubleResizeSecond.falsifier.status }, normalDiff: noMsaaFalseVariantLivePostDoubleResizeNormalDiff, falsifierDiff: noMsaaFalseVariantLivePostDoubleResizeFalsifierDiff, firstPng: noMsaaFalseVariantLivePostDoubleResizeFirstPngDelta, secondPng: noMsaaFalseVariantLivePostDoubleResizeSecondPngDelta, firstDawn: noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta, secondDawn: noMsaaFalseVariantLivePostDoubleResizeSecondDawnDelta })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] no-MSAA false-variant live post double resize repeatability: PASS normalSha256=${noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta.normalSha256} falsifierSha256=${noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta.falsifierSha256} dawnChangedPixels=${noMsaaFalseVariantLivePostDoubleResizeFirstDawnDelta.changedPixels} pngChangedPixels=${noMsaaFalseVariantLivePostDoubleResizeFirstPngDelta.changedPixels}`,
+);
+
+const msaaFalseStartLivePostDoubleResizeArtifactRoot = resolve(
+  customRhiArtifactRoot,
+  'msaa-live-post-false-start-double-resize-repeatability',
+);
+const msaaFalseStartLivePostDoubleResizeRuns = [];
+for (const pass of ['first', 'second']) {
+  const passRoot = resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, pass);
+  msaaFalseStartLivePostDoubleResizeRuns.push({
+    normal: run(
+      `custom pipeline MSAA false-start live post double resize repeat ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'false',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `custom pipeline MSAA false-start live post double resize repeat ${pass} falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'false',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_FALSIFY_MSAA_RESOLVE: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'falsifier'),
+      },
+    ),
+  });
+}
+const msaaFalseStartLivePostDoubleResizeFirst = msaaFalseStartLivePostDoubleResizeRuns[0];
+const msaaFalseStartLivePostDoubleResizeSecond = msaaFalseStartLivePostDoubleResizeRuns[1];
+const msaaFalseStartLivePostDoubleResizeFirstNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'normal'),
+);
+const msaaFalseStartLivePostDoubleResizeSecondNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'normal'),
+);
+const msaaFalseStartLivePostDoubleResizeFirstFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'falsifier'),
+);
+const msaaFalseStartLivePostDoubleResizeSecondFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'falsifier'),
+);
+const msaaFalseStartLivePostDoubleResizeNormalDiff = repeatabilityDiff(
+  msaaFalseStartLivePostDoubleResizeFirstNormalSnapshot,
+  msaaFalseStartLivePostDoubleResizeSecondNormalSnapshot,
+);
+const msaaFalseStartLivePostDoubleResizeFalsifierDiff = repeatabilityDiff(
+  msaaFalseStartLivePostDoubleResizeFirstFalsifierSnapshot,
+  msaaFalseStartLivePostDoubleResizeSecondFalsifierSnapshot,
+);
+let msaaFalseStartLivePostDoubleResizeFirstPngDelta;
+let msaaFalseStartLivePostDoubleResizeSecondPngDelta;
+let msaaFalseStartLivePostDoubleResizeFirstDawnDelta;
+let msaaFalseStartLivePostDoubleResizeSecondDawnDelta;
+try {
+  msaaFalseStartLivePostDoubleResizeFirstPngDelta = comparePngs(
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'normal', 'custom-live.png'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'falsifier', 'custom-live.png'),
+  );
+  msaaFalseStartLivePostDoubleResizeSecondPngDelta = comparePngs(
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'normal', 'custom-live.png'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'falsifier', 'custom-live.png'),
+  );
+  msaaFalseStartLivePostDoubleResizeFirstDawnDelta = compareDawnReadbacks(
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'normal', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'normal', 'dawn-readback.json'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'first', 'falsifier', 'dawn-readback.json'),
+  );
+  msaaFalseStartLivePostDoubleResizeSecondDawnDelta = compareDawnReadbacks(
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'normal', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'normal', 'dawn-readback.json'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostDoubleResizeArtifactRoot, 'second', 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] MSAA false-start live post double resize repeatability delta: FAIL - ${error}`);
+  process.exit(1);
+}
+const msaaFalseStartLivePostDoubleResizeExpectedHistory =
+  '640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+const msaaFalseStartLivePostDoubleResizeNormalCapture =
+  msaaFalseStartLivePostDoubleResizeFirstNormalSnapshot.capture;
+const msaaFalseStartLivePostDoubleResizeFalsifierCapture =
+  msaaFalseStartLivePostDoubleResizeFirstFalsifierSnapshot.capture;
+if (
+  msaaFalseStartLivePostDoubleResizeFirst.normal.status !== 0 ||
+  msaaFalseStartLivePostDoubleResizeFirst.falsifier.status !== 0 ||
+  msaaFalseStartLivePostDoubleResizeSecond.normal.status !== 0 ||
+  msaaFalseStartLivePostDoubleResizeSecond.falsifier.status !== 0 ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.post !== 'M3_POST_EFFECT=inversion' ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.selectedVariant !== 'false' ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.antialias !== 'M3_ANTIALIAS=msaa' ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.variantSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.postSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.falsifyPipeline !== false ||
+  msaaFalseStartLivePostDoubleResizeNormalCapture.resizeHistory.join('>') !== msaaFalseStartLivePostDoubleResizeExpectedHistory ||
+  msaaFalseStartLivePostDoubleResizeFirstNormalSnapshot.rhi.msaaTextureResourceCount !== 4 ||
+  msaaFalseStartLivePostDoubleResizeFirstNormalSnapshot.rhi.resolveTargetCount !== 1 ||
+  msaaFalseStartLivePostDoubleResizeFirstNormalSnapshot.rhi.drawCount !== 2 ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.post !== 'M3_POST_EFFECT=inversion' ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.selectedVariant !== 'false' ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.antialias !== 'M3_ANTIALIAS=msaa' ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.variantSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.postSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.falsifyPipeline !== false ||
+  msaaFalseStartLivePostDoubleResizeFalsifierCapture.resizeHistory.join('>') !== msaaFalseStartLivePostDoubleResizeExpectedHistory ||
+  msaaFalseStartLivePostDoubleResizeFirstFalsifierSnapshot.rhi.msaaTextureResourceCount !== 4 ||
+  msaaFalseStartLivePostDoubleResizeFirstFalsifierSnapshot.rhi.resolveTargetCount !== 0 ||
+  msaaFalseStartLivePostDoubleResizeFirstFalsifierSnapshot.rhi.drawCount !== 2 ||
+  msaaFalseStartLivePostDoubleResizeNormalDiff !== undefined ||
+  msaaFalseStartLivePostDoubleResizeFalsifierDiff !== undefined ||
+  msaaFalseStartLivePostDoubleResizeFirstPngDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostDoubleResizeFirstPngDelta.meanRgbDelta <= 0.01 ||
+  msaaFalseStartLivePostDoubleResizeSecondPngDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostDoubleResizeSecondPngDelta.meanRgbDelta <= 0.01 ||
+  msaaFalseStartLivePostDoubleResizeFirstDawnDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostDoubleResizeFirstDawnDelta.meanRgbDelta <= 0.01 ||
+  msaaFalseStartLivePostDoubleResizeSecondDawnDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostDoubleResizeSecondDawnDelta.meanRgbDelta <= 0.01
+) {
+  console.error(
+    `[m3-programmable] MSAA false-start live post double resize repeatability: FAIL - ${JSON.stringify({ statuses: { firstNormal: msaaFalseStartLivePostDoubleResizeFirst.normal.status, firstFalsifier: msaaFalseStartLivePostDoubleResizeFirst.falsifier.status, secondNormal: msaaFalseStartLivePostDoubleResizeSecond.normal.status, secondFalsifier: msaaFalseStartLivePostDoubleResizeSecond.falsifier.status }, normalDiff: msaaFalseStartLivePostDoubleResizeNormalDiff, falsifierDiff: msaaFalseStartLivePostDoubleResizeFalsifierDiff, firstPng: msaaFalseStartLivePostDoubleResizeFirstPngDelta, secondPng: msaaFalseStartLivePostDoubleResizeSecondPngDelta, firstDawn: msaaFalseStartLivePostDoubleResizeFirstDawnDelta, secondDawn: msaaFalseStartLivePostDoubleResizeSecondDawnDelta })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] MSAA false-start live post double resize repeatability: PASS normalSha256=${msaaFalseStartLivePostDoubleResizeFirstDawnDelta.normalSha256} falsifierSha256=${msaaFalseStartLivePostDoubleResizeFirstDawnDelta.falsifierSha256} dawnChangedPixels=${msaaFalseStartLivePostDoubleResizeFirstDawnDelta.changedPixels} pngChangedPixels=${msaaFalseStartLivePostDoubleResizeFirstPngDelta.changedPixels}`,
+);
+
+const msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot = resolve(
+  customRhiArtifactRoot,
+  'msaa-live-post-false-start-pipeline-double-resize-repeatability',
+);
+const msaaFalseStartLivePostPipelineDoubleResizeRuns = [];
+for (const pass of ['first', 'second']) {
+  const passRoot = resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, pass);
+  msaaFalseStartLivePostPipelineDoubleResizeRuns.push({
+    normal: run(
+      `custom pipeline MSAA false-start live post adjacent pipeline double resize repeat ${pass} normal`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'false',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'normal'),
+      },
+    ),
+    falsifier: run(
+      `custom pipeline MSAA false-start live post adjacent pipeline double resize repeat ${pass} falsifier`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-rhi'],
+      {
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_POST: 'passthrough',
+        FORGEAX_M3_VARIANT: 'false',
+        FORGEAX_M3_SWITCH_VARIANT: '1',
+        FORGEAX_M3_SWITCH_POST: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_FALSIFY: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(passRoot, 'falsifier'),
+      },
+    ),
+  });
+}
+const msaaFalseStartLivePostPipelineDoubleResizeFirst =
+  msaaFalseStartLivePostPipelineDoubleResizeRuns[0];
+const msaaFalseStartLivePostPipelineDoubleResizeSecond =
+  msaaFalseStartLivePostPipelineDoubleResizeRuns[1];
+const msaaFalseStartLivePostPipelineDoubleResizeFirstNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'normal'),
+);
+const msaaFalseStartLivePostPipelineDoubleResizeSecondNormalSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'normal'),
+);
+const msaaFalseStartLivePostPipelineDoubleResizeFirstFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'falsifier'),
+);
+const msaaFalseStartLivePostPipelineDoubleResizeSecondFalsifierSnapshot = readRepeatabilitySnapshot(
+  resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'falsifier'),
+);
+const msaaFalseStartLivePostPipelineDoubleResizeNormalDiff = repeatabilityDiff(
+  msaaFalseStartLivePostPipelineDoubleResizeFirstNormalSnapshot,
+  msaaFalseStartLivePostPipelineDoubleResizeSecondNormalSnapshot,
+);
+const msaaFalseStartLivePostPipelineDoubleResizeFalsifierDiff = repeatabilityDiff(
+  msaaFalseStartLivePostPipelineDoubleResizeFirstFalsifierSnapshot,
+  msaaFalseStartLivePostPipelineDoubleResizeSecondFalsifierSnapshot,
+);
+let msaaFalseStartLivePostPipelineDoubleResizeFirstPngDelta;
+let msaaFalseStartLivePostPipelineDoubleResizeSecondPngDelta;
+let msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta;
+let msaaFalseStartLivePostPipelineDoubleResizeSecondDawnDelta;
+try {
+  msaaFalseStartLivePostPipelineDoubleResizeFirstPngDelta = comparePngs(
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'normal', 'custom-live.png'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'falsifier', 'custom-live.png'),
+  );
+  msaaFalseStartLivePostPipelineDoubleResizeSecondPngDelta = comparePngs(
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'normal', 'custom-live.png'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'falsifier', 'custom-live.png'),
+  );
+  msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta = compareDawnReadbacks(
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'normal', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'normal', 'dawn-readback.json'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'first', 'falsifier', 'dawn-readback.json'),
+  );
+  msaaFalseStartLivePostPipelineDoubleResizeSecondDawnDelta = compareDawnReadbacks(
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'normal', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'normal', 'dawn-readback.json'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'falsifier', 'dawn-readback.rgba'),
+    resolve(msaaFalseStartLivePostPipelineDoubleResizeArtifactRoot, 'second', 'falsifier', 'dawn-readback.json'),
+  );
+} catch (error) {
+  console.error(`[m3-programmable] MSAA false-start live post adjacent pipeline double resize delta: FAIL - ${error}`);
+  process.exit(1);
+}
+const msaaFalseStartLivePostPipelineDoubleResizeExpectedHistory =
+  '640x360>480x270>720x405>640x360>480x270>720x405>640x360';
+const msaaFalseStartLivePostPipelineDoubleResizeNormalCapture =
+  msaaFalseStartLivePostPipelineDoubleResizeFirstNormalSnapshot.capture;
+const msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture =
+  msaaFalseStartLivePostPipelineDoubleResizeFirstFalsifierSnapshot.capture;
+if (
+  msaaFalseStartLivePostPipelineDoubleResizeFirst.normal.status !== 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirst.falsifier.status !== 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeSecond.normal.status !== 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeSecond.falsifier.status !== 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.post !== 'M3_POST_EFFECT=inversion' ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.selectedVariant !== 'false' ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.antialias !== 'M3_ANTIALIAS=msaa' ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.variantSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.postSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.falsifyPipeline !== false ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalCapture.resizeHistory.join('>') !==
+    msaaFalseStartLivePostPipelineDoubleResizeExpectedHistory ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstNormalSnapshot.rhi.msaaTextureResourceCount !== 4 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstNormalSnapshot.rhi.resolveTargetCount !== 1 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstNormalSnapshot.rhi.drawCount !== 2 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.post !== 'M3_POST_EFFECT=inversion' ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.selectedVariant !== 'false' ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.selectedPost !== 'M3_POST_EFFECT=passthrough' ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.antialias !== 'M3_ANTIALIAS=msaa' ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.variantSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.postSwitchedAfterPipeline !== true ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.falsifyPipeline !== true ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierCapture.resizeHistory.join('>') !==
+    msaaFalseStartLivePostPipelineDoubleResizeExpectedHistory ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstFalsifierSnapshot.rhi.msaaTextureResourceCount !== 2 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstFalsifierSnapshot.rhi.resolveTargetCount !== 1 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstFalsifierSnapshot.rhi.drawCount !== 1 ||
+  msaaFalseStartLivePostPipelineDoubleResizeNormalDiff !== undefined ||
+  msaaFalseStartLivePostPipelineDoubleResizeFalsifierDiff !== undefined ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstPngDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstPngDelta.meanRgbDelta <= 0.01 ||
+  msaaFalseStartLivePostPipelineDoubleResizeSecondPngDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeSecondPngDelta.meanRgbDelta <= 0.01 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta.meanRgbDelta <= 0.01 ||
+  msaaFalseStartLivePostPipelineDoubleResizeSecondDawnDelta.changedPixels === 0 ||
+  msaaFalseStartLivePostPipelineDoubleResizeSecondDawnDelta.meanRgbDelta <= 0.01
+) {
+  console.error(
+    `[m3-programmable] MSAA false-start live post adjacent pipeline double resize repeatability: FAIL - ${JSON.stringify({ statuses: { firstNormal: msaaFalseStartLivePostPipelineDoubleResizeFirst.normal.status, firstFalsifier: msaaFalseStartLivePostPipelineDoubleResizeFirst.falsifier.status, secondNormal: msaaFalseStartLivePostPipelineDoubleResizeSecond.normal.status, secondFalsifier: msaaFalseStartLivePostPipelineDoubleResizeSecond.falsifier.status }, normalDiff: msaaFalseStartLivePostPipelineDoubleResizeNormalDiff, falsifierDiff: msaaFalseStartLivePostPipelineDoubleResizeFalsifierDiff, firstPng: msaaFalseStartLivePostPipelineDoubleResizeFirstPngDelta, secondPng: msaaFalseStartLivePostPipelineDoubleResizeSecondPngDelta, firstDawn: msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta, secondDawn: msaaFalseStartLivePostPipelineDoubleResizeSecondDawnDelta })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] MSAA false-start live post adjacent pipeline double resize repeatability: PASS normalSha256=${msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta.normalSha256} falsifierSha256=${msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta.falsifierSha256} dawnChangedPixels=${msaaFalseStartLivePostPipelineDoubleResizeFirstDawnDelta.changedPixels} pngChangedPixels=${msaaFalseStartLivePostPipelineDoubleResizeFirstPngDelta.changedPixels}`,
 );
 
 const liveVariantArtifactRoot = resolve(customRhiArtifactRoot, 'live-variant-switch');

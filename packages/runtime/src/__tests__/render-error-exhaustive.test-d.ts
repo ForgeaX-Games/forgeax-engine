@@ -44,6 +44,20 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'material-skin-attr-missing':
       return code;
+    case 'render-feature-registration-conflict':
+      return code;
+    case 'render-feature-stage-failed':
+      return code;
+    case 'render-feature-capability-missing':
+      return code;
+    case 'render-feature-pass-order-conflict':
+      return code;
+    case 'render-feature-preparation-failed':
+      return code;
+    case 'render-feature-prepared-state-mismatch':
+      return code;
+    case 'render-feature-draw-recording-failed':
+      return code;
     default: {
       const exhaustive: never = code;
       return exhaustive;
@@ -110,6 +124,37 @@ function narrowRenderError(err: RenderError): void {
     case 'material-skin-attr-missing':
       void err.detail.entity;
       void err.detail.missing;
+      break;
+    case 'render-feature-registration-conflict':
+      void err.detail.featureIdentity;
+      void err.detail.conflictingOrder;
+      break;
+    case 'render-feature-stage-failed':
+      void err.detail.featureIdentity;
+      void err.detail.stage;
+      break;
+    case 'render-feature-capability-missing':
+      void err.detail.featureIdentity;
+      void err.detail.capability;
+      break;
+    case 'render-feature-pass-order-conflict':
+      void err.detail.featureIdentity;
+      void err.detail.passIdentity;
+      break;
+    case 'render-feature-preparation-failed':
+      void err.detail.featureIdentity;
+      void err.detail.resourceName;
+      void err.detail.operation;
+      break;
+    case 'render-feature-prepared-state-mismatch':
+      void err.detail.featureIdentity;
+      void err.detail.reason;
+      void err.detail.operation;
+      break;
+    case 'render-feature-draw-recording-failed':
+      void err.detail.featureIdentity;
+      void err.detail.backendReason;
+      void err.detail.operation;
       break;
     default: {
       const exhaustive: never = err;

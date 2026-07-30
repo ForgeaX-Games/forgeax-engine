@@ -5,6 +5,12 @@ Browser UI is an asset plus a small behavior island. The asset package owns the 
 > [!IMPORTANT]
 > `engine-ui` is browser-only. A headless consumer can validate/import the asset, but must not call `mountUi` without a DOM.
 
+## Evidence and recovery
+
+UI authoring is a producer boundary. The source declaration and its cook receipt are joined with catalog `packageUrl`/`cookReceiptUrl` and Pack v2 HTML/CSS/artifact verification as `AssetEvidence`. Preview and runtime mounting do not infer readiness from the catalog alone.
+
+Use `notCooked`, `ready/current`, `ready/stale`, and `unknown` as distinct states; artifact/package results are `notChecked`, `passed`, or `failed`. Recover by fixing the authoring source or recooking, then run `lookup/verify --guid --project --catalog --json`. A headless probe can validate evidence, but `mountUi` still requires a DOM.
+
 ## Shortest recipe
 
 Headless validation is available without a DOM:

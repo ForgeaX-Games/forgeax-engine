@@ -9,7 +9,7 @@
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { ImportErrorDetail, PackErrorCode, PackErrorDetail } from '../index';
-import { ImportError, PACK_ERROR_HINTS } from '../index';
+import { ASSET_EVIDENCE_ERROR_HINTS, ImportError, PACK_ERROR_HINTS } from '../index';
 
 type DetailFor<Code extends string> = Extract<PackErrorDetail, { readonly code: Code }>;
 
@@ -24,6 +24,21 @@ describe('PackErrorCode member count = 15', () => {
   it('PACK_ERROR_HINTS key type is assignable to PackErrorCode (compile-time Record completeness)', () => {
     const keys: readonly PackErrorCode[] = Object.keys(PACK_ERROR_HINTS) as PackErrorCode[];
     expect(keys).toBeDefined();
+  });
+});
+
+describe('AssetEvidence error hints', () => {
+  it('has one actionable hint per evidence error code', () => {
+    expect(Object.keys(ASSET_EVIDENCE_ERROR_HINTS)).toEqual([
+      'asset-evidence-capability-missing',
+      'asset-evidence-source-conflict',
+      'asset-evidence-locator-conflict',
+      'asset-evidence-receipt-conflict',
+      'asset-evidence-digest-mismatch',
+    ]);
+    for (const hint of Object.values(ASSET_EVIDENCE_ERROR_HINTS)) {
+      expect(hint.length).toBeGreaterThan(0);
+    }
   });
 });
 

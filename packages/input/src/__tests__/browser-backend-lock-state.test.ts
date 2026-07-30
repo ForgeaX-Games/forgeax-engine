@@ -152,6 +152,31 @@ function firePointerLockChange(fakes: LockStateFakes, newLockedElement: Element 
 // ---------------------------------------------------------------------------
 
 describe('browser-backend-lock-state.test.ts (w1)', () => {
+  it('preserves physical KeyboardEvent.code held and release edges separately from key', () => {
+    const fakes = buildLockStateFakes();
+    const handle = attachBrowserInputBackend(fakes.canvas, {
+      document: fakes.doc,
+      window: fakes.win,
+    });
+
+    fakes.store.fire('window', 'keydown', { key: '?', code: 'KeyA' } as KeyboardEvent);
+    const pressed = handle.backend.sample();
+    expect(pressed.downKeys.has('?')).toBe(true);
+    expect(pressed.downCodes?.has('KeyA')).toBe(true);
+
+    fakes.store.fire('window', 'keyup', { key: '?', code: 'KeyA' } as KeyboardEvent);
+    const released = handle.backend.sample();
+    expect(released.downKeys.has('?')).toBe(false);
+    expect(released.downCodes?.has('KeyA')).toBe(false);
+    expect(released.upKeys.has('?')).toBe(true);
+    expect(released.upCodes?.has('KeyA')).toBe(true);
+
+    const next = handle.backend.sample();
+    expect(next.upKeys.has('?')).toBe(false);
+    expect(next.upCodes?.has('KeyA')).toBe(false);
+    handle.backend.detach?.();
+  });
+
   it('tracks hover mouse position without a button press', () => {
     const fakes = buildLockStateFakes();
     const handle = attachBrowserInputBackend(fakes.canvas, {

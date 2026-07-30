@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/ForgeaX-Games/forgeax-engine/packages/vite-plugin-pack/schema/pack-index.schema.json",
   "title": "PackIndex",
-  "description": "Schema for pack-index.json — the build-time emitted catalog mapping GUIDs to physical asset URLs.",
+  "description": "Schema for pack-index.json — the catalog mapping GUIDs to Pack v2 package locators.",
   "type": "array",
   "items": {
     "$ref": "#/$defs/packIndexEntry"
@@ -11,17 +11,17 @@
     "packIndexEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["guid", "relativeUrl", "kind", "sourcePath"],
+      "required": ["guid", "packageUrl", "kind", "sourcePath"],
       "properties": {
         "guid": {
           "type": "string",
           "format": "uuid",
           "description": "RFC 4122 36-char dash-form UUID identifying this asset."
         },
-        "relativeUrl": {
+        "packageUrl": {
           "type": "string",
           "minLength": 1,
-          "description": "Root-relative URL to the physical asset file in the build output."
+          "description": "URL to the Pack v2 package; artifact locators are resolved from the package envelope."
         },
         "kind": {
           "type": "string",
@@ -69,6 +69,11 @@
             "type": "string",
             "format": "uuid"
           }
+        },
+        "cookReceiptUrl": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional URL to the producer-owned cook receipt for diagnostics."
         }
       }
     },

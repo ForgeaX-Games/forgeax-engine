@@ -62,6 +62,8 @@ describe('VideoAsset POD shape (M1 baseline)', () => {
           return 'tileset';
         case 'video':
           return 'video';
+        case 'particle-effect':
+          return 'particle-effect';
       }
       // No default branch -- TS guards completeness.
     }

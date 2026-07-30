@@ -136,7 +136,10 @@ const ReadInput = defineSystem({
 app.world.addSystem(Update, ReadInput).unwrap();
 ```
 
-Pass optional capabilities through `plugins`, such as `physicsPlugin('rapier-3d')` and `audioPlugin()`. An assemble-form host owns its renderer, World, input backend, and explicit plugin list.
+Pass optional capabilities through `plugins`, such as `physicsPlugin('rapier-3d')` and `audioPlugin()`. A
+`definePluginGroup(...)` result is also accepted; the app expands it before the same ordered
+`runPlugins` seam, so group membership does not create a second lifecycle. An assemble-form host
+owns its renderer, World, input backend, and explicit plugin source list.
 
 ## API index
 

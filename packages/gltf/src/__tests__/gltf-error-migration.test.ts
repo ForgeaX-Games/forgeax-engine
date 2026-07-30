@@ -52,7 +52,7 @@ function grepCountImportGltfErrorFromTypes(): number {
         '--glob',
         '!**/dist/**',
         '--glob',
-        '!packages/gltf/src/__tests__/gltf-error-migration.test.ts',
+        '!**/gltf-error-migration.test.ts',
         '--regexp',
         'import.*GltfError.*from.*@forgeax/engine-types',
         resolve(REPO_ROOT, 'packages'),

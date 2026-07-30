@@ -59,6 +59,8 @@ describe.skipIf(!hasGpu)('equirect renderable-source integration (feat-20260707 
   const width = 64;
   const height = 32;
   let binBytes: Uint8Array;
+  const packageUrl = '/ddc/equirect.pack.json';
+  const artifactUrl = '/ddc/equirect.bin';
 
   beforeAll(async () => {
     // biome-ignore lint/style/noNonNullAssertion: skipIf(!hasGpu) guards this
@@ -80,25 +82,42 @@ describe.skipIf(!hasGpu)('equirect renderable-source integration (feat-20260707 
       if (url === PACK_INDEX_URL) {
         return {
           ok: true,
-          json: async () => [
-            {
-              guid: GUID_EQUI,
-              relativeUrl: `/ddc/${GUID_EQUI}.bin`,
-              kind: 'equirect',
-              compression: 'none',
-              metadata: {
-                kind: 'texture',
-                width,
-                height,
-                format: 'rgba16float',
-                colorSpace: 'linear',
-                mipmap: false,
-              },
-            },
-          ],
+          json: async () => [{ guid: GUID_EQUI, packageUrl, kind: 'equirect' }],
         } as Response;
       }
-      return { ok: true, arrayBuffer: async () => binBytes.buffer } as Response;
+      if (url === packageUrl) {
+        return {
+          ok: true,
+          json: async () => ({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: GUID_EQUI,
+                kind: 'equirect',
+                payload: {
+                  kind: 'equirect',
+                  width,
+                  height,
+                  format: 'rgba16float',
+                  colorSpace: 'linear',
+                },
+                refs: [],
+                artifacts: {
+                  body: {
+                    path: 'equirect.bin',
+                    mediaType: 'application/x-forgeax-rgba16f',
+                  },
+                },
+              },
+            ],
+          }),
+        } as Response;
+      }
+      if (url === artifactUrl) {
+        return { ok: true, arrayBuffer: async () => binBytes.buffer } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
     }) as typeof globalThis.fetch;
   }
 

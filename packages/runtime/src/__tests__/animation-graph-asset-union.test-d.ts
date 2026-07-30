@@ -68,6 +68,8 @@ describe('AnimationGraph POD in the Asset union (M2 / w12)', () => {
           return 'tileset';
         case 'video':
           return 'video';
+        case 'particle-effect':
+          return 'particle-effect';
         default: {
           const _exhaustive: never = a;
           return _exhaustive;

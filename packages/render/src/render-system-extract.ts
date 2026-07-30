@@ -767,6 +767,12 @@ export interface MaterialSnapshot {
    */
   readonly materialShaderId?: string | undefined;
   /**
+   * The selected forward-pass state for this exact material. A mesh can bind
+   * different materials to its submeshes, so pipeline selection must read the
+   * state from the submesh snapshot rather than the entity's first material.
+   */
+  readonly renderState?: MaterialRenderState | undefined;
+  /**
    * Schema-driven parameter snapshot (feat-20260523 M4-T05).
    * Populated alongside materialShaderId. Maps param name to its
    * runtime-resolved value: number for scalar params, number[] for
@@ -1301,6 +1307,7 @@ function resolveMaterialSnapshot(
     clearcoat: clearcoatPv,
     clearcoatRoughness: clearcoatRoughnessPv,
     materialShaderId: firstPassShader,
+    renderState: allPasses[0]?.renderState,
     paramSnapshot: paramSnap,
     ...(textureHandles.size > 0 && { textureHandles }),
     ...(videoTextureFields.size > 0 && { videoTextureFields }),
@@ -3284,6 +3291,7 @@ export function extractFrame(
             clearcoat: clearcoatPv,
             clearcoatRoughness: clearcoatRoughnessPv,
             materialShaderId: firstPassShader,
+            renderState: allPasses[0]?.renderState,
             paramSnapshot: paramSnap,
             ...(textureHandles.size > 0 && { textureHandles }),
             ...(videoTextureFields.size > 0 && { videoTextureFields }),

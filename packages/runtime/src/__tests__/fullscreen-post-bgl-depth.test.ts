@@ -112,3 +112,20 @@ describe('buildBindGroupLayoutDescriptor — fullscreen-post-with-scene-depth', 
     });
   });
 });
+
+describe('buildBindGroupLayoutDescriptor — fullscreen-post-with-scene-depth-msaa', () => {
+  it('declares a multisampled depth texture with the same five-slot ABI', () => {
+    const out = buildBindGroupLayoutDescriptor(makeSpec(), {
+      kind: 'fullscreen-post-with-scene-depth-msaa',
+    });
+    expect(out.label).toBe('fullscreen-post-with-scene-depth-msaa-bgl');
+    expect(out.entries).toHaveLength(5);
+    expect(out.entries[2]?.buffer?.type).toBe('uniform');
+    expect(out.entries[3]?.texture).toMatchObject({
+      sampleType: 'depth',
+      viewDimension: '2d',
+      multisampled: true,
+    });
+    expect(out.entries[4]?.sampler?.type).toBe('non-filtering');
+  });
+});

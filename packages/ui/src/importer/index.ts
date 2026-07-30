@@ -1,7 +1,7 @@
 import {
   type ImportContext,
   ImportError,
-  type ImportedArtifact,
+  type ImportedArtifactBody,
   type ImportResult,
 } from '@forgeax/engine-types';
 import type { UiAsset } from '../asset.js';
@@ -86,9 +86,9 @@ export function importUiSource(source: UiSource): ImportResult<UiAsset> {
           kind: 'ui',
           payload: { guid: source.guid, html: source.html, css: source.css },
           refs: [],
+          artifacts: {},
         },
       ],
-      artifacts: [],
       sourceDependencies: [],
     },
   };
@@ -131,7 +131,7 @@ export function createUiImporter(): {
       }
       const references = [...htmlAssetUrls(htmlText), ...cssAssetUrls(cssText)];
       const unique = [...new Set(references)];
-      const artifacts: ImportedArtifact[] = [];
+      const artifacts: Record<string, ImportedArtifactBody> = {};
       const dependencies = [context.source, cssPath];
       let htmlOut = htmlText;
       let cssOut = cssText;
@@ -141,7 +141,7 @@ export function createUiImporter(): {
         const read = await context.readSibling(path);
         if (!read.ok) return importFailure(`missing UI companion: ${path}`);
         dependencies.push(path);
-        artifacts.push({ path, mimeType: mimeType(path), bytes: read.value });
+        artifacts[path] = { mediaType: mimeType(path), bytes: read.value };
         const token = `ui-token:${path}`;
         htmlOut = htmlOut.replaceAll(reference, token);
         cssOut = cssOut.replaceAll(reference, token);
@@ -149,8 +149,15 @@ export function createUiImporter(): {
       return {
         ok: true,
         value: {
-          assets: [{ guid, kind: 'ui', payload: { guid, html: htmlOut, css: cssOut }, refs: [] }],
-          artifacts,
+          assets: [
+            {
+              guid,
+              kind: 'ui',
+              payload: { guid, html: htmlOut, css: cssOut },
+              refs: [],
+              artifacts,
+            },
+          ],
           sourceDependencies: dependencies,
         },
       };

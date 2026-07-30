@@ -114,6 +114,13 @@ describe('loadByGuid', () => {
     // arm only fires once a pack index is configured).
     expect((res.error as { code: string }).code).toBe('asset-not-found');
   });
+
+  it('does not route a static load failure through decodeImageBytes', async () => {
+    const reg = makeRegistry();
+    const res = await reg.loadByGuid(reg.parseGuid(GUID_B));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect((res.error as { code: string }).code).toBe('asset-not-found');
+  });
 });
 
 describe('resolveName / packageOf / rename', () => {
@@ -165,7 +172,7 @@ describe('invalidate / invalidateAll', () => {
         [
           GUID_A,
           {
-            relativeUrl: '/node_modules/.cache/forgeax-ddc/sky.bin',
+            packageUrl: '/node_modules/.cache/forgeax-ddc/sky.bin',
             sourcePath: '/assets/sky.hdr',
           },
         ],
@@ -173,7 +180,7 @@ describe('invalidate / invalidateAll', () => {
     );
     reg.catalog(GUID_A, meshPayload());
 
-    expect(reg.resolveName(GUID_A)).toBe('sky.hdr');
+    expect(reg.resolveName(GUID_A)).toBe('sky.bin');
   });
 
   it('invalidateAll clears every catalogued asset and reports the count', () => {
@@ -236,7 +243,7 @@ describe('inspect / listCatalog', () => {
       },
     ] as const;
     const canonicalRow: CatalogRecord = {
-      relativeUrl: '/assets/blob.pack.json',
+      packageUrl: '/assets/blob.pack.json',
       sourcePath: 'models/blob.host',
       kind: 'host/blob',
       packageId: 'host-package',
@@ -248,7 +255,7 @@ describe('inspect / listCatalog', () => {
       diagnostics,
     } as const;
     const legacyRow: CatalogRecord = {
-      relativeUrl: '/assets/legacy.pack.json',
+      packageUrl: '/assets/legacy.pack.json',
       sourcePath: 'models/legacy.host',
       kind: 'host/legacy',
     } as const;

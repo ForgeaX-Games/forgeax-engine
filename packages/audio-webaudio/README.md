@@ -2,6 +2,12 @@
 
 > **Web Audio API backend for @forgeax/engine-audio.** Browser implementation of the `AudioBackend` interface -- owns `AudioContext` lifecycle, fixed two-bus GainNode topology, per-source node graph, and ECS tick systems for edge-detection-driven playback + listener position sync.
 
+## Evidence and recovery
+
+Audio import produces the source declaration, cook receipt, and Pack v2 clip artifacts; the catalog carries `packageUrl` and optional `cookReceiptUrl`. `AssetEvidence` joins those records before the browser decoder is used, keeping Web Audio transport separate from offline cook diagnostics.
+
+`notCooked`, `ready/current`, `ready/stale`, and `unknown` are explicit cook states. Package and artifact checks are independently `notChecked`, `passed`, or `failed`. If `lookup/verify --guid --project --catalog --json` reports a failure, repair the source or recook and preserve the structured `.hint`; do not replace the clip with an unrelated runtime asset.
+
 ## Setup (charter P1 progressive disclosure)
 
 ### Canvas form (auto-attach)

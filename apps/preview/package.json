@@ -12,7 +12,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke:ui-authoring": "node scripts/smoke-ui-authoring.mjs",
+    "smoke:custom-mesh": "node scripts/smoke-custom-mesh.mjs",
+    "smoke:mesh-handle-swap": "node scripts/smoke-mesh-handle-swap.mjs",
+    "smoke:gamepad": "node scripts/smoke-gamepad.mjs",
     "smoke:render-evidence": "node scripts/smoke-render-evidence.mjs",
+    "smoke:depth-of-field": "node scripts/smoke-depth-of-field.mjs",
     "smoke:fixed-state": "node scripts/smoke-fixed-state.mjs",
     "smoke:asset-loop": "node scripts/smoke-asset-loop.mjs"
   },

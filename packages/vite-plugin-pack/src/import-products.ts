@@ -1,4 +1,6 @@
-import type { ImportedAsset, ImportProduct } from '@forgeax/engine-types';
+import { normaliseForPack } from '@forgeax/engine-import';
+import type { ImportedArtifactBody, ImportedAsset, ImportProduct } from '@forgeax/engine-types';
+import type { LogicalPackage } from './package-finalizer.js';
 
 export const UI_DEPENDENCY_CONSUMER_CHANNELS = [
   'typescript-import',
@@ -104,24 +106,58 @@ export function productAssetsByGuid(
 }
 
 export function productArtifactsByPath(
-  product: Pick<ImportProduct, 'artifacts'>,
-): ReadonlyMap<string, (typeof product.artifacts)[number]> {
-  const artifacts = new Map<string, (typeof product.artifacts)[number]>();
-  for (const artifact of product.artifacts) {
-    artifacts.set(artifact.path, artifact);
-  }
-  return artifacts;
+  product: Pick<ImportProduct, 'assets'>,
+  guid?: string,
+): ReadonlyMap<string, ImportedArtifactBody> {
+  const asset = guid === undefined ? product.assets[0] : productAssetByGuid(product, guid);
+  return new Map(Object.entries(asset?.artifacts ?? {}));
 }
 
-export function projectUiDevArtifacts(
-  artifacts: readonly TransportArtifact[],
-  prefix = '/__ui/',
-): readonly (TransportArtifact & { readonly url: string })[] {
-  const root = prefix.endsWith('/') ? prefix : `${prefix}/`;
-  return artifacts.map((artifact) => ({
-    ...artifact,
-    url: `${root}${artifact.path.replace(/^\/+/, '')}`,
-  }));
+export function productBinaryArtifacts(
+  product: Pick<ImportProduct, 'assets'>,
+): ReadonlyMap<string, Uint8Array> {
+  const binaries = new Map<string, Uint8Array>();
+  for (const asset of product.assets) {
+    if (asset.kind !== 'mesh' && asset.kind !== 'texture') continue;
+    const first = Object.entries(asset.artifacts).sort(([left], [right]) =>
+      left.localeCompare(right),
+    )[0]?.[1];
+    if (first !== undefined) binaries.set(asset.guid.toLowerCase(), first.bytes);
+  }
+  return binaries;
+}
+
+export function logicalPackageFromImportProduct(
+  product: Pick<ImportProduct<unknown>, 'assets'>,
+): LogicalPackage {
+  return {
+    schemaVersion: '2.0.0',
+    kind: 'internal-text-package',
+    assets: product.assets.map((asset) => ({
+      guid: asset.guid,
+      kind: asset.kind,
+      ...(asset.name === undefined ? {} : { name: asset.name }),
+      // Mesh geometry is runtime-only binary data once its asset-local body
+      // artifact exists. Keeping the typed-array payload beside that body
+      // duplicates the cook and can exceed JSON transport limits for large
+      // glTF scenes; inline authored mesh packs retain their payload because
+      // they have no cooked body artifact to replace it.
+      payload: normaliseForPack(cookedPayload(asset)) as Record<string, unknown>,
+      refs: asset.refs.map((ref) => ref.guid),
+      artifacts: asset.artifacts,
+    })),
+  };
+}
+
+function cookedPayload(asset: ImportedAsset<unknown>): Record<string, unknown> {
+  const payload = asset.payload as unknown as Record<string, unknown>;
+  if (Object.keys(asset.artifacts).length === 0) return payload;
+  if (asset.kind === 'mesh') return { kind: 'mesh' };
+  if (asset.kind === 'texture' || asset.kind === 'equirect') {
+    const { data: _runtimeBytes, ...metadata } = payload;
+    return metadata;
+  }
+  return payload;
 }
 
 export function projectUiBuildArtifacts(

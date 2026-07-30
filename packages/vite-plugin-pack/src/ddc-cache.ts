@@ -39,11 +39,26 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ImageMetadata } from '@forgeax/engine-types';
+import type { LogicalArtifactBody, LogicalPackage } from './package-finalizer.js';
 
 /** Decoded texture payload cached under one content-addressed key. */
 export interface DdcEntry {
   readonly bytes: Uint8Array;
   readonly metadata: ImageMetadata;
+}
+
+export interface SemanticDdcInput {
+  readonly schemaVersion: string;
+  readonly importerVersion: string;
+  readonly codecVersion: string;
+  readonly sourceDependencies: readonly (
+    | string
+    | { readonly path: string; readonly digest: string }
+  )[];
+  readonly settings: unknown;
+  readonly declaredGuids: readonly string[];
+  readonly cookProfile: string;
+  readonly publish?: unknown;
 }
 
 /**
@@ -80,6 +95,125 @@ function sortKeys(value: unknown): unknown {
     return sorted;
   }
   return value;
+}
+
+/** Derive a DDC key from semantic cook inputs, excluding publish environment. */
+export function semanticDdcKey(input: SemanticDdcInput): string {
+  const semantic = {
+    schemaVersion: input.schemaVersion,
+    importerVersion: input.importerVersion,
+    codecVersion: input.codecVersion,
+    sourceDependencies: [...input.sourceDependencies].sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    ),
+    settings: input.settings,
+    declaredGuids: [...input.declaredGuids].sort(),
+    cookProfile: input.cookProfile,
+  };
+  return createHash('sha256').update(stableSerialize(semantic)).digest('hex');
+}
+
+export interface LogicalDdcCache {
+  readonly key: (input: SemanticDdcInput) => string;
+  readonly read: (input: SemanticDdcInput) => LogicalPackage | null;
+  readonly write: (input: SemanticDdcInput, logicalPackage: LogicalPackage) => void;
+}
+
+export function createLogicalDdcCache(cwd: string): LogicalDdcCache {
+  return {
+    key: semanticDdcKey,
+    read(input) {
+      return readLogical(cwd, semanticDdcKey(input));
+    },
+    write(input, logicalPackage) {
+      writeLogical(cwd, semanticDdcKey(input), logicalPackage);
+    },
+  };
+}
+
+function logicalCacheDir(cwd: string): string {
+  return resolve(cwd, 'node_modules/.cache/forgeax-ddc/logical');
+}
+
+function serialiseLogicalPackage(logicalPackage: LogicalPackage): Record<string, unknown> {
+  return {
+    ...logicalPackage,
+    assets: logicalPackage.assets.map((asset) => ({
+      ...asset,
+      artifacts: Object.fromEntries(
+        Object.entries(asset.artifacts).map(([key, artifact]) => [
+          key,
+          {
+            mediaType: artifact.mediaType,
+            ...(artifact.assetCodec === undefined ? {} : { assetCodec: artifact.assetCodec }),
+            bytes: Buffer.from(artifact.bytes).toString('base64'),
+          },
+        ]),
+      ),
+    })),
+  };
+}
+
+function readLogicalArtifact(artifact: {
+  mediaType: string;
+  assetCodec?: unknown;
+  bytes: string;
+}): LogicalArtifactBody {
+  const decoded = {
+    mediaType: artifact.mediaType,
+    bytes: new Uint8Array(Buffer.from(artifact.bytes, 'base64')),
+  };
+  if (artifact.assetCodec === undefined || artifact.assetCodec === null) return decoded;
+  return {
+    ...decoded,
+    assetCodec: artifact.assetCodec as { name: string; profile?: string; version?: string },
+  };
+}
+
+/** Read a logical package cache entry; malformed or partial entries are misses. */
+export function readLogical(cwd: string, key: string): LogicalPackage | null {
+  try {
+    const raw = JSON.parse(readFileSync(resolve(logicalCacheDir(cwd), `${key}.json`), 'utf8')) as {
+      schemaVersion: '2.0.0';
+      kind: 'internal-text-package';
+      assets: Array<{
+        guid: string;
+        kind: string;
+        name?: string;
+        payload: Record<string, unknown>;
+        refs: string[];
+        artifacts: Record<string, { mediaType: string; assetCodec?: unknown; bytes: string }>;
+      }>;
+    };
+    if (raw.schemaVersion !== '2.0.0' || raw.kind !== 'internal-text-package') return null;
+    return {
+      ...raw,
+      assets: raw.assets.map((asset) => ({
+        ...asset,
+        artifacts: Object.fromEntries(
+          Object.entries(asset.artifacts).map(([key, artifact]) => [
+            key,
+            readLogicalArtifact(artifact),
+          ]),
+        ),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Persist only logical bodies. IO failures degrade to a cache miss. */
+export function writeLogical(cwd: string, key: string, logicalPackage: LogicalPackage): void {
+  try {
+    mkdirSync(logicalCacheDir(cwd), { recursive: true });
+    writeFileSync(
+      resolve(logicalCacheDir(cwd), `${key}.json`),
+      JSON.stringify(serialiseLogicalPackage(logicalPackage)),
+    );
+  } catch {
+    // DDC is an accelerator and must not become a correctness dependency.
+  }
 }
 
 /** Absolute path of the build DDC directory under `node_modules/.cache`. */

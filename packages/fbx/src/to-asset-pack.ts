@@ -6,6 +6,7 @@
 // the produced set stays a subset of the declared set (mirrors gltfImporter).
 // The import-runner then validates produced == declared and rejects mismatches.
 
+import { packMeshBin } from '@forgeax/engine-import';
 import { box3 } from '@forgeax/engine-math';
 import type {
   AnimationClipPod,
@@ -168,6 +169,13 @@ export function buildMeshAsset(
     ...(pod.name !== undefined ? { name: pod.name } : {}),
     payload: mesh,
     refs: [],
+    artifacts: {
+      body: {
+        mediaType: 'application/x-forgeax-mesh',
+        assetCodec: { name: 'mesh-binary', version: '2' },
+        bytes: packMeshBin(mesh as never),
+      },
+    },
   };
 }
 
@@ -198,6 +206,7 @@ function buildMaterialAsset(pod: MaterialPod, guid: string, skinned = false): Im
     ...(pod.name !== undefined ? { name: pod.name } : {}),
     payload: mat,
     refs: [],
+    artifacts: {},
   };
 }
 
@@ -292,6 +301,7 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
     ...(pod.name !== undefined ? { name: pod.name } : {}),
     payload: scene,
     refs: ctx.refs.map((guid) => ({ guid })),
+    artifacts: {},
   };
 }
 
@@ -306,6 +316,7 @@ function buildTextureNote(_pod: TexturePod, _guid: string): ImportedAsset {
     ...(_pod.name !== undefined ? { name: _pod.name } : {}),
     payload: {} as never,
     refs: [],
+    artifacts: {},
   };
 }
 
@@ -414,6 +425,7 @@ export function toAssetPack(params: {
         jointCount: params.skeleton.jointCount,
       } as never,
       refs: [],
+      artifacts: {},
     });
   }
 
@@ -435,6 +447,7 @@ export function toAssetPack(params: {
         skeletonGuid !== undefined
           ? [{ guid: skeletonGuid, sourceField: { fieldName: 'skeleton' } }]
           : [],
+      artifacts: {},
     });
   }
 
@@ -462,6 +475,7 @@ export function toAssetPack(params: {
         })),
       } as never,
       refs: [],
+      artifacts: {},
     });
   }
 

@@ -30,7 +30,13 @@ import {
   removeSystem as scheduleRemoveSystem,
   replaceSystem as scheduleReplaceSystem,
 } from './schedule';
-import { FixedUpdate, isScheduleToken, type ScheduleToken, Update } from './schedule-token';
+import {
+  FixedUpdate,
+  FrameEnd,
+  isScheduleToken,
+  type ScheduleToken,
+  Update,
+} from './schedule-token';
 import {
   FIXED_TIME_RESOURCE_KEY,
   FixedTime,
@@ -272,6 +278,10 @@ export function worldUpdate(
   }
   world._setFixedAccumulator(accumulator.value);
   fixed.overstep = accumulator.value;
+  const frameEnd = world._getSchedule(FrameEnd);
+  if (frameEnd && frameEnd.systems.size > 0) {
+    runSchedule(frameEnd, world, world._getErrorHandler());
+  }
   return ok(undefined);
 }
 

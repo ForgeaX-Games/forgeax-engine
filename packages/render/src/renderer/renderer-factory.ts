@@ -83,6 +83,7 @@ import type {
 import { derive, handleSlot } from '@forgeax/engine-types';
 import { createEngineMetrics } from '../engine-metrics';
 import { RecoverError } from '../errors/recover';
+import { createRenderFeatureHost, type RenderFeatureHost } from '../features/host';
 import type { PostProcessShaderEntry } from '../fullscreen-post-process-pass';
 import { glyphTextLayoutSystem } from '../glyph-text-layout-system';
 import { GpuBuffer } from '../gpu-resource';
@@ -1019,10 +1020,15 @@ interface WebGPURendererInternals {
    * has wired the controller; identity stable across grow events.
    */
   meshSsboState?: MeshSsboState;
+  /** Host-owned producer features; created before device-bound assembly starts. */
+  featureHost?: RenderFeatureHost;
 }
 
 async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<Renderer> {
   let disposed = false;
+  const featureHostResult = createRenderFeatureHost(internals.options?.features ?? []);
+  if (!featureHostResult.ok) throw featureHostResult.error;
+  internals.featureHost = featureHostResult.value;
   // Lazy ShaderRegistry instance (plan-strategy section S-10 / D-R10 / OQ-5
   // close): constructed on first access; subsequent accesses return the
   // same instance.
@@ -2005,6 +2011,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   };
   const renderSystem: RenderSystem = createRenderSystem({
     canvas: internals.canvas,
+    featureHost: internals.featureHost,
     // feat-20260622-s5 M3 / w17: device + context read live off `internals` via
     // getters so the recover() rebuild (which swaps internals.device /
     // internals.context for a freshly-acquired pair) is observed by the record
@@ -2093,6 +2100,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     },
     get bindGroupCounts() {
       return renderSystem.bindGroupCounts;
+    },
+    renderFeatureDiagnostics() {
+      return internals.featureHost?.diagnostics() ?? [];
     },
     draw(worlds: World[], options: DrawOwnerOptions): Result<void, RhiError> {
       // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21
@@ -2275,7 +2285,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
      * 6-step cascade (plan-strategy D-2 ordering):
      *   1. `gpuStore.destroyAll()`           -- texture / cubemap / mesh maps
      *   2. `renderSystem.disposeFrameState()` -- graph.drain() + instanceBuffers
-     *   3. (folded into step 2 above)
+     *   3. `featureHost.dispose()`           -- feature resources + lifecycle
      *   4. `clearIblCacheForDevice(device)`  -- per-device IBL pipeline cache
      *   5. `context.unconfigure()`           -- canvas-context teardown
      *   6. `lostRegistry.clear() / errorRegistry.clear()`
@@ -2310,13 +2320,25 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       } catch (cause) {
         internals.errorRegistry.fire(wrapDisposeError(cause, 'gpuStore.destroyAll'));
       }
-      // Step 2 + 3: drain the per-frame render-graph pool + the per-entity
+      // Step 2: drain the per-frame render-graph pool + the per-entity
       // instanceBuffers GPU storage cache. Both walks live on the
       // RenderSystem closure (frameState is closure-private).
       try {
         renderSystem.disposeFrameState();
       } catch (cause) {
         internals.errorRegistry.fire(wrapDisposeError(cause, 'renderSystem.disposeFrameState'));
+      }
+      // Step 3: release feature-owned resources and invoke feature disposal
+      // hooks after render-graph state has been drained. The host is already
+      // idempotent, and its structured cleanup detail is preserved by the
+      // error registry when a feature cleanup fails.
+      try {
+        const featureDispose = internals.featureHost?.dispose();
+        if (featureDispose !== undefined && !featureDispose.ok) {
+          internals.errorRegistry.fire(featureDispose.error);
+        }
+      } catch (cause) {
+        internals.errorRegistry.fire(wrapDisposeError(cause, 'featureHost.dispose'));
       }
       // Step 4: drop the per-device IBL pipeline cache entry. The GPU
       // pipeline / texture handles inside the entry are released
@@ -2462,6 +2484,18 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // unavailability (the device was acquired but is not usable); health
         // stays `device-lost` so the host can retry.
         return err(new RecoverError('recover-device-unavailable'));
+      }
+
+      // Re-evaluate feature capability gates against the replacement device.
+      // Feature recovery is isolated from renderer recovery: a feature that is
+      // still unsupported or fails its hook remains diagnosed as disabled or
+      // failed while the zero-feature renderer can become alive.
+      const featureRecover = internals.featureHost?.recover({
+        caps: internals.device.caps,
+        frameNumber: 0,
+      });
+      if (featureRecover !== undefined && !featureRecover.ok) {
+        internals.errorRegistry.fire(featureRecover.error);
       }
 
       // Step (f): the renderer is alive again. The next draw() lazily
@@ -6242,7 +6276,7 @@ async function buildReadyWebGPU(
         const fxaaSpec: PipelineSpec = {
           shader: { id: 'forgeax::post::fxaa', passKind: 'post-process', variantSet: undefined },
           attachments: {
-            colorFormats: [swapChainFormats.storage],
+            colorFormats: [storageBufferCapable ? swapChainFormats.storage : swapChainFormats.view],
             depthFormat: undefined,
             sampleCount: 1,
           },
@@ -7223,10 +7257,6 @@ async function buildReadyWebGPU(
       fxaaPipeline: fxaaPipelineHandle,
       fxaaBindGroupLayout: fxaaBglHandle,
       fxaaSampler: fxaaSamplerHandle,
-      fxaaIntermediateTexture: null,
-      fxaaIntermediateView: null,
-      fxaaIntermediateWidth: 0,
-      fxaaIntermediateHeight: 0,
       // feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w7: MSAA
       // attachment slots. All null/0 until the first antialias='msaa' frame.
       msaaColorTexture: null,

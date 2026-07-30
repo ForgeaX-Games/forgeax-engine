@@ -89,7 +89,10 @@ export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
       actionStates = deriveActionStates(sample, inputMap, prevActionStates);
     }
 
-    const snapshot = snapshotFromSample(sample, actionStates, inputMap);
+    const previousSnapshot = world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)
+      ? world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)
+      : undefined;
+    const snapshot = snapshotFromSample(sample, actionStates, inputMap, previousSnapshot);
     world.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, snapshot);
   },
 });

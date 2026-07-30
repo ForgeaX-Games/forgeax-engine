@@ -44,7 +44,7 @@ export default defineConfig({
     target: 'esnext',
     // R-01 guard mirroring 4.textures: the vite-plugin-pack import step
     // emits raw RGBA bytes as `assets/<guid>-<hash>.bin`; opt `.bin`
-    // out of inlining regardless of size so the pack-index relativeUrl
+    // out of inlining regardless of size so the pack-index packageUrl
     // resolves at runtime.
     assetsInlineLimit: (filePath: string): boolean | undefined =>
       filePath.endsWith('.bin') ? false : undefined,

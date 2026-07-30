@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Asset, AssetRelation, ImportedAsset, ImportResult } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { type RunImportMeta, runImport } from '../import-runner.js';
@@ -32,9 +34,9 @@ function registry(): ImporterRegistry {
             kind: 'mesh',
             payload: MESH,
             refs: [{ guid: DEPENDENCY_GUID }],
+            artifacts: {},
           } satisfies ImportedAsset,
         ],
-        artifacts: [],
         sourceDependencies: [],
       },
     }),
@@ -109,5 +111,13 @@ describe('import runner producer fact propagation', () => {
       sourceIndex: 0,
       relations: [relation],
     });
+  });
+
+  it('removes package-global artifact and kind-specific bin contracts from the runner', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '..', 'import-runner.ts'), 'utf8');
+    expect(source).not.toContain('RunImportOk.bins');
+    expect(source).not.toContain('readonly bins');
+    expect(source).not.toContain("a.kind === 'texture'");
+    expect(source).not.toContain("a.kind === 'mesh'");
   });
 });

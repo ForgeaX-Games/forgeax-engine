@@ -133,17 +133,38 @@ describe('w15: fetchBinary decompress gate', () => {
             Promise.resolve([
               {
                 guid: GUID_ZSTD,
-                relativeUrl: `/ddc/${GUID_ZSTD}.bin`,
+                packageUrl: `/ddc/${GUID_ZSTD}.pack.json`,
                 kind: 'mesh',
-                compression: 'zstd',
               },
             ]),
         });
       }
-      return Promise.resolve({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(zstdBytes.buffer),
-      });
+      if (url === `/ddc/${GUID_ZSTD}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_ZSTD,
+                  kind: 'mesh',
+                  payload: {},
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_ZSTD}.bin`,
+                      mediaType: 'application/x-forgeax-mesh',
+                      contentEncoding: 'zstd',
+                    },
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(zstdBytes.buffer) });
     }) as typeof globalThis.fetch;
 
     const reg = new AssetRegistry(makeMockShaderRegistry());
@@ -174,17 +195,37 @@ describe('w15: fetchBinary decompress gate', () => {
             Promise.resolve([
               {
                 guid: GUID_NONE,
-                relativeUrl: `/ddc/${GUID_NONE}.bin`,
+                packageUrl: `/ddc/${GUID_NONE}.pack.json`,
                 kind: 'mesh',
-                compression: 'none',
               },
             ]),
         });
       }
-      return Promise.resolve({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(original.buffer),
-      });
+      if (url === `/ddc/${GUID_NONE}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_NONE,
+                  kind: 'mesh',
+                  payload: {},
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_NONE}.bin`,
+                      mediaType: 'application/x-forgeax-mesh',
+                    },
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(original.buffer) });
     }) as typeof globalThis.fetch;
 
     const reg = new AssetRegistry(makeMockShaderRegistry());
@@ -212,16 +253,37 @@ describe('w15: fetchBinary decompress gate', () => {
             Promise.resolve([
               {
                 guid: GUID_LEGACY,
-                relativeUrl: `/ddc/${GUID_LEGACY}.bin`,
+                packageUrl: `/ddc/${GUID_LEGACY}.pack.json`,
                 kind: 'mesh',
               },
             ]),
         });
       }
-      return Promise.resolve({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(original.buffer),
-      });
+      if (url === `/ddc/${GUID_LEGACY}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_LEGACY,
+                  kind: 'mesh',
+                  payload: {},
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_LEGACY}.bin`,
+                      mediaType: 'application/x-forgeax-mesh',
+                    },
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(original.buffer) });
     }) as typeof globalThis.fetch;
 
     const reg = new AssetRegistry(makeMockShaderRegistry());
@@ -249,17 +311,38 @@ describe('w15: fetchBinary decompress gate', () => {
             Promise.resolve([
               {
                 guid: GUID_ZSTD,
-                relativeUrl: `/ddc/${GUID_ZSTD}.bin`,
+                packageUrl: `/ddc/${GUID_ZSTD}.pack.json`,
                 kind: 'mesh',
-                compression: 'zstd',
               },
             ]),
         });
       }
-      return Promise.resolve({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(corrupt.buffer),
-      });
+      if (url === `/ddc/${GUID_ZSTD}.pack.json`) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_ZSTD,
+                  kind: 'mesh',
+                  payload: {},
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: `${GUID_ZSTD}.bin`,
+                      mediaType: 'application/x-forgeax-mesh',
+                      contentEncoding: 'zstd',
+                    },
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(corrupt.buffer) });
     }) as typeof globalThis.fetch;
 
     const reg = new AssetRegistry(makeMockShaderRegistry());
@@ -268,13 +351,11 @@ describe('w15: fetchBinary decompress gate', () => {
     const guid = parseGuid(GUID_ZSTD);
     const result = await reg.loadByGuid<MeshAsset>(guid);
 
-    // TDD assertion — before w19, the error code is 'asset-parse-failed'
-    // (unpackMeshBin sees the corrupt bytes). After w19, it's
-    // 'asset-fetch-failed' with codec error nested in detail.
-    // This assertion is currently RED (code mismatch).
+    // The artifact boundary reports codec failures with its dedicated
+    // structured error code rather than collapsing them into asset parsing.
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe('asset-parse-failed');
+      expect(result.error.code).toBe('asset-artifact-decode-failed');
     }
   });
 });

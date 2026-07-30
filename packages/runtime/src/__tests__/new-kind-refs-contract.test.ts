@@ -65,12 +65,12 @@ describe('AC-07 — a new reference appears in the load graph via envelope.refs'
     });
 
     const packIndex = [
-      { guid: PARENT_GUID, relativeUrl: '/packs/parent.pack.json', kind: 'material' },
+      { guid: PARENT_GUID, packageUrl: '/packs/parent.pack.json', kind: 'material' },
     ];
     // The pack body carries refs[] = [EXTRA_REF_GUID]. No new switch arm, no
     // per-kind walker change -- the GUID in refs[] is the entire wiring.
     const parentPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {

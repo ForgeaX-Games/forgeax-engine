@@ -46,4 +46,23 @@ describe('LoaderRegistry', () => {
     const bad = { kind: 'mesh', load: 123 } as unknown as Loader<unknown>;
     expect(() => new LoaderRegistry().register(bad)).toThrow(TypeError);
   });
+
+  it('does not treat a catalog row as a loader input', async () => {
+    const reg = new LoaderRegistry();
+    reg.registerPackLoader({
+      kind: 'mesh',
+      load: async (input) => ({ ok: true, value: input.payload }),
+    });
+    const result = await reg.loadPack(
+      {
+        guid: 'mesh-guid',
+        kind: 'mesh',
+        payload: { vertices: [] },
+        refs: [],
+        artifacts: {},
+      },
+      {} as never,
+    );
+    expect(result.ok).toBe(true);
+  });
 });

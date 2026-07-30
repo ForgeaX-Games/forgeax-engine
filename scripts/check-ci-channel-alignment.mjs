@@ -264,7 +264,8 @@ function runAlignmentCheck(ciYamlText, rootDir) {
 
 const W5_PATH = 'packages/ecs/src/__tests__/query-trs-flat-column-ratio.perf.test.ts';
 const W6_PATH = 'packages/ecs/src/__tests__/query-light-extract-flat-column-ratio.perf.test.ts';
-const EXPECTED_PERF_PATHS = [W5_PATH, W6_PATH].sort();
+const W7_PATH = 'packages/ecs/src/__tests__/frame-end.perf.test.ts';
+const EXPECTED_PERF_PATHS = [W5_PATH, W6_PATH, W7_PATH].sort();
 
 function extractRootEcsPerfInclude(rootConfigText) {
   const idx = rootConfigText.indexOf("name: 'ecs-perf'");
@@ -340,7 +341,7 @@ function runOwnershipCheck({
     issues.push(
       `[ownership] FAIL: @forgeax/engine-ecs does not exclude '**/*.perf.test.ts' (channel: primary-pnpm, portability-bun)\n` +
         `  Project: ecs-perf\n` +
-        `  W5 (${W5_PATH}) and W6 (${W6_PATH}) would re-enter normal ECS selection.\n` +
+        `  W5 (${W5_PATH}), W6 (${W6_PATH}), and W7 (${W7_PATH}) would re-enter normal ECS selection.\n` +
         `  Expected: exclude array in packages/ecs/vitest.config.ts contains '**/*.perf.test.ts'`,
     );
   }
@@ -351,7 +352,7 @@ function runOwnershipCheck({
     issues.push(
       `[ownership] FAIL: ecs-perf project not found in root vitest.config.ts (channel: primary-pnpm)\n` +
         `  Project: ecs-perf\n` +
-        `  W5 (${W5_PATH}) and W6 (${W6_PATH}) have no named performance owner.\n` +
+        `  W5 (${W5_PATH}), W6 (${W6_PATH}), and W7 (${W7_PATH}) have no named performance owner.\n` +
         `  Expected: named project 'ecs-perf' with include globs ending in '.perf.test.ts'`,
     );
   } else {
@@ -368,7 +369,7 @@ function runOwnershipCheck({
     }
   }
 
-  // (c) ecs-perf's include globs resolve exactly W5/W6
+  // (c) ecs-perf's include globs resolve exactly W5/W6/W7
   const perfFiles = _perfFiles ?? (incGlobs ? resolvePerfFiles(rootDir, incGlobs) : []);
   const sorted = [...perfFiles].sort();
   const eq =
@@ -385,6 +386,7 @@ function runOwnershipCheck({
         `  Project: ecs-perf\n` +
         `  W5: ${W5_PATH}\n` +
         `  W6: ${W6_PATH}\n` +
+        `  W7: ${W7_PATH}\n` +
         `  Includes: ${incGlobs?.join(', ') || '(missing project)'}\n` +
         `  ${parts.join('; ')}\n` +
         `  Expected exactly: ${EXPECTED_PERF_PATHS.join(', ')}`,
@@ -397,7 +399,7 @@ function runOwnershipCheck({
     issues.push(
       `[ownership] FAIL: portability-bun selects ecs-perf project (channel: portability-bun)\n` +
         `  test:portability = ${JSON.stringify(portScript)}\n` +
-        `  Expected: no 'ecs-perf' in test:portability — Bun canary must not discover W5/W6`,
+        `  Expected: no 'ecs-perf' in test:portability — Bun canary must not discover W5/W6/W7`,
     );
   }
 
@@ -421,6 +423,7 @@ function runOwnershipCheck({
           `  Project: primary-pnpm/coverage-pnpm\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
+          `  W7: ${W7_PATH}\n` +
           `  Expected: one coverage/typecheck owner in coverage-pnpm; primary-pnpm must not carry an event-specific duplicate`,
       );
     }
@@ -437,6 +440,7 @@ function runOwnershipCheck({
           `  Project: ecs-perf\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
+          `  W7: ${W7_PATH}\n` +
           `  Expected: one 'ECS performance ratio gates (uninstrumented)' step in coverage-pnpm, with no coverage instrumentation`,
       );
     }
@@ -451,14 +455,14 @@ function runOwnershipCheck({
         issues.push(
           `[ownership] FAIL: portability-bun contains 'ecs-perf' (channel: portability-bun)\n` +
             `  Step: ${s.name}\n` +
-            `  Expected: no 'ecs-perf' in portability job — W5/W6 would re-enter Bun selection`,
+            `  Expected: no 'ecs-perf' in portability job — W5/W6/W7 would re-enter Bun selection`,
         );
       }
       if (s.run.includes('.perf.test.ts')) {
         issues.push(
           `[ownership] FAIL: portability-bun contains '.perf.test.ts' (channel: portability-bun)\n` +
             `  Step: ${s.name}\n` +
-            `  Expected: no '.perf.test.ts' in portability job — W5/W6 would re-enter Bun selection`,
+            `  Expected: no '.perf.test.ts' in portability job — W5/W6/W7 would re-enter Bun selection`,
         );
       }
     }

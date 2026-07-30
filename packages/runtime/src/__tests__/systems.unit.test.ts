@@ -701,7 +701,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return { internals, swapChainView };
   }
 
-  function makePipelineState(fxaaPreAllocated: boolean): unknown {
+  function makePipelineState(): unknown {
     return {
       meshes: new Map(),
       format: 'bgra8unorm',
@@ -750,10 +750,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         fxaaPipeline: null,
         fxaaBindGroupLayout: null,
         fxaaSampler: null,
-        fxaaIntermediateTexture: fxaaPreAllocated ? { __role: 'fxaa-intermediate' } : null,
-        fxaaIntermediateView: fxaaPreAllocated ? { __role: 'fxaa-intermediate-view' } : null,
-        fxaaIntermediateWidth: fxaaPreAllocated ? 800 : 0,
-        fxaaIntermediateHeight: fxaaPreAllocated ? 600 : 0,
         shadowTexture: null,
         shadowMapSize: 0,
         shadowCascadeCount: 0,
@@ -798,7 +794,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('row 1: antialias=none -> no intermediate texture allocated (D-7 zero-overhead)', async () => {
       const log: DeviceLog = { events: [] };
       const { internals } = makeRecorderInternals(log);
-      const ps = makePipelineState(false);
+      const ps = makePipelineState();
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
       const { recordFrame } = await import('@forgeax/engine-render/internal');
       recordFrame(
@@ -851,7 +847,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('row 2: antialias=fxaa first frame -> intermediate texture created with bgra8unorm format and TEXTURE_BINDING | COPY_DST usage', async () => {
       const log: DeviceLog = { events: [] };
       const { internals } = makeRecorderInternals(log);
-      const ps = makePipelineState(false);
+      const ps = makePipelineState();
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
       const { recordFrame } = await import('@forgeax/engine-render/internal');
       recordFrame(
@@ -902,7 +898,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // genuine assertions, restore as named `it()` blocks.
     });
 
-    it('D-3: intermediate texture format = swap-chain storage format (helper Channel 2 UA-preferred truth)', () => {
+    it('D-3: graph-owned LDR target format derives from swap-chain storage truth', () => {
       // bug-20260612 fix-up I-4: replaced 'expect(local-const).toBe(self)' tautology with
       // helper-driven assertion. Stub navigator.gpu.getPreferredCanvasFormat() to chromium's
       // canonical 'bgra8unorm' AND a contrasting 'rgba16float' value, then verify the
@@ -928,12 +924,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       }
     });
 
-    it('D-1: intermediate texture usage includes TEXTURE_BINDING | COPY_DST', () => {
-      const usage = 0x04 | 0x08; // TEXTURE_BINDING | COPY_DST
-      // The intermediate texture is COPY_DST (target of copyTextureToTexture
-      // from swap-chain) and TEXTURE_BINDING (sampled by FXAA fragment).
+    it('D-1: graph-owned LDR target usage includes RENDER_ATTACHMENT | TEXTURE_BINDING', () => {
+      const usage = 0x10 | 0x04;
+      expect(usage & 0x10).toBe(0x10); // RENDER_ATTACHMENT
       expect(usage & 0x04).toBe(0x04); // TEXTURE_BINDING
-      expect(usage & 0x08).toBe(0x08); // COPY_DST
+      expect(usage & 0x08).toBe(0); // COPY_DST is no longer required
     });
 
     it('D-7: antialias=none first frame allocates no FXAA resources', () => {
@@ -1046,33 +1041,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         fxaaPipeline: null,
         fxaaBindGroupLayout: null,
         fxaaSampler: null,
-        fxaaIntermediateTexture: null,
-        fxaaIntermediateView: null,
-        fxaaIntermediateWidth: 0,
-        fxaaIntermediateHeight: 0,
       };
       expect('fxaaPipeline' in state).toBe(true);
       expect('fxaaBindGroupLayout' in state).toBe(true);
       expect('fxaaSampler' in state).toBe(true);
-      expect('fxaaIntermediateTexture' in state).toBe(true);
-      expect('fxaaIntermediateView' in state).toBe(true);
-      expect('fxaaIntermediateWidth' in state).toBe(true);
-      expect('fxaaIntermediateHeight' in state).toBe(true);
       // All defaults are null or 0.
       expect(state.fxaaPipeline).toBeNull();
       expect(state.fxaaBindGroupLayout).toBeNull();
       expect(state.fxaaSampler).toBeNull();
-      expect(state.fxaaIntermediateTexture).toBeNull();
-      expect(state.fxaaIntermediateView).toBeNull();
-      expect(state.fxaaIntermediateWidth).toBe(0);
-      expect(state.fxaaIntermediateHeight).toBe(0);
     });
 
-    it('D-3: intermediate texture format = swap-chain storage format (helper Channel 2 truth, copyTextureToTexture zero-conversion)', () => {
+    it('D-3: graph-owned LDR target format derives from swap-chain storage truth', () => {
       // bug-20260612 fix-up I-4: replaced 'expect(local-const).toBe(self)' tautology
-      // with helper-driven assertion. The intermediate texture must match the
-      // swap-chain storage format so copyTextureToTexture from swap-chain to
-      // intermediate stays zero-conversion (no implicit re-encode). Stub
+      // with helper-driven assertion. The graph-owned LDR target derives its
+      // native storage format from the same swap-chain SSOT. Stub
       // getPreferredCanvasFormat to chromium's 'bgra8unorm', call helper, and
       // assert (a) Channel 2 returns the UA-preferred value, (b) Channel 3
       // (storageBufferCapable=false) does NOT take the UA path (returns rgba8unorm).
@@ -1082,7 +1064,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const ch3 = selectSwapChainFormat(false);
         expect(ch2.storage).toBe('bgra8unorm');
         expect(ch3.storage).toBe('rgba8unorm');
-        // The intermediate texture wires to ch2.storage (Channel 2 active path
+        // The LDR target wires to ch2.storage (Channel 2 active path
         // when storageBufferCapable=true; Channel 3 has its own GLES override).
         expect(ch2.storage).not.toBe(ch3.storage);
       } finally {
@@ -1090,13 +1072,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       }
     });
 
-    it('D-1: intermediate texture usage = RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_DST', () => {
-      // The intermediate texture is both copied to (COPY_DST from swap-chain)
-      // and sampled from (TEXTURE_BINDING in FXAA fragment). RENDER_ATTACHMENT
-      // is not needed here since the FXAA pass writes to swap-chain directly.
-      const usage = 0x04 | 0x08; // TEXTURE_BINDING | COPY_DST
+    it('D-1: graph-owned LDR target usage = RENDER_ATTACHMENT | TEXTURE_BINDING', () => {
+      const usage = 0x10 | 0x04;
+      expect(usage & 0x10).toBe(0x10); // RENDER_ATTACHMENT
       expect(usage & 0x04).toBe(0x04); // TEXTURE_BINDING
-      expect(usage & 0x08).toBe(0x08); // COPY_DST
+      expect(usage & 0x08).toBe(0); // COPY_DST is intentionally absent
     });
   });
 
@@ -5307,7 +5287,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       };
       const ctx = {
         runtime: {
-          device: { caps: { backendKind: 'webgpu' as const } },
+          device: { caps: { backendKind: 'webgpu' as const, storageBuffer: true } },
           errorRegistry: { fire: () => {} },
         },
         // bug-20260612 made urpPipeline.buildGraph derive offscreen target
@@ -5321,7 +5301,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           colorAttachmentFormat: 'bgra8unorm-srgb' as const,
         },
       };
-      const graph = urpPipeline.buildGraph(ctx, {});
+      const graph = urpPipeline.buildGraph(ctx, {
+        camera: { antialias: 'none', tonemap: 'reinhard' },
+      });
       if (graph === null) throw new Error('urpPipeline.buildGraph returned null');
       return graph.listPasses();
     }

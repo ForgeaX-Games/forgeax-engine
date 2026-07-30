@@ -71,6 +71,7 @@ export interface ComponentAccessState {
   readonly markComponentAdded: (entity: EntityHandle, componentId: number) => void;
   readonly markComponentChanged: (entity: EntityHandle, componentId: number) => void;
   readonly removeComponentChange: (entity: EntityHandle, componentId: number) => void;
+  readonly markStructureChanged: () => void;
   routeError(err: unknown, ctx: ErrorContext): void;
 }
 
@@ -111,6 +112,10 @@ export class WorldComponentAccess {
 
   private markComponentChanged(entity: EntityHandle, component: Component): void {
     this.state.markComponentChanged(entity, component.id);
+  }
+
+  private markStructureChanged(): void {
+    this.state.markStructureChanged();
   }
 
   checkCardinality(component: Component, extraCount: number): CardinalityExceededError | null {
@@ -1023,6 +1028,7 @@ export class WorldComponentAccess {
       );
     }
 
+    this.markStructureChanged();
     return ok(undefined);
   }
 
@@ -1131,6 +1137,7 @@ export class WorldComponentAccess {
     // Migrate entity: copy all data except the removed component.
     this.storage.migrateEntity(rec, srcArch, targetArch);
     this.state.removeComponentChange(entity, component.id);
+    this.markStructureChanged();
     return ok(undefined);
   }
 
@@ -1209,6 +1216,7 @@ export class WorldComponentAccess {
         );
       }
     }
+    this.markStructureChanged();
   }
 
   // ──────────────────────────────────────────────────────────────────────────

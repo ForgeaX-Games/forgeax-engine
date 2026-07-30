@@ -37,6 +37,9 @@ import { Transform } from '@forgeax/engine-scene';
 import type { RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
 import customPipelineInversionShader from './custom-pipeline-inversion.wgsl';
 import demoShader from './multi-uv-demo.wgsl';
+import depthFalsifierShader from './post-depth-falsifier.wgsl';
+import depthOverlayShader from './post-depth-overlay.wgsl';
+import depthOverlayMsaaShader from './post-depth-overlay-msaa.wgsl';
 import inversionShader from './post-inversion.wgsl';
 import passthroughShader from './post-passthrough.wgsl';
 
@@ -44,11 +47,14 @@ const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
 const CUSTOM_PIPELINE_ID = 'hello-multi-uv::custom-render-graph';
 const CUSTOM_PIPELINE_INVERSION_ID = 'hello-multi-uv::custom-render-graph-inversion';
 const CUSTOM_PIPELINE_PASSTHROUGH_ID = 'hello-multi-uv::custom-render-graph-passthrough';
+const CUSTOM_PIPELINE_DEPTH_ID = 'hello-multi-uv::custom-render-graph-depth';
+const CUSTOM_PIPELINE_DEPTH_MSAA_ID = 'hello-multi-uv::custom-render-graph-depth-msaa';
+const CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID = 'hello-multi-uv::custom-render-graph-depth-falsifier';
 const CUSTOM_COLOR_KEY = 'helloMultiUvCustomColor';
-const CUSTOM_DEPTH_KEY = 'helloMultiUvCustomDepth';
+const CUSTOM_DEPTH_KEY = 'depth';
 const CUSTOM_RESOLVE_KEY = 'helloMultiUvCustomResolve';
 
-function makeCustomPipeline(postShader: string): RenderPipeline {
+function makeCustomPipeline(postShader: string, readsDepth = false): RenderPipeline {
   return {
     buildGraph(
       ctx: RenderPipelineContext,
@@ -73,7 +79,7 @@ function makeCustomPipeline(postShader: string): RenderPipeline {
         format: 'depth24plus-stencil8',
         size: 'swapchain',
         sample: sceneSample,
-        usage: 0x10,
+        usage: 0x10 | 0x04,
       });
       if (msaaActive && !falsifyMsaaResolve) {
         graph.addColorTarget(CUSTOM_RESOLVE_KEY, {
@@ -95,7 +101,7 @@ function makeCustomPipeline(postShader: string): RenderPipeline {
       addFullscreenPass(graph, 'custom-present', {
         shader: postShader,
         color: 'swapchain',
-        reads: [colorInputKey],
+        reads: readsDepth ? [colorInputKey, CUSTOM_DEPTH_KEY] : [colorInputKey],
       });
       const compiled = graph.compile({
         backendKind: ctx.runtime.device.caps.backendKind,
@@ -139,6 +145,8 @@ const FLOATS_BASE = 12;
 const FLOATS_PER_VERTEX = FLOATS_BASE + (UV_SETS - 1) * 2; // 14
 const POST_PASSTHROUGH_ID = 'hello-multi-uv::passthrough';
 const POST_INVERSION_ID = 'hello-multi-uv::inversion';
+const POST_DEPTH_ID = 'hello-multi-uv::depth';
+const POST_DEPTH_MSAA_ID = 'hello-multi-uv::depth-msaa';
 
 const vertexCount = VX * VY;
 const indexCount = GRID_X * GRID_Y * 6;
@@ -267,6 +275,7 @@ if (!app.ok) {
   postSelect.setAttribute('aria-label', 'M3 post-process effect');
   postSelect.add(new Option('passthrough', 'passthrough'));
   postSelect.add(new Option('inversion', 'inversion'));
+  postSelect.add(new Option('depth overlay', 'depth'));
   postControl.append(postSelect, ' ');
   const postStatus = document.createElement('span');
   postStatus.id = 'post-status';
@@ -335,6 +344,17 @@ if (!app.ok) {
   app.value.renderer.postProcess.register(CUSTOM_PIPELINE_PASSTHROUGH_ID, {
     source: passthroughShader.wgsl,
   });
+  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_DEPTH_ID, {
+    source: depthOverlayShader.wgsl,
+    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
+  });
+  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_DEPTH_MSAA_ID, {
+    source: depthOverlayMsaaShader.wgsl,
+    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
+  });
+  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID, {
+    source: depthFalsifierShader.wgsl,
+  });
   app.value.renderer.registerPipeline(
     CUSTOM_PIPELINE_ID,
     makeCustomPipeline(CUSTOM_PIPELINE_PASSTHROUGH_ID),
@@ -342,6 +362,18 @@ if (!app.ok) {
   app.value.renderer.registerPipeline(
     CUSTOM_PIPELINE_INVERSION_ID,
     makeCustomPipeline(CUSTOM_PIPELINE_INVERSION_ID),
+  );
+  app.value.renderer.registerPipeline(
+    CUSTOM_PIPELINE_DEPTH_ID,
+    makeCustomPipeline(CUSTOM_PIPELINE_DEPTH_ID, true),
+  );
+  app.value.renderer.registerPipeline(
+    CUSTOM_PIPELINE_DEPTH_MSAA_ID,
+    makeCustomPipeline(CUSTOM_PIPELINE_DEPTH_MSAA_ID, true),
+  );
+  app.value.renderer.registerPipeline(
+    CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID,
+    makeCustomPipeline(CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID),
   );
 
   // Build MeshAsset with independent per-attribute typed arrays. The interleaved
@@ -468,12 +500,13 @@ if (!app.ok) {
   });
 
   const falsifyPipelineSelection = new URLSearchParams(location.search).has('falsify-pipeline');
+  const falsifyDepthSelection = new URLSearchParams(location.search).has('falsify-depth');
   const standardPipeline: RenderPipelineAsset = {
     kind: 'render-pipeline',
     pipelineId: 'forgeax::urp',
   };
   type PipelineChoice = 'standard' | 'custom';
-  type PostChoice = 'passthrough' | 'inversion';
+  type PostChoice = 'passthrough' | 'inversion' | 'depth';
   let selectedPipeline: PipelineChoice = 'standard';
   let selectedPost: PostChoice = 'passthrough';
   const pipelineAsset = (pipeline: PipelineChoice, post: PostChoice): RenderPipelineAsset => ({
@@ -482,13 +515,29 @@ if (!app.ok) {
       pipeline === 'custom'
         ? falsifyPipelineSelection
           ? 'forgeax::urp'
-          : post === 'inversion'
-            ? CUSTOM_PIPELINE_INVERSION_ID
-            : CUSTOM_PIPELINE_ID
+          : post === 'depth'
+            ? falsifyDepthSelection
+              ? CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID
+              : useMsaa
+                ? CUSTOM_PIPELINE_DEPTH_MSAA_ID
+                : CUSTOM_PIPELINE_DEPTH_ID
+            : post === 'inversion'
+              ? CUSTOM_PIPELINE_INVERSION_ID
+              : CUSTOM_PIPELINE_ID
         : standardPipeline.pipelineId,
     ...(pipeline === 'standard'
       ? {
-          config: { postEffects: [post === 'inversion' ? POST_INVERSION_ID : POST_PASSTHROUGH_ID] },
+          config: {
+            postEffects: [
+              post === 'depth'
+                ? useMsaa
+                  ? POST_DEPTH_MSAA_ID
+                  : POST_DEPTH_ID
+                : post === 'inversion'
+                  ? POST_INVERSION_ID
+                  : POST_PASSTHROUGH_ID,
+            ],
+          },
         }
       : {}),
   });
@@ -513,6 +562,14 @@ if (!app.ok) {
   app.value.renderer.postProcess.register(POST_INVERSION_ID, {
     source: inversionShader.wgsl,
   });
+  app.value.renderer.postProcess.register(POST_DEPTH_ID, {
+    source: depthOverlayShader.wgsl,
+    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
+  });
+  app.value.renderer.postProcess.register(POST_DEPTH_MSAA_ID, {
+    source: depthOverlayMsaaShader.wgsl,
+    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
+  });
 
   const selectPost = (effect: PostChoice) => {
     const asset = pipelineAsset(selectedPipeline, effect);
@@ -526,10 +583,21 @@ if (!app.ok) {
     postStatus.textContent = `M3_POST_EFFECT=${effect}`;
   };
   postSelect.addEventListener('change', () => {
-    selectPost(postSelect.value === 'inversion' ? 'inversion' : 'passthrough');
+    selectPost(
+      postSelect.value === 'depth'
+        ? 'depth'
+        : postSelect.value === 'inversion'
+          ? 'inversion'
+          : 'passthrough',
+    );
   });
 
-  const initialPost: PostChoice = params.get('post') === 'inversion' ? 'inversion' : 'passthrough';
+  const initialPost: PostChoice =
+    params.get('post') === 'depth'
+      ? 'depth'
+      : params.get('post') === 'inversion'
+        ? 'inversion'
+        : 'passthrough';
   selectedPost = initialPost;
   postSelect.value = initialPost;
   postStatus.textContent = `M3_POST_EFFECT=${initialPost}`;

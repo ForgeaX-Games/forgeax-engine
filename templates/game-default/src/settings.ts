@@ -1,17 +1,20 @@
 import { mountUi, type UiAsset, type UiError, type UiInstance } from '@forgeax/engine-ui';
+import type { ClearColorMode } from './clear-color';
 
 export const SETTINGS_UI_GUID = '019f8354-6386-4387-849d-f2ab4b9622a0';
 
 export type AntialiasMode = 'none' | 'msaa' | 'fxaa';
-export interface GameSettingsState { music: number; musicMuted: boolean; highContrast: boolean; antialias: AntialiasMode; bloom: boolean }
-export const DEFAULT_GAME_SETTINGS: Readonly<GameSettingsState> = Object.freeze({ music: 70, musicMuted: false, highContrast: false, antialias: 'fxaa', bloom: true });
+export interface GameSettingsState { music: number; musicMuted: boolean; highContrast: boolean; antialias: AntialiasMode; bloom: boolean; depthOfField: boolean; clearColor: ClearColorMode }
+export const DEFAULT_GAME_SETTINGS: Readonly<GameSettingsState> = Object.freeze({ music: 70, musicMuted: false, highContrast: false, antialias: 'fxaa', bloom: true, depthOfField: false, clearColor: 'sky' });
 export function createGameSettingsState(): GameSettingsState { return { ...DEFAULT_GAME_SETTINGS }; }
-export function applyGameSetting(state: GameSettingsState, name: 'music' | 'musicMuted' | 'highContrast' | 'antialias' | 'bloom', value: number | boolean | string): void {
+export function applyGameSetting(state: GameSettingsState, name: 'music' | 'musicMuted' | 'highContrast' | 'antialias' | 'bloom' | 'depthOfField' | 'clearColor', value: number | boolean | string): void {
   if (name === 'music' && typeof value === 'number') state.music = Math.max(0, Math.min(100, value));
   if (name === 'musicMuted' && typeof value === 'boolean') state.musicMuted = value;
   if (name === 'highContrast' && typeof value === 'boolean') state.highContrast = value;
   if (name === 'antialias' && (value === 'none' || value === 'msaa' || value === 'fxaa')) state.antialias = value;
   if (name === 'bloom' && typeof value === 'boolean') state.bloom = value;
+  if (name === 'depthOfField' && typeof value === 'boolean') state.depthOfField = value;
+  if (name === 'clearColor' && (value === 'sky' || value === 'purple')) state.clearColor = value;
 }
 export function restoreFocus(target: HTMLElement | null, fallback: HTMLElement): void {
   const candidate = target && target.isConnected && !target.hasAttribute('disabled') ? target : fallback;
@@ -78,7 +81,9 @@ export function mountSettings(asset: UiAsset | null, root: HTMLElement, state: G
     if (name === 'music-muted' && input) applyGameSetting(state, 'musicMuted', input.checked);
     if (name === 'high-contrast' && input) applyGameSetting(state, 'highContrast', input.checked);
     if (name === 'bloom' && input) applyGameSetting(state, 'bloom', input.checked);
+    if (name === 'depth-of-field' && input) applyGameSetting(state, 'depthOfField', input.checked);
     if (select?.dataset.uiSetting === 'antialias') applyGameSetting(state, 'antialias', select.value);
+    if (select?.dataset.uiSetting === 'clear-color') applyGameSetting(state, 'clearColor', select.value);
   };
   shadow.addEventListener('click', (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-ui-action]') : null;

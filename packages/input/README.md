@@ -1,6 +1,6 @@
 # @forgeax/engine-input
 
-> **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (down/up edge) + mouse (position / movementDelta / button / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Higher-level abstractions: **action indirection** (declare once, forget device — `snap.action(name)` / `snap.getAxis` / `snap.getVector`) + **gesture recognizer** (pinch / rotate / swipe / long-press / double-tap — `snap.gesture` + `snap.gestureEvents`). Capability probe (`snap.capabilities`) available at attach time.
+> **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (logical key + physical code held/press/release edges) + mouse (position / movementDelta / button held/press/release edges / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Higher-level abstractions: **action indirection** (declare once, forget device — `snap.action(name)` / `snap.getAxis` / `snap.getVector`) + **gesture recognizer** (pinch / rotate / swipe / long-press / double-tap — `snap.gesture` + `snap.gestureEvents`). Capability probe (`snap.capabilities`) available at attach time.
 
 ## 4 步 recipe
 
@@ -77,12 +77,16 @@ detach();
 
 ## 多设备表面（charter F2 minimal surface）
 
-### keyboard（2 读点）
+### keyboard (6 read points)
 
 | 调用 | 返回 | 语义 |
 |:--|:--|:--|
 | `snap.keyboard.down(key)` | `boolean` | `key` 当前帧首仍处于按下状态（`document.hasFocus()` 失焦时保持上一帧状态） |
+| `snap.keyboard.justPressed(key)` | `boolean` | 上一帧未按、本帧按下（一帧寿命；首帧 held key 视为刚按下） |
 | `snap.keyboard.up(key)` | `boolean` | `key` 上一帧 down、本帧 up 的边沿（一帧内 true，下一帧自动消失） |
+| `snap.keyboard.downCode(code)` | `boolean` | `KeyboardEvent.code` physical code 当前帧按下；例如 `KeyA` 不随键盘布局改变 |
+| `snap.keyboard.justPressedCode(code)` | `boolean` | physical code 上一帧未按、本帧按下（一帧寿命） |
+| `snap.keyboard.upCode(code)` | `boolean` | physical code 上一帧按下、本帧释放（一帧寿命） |
 
 ### mouse（5 读点）
 
@@ -92,6 +96,7 @@ detach();
 | `snap.mouse.movementDelta` | `{ x: number; y: number }` | PointerLock `movementX/Y` 自上次扫描以来的累加；扫描后 backend 自动清零 |
 | `snap.mouse.pointerLocked` | `boolean` | 合并锁态——W3C `pointerlockchange`（`pointerLockElement === canvas`）OR host `lockProvider.requestLock()` 置位；`required` 字段，非 optional。consumer 写 `if (snap.mouse.pointerLocked)` 判断"仅锁定态消费 look delta"。与 `movementDelta` 同位——两个事实在同一属性路径下（charter F1 单点可索引） |
 | `snap.mouse.button(i)` | `boolean`（`i: 0 \| 1 \| 2`） | 对齐 W3C MouseEvent.button：0=主键 / 1=辅助键 / 2=次键。`i: 3` 触发 TS 编译错误 |
+| `snap.mouse.justPressed(i)` / `justReleased(i)` | `boolean` | 鼠标按钮帧边沿；首帧 held 按钮视为刚按下 |
 | `snap.mouse.wheelDelta` | `number` | 每帧 sign-discrete 滚轮 notches 累加（W3C `WheelEvent.deltaY`：正=下滚/负=上滚）；frame-start 冻结后清零。OOS-7：轨迹板高精度滚动未展开（sub-notch 量值保留给未来 `ScrollSnapshot`） |
 
 ### gamepad（7 读点）

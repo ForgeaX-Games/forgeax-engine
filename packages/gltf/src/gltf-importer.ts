@@ -32,6 +32,7 @@
 // gap as `import-produced-no-assets`. A texture sub-asset that fails byte
 // extraction surfaces as `gltf-image-extract-failed` (D-6).
 
+import { packMeshBin } from '@forgeax/engine-import';
 import type {
   AssetRef,
   Handle,
@@ -209,6 +210,7 @@ function materialTextureRefs(
   pushRefForTextureIndex(mat.baseColorTexture, 'baseColorTexture');
   pushRefForTextureIndex(mat.metallicRoughnessTexture, 'metallicRoughnessTexture');
   pushRefForTextureIndex(mat.normalTexture, 'normalTexture');
+  pushRefForTextureIndex(mat.emissiveTexture, 'emissiveTexture');
   return refs;
 }
 
@@ -285,12 +287,20 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       const prims = doc.meshes.filter((m) => m.meshIndex === sub.sourceIndex);
       if (prims.length === 0) continue;
       const meshName = isMultiAsset ? prims[0]?.name : undefined;
+      const meshPayload = meshIrToMeshAsset(prims);
       out.push({
         guid: sub.guid,
         kind: 'mesh',
         ...(meshName !== undefined ? { name: meshName } : {}),
-        payload: meshIrToMeshAsset(prims),
+        payload: meshPayload,
         refs: [],
+        artifacts: {
+          body: {
+            mediaType: 'application/x-forgeax-mesh',
+            assetCodec: { name: 'mesh-binary', version: '2' },
+            bytes: packMeshBin(meshPayload as never),
+          },
+        },
       });
     } else if (sub.kind === 'material') {
       const mat = doc.materials[sub.sourceIndex];
@@ -331,13 +341,19 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       // sample handle-1 (BUILTIN_TRIANGLE) for every material instead of
       // the real texture. Mirror the ordering of materialTextureRefs.
       const textures = doc.textures ?? [];
-      const slotKeys = ['baseColorTexture', 'metallicRoughnessTexture', 'normalTexture'] as const;
+      const slotKeys = [
+        'baseColorTexture',
+        'metallicRoughnessTexture',
+        'normalTexture',
+        'emissiveTexture',
+      ] as const;
       const slotImageIndices: ReadonlyArray<number | undefined> = [
         mat.baseColorTexture !== undefined ? textures[mat.baseColorTexture]?.source : undefined,
         mat.metallicRoughnessTexture !== undefined
           ? textures[mat.metallicRoughnessTexture]?.source
           : undefined,
         mat.normalTexture !== undefined ? textures[mat.normalTexture]?.source : undefined,
+        mat.emissiveTexture !== undefined ? textures[mat.emissiveTexture]?.source : undefined,
       ];
       const newParamValues: Record<string, unknown> = { ...matAsset.paramValues };
       let refsCursor = 0;
@@ -361,6 +377,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         ...(matName !== undefined ? { name: matName } : {}),
         payload: rewrittenAsset,
         refs: materialRefs,
+        artifacts: {},
       });
     } else if (sub.kind === 'texture') {
       const imageIndex = sub.sourceIndex;
@@ -406,6 +423,13 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         ...(texName !== undefined ? { name: texName } : {}),
         payload: decoded.value.texture,
         refs: [],
+        artifacts: {
+          body: {
+            mediaType: extracted.mimeType,
+            assetCodec: { name: 'rgba8', version: '1' },
+            bytes: decoded.value.bytes,
+          },
+        },
       });
     } else if (sub.kind === 'scene') {
       // #317 multi-material design: bridge accepts glTF mesh-index keyed
@@ -547,6 +571,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         ...(sceneName !== undefined ? { name: sceneName } : {}),
         payload: sceneWithSkinGuids,
         refs,
+        artifacts: {},
       });
     } else if (sub.kind === 'skeleton') {
       // tweak-20260611 M4: skeleton sub-asset POD emit. GltfSkeletonRecord (the
@@ -561,7 +586,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         inverseBindMatrices: rec.inverseBindMatrices,
         jointCount: rec.jointCount,
       };
-      out.push({ guid: sub.guid, kind: 'skeleton', payload, refs: [] });
+      out.push({ guid: sub.guid, kind: 'skeleton', payload, refs: [], artifacts: {} });
     } else if (sub.kind === 'skin') {
       // tweak-20260611 M4: skin sub-asset POD emit. The 1:1 mapping with
       // skeleton (toAssetPack emits one skin per GltfSkeletonRecord at the same
@@ -584,6 +609,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         kind: 'skin',
         payload,
         refs: [{ guid: skeletonGuid, sourceField: { fieldName: 'skeleton' } }],
+        artifacts: {},
       });
     } else if (sub.kind === 'animation-clip') {
       // tweak-20260611 M4: animation-clip sub-asset POD emit. GltfAnimationClipRecord
@@ -610,10 +636,10 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
           },
         })),
       };
-      out.push({ guid: sub.guid, kind: 'animation-clip', payload, refs: [] });
+      out.push({ guid: sub.guid, kind: 'animation-clip', payload, refs: [], artifacts: {} });
     }
   }
-  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
+  return { ok: true, value: { assets: out, sourceDependencies: [] } };
 }
 
 /**

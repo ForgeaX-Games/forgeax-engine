@@ -1,14 +1,12 @@
 // @forgeax/engine-import - import runner (feat-20260603-asset-import-loader-injection M2 / w15).
 //
 // The build-time orchestration that turns one parsed `*.meta.json` sidecar
-// into the DDC (`.pack.json` + optional `.bin`). It is the consumer side of
+// into the logical Pack v2 package. It is the consumer side of
 // the ImporterRegistry: it reads `meta.importer`, looks up the registered
 // Importer, calls `importer.import(ctx)`, enforces the GUID import-stable iron
-// law against the produced asset set, then folds the produced PODs into the
-// DDC `.pack.json` `assets[]` rows (one ImportedAsset -> one
-// `{ guid, kind, payload, refs }` row, reusing the existing
-// internal-text-package shape - no new format is invented; requirements
-// constraint).
+// law against the produced asset set, then folds the produced PODs into
+// logical `assets[]` rows. Artifact bytes stay with their owning asset;
+// final paths and integrity belong to M3.
 //
 // Error model (charter P3, ImportErrorCode 5 closed members):
 //   - importer-not-registered  : registry.get(meta.importer) === undefined
@@ -29,6 +27,7 @@ import type {
   ImageError,
   ImportContext,
   ImportError as ImportErrorType,
+  ImportedArtifactBody,
   ImportProduct,
   ProviderProvenance,
   ResourceRevision,
@@ -36,7 +35,6 @@ import type {
 } from '@forgeax/engine-types';
 import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
 import type { ImporterRegistry } from './importer-registry.js';
-import { packMeshBin } from './mesh-bin.js';
 
 /** Reserved `meta.importer` key consumed by vite-plugin-shader, not the import runner. */
 export const SHADER_RESERVED_IMPORTER_KEY = 'shader';
@@ -79,7 +77,7 @@ function isModuleLoadFailure(e: unknown): boolean {
  * boundary keeps every downstream consumer (build emitFile, dev startMetaImport,
  * and any future pack-cache tool) aligned on the same on-disk shape.
  */
-function normaliseForPack(value: unknown): unknown {
+export function normaliseForPack(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   if (
     value instanceof Float32Array ||
@@ -111,23 +109,28 @@ export type RunImportResult =
   | { readonly ok: true; readonly value: RunImportOk }
   | { readonly ok: false; readonly error: ImportErrorType };
 
+export type RunImportProductResult =
+  | {
+      readonly ok: true;
+      readonly value: { readonly skipped: 'shader' } | { readonly product: ImportProduct };
+    }
+  | { readonly ok: false; readonly error: ImportErrorType };
+
 /**
  * Success payload. `skipped: 'shader'` marks a reserved shader sidecar the
  * runner intentionally did not import (no DDC written); otherwise `pack` is the
- * built DDC `.pack.json` document and `bins` the optional binary blobs keyed by
- * lowercased sub-asset GUID.
+ * logical Pack v2 document. Artifact bytes remain owned by each asset.
  */
 export type RunImportOk =
   | { readonly skipped: 'shader' }
   | {
       readonly product: ImportProduct;
       readonly pack: DdcPack;
-      readonly bins?: ReadonlyMap<string, Uint8Array>;
     };
 
-/** The `internal-text-package` DDC document the runner produces (reused, not invented). */
+/** The logical Pack v2 document consumed by the shared finalizer. */
 export interface DdcPack {
-  readonly schemaVersion: string;
+  readonly schemaVersion: '2.0.0';
   readonly kind: 'internal-text-package';
   readonly packageId?: string;
   readonly provenance?: ProviderProvenance;
@@ -142,6 +145,7 @@ export interface DdcPack {
     readonly relations?: readonly AssetRelation[];
     readonly payload: Record<string, unknown>;
     readonly refs: readonly string[];
+    readonly artifacts: Readonly<Record<string, ImportedArtifactBody>>;
   }>;
 }
 
@@ -154,6 +158,8 @@ export interface RunImportMeta {
   readonly revision?: ResourceRevision;
   readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly importSettings?: Readonly<Record<string, unknown>>;
+  /** Skip the normalized DDC pack when a downstream finalizer owns publication. */
+  readonly buildPack?: boolean;
   readonly subAssets: ReadonlyArray<{
     readonly guid: string;
     readonly sourceIndex: number;
@@ -258,11 +264,21 @@ function errResult(error: ImportErrorType): {
  * @param fs the source-read capability (injected so the runner stays
  *   testable without touching real disk).
  */
+export function runImport(
+  meta: RunImportMeta & { readonly buildPack: false },
+  registry: ImporterRegistry,
+  fs: ImportRunnerFs,
+): Promise<RunImportProductResult>;
+export function runImport(
+  meta: RunImportMeta,
+  registry: ImporterRegistry,
+  fs: ImportRunnerFs,
+): Promise<RunImportResult>;
 export async function runImport(
   meta: RunImportMeta,
   registry: ImporterRegistry,
   fs: ImportRunnerFs,
-): Promise<RunImportResult> {
+): Promise<RunImportResult | RunImportProductResult> {
   // Reserved shader key: orthogonal vite-plugin-shader pipeline owns these.
   if (meta.importer === SHADER_RESERVED_IMPORTER_KEY) {
     return { ok: true, value: { skipped: 'shader' } };
@@ -404,10 +420,22 @@ export async function runImport(
       if (
         value === undefined ||
         !Array.isArray(value.assets) ||
-        !Array.isArray(value.artifacts) ||
-        !Array.isArray(value.sourceDependencies)
+        !Array.isArray(value.sourceDependencies) ||
+        'artifacts' in value
       ) {
         throw new Error('importer returned an invalid ImportProduct');
+      }
+      for (const asset of value.assets) {
+        if (
+          asset === null ||
+          typeof asset !== 'object' ||
+          !('artifacts' in asset) ||
+          asset.artifacts === null ||
+          typeof asset.artifacts !== 'object' ||
+          Array.isArray(asset.artifacts)
+        ) {
+          throw new Error('importer returned an asset without local artifacts');
+        }
       }
       product = value;
     }
@@ -470,65 +498,22 @@ export async function runImport(
     );
   }
 
-  // M2 / w7: extract texture bytes into bins and strip data from pack payload.
-  // TextureAsset.data carries raw RGBA bytes; the runner moves them into
-  // RunImportOk.bins (keyed by lowercased GUID) so the pack payload carries
-  // only metadata (width/height/format/colorSpace).
-  const bins = new Map<string, Uint8Array>();
   const declarations = new Map(
     meta.subAssets.map((declaration) => [declaration.guid, declaration]),
   );
+  const productWithDependencies = {
+    ...product,
+    sourceDependencies: [...dependencies],
+  };
+  if (meta.buildPack === false) {
+    return {
+      ok: true,
+      value: { product: productWithDependencies },
+    };
+  }
+
   const assets = produced.map((a) => {
-    const payload = a.payload as unknown as Record<string, unknown>;
     const outputFields = declarationFields(declarations.get(a.guid));
-    if (
-      a.kind === 'texture' &&
-      'data' in payload &&
-      payload.data instanceof Uint8Array &&
-      payload.data.length > 0
-    ) {
-      bins.set(a.guid.toLowerCase(), payload.data);
-      // bug-20260610: even after we strip the texture's RGBA bytes into bins,
-      // the rest of the payload may still hold typed arrays (e.g. SH coeffs
-      // on a CubeTextureAsset). Normalise the auxiliary fields so
-      // JSON.stringify -> JSON.parse roundtrips into shapes the runtime
-      // loaders accept; preserve `data` as `Uint8Array(0)` (the in-memory
-      // contract: data lives in bins, payload.data is a zero-length sentinel
-      // typed-array, not a plain array).
-      const auxNormalised = normaliseForPack(payload) as Record<string, unknown>;
-      return {
-        guid: a.guid,
-        kind: a.kind,
-        ...outputFields,
-        ...(a.name !== undefined ? { name: a.name } : {}),
-        payload: { ...auxNormalised, data: new Uint8Array(0) },
-        refs: a.refs.map((r) => r.guid),
-      };
-    }
-    if (a.kind === 'mesh') {
-      // bug-20260610 Fix A: mesh vertices/indices (typed arrays) move out of
-      // the JSON pack body into a sibling `<guid>.bin` sidecar. Submeshes,
-      // attributes, and aabb travel as a UTF-8 JSON tail in the same .bin so
-      // the catalog row's relativeUrl can point straight at the .bin (D-3) and
-      // the runtime never needs a second `.pack.json` round-trip for mesh.
-      // The pack-body payload becomes the empty sentinel (vertices=[],
-      // indices=[], data=Uint8Array(0)) -- the meshLoader's inline-array path
-      // (CON-7) still sees a parseable empty array and refuses gracefully when
-      // a stray legacy fetch lands on this entry.
-      bins.set(a.guid.toLowerCase(), packMeshBin(payload));
-      return {
-        guid: a.guid,
-        kind: a.kind,
-        ...outputFields,
-        ...(a.name !== undefined ? { name: a.name } : {}),
-        payload: {
-          vertices: [],
-          indices: [],
-          data: new Uint8Array(0),
-        },
-        refs: a.refs.map((r) => r.guid),
-      };
-    }
     return {
       guid: a.guid,
       kind: a.kind,
@@ -544,11 +529,12 @@ export async function runImport(
       // existing pack-fixture test uses (`vertices: Array.from(...)`).
       payload: normaliseForPack(a.payload as unknown) as Record<string, unknown>,
       refs: a.refs.map((r) => r.guid),
+      artifacts: a.artifacts,
     };
   });
 
   const pack: DdcPack = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     ...(meta.packageId !== undefined ? { packageId: meta.packageId } : {}),
     ...(meta.provenance !== undefined ? { provenance: meta.provenance } : {}),
@@ -561,11 +547,9 @@ export async function runImport(
     ok: true,
     value: {
       product: {
-        ...product,
-        sourceDependencies: [...dependencies],
+        ...productWithDependencies,
       },
       pack,
-      ...(bins.size > 0 ? { bins } : {}),
     },
   };
 }

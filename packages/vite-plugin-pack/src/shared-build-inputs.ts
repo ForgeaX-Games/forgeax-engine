@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import type { PackIndexEntry } from '@forgeax/engine-types';
+import { type SemanticDdcInput, semanticDdcKey } from './ddc-cache.js';
 
 export interface PackBuildInputOptions {
   readonly roots?: readonly string[] | undefined;
@@ -10,6 +11,10 @@ export interface PackBuildInputOptions {
 
 export const SHARED_ASSET_PACK_CLASS = 'shared-asset-pack';
 export const SHARED_ASSET_PACK_CATALOG = 'shared-app-inputs/assets/catalog.json';
+
+export function sharedSemanticDdcKey(input: SemanticDdcInput): string {
+  return semanticDdcKey(input);
+}
 
 function normalizeBasePrefix(base: string | undefined): string {
   return (base ?? '/').replace(/\/$/, '');
@@ -31,8 +36,8 @@ export function resolvePackBuildInputs(options: PackBuildInputOptions): {
   return { roots, basePrefix: normalizeBasePrefix(options.base) };
 }
 
-export function projectPackIndexUrl(basePrefix: string, relativeUrl: string): string {
-  return `${basePrefix}/${relativeUrl.replace(/^\/+/, '')}`;
+export function projectPackIndexUrl(basePrefix: string, packageUrl: string): string {
+  return `${basePrefix}/${packageUrl.replace(/^\/+/, '')}`;
 }
 
 export function projectSharedPackCatalog(
@@ -42,7 +47,7 @@ export function projectSharedPackCatalog(
   const basePrefix = normalizeBasePrefix(base);
   return catalog.map((entry) => ({
     ...entry,
-    relativeUrl: projectPackIndexUrl(basePrefix, entry.relativeUrl.replace(/^\/+/, '')),
+    packageUrl: projectPackIndexUrl(basePrefix, entry.packageUrl.replace(/^\/+/, '')),
   }));
 }
 

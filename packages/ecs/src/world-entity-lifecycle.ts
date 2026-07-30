@@ -95,6 +95,7 @@ export function spawnCore(
       world._relationshipOnInsert(spawnedEntity, cd.component as Component, filled);
     }
   }
+  world._markStructureChanged();
   return ok(spawnedEntity);
 }
 
@@ -143,6 +144,7 @@ export function despawnCore(
     if (!isRetiredSlot(record.generation)) world._getFreeIndices().push(slot);
   }
   for (const child of linkedChildren) despawnCore(world, child, true);
+  world._markStructureChanged();
   return ok(undefined);
 }
 

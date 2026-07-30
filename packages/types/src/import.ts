@@ -1,4 +1,5 @@
-import type { Asset, AssetRef, ImageError, PackIndexEntry, TextureAsset } from './index.js';
+import type { PackIndexEntry } from './catalog.js';
+import type { Asset, AssetCodec, AssetRef, ImageError, TextureAsset } from './index.js';
 
 // === Import contract SSOT (feat-20260603-asset-import-loader-injection M2 / w12) ===
 //
@@ -200,6 +201,7 @@ export interface ImportedAsset<P = Asset> {
   readonly name?: string;
   readonly payload: P;
   readonly refs: readonly AssetRef[];
+  readonly artifacts: Readonly<Record<string, ImportedArtifactBody>>;
 }
 
 /**
@@ -320,17 +322,16 @@ export interface ImportTransport {
 /** A normalized filesystem path observed by an importer read attempt. */
 export type SourceDependency = string;
 
-/** A build artifact emitted alongside the imported asset payload. */
-export interface ImportedArtifact {
-  readonly path: string;
-  readonly mimeType: string;
+/** Logical artifact content emitted by one imported asset. */
+export interface ImportedArtifactBody {
+  readonly mediaType: string;
+  readonly assetCodec?: AssetCodec;
   readonly bytes: Uint8Array;
 }
 
 /** Generic import output shared by every importer and transport. */
 export interface ImportProduct<P = Asset> {
   readonly assets: readonly ImportedAsset<P>[];
-  readonly artifacts: readonly ImportedArtifact[];
   readonly sourceDependencies: readonly SourceDependency[];
 }
 

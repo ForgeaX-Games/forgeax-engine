@@ -46,6 +46,8 @@ import {
   type Asset,
   type AssetEnvelope,
   AssetError,
+  type AssetEvidence,
+  type AssetEvidenceError,
   type AssetRef,
   type CatalogEntry,
   type EngineMetrics,
@@ -102,7 +104,13 @@ import {
   HANDLE_TRIANGLE,
 } from './handles';
 import { inferAtlasExtent, validateMeshPayload, validateTilesetPayload } from './payload-validate';
-import { type CatalogRecord, createInlineCatalogRecord, fetchPackIndex } from './registry/catalog';
+import { ArtifactReadCache } from './registry/artifact-io';
+import {
+  createRuntimeAssetEvidenceAdapter,
+  type RuntimeAssetEvidenceAdapter,
+  type RuntimeEvidenceSource,
+} from './registry/asset-evidence';
+import { type CatalogRecord, fetchPackIndex } from './registry/catalog';
 import {
   instantiateFlat as instantiateFlatImpl,
   instantiate as instantiateImpl,
@@ -116,6 +124,7 @@ import {
   parseAssetPayload as parseAssetPayloadImpl,
   registerPackagesFromIndex,
 } from './registry/load-by-guid';
+import { LoadStateStore } from './registry/load-state';
 import {
   detectTileNeedsRepeatSampler,
   materialShaderTextureFieldNames as materialShaderTextureFieldNamesImpl,
@@ -148,9 +157,9 @@ export {
 export {
   equirectLoader,
   fontLoader,
+  PACK_ARTIFACT_LOADERS,
   textureLoader,
-  UPSTREAM_ENTRY_LOADERS,
-} from './loaders/upstream-entry';
+} from './loaders/pack-artifact';
 export { type TilesetValidateOptions, validateTilesetPayload } from './payload-validate';
 
 // ─── Re-exports for engine-runtime-local consumers ──────────────────────────
@@ -235,11 +244,14 @@ interface MutablePackage {
 // cached -- parseAssetPayload still runs per-call to look up the per-GUID
 // entry (CON-2 register-before-recurse cycle safety).
 export interface ParsedPackFile {
+  schemaVersion?: string;
+  kind?: string;
   assets: Array<{
     guid: string;
     kind: string;
     payload: Record<string, unknown>;
     refs?: string[];
+    artifacts?: Record<string, import('@forgeax/engine-types').ArtifactDescriptor>;
   }>;
 }
 
@@ -302,11 +314,14 @@ export class AssetRegistry {
     new Map();
 
   // bug-20260610 Fix B (M3 / D-4): per-instance pack-file cache keyed by
-  // relativeUrl (the .pack.json URL). `packFileInFlight` de-duplicates
+  // packageUrl (the .pack.json URL). `packFileInFlight` de-duplicates
   // concurrent fetches; `packFileCache` stores resolved bodies so the
   // same URL is fetched at most once per AssetRegistry lifetime (CON-6).
   readonly packFileCache: Map<string, ParsedPackFile> = new Map();
   readonly packFileInFlight: Map<string, Promise<ParsedPackFile>> = new Map();
+  readonly artifactCache = new ArtifactReadCache();
+  readonly loadState = new LoadStateStore();
+  private assetEvidenceAdapter: RuntimeAssetEvidenceAdapter = createRuntimeAssetEvidenceAdapter();
 
   // feat-20260621-asset-registry-robustness-invalidate-inflight-cach F17c:
   // per-GUID generation counter incremented on each invalidate(guid) call.
@@ -459,6 +474,7 @@ export class AssetRegistry {
           payload,
           refs: [],
         });
+      if (payload !== undefined) this.loadState.registerReady(guidStr, payload);
     }
     // D-5: builtin meshes have no import path and no source name -- register
     // them with a null package so resolveName returns '' (the detectable
@@ -491,6 +507,15 @@ export class AssetRegistry {
    */
   setTranscodeCaps(caps: TranscodeCaps): void {
     this.transcodeCaps = caps;
+  }
+
+  /**
+   * Inject authoritative runtime evidence without importing CLI or Node policy.
+   * `inspect(guid)` and `verifyByGuid(guid)` return the shared state model; an
+   * omitted capability remains an explicit structured error, never a pass.
+   */
+  configureAssetEvidence(source: RuntimeEvidenceSource): void {
+    this.assetEvidenceAdapter = createRuntimeAssetEvidenceAdapter(source);
   }
 
   /**
@@ -552,12 +577,12 @@ export class AssetRegistry {
    * feat-20260621 F17c: invalidate a single cached asset by GUID so the next
    * `loadByGuid` performs a genuinely fresh fetch. Clears, for this GUID only:
    * the catalogue entry, the in-flight dedup entry, the cached pack-file body
-   * (keyed by the index entry's relativeUrl), and the pack-index entry. Then
+   * (keyed by the index entry's packageUrl), and the pack-index entry. Then
    * increments the per-GUID generation counter so any still in-flight Promise
    * for this GUID discards its result (returns `asset-invalidated`). The body +
    * index clears are targeted (other GUIDs' cached bodies and index entries
    * survive); deleting the index entry forces `resolveCatalogEntry` to re-fetch
-   * the pack-index on the next load, re-resolving the relativeUrl whose body
+   * the pack-index on the next load, re-resolving the packageUrl whose body
    * cache was just dropped. No-op when the GUID is not catalogued.
    *
    * Does NOT touch `packages` (a re-load's registerPackage overwrites them; D-8)
@@ -568,25 +593,25 @@ export class AssetRegistry {
    */
   invalidate(guid: string): void {
     const guidKey = guid.toLowerCase();
-    // D-6: preserve the resolved display identity across the delete. A
-    // single-asset package derives its name from the package path, so the
-    // envelope may not carry a stored name even though `resolveName()` is
-    // non-empty. Without parking that derived name, a dev re-import changes
-    // `sky.hdr` into the DDC `.bin` filename after invalidate/reload.
-    const survivingName = this.resolveName(guidKey);
-    if (survivingName !== '') this.pendingNames.set(guidKey, survivingName);
+    // D-6: the stored name lives on the envelope; preserve it across the delete
+    // (the `packages` mapping survives, so resolveName must still see the name
+    // until a re-load's registerPackage overwrites it) by parking it on
+    // pendingNames -- the next catalog() of this GUID drains it back.
+    const survivingName = this.assetCatalog.get(guidKey)?.name;
+    if (survivingName !== undefined) this.pendingNames.set(guidKey, survivingName);
     this.assetCatalog.delete(guidKey);
+    this.loadState.remove(guidKey);
     // R-1 hard fix (research-decisions.md): delete inFlight entry so the
     // next loadByGuid does not hit the old Promise whose generation no
     // longer matches (AC-04 requires a fresh fetch, not asset-invalidated).
     this.inFlight.delete(guidKey);
     // Round-2 M-A: widen the clear so a COMPLETED reload re-fetches fresh
     // bytes instead of serving the stale cached body. Ordering is load-bearing:
-    // read relativeUrl from the index entry FIRST, then delete the body, then
+    // read packageUrl from the index entry FIRST, then delete the body, then
     // delete the index entry. Targeted delete (not wholesale undefined) keeps
     // other GUIDs' cached bodies/index entries intact (per-GUID precision).
     const entry = this.packIndexCache?.get(guidKey);
-    if (entry !== undefined) this.packFileCache.delete(entry.relativeUrl);
+    if (entry !== undefined) this.packFileCache.delete(entry.packageUrl);
     this.packIndexCache?.delete(guidKey);
     this.generations.set(guidKey, (this.generations.get(guidKey) ?? 0) + 1);
   }
@@ -608,11 +633,12 @@ export class AssetRegistry {
   invalidateAll(): { clearedCount: number } {
     const count = this.assetCatalog.size;
     this.assetCatalog.clear();
+    this.loadState.clear();
     this.inFlight.clear();
     this.globalGeneration++;
     // Round-2 M-A: wholesale clear of the shared body cache, and reset the
     // index cache to UNDEFINED (R2-1) -- NOT .clear(). packFileCache uses
-    // .clear() because fetchPackFile checks `.get(relativeUrl)` per URL, so an
+    // .clear() because fetchPackFile checks `.get(packageUrl)` per URL, so an
     // empty Map correctly misses and re-fetches. packIndexCache uses =undefined
     // because resolveCatalogEntry's re-fetch guard tests `=== undefined`; an
     // empty Map would short-circuit it and serve asset-not-imported for every
@@ -1047,6 +1073,7 @@ export class AssetRegistry {
       payload: stored,
       refs: refs ?? [],
     });
+    this.loadState.registerReady(key, stored);
     // D-1: catalog() inline path defaults every GUID to the no-package state
     // (null). loadByGuid + builtin override via their own registerPackage calls
     // before / after this so the package mapping is populated for all assets
@@ -1061,7 +1088,7 @@ export class AssetRegistry {
    * package-mapping write primitive. All three registration entry points funnel
    * here so the XOR name invariant is implemented once (#1 SSOT):
    *   - catalog() inline path -> registerPackage(null, [guid])          (no package)
-   *   - loadByGuid disk path  -> registerPackage(relativeUrl, [g1,g2,...], names)
+   *   - loadByGuid disk path  -> registerPackage(packageUrl, [g1,g2,...], names)
    *   - constructor builtin    -> registerPackage(null, [...guids])      (D-5 null)
    *
    * `path === null` registers the GUIDs with no package (resolveName reads their
@@ -1288,7 +1315,11 @@ export class AssetRegistry {
   lookup<T = Asset>(guid: AssetGuid | string): T | undefined {
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
-    return this.assetCatalog.get(key)?.payload as T | undefined;
+    const ready = this.loadState.getReady<T>(key);
+    if (ready !== undefined) return ready;
+    if (this.packIndexUrl === undefined)
+      return this.assetCatalog.get(key)?.payload as T | undefined;
+    return undefined;
   }
 
   /**
@@ -1355,7 +1386,12 @@ export class AssetRegistry {
   }): Result<{ asset: Asset; refs: readonly string[] }, AssetError> {
     return parseAndReturnAssetImpl(this, assetEntry);
   }
-  inspect(): InspectSnapshot {
+  /** Return the legacy catalog snapshot when no GUID is supplied. */
+  inspect(): InspectSnapshot;
+  /** Return joined source/cook/package/runtime evidence for one GUID. */
+  inspect(guid: string): Promise<Result<AssetEvidence, AssetEvidenceError>>;
+  inspect(guid?: string): InspectSnapshot | Promise<Result<AssetEvidence, AssetEvidenceError>> {
+    if (guid !== undefined) return this.assetEvidenceAdapter.inspect(guid);
     const assets: InspectEntry[] = [];
     for (const [guid, envelope] of this.assetCatalog) {
       assets.push({
@@ -1367,12 +1403,17 @@ export class AssetRegistry {
     return { assets };
   }
 
+  /** Verify the same GUID evidence chain through the injected SDK capability. */
+  verifyByGuid(guid: string): Promise<Result<AssetEvidence, AssetEvidenceError>> {
+    return this.assetEvidenceAdapter.verifyByGuid(guid);
+  }
+
   /**
    * Return a readonly snapshot of all catalogued assets (inlined + pack-index)
    * for enumeration by asset panels (AC-03 single source of truth).
    *
    * Merges entries from the private `packIndexCache` (prod path, carries
-   * `relativeUrl`) and `assetCatalog` (inlined / dev path, no URL). Each
+   * `packageUrl`) and `assetCatalog` (inlined / dev path, no URL). Each
    * GUID appears exactly once. Returns a fresh array on every call — the
    * internal Maps are never exposed (charter P4 consistent abstraction).
    *
@@ -1381,19 +1422,70 @@ export class AssetRegistry {
    * @example
    * ```ts
    * for (const e of registry.listCatalog()) {
-   *   console.log(e.guid, e.kind, e.name, e.relativeUrl);
+   *   console.log(e.guid, e.kind, e.name, e.packageUrl);
    * }
    * ```
    */
-  listCatalog(): readonly (CatalogRecord & { guid: string })[] {
+  listCatalog(): readonly {
+    guid: string;
+    kind: string;
+    name?: string;
+    packageUrl: string;
+    packageId?: CatalogEntry['packageId'];
+    provenance?: CatalogEntry['provenance'];
+    revision?: CatalogEntry['revision'];
+    sourceKey?: CatalogEntry['sourceKey'];
+    sourceIndex?: CatalogEntry['sourceIndex'];
+    relations?: CatalogEntry['relations'];
+    diagnostics?: CatalogEntry['diagnostics'];
+    refs?: readonly string[];
+    /**
+     * On-disk source-file path for external imported assets (FBX / GLB / HDR /
+     * audio / font), relative to the game root. Editors locate the
+     * `.meta.json` sidecar via `sourcePath + '.meta.json'` for CRUD; unlike
+     * `packageUrl` (the runtime load artefact) it is stable across DDC cook
+     * state. `undefined` for inline / dev-path assets (no sidecar, no CRUD).
+     */
+    sourcePath?: string;
+  }[] {
     const seen = new Set<string>();
-    const result: (CatalogRecord & { guid: string })[] = [];
+    const result: {
+      guid: string;
+      kind: string;
+      name?: string;
+      packageUrl: string;
+      packageId?: CatalogEntry['packageId'];
+      provenance?: CatalogEntry['provenance'];
+      revision?: CatalogEntry['revision'];
+      sourceKey?: CatalogEntry['sourceKey'];
+      sourceIndex?: CatalogEntry['sourceIndex'];
+      relations?: CatalogEntry['relations'];
+      diagnostics?: CatalogEntry['diagnostics'];
+      refs?: readonly string[];
+      sourcePath?: string;
+      cookReceiptUrl?: string;
+    }[] = [];
 
-    // Prod entries: packIndexCache carries relativeUrl + optional name + refs.
+    // Prod entries: packIndexCache carries packageUrl + optional name + refs.
     if (this.packIndexCache) {
       for (const [guidKey, entry] of this.packIndexCache) {
         seen.add(guidKey);
-        result.push({ guid: guidKey, ...entry });
+        result.push({
+          guid: guidKey,
+          kind: entry.kind,
+          ...(entry.name !== undefined ? { name: entry.name } : {}),
+          packageUrl: entry.packageUrl,
+          ...(entry.packageId !== undefined ? { packageId: entry.packageId } : {}),
+          ...(entry.provenance !== undefined ? { provenance: entry.provenance } : {}),
+          ...(entry.revision !== undefined ? { revision: entry.revision } : {}),
+          ...(entry.sourceKey !== undefined ? { sourceKey: entry.sourceKey } : {}),
+          ...(entry.sourceIndex !== undefined ? { sourceIndex: entry.sourceIndex } : {}),
+          ...(entry.relations !== undefined ? { relations: entry.relations } : {}),
+          ...(entry.diagnostics !== undefined ? { diagnostics: entry.diagnostics } : {}),
+          ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
+          ...(entry.sourcePath !== undefined ? { sourcePath: entry.sourcePath } : {}),
+          ...(entry.cookReceiptUrl !== undefined ? { cookReceiptUrl: entry.cookReceiptUrl } : {}),
+        });
       }
     }
 
@@ -1403,7 +1495,13 @@ export class AssetRegistry {
     for (const [guidKey, envelope] of this.assetCatalog) {
       if (!seen.has(guidKey)) {
         const name = envelope.name ?? this.resolveName(guidKey);
-        result.push({ guid: guidKey, ...createInlineCatalogRecord(envelope, name) });
+        result.push({
+          guid: guidKey,
+          kind: envelope.payload.kind,
+          name,
+          packageUrl: '',
+          ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((r) => r.guid) } : {}),
+        });
       }
     }
 

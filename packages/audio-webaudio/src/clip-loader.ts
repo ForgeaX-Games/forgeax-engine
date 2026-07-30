@@ -18,79 +18,24 @@ import { AudioError } from '@forgeax/engine-audio';
 import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AudioClipAsset } from '@forgeax/engine-types';
 
-/**
- * Load an AudioClipAsset from a pack-index entry.
- *
- * Path: fetch(relativeUrl) -> arrayBuffer() -> decodeAudioData(arrayBuffer) -> AudioClipAsset.
- *
- * Uses a temporary AudioContext for decoding (not the audio engine's context).
- * The decoded AudioBuffer is shared across all handles pointing to the same GUID.
- *
- * Returns:
- * - `Ok(AudioClipAsset)` on success
- * - `Err(AudioError)` with structured error codes:
- *   - `decode-failed`: decodeAudioData rejected (corrupt file or unsupported codec)
- *
- * @param guid Pack-index GUID of the audio asset (for error tracing)
- * @param relativeUrl HTTP path to the audio file (from PackIndexEntry.relativeUrl)
- */
-export async function loadAudioClipByGuid(
+export async function decodeAudioClipBytes(
   guid: string,
-  relativeUrl: string,
+  bytes: Uint8Array,
 ): Promise<Result<AudioClipAsset, AudioError>> {
-  // Step 1: fetch the audio file as ArrayBuffer
-  let arrayBuffer: ArrayBuffer;
-  try {
-    const response = await fetch(relativeUrl);
-    if (!response.ok) {
-      return err(
-        new AudioError({
-          code: 'decode-failed',
-          expected: `HTTP 200 for audio asset at ${relativeUrl}`,
-          hint: `asset guid ${guid}: HTTP ${response.status} fetching ${relativeUrl}`,
-          detail: {
-            code: 'decode-failed' as const,
-            reason: `HTTP ${response.status}: ${response.statusText}`,
-          },
-        }),
-      );
-    }
-    arrayBuffer = await response.arrayBuffer();
-  } catch (e) {
-    return err(
-      new AudioError({
-        code: 'decode-failed',
-        expected: `fetchable audio asset at ${relativeUrl}`,
-        hint: `asset guid ${guid}: network error fetching ${relativeUrl}`,
-        detail: {
-          code: 'decode-failed' as const,
-          reason: e instanceof Error ? e.message : 'fetch failed',
-        },
-      }),
-    );
-  }
-
-  // Step 2: decode AudioBuffer via a temporary AudioContext
   try {
     const ctx = new AudioContext();
-    const buffer = await ctx.decodeAudioData(arrayBuffer);
+    const buffer = await ctx.decodeAudioData(bytes.slice().buffer as ArrayBuffer);
     await ctx.close();
-
-    const asset: AudioClipAsset = {
-      kind: 'audio',
-      buffer,
-    };
-
-    return ok(asset);
+    return ok({ kind: 'audio', buffer });
   } catch (e) {
     return err(
       new AudioError({
         code: 'decode-failed',
-        expected: 'decodeAudioData succeeds for valid audio file',
-        hint: 'ensure the audio file is a valid wav/mp3/ogg/flac supported by the browser',
+        expected: `decodable audio artifact bytes for GUID ${guid}`,
+        hint: 'verify the audio artifact mediaType and browser-supported codec',
         detail: {
           code: 'decode-failed' as const,
-          reason: e instanceof Error ? e.message : 'decodeAudioData failed',
+          reason: e instanceof Error ? e.message : 'audio artifact decode failed',
         },
       }),
     );

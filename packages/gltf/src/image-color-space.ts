@@ -5,8 +5,8 @@
 // texture slots are colour-encoded vs data-encoded:
 //   - sRGB    : baseColorTexture, emissiveTexture
 //   - linear  : metallicRoughnessTexture, normalTexture, occlusionTexture
-// MaterialIr today only carries baseColor / metallicRoughness / normal
-// (Tier-C subset; emissive + occlusion arrive when MaterialIr expands).
+// MaterialIr carries baseColor / metallicRoughness / normal / emissive;
+// occlusion remains outside this Tier-C subset.
 // We pre-scan the doc so the gltfImporter knows each `images[]` row's
 // colorSpace before decoding (TextureAsset.colorSpace + .format derive
 // from this).

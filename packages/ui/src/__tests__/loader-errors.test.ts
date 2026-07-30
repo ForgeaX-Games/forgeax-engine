@@ -16,4 +16,20 @@ describe('ui loader errors', () => {
     const result = createUiLoader().load({ guid: 'a', html: '<div/>', css: '' });
     expect(result.ok).toBe(true);
   });
+
+  it('accepts Pack v2 loader input and rejects a catalog row as content', () => {
+    const loader = createUiLoader();
+    const result = loader.load({
+      guid: 'a',
+      kind: 'ui',
+      payload: { guid: 'a', html: '<div/>', css: '' },
+      refs: [],
+      artifacts: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(loader.load({ guid: 'a', packageUrl: '/a.ui.html' })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-asset' },
+    });
+  });
 });

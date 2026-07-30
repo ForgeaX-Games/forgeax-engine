@@ -13,6 +13,19 @@
 // SpotLight / PointLightShadow component validators (forward cross-directory
 // import, no cycle -- research Finding C2).
 
+import type {
+  RenderFeatureCapabilityMissingDetail,
+  RenderFeatureDrawRecordingFailedDetail,
+  RenderFeatureErrorCode,
+  RenderFeaturePassOrderConflictDetail,
+  RenderFeaturePreparationFailedDetail,
+  RenderFeaturePreparedStateMismatchDetail,
+  RenderFeatureRecovery,
+  RenderFeatureRegistrationConflictDetail,
+  RenderFeatureStage,
+  RenderFeatureStageFailedDetail,
+} from '../features/types';
+
 // ── ShadowInvalidConfigError ──────────────────────────────────────────────
 
 /**
@@ -635,6 +648,186 @@ export class MaterialSkinAttrMissingError extends Error {
   }
 }
 
+// -- RenderFeature errors ---------------------------------------------------
+
+export class RenderFeatureRegistrationConflictError extends Error {
+  readonly code = 'render-feature-registration-conflict' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeatureRegistrationConflictDetail;
+
+  constructor(featureIdentity: string, order: number, conflictingOrder: number) {
+    const expected = `feature identity '${featureIdentity}' is unique`;
+    const hint = `rename '${featureIdentity}' or remove the duplicate feature before registration`;
+    super(`render feature registration conflict for '${featureIdentity}'`);
+    this.name = 'RenderFeatureRegistrationConflictError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { featureIdentity, order, conflictingOrder };
+  }
+}
+
+export class RenderFeatureStageFailedError extends Error {
+  readonly code = 'render-feature-stage-failed' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeatureStageFailedDetail;
+
+  constructor(
+    featureIdentity: string,
+    order: number,
+    stage: RenderFeatureStage,
+    recovery: RenderFeatureRecovery,
+  ) {
+    const expected = `feature '${featureIdentity}' completes its ${stage} stage without an error`;
+    let hint: string;
+    switch (recovery) {
+      case 'next-frame':
+        hint = `correct '${featureIdentity}' ${stage} data and retry on the next frame`;
+        break;
+      case 'renderer-recover':
+        hint = `wait for renderer recovery before retrying '${featureIdentity}'`;
+        break;
+      case 'registration':
+        hint = `correct '${featureIdentity}' registration before retrying`;
+        break;
+    }
+    super(`render feature '${featureIdentity}' failed during ${stage}`);
+    this.name = 'RenderFeatureStageFailedError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { featureIdentity, order, stage, recovery };
+  }
+}
+
+export class RenderFeatureCapabilityMissingError extends Error {
+  readonly code = 'render-feature-capability-missing' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeatureCapabilityMissingDetail;
+
+  constructor(
+    featureIdentity: string,
+    order: number,
+    capability: RenderFeatureCapabilityMissingDetail['capability'],
+  ) {
+    const expected = `device capability '${capability}' is available for feature '${featureIdentity}'`;
+    const hint = `disable '${featureIdentity}' or use a device with '${capability}' capability`;
+    super(`render feature '${featureIdentity}' requires missing capability '${capability}'`);
+    this.name = 'RenderFeatureCapabilityMissingError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { featureIdentity, order, capability };
+  }
+}
+
+export class RenderFeaturePassOrderConflictError extends Error {
+  readonly code = 'render-feature-pass-order-conflict' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeaturePassOrderConflictDetail;
+
+  constructor(
+    featureIdentity: string,
+    order: number,
+    passIdentity: string,
+    dependencyIdentity: string,
+  ) {
+    const expected = `feature pass '${passIdentity}' follows dependency '${dependencyIdentity}'`;
+    const hint = `reorder '${featureIdentity}' passes so '${passIdentity}' follows '${dependencyIdentity}'`;
+    super(`render feature '${featureIdentity}' pass order conflict`);
+    this.name = 'RenderFeaturePassOrderConflictError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { featureIdentity, order, passIdentity, dependencyIdentity };
+  }
+}
+
+export class RenderFeaturePreparationFailedError extends Error {
+  readonly code = 'render-feature-preparation-failed' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeaturePreparationFailedDetail;
+
+  constructor(
+    featureIdentity: string,
+    order: number,
+    operation: string,
+    resourceKind: RenderFeaturePreparationFailedDetail['resourceKind'],
+    resourceName: string,
+    reason: string,
+    recovery: RenderFeatureRecovery,
+  ) {
+    const expected = `${resourceKind} '${resourceName}' is prepared during ${operation}`;
+    const hint = `repair '${resourceName}' and retry feature '${featureIdentity}' on ${recovery}`;
+    super(`render feature '${featureIdentity}' preparation failed for '${resourceName}'`);
+    this.name = 'RenderFeaturePreparationFailedError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = {
+      featureIdentity,
+      order,
+      stage: 'prepare',
+      operation,
+      resourceKind,
+      resourceName,
+      reason,
+      recovery,
+    };
+  }
+}
+
+export class RenderFeaturePreparedStateMismatchError extends Error {
+  readonly code = 'render-feature-prepared-state-mismatch' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeaturePreparedStateMismatchDetail;
+
+  constructor(detail: RenderFeaturePreparedStateMismatchDetail) {
+    const expected = `${detail.resourceKind} state is compatible for '${detail.operation}'`;
+    const hint = `repair '${detail.reason}' for feature '${detail.featureIdentity}' and retry`;
+    super(`render feature '${detail.featureIdentity}' prepared state mismatch`);
+    this.name = 'RenderFeaturePreparedStateMismatchError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = detail;
+  }
+}
+
+export class RenderFeatureDrawRecordingFailedError extends Error {
+  readonly code = 'render-feature-draw-recording-failed' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderFeatureDrawRecordingFailedDetail;
+
+  constructor(
+    featureIdentity: string,
+    order: number,
+    operation: string,
+    resourceKind: RenderFeatureDrawRecordingFailedDetail['resourceKind'],
+    reason: string,
+    backendReason: string,
+    recovery: RenderFeatureRecovery,
+  ) {
+    const expected = `${resourceKind} recording succeeds for '${operation}'`;
+    const hint = `repair '${reason}' and retry feature '${featureIdentity}' after ${recovery}`;
+    super(`render feature '${featureIdentity}' draw recording failed`);
+    this.name = 'RenderFeatureDrawRecordingFailedError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = {
+      featureIdentity,
+      order,
+      stage: 'record',
+      operation,
+      resourceKind,
+      reason,
+      backendReason,
+      recovery,
+    };
+  }
+}
+
 // -- RenderErrorCode / RenderError closed unions --------------------------------
 
 /**
@@ -656,7 +849,8 @@ export type RenderErrorCode =
   | 'vertex-storage-buffer-unavailable'
   | 'skin-palette-overflow'
   | 'skin-material-mismatch'
-  | 'material-skin-attr-missing';
+  | 'material-skin-attr-missing'
+  | RenderFeatureErrorCode;
 
 /**
  * Closed union of the render-cluster structured error classes, each carrying a
@@ -677,4 +871,11 @@ export type RenderError =
   | VertexStorageBufferUnavailableError
   | SkinPaletteOverflowError
   | SkinMaterialMismatchError
-  | MaterialSkinAttrMissingError;
+  | MaterialSkinAttrMissingError
+  | RenderFeatureRegistrationConflictError
+  | RenderFeatureStageFailedError
+  | RenderFeatureCapabilityMissingError
+  | RenderFeaturePassOrderConflictError
+  | RenderFeaturePreparationFailedError
+  | RenderFeaturePreparedStateMismatchError
+  | RenderFeatureDrawRecordingFailedError;

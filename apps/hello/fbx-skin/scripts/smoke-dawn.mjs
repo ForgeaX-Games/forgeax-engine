@@ -244,7 +244,7 @@ try {
 // each pack-body asset entry keeps the importer's on-disk shape: numeric
 // refs-index handle fields in the scene payload + a GUID-string refs[] list.
 // parseScenePayload (canonical decode) resolves those handles at loadByGuid time.
-// The mesh row's relativeUrl is a `.pack.json` (NOT a `.bin`), so the mesh flows
+// The mesh row's packageUrl is a Pack v2 package (NOT a raw `.bin`), so the mesh flows
 // through the inline meshLoader path; every loader accepts the typed arrays the
 // importer produced because the pack bytes are served in-memory (no JSON.stringify
 // round-trip flattens them).
@@ -256,21 +256,36 @@ if (!imported.ok) {
 const importedAssets = imported.value.assets;
 const PACK_URL = '/humanoid.pack.json';
 const PACK_INDEX_URL = '/pack-index.json';
+const artifactBytes = new Map();
 const packIndex = importedAssets.map((a) => ({
   guid: a.guid,
-  relativeUrl: PACK_URL,
+  packageUrl: PACK_URL,
   kind: a.kind,
   sourcePath: HUMANOID_FBX,
   ...(a.name !== undefined ? { name: a.name } : {}),
 }));
 const packBody = {
-  schemaVersion: 1,
-  kind: 'external-asset-package',
+  schemaVersion: '2.0.0',
+  kind: 'internal-text-package',
   assets: importedAssets.map((a) => ({
     guid: a.guid,
     kind: a.kind,
     payload: a.payload,
     refs: (a.refs ?? []).map((r) => r.guid),
+    artifacts: Object.fromEntries(
+      Object.entries(a.artifacts ?? {}).map(([key, artifact]) => {
+        const path = `artifacts/${a.guid}/${key}`;
+        artifactBytes.set(`/${path}`, artifact.bytes);
+        return [
+          key,
+          {
+            path,
+            mediaType: artifact.mediaType,
+            byteLength: artifact.bytes.byteLength,
+          },
+        ];
+      }),
+    ),
   })),
 };
 console.log(`[smoke] cooked in-memory pack: ${packIndex.length} entries from fbxImporter.import`);
@@ -283,7 +298,7 @@ globalThis.fetch = async (url, ...rest) => {
   if (urlStr.startsWith('data:')) return originalFetch(url, ...rest);
   if (urlStr === PACK_INDEX_URL) {
     // Return the array object directly (no JSON.stringify) so nothing is copied
-    // unnecessarily; fetchPackIndex only reads guid/relativeUrl/kind/name.
+    // unnecessarily; fetchPackIndex only reads guid/packageUrl/kind/name.
     return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
   if (urlStr === PACK_URL) {
@@ -291,6 +306,15 @@ globalThis.fetch = async (url, ...rest) => {
     // skeleton / clip payloads survive because there is no serialise/parse hop
     // (the loaders' dual contract accepts Float32Array / Uint16Array directly).
     return { ok: true, json: () => Promise.resolve(packBody), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+  }
+  const artifactPath = new URL(urlStr, 'http://asset.local').pathname;
+  if (artifactBytes.has(artifactPath)) {
+    const bytes = artifactBytes.get(artifactPath);
+    return {
+      ok: true,
+      arrayBuffer: () => Promise.resolve(bytes.slice().buffer),
+      json: () => Promise.reject(new Error('artifact is binary, not JSON')),
+    };
   }
   return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
 };

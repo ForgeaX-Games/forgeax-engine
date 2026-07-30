@@ -19,7 +19,7 @@ import type {
   VirtualJoystickConfig,
 } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
-import type { Plugin, PluginError } from '@forgeax/engine-plugin';
+import type { PluginError, PluginSource } from '@forgeax/engine-plugin';
 import type { Renderer, RendererError } from '@forgeax/engine-render';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -109,7 +109,7 @@ export interface AppAssembleArgs {
   readonly renderer: Renderer;
   readonly world: World;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
-  readonly plugins?: Plugin[];
+  readonly plugins?: readonly PluginSource[];
   readonly silenceUnhandledErrors?: boolean;
   /**
    * Per-frame draw-source injection seam (M2 / D-3). When supplied, the
@@ -137,7 +137,7 @@ export interface CreateAppOptions {
   /** Host-owned UI root whose events do not enter gameplay input. */
   readonly uiRoot?: Node;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
-  readonly plugins?: Plugin[];
+  readonly plugins?: readonly PluginSource[];
   /**
    * A host-owned input backend for this canvas. When supplied, createApp inserts
    * it into the World instead of attaching a second browser listener set. The

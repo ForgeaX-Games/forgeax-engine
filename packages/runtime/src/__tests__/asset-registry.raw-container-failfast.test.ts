@@ -2,16 +2,16 @@
 //
 // Regression for the city_Sample_512 slowness. The gltf/fbx catalog arm
 // (vite-plugin-pack build-catalog) emits thin mesh/material/scene rows whose
-// relativeUrl is the RAW source container (`.glb` / `.gltf` / `.fbx`); the
+// packageUrl is the RAW source container (`.glb` / `.gltf` / `.fbx`); the
 // per-sub-asset importer artifact (`.<guid>.bin` / `.pack.json`) only exists
 // AFTER the ImportTransport (dev `POST /__import/:guid`) parses the container.
 //
-// Before the fix, a material/mesh/scene row with a raw `.glb` relativeUrl was
+// Before the fix, a material/mesh/scene row with a raw `.glb` packageUrl was
 // fetched + `res.json()`-parsed FIRST (throws on binary glTF) before falling
 // through to the transport -- so a 1028-sub-asset GLB re-downloaded the 62 MB
 // container ~707x (once per non-texture sub-asset), ~5 min add-to-scene.
 //
-// The fix fails fast in ddcLoad: a non-upstream sub-asset whose relativeUrl is a
+// The fix fails fast in ddcLoad: a non-upstream sub-asset whose packageUrl is a
 // raw container returns asset-not-imported (transport-eligible) WITHOUT fetching
 // the container, mirroring the texture path's pre-fetch `.bin`-suffix guard.
 //
@@ -44,7 +44,7 @@ function parseGuid(g: string): AssetGuid {
 // artifact). Minimal valid unlit material.
 function importedMaterialPack() {
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -61,6 +61,7 @@ function importedMaterialPack() {
           ],
         },
         refs: [],
+        artifacts: {},
       },
     ],
   };
@@ -78,9 +79,75 @@ describe('raw-container fail-fast (perf-20260706)', () => {
     globalThis.fetch = originalFetch;
   });
 
+  it('loads a local Pack v2 package without a raw source or suffix arm', async () => {
+    const packIndex = [
+      { guid: MAT_GUID, packageUrl: '/assets/material.pack.json', kind: 'material' },
+    ];
+    const pack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MAT_GUID,
+          kind: 'material',
+          payload: {
+            passes: [
+              {
+                name: 'forward',
+                shader: 'test::dummy',
+                tags: { LightMode: 'Forward' },
+                paramValues: {},
+              },
+            ],
+          },
+          refs: [],
+          artifacts: {},
+        },
+      ],
+    };
+    globalThis.fetch = vi.fn().mockImplementation((input: string) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (url === PACK_INDEX_URL)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      if (url === '/assets/material.pack.json')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(pack) });
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    const reg = new AssetRegistry(makeMockShaderRegistry());
+    reg.configurePackIndex(PACK_INDEX_URL);
+    const result = await reg.loadByGuid(parseGuid(MAT_GUID));
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a legacy top-level payload even when the catalog uses packageUrl', async () => {
+    const packIndex = [
+      { guid: MAT_GUID, packageUrl: '/assets/legacy.pack.json', kind: 'material' },
+    ];
+    const legacyPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [{ guid: MAT_GUID, kind: 'material', payload: { passes: [] }, refs: [] }],
+    };
+    globalThis.fetch = vi.fn().mockImplementation((input: string) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (url === PACK_INDEX_URL)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      if (url === '/assets/legacy.pack.json')
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(legacyPack) });
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    const reg = new AssetRegistry(makeMockShaderRegistry());
+    reg.configurePackIndex(PACK_INDEX_URL);
+    const result = await reg.loadByGuid(parseGuid(MAT_GUID));
+    expect(result.ok).toBe(false);
+  });
+
   it('never fetches the raw .glb; routes through transport; loads from imported .pack.json', async () => {
-    // Pack-index: a single material row whose relativeUrl is the RAW .glb.
-    const packIndex = [{ guid: MAT_GUID, relativeUrl: RAW_GLB_URL, kind: 'material' }];
+    // Pack-index: a single material row whose packageUrl is the RAW .glb.
+    const packIndex = [{ guid: MAT_GUID, packageUrl: RAW_GLB_URL, kind: 'material' }];
 
     let rawGlbFetches = 0;
     let importedPackFetches = 0;
@@ -106,11 +173,11 @@ describe('raw-container fail-fast (perf-20260706)', () => {
     }) as typeof globalThis.fetch;
 
     // Transport: mirrors the dev POST /__import/:guid -> rewrites the row's
-    // relativeUrl from the raw .glb to the imported .pack.json.
+    // packageUrl from the raw .glb to the imported .pack.json.
     const transport: ImportTransport = {
       fetchPack: vi.fn().mockResolvedValue({
         ok: true,
-        entries: [{ guid: MAT_GUID, relativeUrl: IMPORTED_PACK_URL, kind: 'material' }],
+        entries: [{ guid: MAT_GUID, packageUrl: IMPORTED_PACK_URL, kind: 'material' }],
       }),
     };
 
@@ -129,7 +196,7 @@ describe('raw-container fail-fast (perf-20260706)', () => {
   });
 
   it('shipped form (no transport): raw-container row fails fast with asset-not-imported, no .glb fetch', async () => {
-    const packIndex = [{ guid: MAT_GUID, relativeUrl: RAW_GLB_URL, kind: 'material' }];
+    const packIndex = [{ guid: MAT_GUID, packageUrl: RAW_GLB_URL, kind: 'material' }];
     let rawGlbFetches = 0;
     globalThis.fetch = vi.fn().mockImplementation((input: string) => {
       const url = typeof input === 'string' ? input : String(input);

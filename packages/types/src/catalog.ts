@@ -5,7 +5,6 @@ import type {
   ResourceRevision,
   TopologyDiff,
 } from './asset-producer';
-import type { AssetCompression, ImageMetadata } from './index';
 
 /** One producer revision point in a catalog continuity window. */
 export interface CatalogRevisionPoint {
@@ -19,16 +18,13 @@ export interface CatalogRevisionWindow {
   readonly current: readonly CatalogRevisionPoint[];
 }
 
-/**
- * One stable row from a development or build catalog snapshot.
- *
- * `guid` and producer facts are identity-bearing data; `relativeUrl` and
- * `sourcePath` are locators and must not be used as replacement identity.
- */
+/** One stable row from a development or build catalog snapshot. */
 export interface CatalogEntry {
   readonly guid: string;
-  readonly relativeUrl: string;
+  /** GUID-to-pack navigation only; artifact paths live inside Pack v2. */
+  readonly packageUrl: string;
   readonly kind: string;
+  /** Source declaration navigation for diagnostics, not runtime content. */
   readonly sourcePath: string;
   /** Stable package identity; path is a locator, never the package identity. */
   readonly packageId?: string;
@@ -45,9 +41,9 @@ export interface CatalogEntry {
   /** Structured producer diagnostics; consumers must not parse messages. */
   readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly name?: string;
-  readonly metadata?: ImageMetadata | undefined;
+  /** Optional navigation to the producer-owned cook receipt. */
+  readonly cookReceiptUrl?: string;
   readonly refs?: readonly string[];
-  readonly compression?: AssetCompression;
 }
 
 /**
@@ -68,3 +64,5 @@ export interface CatalogDelta {
   readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly revisions?: CatalogRevisionWindow;
 }
+
+export type PackIndexEntry = CatalogEntry;

@@ -39,6 +39,20 @@ describe('engine-ui dual entry', () => {
     expect(typeof mountUi).toBe('function');
   });
 
+  it('loads the Pack v2 UI envelope and keeps the payload projection stable', () => {
+    const loaded = createUiLoader().load({
+      guid: 'hud-guid',
+      kind: 'ui',
+      payload: { guid: 'hud-guid', html: '<div>hud</div>', css: '.hud{}' },
+      refs: [],
+      artifacts: {},
+    });
+    expect(loaded).toEqual({
+      ok: true,
+      value: { guid: 'hud-guid', html: '<div>hud</div>', css: '.hud{}' },
+    });
+  });
+
   it('reads the declared GUID and local CSS/asset companions', async () => {
     const reads = new Map([
       ['hud.ui.html', '<section><img src="icons/panel.png"></section>'],
@@ -78,7 +92,7 @@ describe('engine-ui dual entry', () => {
       'hud.ui.css',
       'icons/panel.png',
     ]);
-    expect(result.value.artifacts[0]?.path).toBe('icons/panel.png');
+    expect(result.value.assets[0]?.artifacts['icons/panel.png']?.mediaType).toBe('image/png');
     expect(result.value.assets[0]?.payload.html).toContain('ui-token:icons/panel.png');
     expect(result.value.assets[0]?.payload.css).toContain('ui-token:icons/panel.png');
   });

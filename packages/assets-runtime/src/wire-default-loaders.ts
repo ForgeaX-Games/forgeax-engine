@@ -8,17 +8,18 @@
 // research Finding 8). An AI user that has wired inspectors once recognises the
 // same form here at near-zero cost (requirements §AI User Affordances).
 //
-// The two seed tables INLINE_PACK_LOADERS + UPSTREAM_ENTRY_LOADERS are the
+// The two seed tables INLINE_PACK_LOADERS + PACK_ARTIFACT_LOADERS are the
 // default set. videoLoader lives in graphics-extras and is wired here. The
 // renderer supplies its concrete Web Audio loader through `extraLoaders`, so
 // this package remains independent of the Web Audio backend while the
 // production registry still has all 11 engine kinds.
 //
-// Default set wired internally (10 kinds):
+// Default set wired internally (11 kinds):
 //   inline pack-payload (6): mesh / scene / material / skeleton / skin /
 //     animation-clip
 //   upstream-branch (3):     texture / font / equirect
 //   video (1):               video (videoLoader, graphics-extras)
+//   UI (1):                  ui (engine-ui)
 //
 // Deliberately NOT registered (AC-02 exclusion): sampler / render-pipeline /
 // shader -- these have no inline loader today; `loadByGuid` on them surfaces
@@ -26,17 +27,27 @@
 
 import { videoLoader } from '@forgeax/engine-graphics-extras';
 import type { Loader } from '@forgeax/engine-types';
+import { createUiLoader, type UiAsset } from '@forgeax/engine-ui';
 import { LoaderRegistry } from './loader-registry';
 import { INLINE_PACK_LOADERS } from './loaders/inline-pack';
-import { UPSTREAM_ENTRY_LOADERS } from './loaders/upstream-entry';
+import { PACK_ARTIFACT_LOADERS } from './loaders/pack-artifact';
+
+const uiPayloadLoader = createUiLoader();
+const uiLoader: Loader<UiAsset> = {
+  kind: 'ui',
+  load: (payload) => {
+    const result = uiPayloadLoader.load(payload);
+    return result.ok ? result.value : undefined;
+  },
+};
 
 /**
- * Wire the engine's default loader set (10 engine-owned kinds: 6 inline +
- * texture + font + equirect + video) plus any `extraLoaders` onto `registry` in
+ * Wire the engine's default loader set (11 engine-owned kinds: 6 inline +
+ * texture + font + equirect + video + UI) plus any `extraLoaders` onto `registry` in
  * one call. Returns the same `registry` for chaining (so `wireDefaultLoaders(new
  * LoaderRegistry())` is a one-expression wired registry). The `extraLoaders` are
  * appended after the defaults; the production assembly point injects its
- * concrete audio catalog-entry loader to complete the 11-kind set.
+ * concrete audio catalog-entry loader to complete the 12-kind set.
  *
  * @example
  * ```ts
@@ -52,8 +63,9 @@ export function wireDefaultLoaders(
   extraLoaders: readonly Loader[] = [],
 ): LoaderRegistry {
   for (const loader of INLINE_PACK_LOADERS) registry.register(loader);
-  for (const loader of UPSTREAM_ENTRY_LOADERS) registry.register(loader);
+  for (const loader of PACK_ARTIFACT_LOADERS) registry.register(loader);
   registry.register(videoLoader);
+  registry.register(uiLoader);
   for (const loader of extraLoaders) registry.register(loader);
   return registry;
 }

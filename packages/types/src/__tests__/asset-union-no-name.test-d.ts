@@ -67,6 +67,8 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'TilesetAsset';
     case 'video':
       return 'VideoAsset';
+    case 'particle-effect':
+      return 'ParticleEffectAsset';
     default: {
       const _exhaustiveCheck: never = asset;
       return _exhaustiveCheck;
@@ -74,7 +76,7 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
   }
 }
 
-// The 14 Asset union member interface names, matching export declarations.
+// The Asset union member interface names, matching export declarations.
 const ASSET_MEMBER_NAMES = [
   'MeshAsset',
   'TextureAsset',
@@ -92,6 +94,7 @@ const ASSET_MEMBER_NAMES = [
   'RenderPipelineAsset',
   'TilesetAsset',
   'VideoAsset',
+  'ParticleEffectAsset',
 ] as const;
 
 /**
@@ -146,8 +149,8 @@ function countNameFieldsPerAssetInterface(): Map<string, number> {
   return result;
 }
 
-describe('M1 Asset union cardinality grep gate (16 members, OOS-2 POD no-name)', () => {
-  it('(a) exhaustive switch over Asset.kind covers all 16 discriminants', () => {
+describe('M1 Asset union cardinality grep gate (17 members, OOS-2 POD no-name)', () => {
+  it('(a) exhaustive switch over Asset.kind covers all 17 discriminants', () => {
     const result = exhaustiveAssetKindSwitch({ kind: 'mesh' } as Asset);
     expect(typeof result).toBe('string');
   });

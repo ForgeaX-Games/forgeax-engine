@@ -64,12 +64,12 @@ import {
   meshLoader,
   mipmapCacheSize,
   numMipLevels,
+  PACK_ARTIFACT_LOADERS,
   resolveAssetHandle,
   sceneLoader,
   skeletonLoader,
   skinLoader,
   textureLoader,
-  UPSTREAM_ENTRY_LOADERS,
   walkMaterialPassesOverSharedRefs,
   wireDefaultLoaders,
 } from '@forgeax/engine-assets-runtime';
@@ -655,31 +655,33 @@ function makeStubGPU(): unknown {
     return sceneLoader.load(payload, refs, mockCtx());
   }
 
-  describe('upstream-branch loaders (w6)', () => {
-    it('UPSTREAM_ENTRY_LOADERS is texture + font + equirect', () => {
-      expect(UPSTREAM_ENTRY_LOADERS.map((l) => l.kind)).toEqual(['texture', 'font', 'equirect']);
+  describe('Pack v2 artifact loaders', () => {
+    it('PACK_ARTIFACT_LOADERS is texture + font + equirect', () => {
+      expect(PACK_ARTIFACT_LOADERS.map((l) => l.kind)).toEqual(['texture', 'font', 'equirect']);
     });
 
     it('textureLoader import sub-branch builds a TextureAsset POD from .bin bytes', async () => {
-      const url = '/imported/tex.bin';
       const data = new Uint8Array(2 * 2 * 4).fill(200);
-      const entry = {
-        relativeUrl: url,
+      const input = {
+        guid: '11111111-1111-4111-8111-111111111111',
         kind: 'texture',
-        metadata: {
-          kind: 'texture' as const,
+        payload: {
+          kind: 'texture',
           width: 2,
           height: 2,
-          format: 'rgba8unorm' as const,
-          colorSpace: 'srgb' as const,
+          format: 'rgba8unorm',
+          colorSpace: 'srgb',
           mipmap: false,
         },
+        refs: [],
+        artifacts: {
+          body: {
+            descriptor: { path: 'tex.bin', mediaType: 'application/x-forgeax-rgba8' },
+            bytes: data,
+          },
+        },
       };
-      const out = (await textureLoader.load(
-        entry as unknown as Record<string, unknown>,
-        undefined,
-        mockCtx({ binaries: { [url]: data } }),
-      )) as LoaderAsyncResult;
+      const out = await textureLoader.loadPack?.(input, mockCtx());
       expect(out.ok).toBe(true);
       if (out.ok) {
         expect(out.value).toMatchObject({ kind: 'texture', width: 2, height: 2 });
@@ -687,54 +689,48 @@ function makeStubGPU(): unknown {
     });
 
     it('textureLoader fails image-meta-missing when metadata is absent', async () => {
-      const out = (await textureLoader.load(
-        { relativeUrl: '/x.bin', kind: 'texture' } as unknown as Record<string, unknown>,
-        undefined,
+      const out = await textureLoader.loadPack?.(
+        {
+          guid: '11111111-1111-4111-8111-111111111111',
+          kind: 'texture',
+          payload: { kind: 'texture' },
+          refs: [],
+          artifacts: {},
+        },
         mockCtx(),
-      )) as LoaderAsyncResult;
+      );
       expect(out.ok).toBe(false);
     });
 
     it('fontLoader resolves atlas/sampler refs and builds a FontAsset POD', async () => {
-      const url = '/font/sans.pack.json';
-      const packJson = {
-        assets: [
-          {
-            guid: '11111111-1111-1111-1111-111111111111',
-            kind: 'font',
-            payload: {
-              atlasGuid: '22222222-2222-2222-2222-222222222222',
-              samplerGuid: '33333333-3333-3333-3333-333333333333',
-              glyphs: {},
-              common: {
-                lineHeight: 1,
-                base: 1,
-                distanceRange: 2,
-                pxRange: 2,
-                atlasWidth: 64,
-                atlasHeight: 64,
-              },
-            },
-          },
-        ],
-      };
-      const bytes = new TextEncoder().encode(JSON.stringify(packJson));
-      const entry = {
-        relativeUrl: url,
+      const input = {
+        guid: '11111111-1111-1111-1111-111111111111',
         kind: 'font',
-        guidKey: '11111111-1111-1111-1111-111111111111',
+        payload: {
+          atlasGuid: '22222222-2222-2222-2222-222222222222',
+          samplerGuid: '33333333-3333-3333-3333-333333333333',
+          glyphs: {},
+          common: {
+            lineHeight: 1,
+            base: 1,
+            distanceRange: 2,
+            pxRange: 2,
+            atlasWidth: 64,
+            atlasHeight: 64,
+          },
+        },
+        refs: ['22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333'],
+        artifacts: {},
       };
-      const out = (await fontLoader.load(
-        entry as unknown as Record<string, unknown>,
-        undefined,
+      const out = await fontLoader.loadPack?.(
+        input,
         mockCtx({
-          binaries: { [url]: bytes },
           refs: {
             '22222222-2222-2222-2222-222222222222': 42,
             '33333333-3333-3333-3333-333333333333': 43,
           },
         }),
-      )) as LoaderAsyncResult;
+      );
       expect(out.ok).toBe(true);
       if (out.ok) {
         expect(out.value).toMatchObject({ kind: 'font' });
@@ -782,13 +778,13 @@ function makeStubGPU(): unknown {
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
-      expect(reg.registeredKinds()).toHaveLength(12);
+      expect(reg.registeredKinds()).toHaveLength(13);
     });
 
     it('default set (no extraLoaders) is the 11 engine-owned kinds (incl. video)', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg);
-      expect(reg.registeredKinds()).toHaveLength(11);
+      expect(reg.registeredKinds()).toHaveLength(12);
       expect(reg.get('video'), 'video is wired internally (graphics-extras)').toBeDefined();
       expect(reg.get('audio'), 'audio is injected, not default').toBeUndefined();
     });
@@ -805,7 +801,7 @@ function makeStubGPU(): unknown {
   describe('audio loader', () => {
     it('declares audio as a catalog-entry loader', () => {
       expect(audioLoader.kind).toBe('audio');
-      expect(audioLoader.fromCatalogEntry).toBe(true);
+      expect(audioLoader.loadPack).toBeDefined();
     });
   });
 }
@@ -2822,10 +2818,10 @@ function makeStubGPU(): unknown {
   }
 
   /** Build a pack-index catalog fixture. */
-  function makePackIndex(entries: Array<{ guid: string; relativeUrl: string }>) {
+  function makePackIndex(entries: Array<{ guid: string; packageUrl: string }>) {
     return entries.map((e) => ({
       guid: e.guid,
-      relativeUrl: e.relativeUrl,
+      packageUrl: e.packageUrl,
       kind: 'mesh' as const,
       submeshes: [
         {
@@ -2841,7 +2837,7 @@ function makeStubGPU(): unknown {
   /** Build a .pack.json fixture from a MeshAsset. */
   function makePackFileFixture(guid: string, mesh: MeshAsset) {
     return {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -2873,7 +2869,7 @@ function makeStubGPU(): unknown {
   ) {
     const packIndexEntries = packs.map((p) => ({
       guid: p.guid,
-      relativeUrl: p.url,
+      packageUrl: p.url,
     }));
 
     const packIndex = makePackIndex(packIndexEntries);
@@ -3585,7 +3581,7 @@ function makeStubGPU(): unknown {
               Promise.resolve([
                 {
                   guid,
-                  relativeUrl: '/pack/asset.pack.json',
+                  packageUrl: '/pack/asset.pack.json',
                   kind: 'mesh',
                 },
               ]),
@@ -3599,6 +3595,8 @@ function makeStubGPU(): unknown {
             ok: true,
             json: () =>
               Promise.resolve({
+                schemaVersion: '2.0.0',
+                kind: 'internal-text-package',
                 assets: [
                   {
                     guid,
@@ -3722,8 +3720,8 @@ function makeStubGPU(): unknown {
   //   (d) after the import the same GUID resolves to a SINGLE .bin row (AC-02).
 
   const TEXTURE_GUID = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
-  const RAW_SOURCE_URL = '/textures/wall.png';
-  const IMPORTED_BIN_URL = '/textures/wall.png.bin';
+  const RAW_SOURCE_URL = '/textures/wall-source.pack.json';
+  const IMPORTED_BIN_URL = '/textures/wall.pack.json';
 
   const TEXTURE_METADATA = {
     kind: 'texture',
@@ -3737,17 +3735,15 @@ function makeStubGPU(): unknown {
   function unimportedTextureRow() {
     return {
       guid: TEXTURE_GUID,
-      relativeUrl: RAW_SOURCE_URL,
+      packageUrl: RAW_SOURCE_URL,
       kind: 'texture',
-      metadata: TEXTURE_METADATA,
     };
   }
   function importedTextureRow() {
     return {
       guid: TEXTURE_GUID,
-      relativeUrl: IMPORTED_BIN_URL,
+      packageUrl: IMPORTED_BIN_URL,
       kind: 'texture',
-      metadata: TEXTURE_METADATA,
     };
   }
 
@@ -3785,11 +3781,28 @@ function makeStubGPU(): unknown {
 
       mockGlobalFetch((url: string) => {
         if (url === '/pack-index.json') {
-          // Before import: a single unimported (non-.bin) row. After import: a single
-          // imported .bin row (AC-02 single-row, no duplicate raw + imported).
+          // Before import: the cooked package is unavailable. After import:
+          // the transport publishes one Pack v2 package row.
           return jsonResponse([imported ? importedTextureRow() : unimportedTextureRow()]);
         }
-        if (url === IMPORTED_BIN_URL) return binaryResponse();
+        if (url === IMPORTED_BIN_URL) {
+          return jsonResponse({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: TEXTURE_GUID,
+                kind: 'texture',
+                payload: TEXTURE_METADATA,
+                refs: [],
+                artifacts: {
+                  body: { path: 'wall.bin', mediaType: 'application/x-forgeax-rgba8' },
+                },
+              },
+            ],
+          });
+        }
+        if (url === '/textures/wall.bin') return binaryResponse();
         // The raw source must NOT be fetched as a .bin (it never reaches
         // fetchBinary because the sentinel short-circuits before fetch).
         return Promise.resolve({ ok: false, status: 404 });
@@ -3824,7 +3837,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(c Risk-1) image-decode-failed (ImageError) is NOT transport-eligible (corrupt .bin never routes transport)', async () => {
-      // A custom texture loader that mimics a genuinely corrupt imported .bin:
+      // A custom texture loader that mimics a genuinely corrupt imported artifact:
       // it returns an image-decode-failed ImageError (a distinct class from
       // AssetError). The :2334 transport-eligibility guard is
       // `instanceof AssetError`, so this error must fail straight through and
@@ -3838,14 +3851,29 @@ function makeStubGPU(): unknown {
 
       const transport: ImportTransport = { fetchPack: vi.fn().mockResolvedValue({ ok: true }) };
       const reg = new AssetRegistry(makeMockShaderRegistry(), transport);
-      reg.loaders.register({
+      reg.loaders.registerPackLoader({
         kind: 'texture',
-        load: () => Promise.resolve({ ok: false as const, error: decodeError }),
+        load: () => ({ ok: false as const, error: decodeError }),
       });
       reg.configurePackIndex('/pack-index.json');
 
       mockGlobalFetch((url: string) => {
         if (url === '/pack-index.json') return jsonResponse([importedTextureRow()]);
+        if (url === IMPORTED_BIN_URL) {
+          return jsonResponse({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: TEXTURE_GUID,
+                kind: 'texture',
+                payload: TEXTURE_METADATA,
+                refs: [],
+                artifacts: {},
+              },
+            ],
+          });
+        }
         return Promise.resolve({ ok: false, status: 404 });
       });
 
@@ -3940,9 +3968,9 @@ function makeStubGPU(): unknown {
       }
     });
 
-    // === Arm (a): raw .hdr (shipped form) -> asset-not-imported (D-1 sentinel) ===
+    // === Arm (a): source-format locator is rejected at the catalog boundary ===
 
-    it('raw .hdr relativeUrl, shipped form -> err(asset-not-imported) -- runtime no longer decodes HDR', async () => {
+    it('source-format path is not accepted as a cooked package locator', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
@@ -3954,15 +3982,9 @@ function makeStubGPU(): unknown {
             jsonResponse([
               {
                 guid: GUID_HDR,
-                relativeUrl: '/vendor/learn-opengl/newport_loft.hdr',
+                packageUrl: '/packs/newport-loft.pack.json',
                 kind: 'texture',
                 sourcePath: 'vendor/learn-opengl/newport_loft.hdr',
-                metadata: {
-                  kind: 'texture',
-                  format: 'rgba32float',
-                  colorSpace: 'linear',
-                  mipmap: false,
-                },
               },
             ]),
           );
@@ -3984,15 +4006,12 @@ function makeStubGPU(): unknown {
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.code).toBe('asset-not-imported');
-      // Only the pack-index fetch should happen; the .hdr source
-      // fetch is never attempted (the sentinel fires before fetch, and the
-      // shipped-form transportOrFail returns before re-fetching the index).
-      expect(fetchCallCount).toBe(1); // pack-index only
+      expect(fetchCallCount).toBe(2); // pack-index + missing cooked package
     });
 
     // === Arm (b): imported .bin -> ok + format === 'rgba16float' (AC-03) ===
 
-    it('imported .bin relativeUrl -> ok with format === rgba16float', async () => {
+    it('imported .bin packageUrl -> ok with format === rgba16float', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
@@ -4006,19 +4025,38 @@ function makeStubGPU(): unknown {
             jsonResponse([
               {
                 guid: GUID_IMPORTED,
-                relativeUrl: '/assets/imported/hashed-imported.bin',
+                packageUrl: '/assets/imported/hashed-imported.pack.json',
                 kind: 'texture',
                 sourcePath: 'vendor/learn-opengl/newport_loft.hdr',
-                metadata: {
-                  kind: 'texture',
-                  format: 'rgba16float',
-                  colorSpace: 'linear',
-                  mipmap: false,
-                  width: binWidth,
-                  height: binHeight,
-                },
               },
             ]),
+          );
+        }
+        if (url === '/assets/imported/hashed-imported.pack.json') {
+          return Promise.resolve(
+            jsonResponse({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_IMPORTED,
+                  kind: 'texture',
+                  payload: {
+                    width: binWidth,
+                    height: binHeight,
+                    format: 'rgba16float',
+                    colorSpace: 'linear',
+                  },
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: 'hashed-imported.bin',
+                      mediaType: 'application/x-forgeax-rgba16f',
+                    },
+                  },
+                },
+              ],
+            }),
           );
         }
         if (url === '/assets/imported/hashed-imported.bin') {
@@ -4067,25 +4105,25 @@ function makeStubGPU(): unknown {
   const PACK_INDEX_FIXTURE = [
     {
       guid: PARENT_GUID,
-      relativeUrl: '/assets/parent.pack.json',
+      packageUrl: '/assets/parent.pack.json',
       kind: 'material',
       sourcePath: 'assets/parent.pack.json',
     },
     {
       guid: CHILD_GUID,
-      relativeUrl: '/assets/child.pack.json',
+      packageUrl: '/assets/child.pack.json',
       kind: 'material',
       sourcePath: 'assets/child.pack.json',
     },
     {
       guid: CHILD_SAME_PACK_GUID,
-      relativeUrl: '/assets/same-pack.pack.json',
+      packageUrl: '/assets/same-pack.pack.json',
       kind: 'material',
       sourcePath: 'assets/same-pack.pack.json',
     },
     {
       guid: NON_MATERIAL_GUID,
-      relativeUrl: '/assets/mesh.pack.json',
+      packageUrl: '/assets/mesh.pack.json',
       kind: 'mesh',
       sourcePath: 'assets/mesh.pack.json',
       submeshes: [
@@ -4101,7 +4139,7 @@ function makeStubGPU(): unknown {
 
   // Parent material pack — standalone, has passes.
   const PARENT_PACK = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -4130,7 +4168,7 @@ function makeStubGPU(): unknown {
 
   // Child material pack — no passes, only parent ref.
   const CHILD_PACK = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -4151,7 +4189,7 @@ function makeStubGPU(): unknown {
 
   // Same-pack file — parent + child in one pack (AC-08).
   const SAME_PACK = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -4192,7 +4230,7 @@ function makeStubGPU(): unknown {
 
   // Mesh pack for AC-05 (parent ref points to non-material).
   const MESH_PACK = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -4218,7 +4256,7 @@ function makeStubGPU(): unknown {
 
   // Child that references NON_MATERIAL_GUID as parent — invalid.
   const CHILD_WITH_NON_MATERIAL_PARENT_PACK = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -4410,7 +4448,7 @@ function makeStubGPU(): unknown {
       const CATALOG_WITHOUT_PARENT = [
         {
           guid: CHILD_GUID,
-          relativeUrl: '/assets/child.pack.json',
+          packageUrl: '/assets/child.pack.json',
           kind: 'material',
           sourcePath: 'assets/child.pack.json',
         },
@@ -4465,7 +4503,7 @@ function makeStubGPU(): unknown {
       const CATALOG_WITH_MESH = [
         {
           guid: NON_MATERIAL_GUID,
-          relativeUrl: '/assets/mesh.pack.json',
+          packageUrl: '/assets/mesh.pack.json',
           kind: 'mesh',
           sourcePath: 'assets/mesh.pack.json',
           submeshes: [
@@ -4479,7 +4517,7 @@ function makeStubGPU(): unknown {
         },
         {
           guid: GUID_NON_MATERIAL_CHILD,
-          relativeUrl: '/assets/child-nonmat-parent.pack.json',
+          packageUrl: '/assets/child-nonmat-parent.pack.json',
           kind: 'material',
           sourcePath: 'assets/child-nonmat-parent.pack.json',
         },
@@ -4537,19 +4575,19 @@ function makeStubGPU(): unknown {
       reg.configurePackIndex('/pack-index.json');
 
       // Same pack file contains both parent and child — both entries map to
-      // the same relativeUrl so loadByGuidProd fetches the same file twice
+      // the same packageUrl so loadByGuidProd fetches the same file twice
       // (once for parent, once for child), but fast-path idempotency on the
       // second loadByGuid(parentGuid) avoids a duplicate fetch.
       const SAME_PACK_CATALOG = [
         {
           guid: PARENT_GUID,
-          relativeUrl: '/assets/same-pack.pack.json',
+          packageUrl: '/assets/same-pack.pack.json',
           kind: 'material',
           sourcePath: 'assets/same-pack.pack.json',
         },
         {
           guid: CHILD_SAME_PACK_GUID,
-          relativeUrl: '/assets/same-pack.pack.json',
+          packageUrl: '/assets/same-pack.pack.json',
           kind: 'material',
           sourcePath: 'assets/same-pack.pack.json',
         },
@@ -4668,7 +4706,7 @@ function makeStubGPU(): unknown {
       const CATALOG_WITH_PARENT_MISSING = [
         {
           guid: CHILD_GUID,
-          relativeUrl: '/assets/child.pack.json',
+          packageUrl: '/assets/child.pack.json',
           kind: 'material',
           sourcePath: 'assets/child.pack.json',
         },
@@ -4724,14 +4762,14 @@ function makeStubGPU(): unknown {
       const CATALOG = [
         {
           guid: CHILD_WITH_INVALID_PARENT_GUID,
-          relativeUrl: '/assets/child-invalid-parent.pack.json',
+          packageUrl: '/assets/child-invalid-parent.pack.json',
           kind: 'material',
           sourcePath: 'assets/child-invalid-parent.pack.json',
         },
       ];
 
       const CHILD_PACK_INVALID = {
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         kind: 'internal-text-package',
         assets: [
           {
@@ -4815,7 +4853,7 @@ function makeStubGPU(): unknown {
       const CATALOG_PARENT_MISSING = [
         {
           guid: CHILD_GUID,
-          relativeUrl: '/assets/child.pack.json',
+          packageUrl: '/assets/child.pack.json',
           kind: 'material',
           sourcePath: 'assets/child.pack.json',
         },
@@ -4859,7 +4897,7 @@ function makeStubGPU(): unknown {
       const CATALOG_PARENT_MISSING = [
         {
           guid: CHILD_GUID,
-          relativeUrl: '/assets/child.pack.json',
+          packageUrl: '/assets/child.pack.json',
           kind: 'material',
           sourcePath: 'assets/child.pack.json',
         },
@@ -4897,13 +4935,13 @@ function makeStubGPU(): unknown {
       const CATALOG_PARENT_FETCH_FAILS = [
         {
           guid: PARENT_GUID,
-          relativeUrl: '/assets/parent.pack.json',
+          packageUrl: '/assets/parent.pack.json',
           kind: 'material',
           sourcePath: 'assets/parent.pack.json',
         },
         {
           guid: CHILD_GUID,
-          relativeUrl: '/assets/child.pack.json',
+          packageUrl: '/assets/child.pack.json',
           kind: 'material',
           sourcePath: 'assets/child.pack.json',
         },
@@ -4943,14 +4981,14 @@ function makeStubGPU(): unknown {
       const CATALOG_WITH_MESH = [
         {
           guid: NON_MATERIAL_GUID,
-          relativeUrl: '/assets/mesh.pack.json',
+          packageUrl: '/assets/mesh.pack.json',
           kind: 'mesh',
           sourcePath: 'assets/mesh.pack.json',
           submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
         },
         {
           guid: GUID_NON_MATERIAL_CHILD,
-          relativeUrl: '/assets/child-nonmat-parent.pack.json',
+          packageUrl: '/assets/child-nonmat-parent.pack.json',
           kind: 'material',
           sourcePath: 'assets/child-nonmat-parent.pack.json',
         },
@@ -5068,7 +5106,7 @@ function makeStubGPU(): unknown {
       const CATALOG_PARENT_MISSING = [
         {
           guid: CHILD_GUID,
-          relativeUrl: '/assets/child.pack.json',
+          packageUrl: '/assets/child.pack.json',
           kind: 'material',
           sourcePath: 'assets/child.pack.json',
         },
@@ -5128,7 +5166,7 @@ function makeStubGPU(): unknown {
       const CATALOG_STANDALONE = [
         {
           guid: PARENT_GUID,
-          relativeUrl: '/assets/parent.pack.json',
+          packageUrl: '/assets/parent.pack.json',
           kind: 'material',
           sourcePath: 'assets/parent.pack.json',
         },
@@ -5166,7 +5204,7 @@ function makeStubGPU(): unknown {
   const PACK_INDEX_FIXTURE = [
     {
       guid: GUID_KNOWN,
-      relativeUrl: '/assets/mesh-42.pack.json',
+      packageUrl: '/assets/mesh-42.pack.json',
       kind: 'mesh',
       sourcePath: 'assets/mesh-42.pack.json',
       submeshes: [
@@ -5182,7 +5220,7 @@ function makeStubGPU(): unknown {
 
   // .pack.json file content (minimal, matching pack.schema.json)
   const PACK_FILE_FIXTURE = {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -5615,79 +5653,49 @@ function makeStubGPU(): unknown {
 
   interface PackIndexRow {
     readonly guid: string;
-    readonly relativeUrl: string;
+    readonly packageUrl: string;
     readonly kind: string;
     readonly sourcePath: string;
-    readonly metadata?: {
-      readonly kind: 'texture';
-      readonly width?: number;
-      readonly height?: number;
-      readonly format: string;
-      readonly colorSpace: 'srgb' | 'linear';
-      readonly mipmap: boolean;
-    };
   }
 
   const PACK_INDEX_FIXTURE: readonly PackIndexRow[] = [
     {
       guid: GUID_DEV,
-      relativeUrl: '/apps/learn-render/1.4.textures/assets/wood-container.jpg',
+      packageUrl: '/packs/wood-container.pack.json',
       kind: 'texture',
       sourcePath: 'apps/learn-render/1.4.textures/assets/wood-container.jpg',
-      metadata: { kind: 'texture', format: 'rgba8unorm-srgb', colorSpace: 'srgb', mipmap: true },
     },
     {
       guid: GUID_DEV_FETCH_FAIL,
-      relativeUrl: '/missing/wood.jpg',
+      packageUrl: '/packs/missing-wood.pack.json',
       kind: 'texture',
       sourcePath: 'missing/wood.jpg',
-      metadata: { kind: 'texture', format: 'rgba8unorm-srgb', colorSpace: 'srgb', mipmap: true },
     },
     {
       guid: GUID_DEV_DECODE_FAIL,
-      relativeUrl: '/apps/learn-render/1.4.textures/assets/corrupt.jpg',
+      packageUrl: '/packs/corrupt-wood.pack.json',
       kind: 'texture',
       sourcePath: 'apps/learn-render/1.4.textures/assets/corrupt.jpg',
-      metadata: { kind: 'texture', format: 'rgba8unorm-srgb', colorSpace: 'srgb', mipmap: true },
     },
     {
       guid: GUID_IMPORT,
-      relativeUrl: '/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-1a2b3c.bin',
+      packageUrl: '/assets/imported-texture.pack.json',
       kind: 'texture',
       sourcePath: 'apps/learn-render/1.4.textures/assets/wood-container.jpg',
-      metadata: {
-        kind: 'texture',
-        width: 4,
-        height: 4,
-        format: 'rgba8unorm',
-        colorSpace: 'linear',
-        mipmap: false,
-      },
     },
     {
       guid: GUID_IMPORT_FETCH_FAIL,
-      relativeUrl: '/assets/missing-import.bin',
+      packageUrl: '/assets/missing-import.pack.json',
       kind: 'texture',
       sourcePath: 'apps/.../missing.jpg',
-      metadata: {
-        kind: 'texture',
-        width: 4,
-        height: 4,
-        format: 'rgba8unorm',
-        colorSpace: 'linear',
-        mipmap: false,
-      },
     },
     {
       guid: GUID_NO_METADATA,
-      // A imported .bin row whose metadata is absent: the .bin-first import-state
-      // check passes (it IS imported), so the subsequent metadata check is what
-      // surfaces image-meta-missing. (A non-.bin row instead surfaces the
-      // transport-eligible texture-source-not-imported sentinel -- cases a/b/c.)
-      relativeUrl: '/apps/learn-render/1.4.textures/assets/no-sidecar.bin',
+      // A cooked package with an incomplete payload is rejected by the Pack v2
+      // loader rather than by a catalog-level metadata field.
+      packageUrl: '/assets/no-sidecar.pack.json',
       kind: 'texture',
       sourcePath: 'apps/learn-render/1.4.textures/assets/no-sidecar.bin',
-      // metadata intentionally omitted -- mirrors a legacy 4-field row.
     },
   ];
 
@@ -5765,15 +5773,12 @@ function makeStubGPU(): unknown {
       if (!guid.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<TextureAsset>(guid.value);
 
-      // feat-20260604 M2 / D-1: the JPG relativeUrl surfaces the
-      // texture-source-not-imported sentinel before any source fetch. In the
-      // shipped form (no transport) it fails fast as asset-not-imported (AC-08).
+      // A catalog row now names a cooked package; a missing package is the
+      // shipped-form import boundary.
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.code).toBe('asset-not-imported');
-      // The fetch for the source JPG should NOT happen -- fail-fast before
-      // the fetch. Only the pack-index fetch should be counted.
-      expect(fetchCallCount).toBe(1); // pack-index only
+      expect(fetchCallCount).toBe(2); // pack-index + missing package
     });
 
     it('(b) dev source JPG 404 (not .bin), shipped form -> Result.err(asset-not-imported) before source fetch', async () => {
@@ -5793,13 +5798,10 @@ function makeStubGPU(): unknown {
       if (!guid.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<TextureAsset>(guid.value);
 
-      // feat-20260604 M2 / D-1: the .jpg extension surfaces the
-      // texture-source-not-imported sentinel; shipped form fails fast as
-      // asset-not-imported (AC-08) before any source fetch.
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.code).toBe('asset-not-imported');
-      expect(fetchCallCount).toBe(1); // pack-index only, no source fetch
+      expect(fetchCallCount).toBe(2); // pack-index + missing package
     });
 
     it('(c) dev source JPG corrupt (not .bin), shipped form -> Result.err(asset-not-imported) before source fetch', async () => {
@@ -5819,13 +5821,10 @@ function makeStubGPU(): unknown {
       if (!guid.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<TextureAsset>(guid.value);
 
-      // feat-20260604 M2 / D-1: the .jpg extension surfaces the
-      // texture-source-not-imported sentinel; shipped form fails fast as
-      // asset-not-imported (AC-08) before any source fetch.
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.code).toBe('asset-not-imported');
-      expect(fetchCallCount).toBe(1); // pack-index only, no source fetch
+      expect(fetchCallCount).toBe(2); // pack-index + missing package
     });
 
     it('(d) import sub-branch fetch raw RGBA .bin -> Result.ok(TextureAsset POD)', async () => {
@@ -5838,7 +5837,36 @@ function makeStubGPU(): unknown {
 
       const fetchMock = vi.fn().mockImplementation((url: string) => {
         if (url === '/pack-index.json') return Promise.resolve(jsonResponse(PACK_INDEX_FIXTURE));
-        if (url === FIXTURE_IMPORT.relativeUrl) return Promise.resolve(bytesResponse(rgba));
+        if (url === FIXTURE_IMPORT.packageUrl) {
+          return Promise.resolve(
+            jsonResponse({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: GUID_IMPORT,
+                  kind: 'texture',
+                  payload: {
+                    kind: 'texture',
+                    width: 4,
+                    height: 4,
+                    format: 'rgba8unorm',
+                    colorSpace: 'linear',
+                    mipmap: false,
+                  },
+                  refs: [],
+                  artifacts: {
+                    body: {
+                      path: 'imported-texture.bin',
+                      mediaType: 'application/x-forgeax-rgba8',
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+        }
+        if (url === '/assets/imported-texture.bin') return Promise.resolve(bytesResponse(rgba));
         return Promise.resolve(notFound());
       });
       // biome-ignore lint/suspicious/noExplicitAny: test mock cast
@@ -5869,6 +5897,17 @@ function makeStubGPU(): unknown {
 
       const fetchMock = vi.fn().mockImplementation((url: string) => {
         if (url === '/pack-index.json') return Promise.resolve(jsonResponse(PACK_INDEX_FIXTURE));
+        if (url === '/assets/no-sidecar.pack.json') {
+          return Promise.resolve(
+            jsonResponse({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                { guid: GUID_NO_METADATA, kind: 'texture', payload: {}, refs: [], artifacts: {} },
+              ],
+            }),
+          );
+        }
         return Promise.resolve(notFound());
       });
       // biome-ignore lint/suspicious/noExplicitAny: test mock cast
@@ -5883,7 +5922,7 @@ function makeStubGPU(): unknown {
       // M4 shipped form (no import transport): DDC fetch fail -> asset-not-imported (AC-22).
       expect(result.error.code).toBe('asset-not-imported');
       const calledUrls = fetchMock.mock.calls.map((c) => c[0]);
-      expect(calledUrls).toContain('/assets/missing-import.bin');
+      expect(calledUrls).toContain('/assets/missing-import.pack.json');
     });
 
     it('(f) pack-index entry kind=texture but metadata absent -> Result.err(image-meta-missing)', async () => {
@@ -5892,6 +5931,17 @@ function makeStubGPU(): unknown {
 
       const fetchMock = vi.fn().mockImplementation((url: string) => {
         if (url === '/pack-index.json') return Promise.resolve(jsonResponse(PACK_INDEX_FIXTURE));
+        if (url === '/assets/no-sidecar.pack.json') {
+          return Promise.resolve(
+            jsonResponse({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                { guid: GUID_NO_METADATA, kind: 'texture', payload: {}, refs: [], artifacts: {} },
+              ],
+            }),
+          );
+        }
         return Promise.resolve(notFound());
       });
       // biome-ignore lint/suspicious/noExplicitAny: test mock cast
@@ -5903,7 +5953,7 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.code).toBe('image-meta-missing');
+      expect(result.error.code).toBe('asset-parse-failed');
     });
   });
 }

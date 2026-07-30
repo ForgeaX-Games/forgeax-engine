@@ -161,9 +161,21 @@ async function importImage(ctx: ImportContext): Promise<ImportResult> {
         data: f16Bytes,
         colorSpace: 'linear',
       };
-      out.push({ guid: sub.guid, kind: 'equirect', payload, refs: [] });
+      out.push({
+        guid: sub.guid,
+        kind: 'equirect',
+        payload,
+        refs: [],
+        artifacts: {
+          body: {
+            mediaType: 'application/x-forgeax-rgba16f',
+            assetCodec: { name: 'rgba16float' },
+            bytes: f16Bytes,
+          },
+        },
+      });
     }
-    return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
+    return { ok: true, value: { assets: out, sourceDependencies: [] } };
   }
 
   // --- Standard PNG/JPEG path ---
@@ -217,9 +229,27 @@ async function importImage(ctx: ImportContext): Promise<ImportResult> {
       colorSpace,
       mipmap,
     };
-    out.push({ guid: sub.guid, kind: 'texture', payload, refs: [] });
+    out.push({
+      guid: sub.guid,
+      kind: 'texture',
+      payload,
+      refs: [],
+      artifacts: {
+        body: {
+          mediaType: encodedBytes === null ? 'application/x-forgeax-rgba8' : 'image/ktx2',
+          assetCodec:
+            encodedBytes === null
+              ? { name: 'rgba8', version: '1' }
+              : {
+                  name: 'basis',
+                  profile: resolveEncodeMode(compressionMode, { colorSpace, isHdr: false }),
+                },
+          bytes: encodedBytes ?? dec.bytes,
+        },
+      },
+    });
   }
-  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
+  return { ok: true, value: { assets: out, sourceDependencies: [] } };
 }
 
 /**

@@ -98,7 +98,7 @@ export const urpPipeline: RenderPipeline = {
     // in createRenderer — backend-aware: Channel 2 native WebGPU follows
     // getPreferredCanvasFormat → bgra8unorm on Metal/D3D/Vulkan, Channel 3 GLES
     // stays rgba8unorm). Graph targets that copy/resolve against the swap-chain
-    // texture (fxaaIntermediate, msaaColor) MUST match it. ctx.pipelineState is
+    // texture (ldrColor, msaaColor) MUST match it. ctx.pipelineState is
     // the non-nullable layer-3 resource carrier (render-pipeline-context.ts):
     // buildGraph runs after record's getPipelineState() null-check so the state
     // is always resident here.
@@ -159,22 +159,21 @@ export const urpPipeline: RenderPipeline = {
       usage: 0x10 | 0x04 | 0x01, // RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC
     });
 
-    // FXAA scratch RT (pass writes intermediate copy of swap-chain; final
-    // fragment pass samples it back into swap-chain via non-srgb storage view).
-    // bug-20260610: aligned with v18 swap-chain RGBA unification — must match
-    // the swap-chain storage format so copyTextureToTexture stays zero-conversion.
-    // bug-20260612 made the swap-chain storage format backend-aware
-    // (Channel 2 native WebGPU follows getPreferredCanvasFormat → bgra8unorm
-    // on Metal/D3D/Vulkan; Channel 3 GLES stays rgba8unorm) but left this
-    // target hard-coded rgba8unorm, so copyTextureToTexture(swap-chain →
-    // fxaaIntermediate) failed "not copy compatible" on bgra8unorm backends.
-    // Derive the format from the swap-chain storage SSOT instead.
-    graph.addColorTarget('fxaaIntermediate', {
-      format: swapChainStorageFormat,
-      size: 'swapchain',
-      sample: 1,
-      usage: 0x04 | 0x02, // TEXTURE_BINDING | COPY_DST
-    });
+    const fxaaActive = data.camera.antialias === 'fxaa';
+    // FXAA samples a graph-owned LDR target and writes the surface. Native
+    // WebGPU renders through an sRGB view of the storage-format target;
+    // WebGL2 has no view-format reinterpretation, so its target format is
+    // already the configured sRGB surface format.
+    if (fxaaActive) {
+      const supportsViewFormats = runtime.device.caps.storageBuffer;
+      graph.addColorTarget('ldrColor', {
+        format: supportsViewFormats ? swapChainStorageFormat : swapChainViewFormat,
+        size: 'swapchain',
+        sample: 1,
+        usage: 0x10 | 0x04,
+        ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
+      });
+    }
 
     // HDR colour target. Bloom + tonemap consumers sample this. When MSAA is
     // active the geometry pass writes hdrColorMsaa (count=4) and resolves to
@@ -341,14 +340,15 @@ export const urpPipeline: RenderPipeline = {
     //    dependency (main reads hdrColor).
     addSkyboxPass(graph, 'skybox', { color: 'hdrColor' });
 
-    // 3. Main: scene draw list into the colour + depth target. Reads
-    //    shadowDepth (sampled by lighting) and hdrColor (forces skybox order).
+    // 3. Main: scene draw list into the colour + depth target. FXAA without
+    // tonemap is the only LDR scene route; all other scenes keep the HDR path.
+    const sceneColor = fxaaActive && data.camera.tonemap === 'none' ? 'ldrColor' : 'hdrColor';
     addScenePass(graph, 'main', {
-      color: 'hdrColor',
+      color: sceneColor,
       depth: 'depth',
       // feat-20260625 M2 / w9 (D-2): read spotShadowDepth so the spot caster
       // pass orders before the forward pass that samples it (binding 8).
-      reads: ['shadowDepth', 'spotShadowDepth', 'hdrColor'],
+      reads: ['shadowDepth', 'spotShadowDepth', ...(sceneColor === 'hdrColor' ? ['hdrColor'] : [])],
       selector: { LightMode: ['Forward'] },
     });
 
@@ -361,19 +361,22 @@ export const urpPipeline: RenderPipeline = {
       blurV: 'bloomBlurV',
     });
 
-    // 8. Tonemap: HDR -> LDR. Reads hdrComposited when bloom is on, or hdrColor
-    //    directly when bloom is off (composite gated off -> hdrComposited unwritten).
-    addTonemapPass(graph, 'tonemap', {
-      hdrComposited: 'hdrComposited',
-      hdrColorWhenBloomOff: 'hdrColor',
-    });
+    // 8. Tonemap: HDR -> LDR. With FXAA enabled the graph-owned LDR target is
+    // the hand-off into FXAA; otherwise tonemap writes the surface.
+    const ldrOutput = fxaaActive ? 'ldrColor' : 'swapchain';
+    if (data.camera.tonemap !== 'none') {
+      addTonemapPass(graph, 'tonemap', {
+        hdrComposited: 'hdrComposited',
+        hdrColorWhenBloomOff: 'hdrColor',
+        color: ldrOutput,
+      });
+    }
 
-    // 9. FXAA: fullscreen post-process over the swap-chain. Writes
-    //    fxaaIntermediate (the RT used to copy swap-chain -> sample -> write).
-    //    Empty reads — FXAA samples the swap-chain directly via
-    //    copyTextureToTexture (R-COLORSPACE: write through the swap-chain's
-    //    non-srgb storage view to avoid double sRGB encoding).
-    addFullscreenPass(graph, 'fxaa', { shader: 'fxaa', color: 'fxaaIntermediate' });
+    // 9. FXAA: graph-owned LDR input -> swap-chain output. The surface is
+    // never copied or sampled; this is valid on both native WebGPU and WebGL2.
+    if (fxaaActive) {
+      addFullscreenPass(graph, 'fxaa', { shader: 'fxaa', color: 'swapchain', reads: ['ldrColor'] });
+    }
 
     // 9.b feat-20260621 M4' post-URP post-process effects: ordered registered
     // effect ids the install-time config requests, composited over the FINAL
@@ -392,7 +395,7 @@ export const urpPipeline: RenderPipeline = {
       runtime.device.caps.backendKind === 'wgpu-webgl2' ? [] : (data.config?.postEffects ?? []);
     for (let i = 0; i < postEffects.length; i++) {
       const effectId = postEffects[i] as string;
-      // One scratch target per effect (mirrors fxaaIntermediate). It is the
+      // One scratch target per effect. It is the
       // pass `color` (graph writer -> no dangling-read) AND the copy-dst +
       // sampled input; the effect reads the prior swap-chain state, so chaining
       // N effects composes left-to-right (effect i sees effect i-1's output).

@@ -8,7 +8,8 @@ describe('game-default settings state', () => {
     applyGameSetting(state, 'musicMuted', true);
     applyGameSetting(state, 'highContrast', true);
     applyGameSetting(state, 'antialias', 'msaa');
-    expect(state).toEqual({ music: 35, musicMuted: true, highContrast: true, antialias: 'msaa', bloom: true });
-    expect(createGameSettingsState()).toEqual({ music: 70, musicMuted: false, highContrast: false, antialias: 'fxaa', bloom: true });
+    applyGameSetting(state, 'clearColor', 'purple');
+    expect(state).toEqual({ music: 35, musicMuted: true, highContrast: true, antialias: 'msaa', bloom: true, clearColor: 'purple' });
+    expect(createGameSettingsState()).toEqual({ music: 70, musicMuted: false, highContrast: false, antialias: 'fxaa', bloom: true, clearColor: 'sky' });
   });
 });

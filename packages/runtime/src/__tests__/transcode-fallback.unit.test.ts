@@ -22,7 +22,7 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { AssetCompression, TranscodeCaps } from '@forgeax/engine-types';
+import type { TranscodeCaps } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -93,7 +93,10 @@ function parseGuid(g: string): AssetGuid {
 
 let originalFetch: typeof globalThis.fetch;
 
-function wireFetch(compression: AssetCompression, colorSpace: 'srgb' | 'linear'): void {
+function wireFetch(
+  compression: 'basis-uastc' | 'basis-etc1s',
+  colorSpace: 'srgb' | 'linear',
+): void {
   globalThis.fetch = vi.fn().mockImplementation((input: string) => {
     const url = typeof input === 'string' ? input : String(input);
     if (url === PACK_INDEX_URL) {
@@ -103,19 +106,35 @@ function wireFetch(compression: AssetCompression, colorSpace: 'srgb' | 'linear')
           Promise.resolve([
             {
               guid: GUID_TEX,
-              relativeUrl: `/ddc/${GUID_TEX}.ktx2`,
+              packageUrl: `/ddc/${GUID_TEX}.pack.json`,
               kind: 'texture',
-              compression,
-              metadata: {
-                kind: 'texture',
-                width: 4,
-                height: 4,
-                format: colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
-                colorSpace,
-                mipmap: false,
-              },
             },
           ]),
+      });
+    }
+    if (url === `/ddc/${GUID_TEX}.pack.json`) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: GUID_TEX,
+                kind: 'texture',
+                payload: { width: 4, height: 4, colorSpace },
+                refs: [],
+                artifacts: {
+                  body: {
+                    path: `${GUID_TEX}.ktx2`,
+                    mediaType: 'image/ktx2',
+                    assetCodec: { name: 'basis', profile: compression.slice(6) },
+                  },
+                },
+              },
+            ],
+          }),
       });
     }
     return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(KTX2_MAGIC.buffer) });
@@ -124,7 +143,7 @@ function wireFetch(compression: AssetCompression, colorSpace: 'srgb' | 'linear')
 
 async function loadFormat(
   caps: TranscodeCaps,
-  compression: AssetCompression,
+  compression: 'basis-uastc' | 'basis-etc1s',
   colorSpace: 'srgb' | 'linear' = 'srgb',
 ): Promise<{ ok: boolean; format?: GPUTextureFormat }> {
   wireFetch(compression, colorSpace);

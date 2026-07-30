@@ -1,17 +1,31 @@
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset } from '@forgeax/engine-runtime';
+import animatedTargetShader from './animated-target.wgsl';
+
+export const ANIMATED_TARGET_SHADER_ID = 'game_default::animated_target';
+export const ANIMATED_TARGET_SHADER_SOURCE = animatedTargetShader.wgsl;
+
+type MutableMaterial = {
+  passes?: MaterialAsset['passes'];
+  paramValues?: Readonly<Record<string, unknown>>;
+};
 
 export type AnimatedMaterialTarget = {
   e: EntityHandle;
   mat: Handle<'MaterialAsset', 'shared'>;
   baseHue: number;
   baseColor: readonly [number, number, number, number];
+  baseMaterial: MaterialAsset;
+  shaderAnimated: boolean;
+  shaderTime: number;
 };
 
 export function createAnimatedMaterialTarget(
   world: World,
   source: Omit<AnimatedMaterialTarget, 'baseHue' | 'baseColor'>,
   baseHue: number,
+  renderer?: Renderer,
 ): AnimatedMaterialTarget {
   const result = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(source.mat);
   const values = result.ok ? result.value.paramValues as Record<string, unknown> | undefined : undefined;
@@ -19,7 +33,25 @@ export function createAnimatedMaterialTarget(
   const color: [number, number, number, number] = Array.isArray(rawColor) && rawColor.length === 4
     ? [Number(rawColor[0]), Number(rawColor[1]), Number(rawColor[2]), Number(rawColor[3])]
     : [1, 1, 1, 1];
-  return { ...source, baseHue, baseColor: color };
+  const baseMaterial = result.ok ? { ...result.value } : { kind: 'material' as const };
+  let shaderAnimated = false;
+  if (result.ok && renderer?.shader !== null && renderer?.shader !== undefined) {
+    const registry = renderer.shader;
+    if (!registry.lookupMaterialShader(ANIMATED_TARGET_SHADER_ID).ok) {
+      registry.registerMaterialShader(ANIMATED_TARGET_SHADER_ID, {
+        source: ANIMATED_TARGET_SHADER_SOURCE,
+        paramSchema: [
+          { name: 'baseColor', type: 'color' },
+          { name: 'time', type: 'f32', default: 0 },
+        ],
+      });
+    }
+    const material = result.value as unknown as MutableMaterial;
+    material.passes = [{ name: 'Forward', shader: ANIMATED_TARGET_SHADER_ID, tags: { LightMode: 'Forward' }, queue: 2000 }];
+    material.paramValues = { baseColor: color, time: 0 };
+    shaderAnimated = true;
+  }
+  return { ...source, baseHue, baseColor: color, baseMaterial, shaderAnimated, shaderTime: 0 };
 }
 
 function hueToRgb(p: number, q: number, t: number): number {
@@ -46,12 +78,32 @@ export function stepAnimatedMaterial(world: World, target: AnimatedMaterialTarge
   if (!result.ok) return;
   const values = result.value.paramValues as Record<string, unknown> | undefined;
   if (values === undefined) return;
+  if (target.shaderAnimated) {
+    values.time = elapsed;
+    target.shaderTime = elapsed;
+    return;
+  }
   values.baseColor = [...hslToRgb(target.baseHue + elapsed * 38), 1];
 }
 
 export function resetAnimatedMaterial(world: World, target: AnimatedMaterialTarget): void {
   const result = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(target.mat);
   if (!result.ok) return;
+  if (target.shaderAnimated) {
+    const material = result.value as unknown as Record<string, unknown>;
+    for (const key of Object.keys(material)) delete material[key];
+    Object.assign(material, target.baseMaterial);
+    target.shaderTime = 0;
+    return;
+  }
   const values = result.value.paramValues as Record<string, unknown> | undefined;
   if (values !== undefined) values.baseColor = [...target.baseColor];
+}
+
+export function animatedShaderEnabled(target: AnimatedMaterialTarget | undefined): boolean {
+  return target?.shaderAnimated === true;
+}
+
+export function animatedShaderTime(target: AnimatedMaterialTarget | undefined): number {
+  return target?.shaderTime ?? 0;
 }

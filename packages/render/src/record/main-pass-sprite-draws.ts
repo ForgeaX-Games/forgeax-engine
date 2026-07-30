@@ -396,7 +396,7 @@ function recordSpriteTransparentPbrDraws(
         runtime.getMaterialShaderPipeline?.(
           smShaderId,
           /* isHdr */ false,
-          entry.renderState,
+          submeshMaterial.renderState,
           sm.topology,
           entry.mesh.indexFormat,
           subVariantSet,

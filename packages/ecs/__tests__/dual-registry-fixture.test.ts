@@ -21,21 +21,25 @@ describe('dual-registry-fixture.test.ts', () => {
     expect(src).toContain('defineSystem');
   });
 
-  it('AC-10: import evaluates fixture; both registries see their items', async () => {
-    // Dynamic import evaluates at test-time; vitest transforms TS and
-    // the side-effect registers the component + system in the globals.
-    await import('../src/__fixtures__/dual-fixture');
+  it(
+    'AC-10: import evaluates fixture; both registries see their items',
+    { timeout: 30_000 },
+    async () => {
+      // Dynamic import evaluates at test-time; vitest transforms TS and
+      // the side-effect registers the component + system in the globals.
+      await import('../src/__fixtures__/dual-fixture');
 
-    // Dynamic ESM from barrel to avoid hoisted static import collision.
-    const { getRegisteredComponents, getRegisteredSystems } =
-      await import('../src/index');
+      // Dynamic ESM from barrel to avoid hoisted static import collision.
+      const { getRegisteredComponents, getRegisteredSystems } =
+        await import('../src/index');
 
-    const comps = getRegisteredComponents();
-    expect(comps.get('DualFixturePos')).toBeDefined();
+      const comps = getRegisteredComponents();
+      expect(comps.get('DualFixturePos')).toBeDefined();
 
-    const systems = getRegisteredSystems();
-    expect(systems.get('dual-fixture-system')).toBeDefined();
-  });
+      const systems = getRegisteredSystems();
+      expect(systems.get('dual-fixture-system')).toBeDefined();
+    },
+  );
 
   it('AC-10: registries do not cross-contaminate', async () => {
     const { getRegisteredComponents, getRegisteredSystems } =

@@ -106,13 +106,32 @@ if (!hdrEntry) {
   console.error(`[smoke] FAIL - HDR GUID ${hdrGuid} is absent from ${packIndexPath}`);
   process.exit(1);
 }
-const hdrBytes = new Uint8Array(readFileSync(resolve(distDir, hdrEntry.relativeUrl.replace(/^\//, ''))));
+const hdrPackagePath = hdrEntry.packageUrl.replace(/^\//, '');
+const hdrPackageBytes = new Uint8Array(readFileSync(resolve(distDir, hdrPackagePath)));
+const hdrPackage = JSON.parse(new TextDecoder().decode(hdrPackageBytes));
+const hdrAsset = hdrPackage.assets.find((asset) => asset.guid === hdrGuid);
+if (!hdrAsset) {
+  console.error(`[smoke] FAIL - HDR GUID ${hdrGuid} is absent from ${hdrEntry.packageUrl}`);
+  process.exit(1);
+}
+const hdrArtifactPath = hdrAsset.artifacts.body.path;
+const hdrArtifactUrl = `${hdrEntry.packageUrl.slice(0, hdrEntry.packageUrl.lastIndexOf('/') + 1)}${hdrArtifactPath}`;
+const hdrBytes = new Uint8Array(
+  readFileSync(resolve(dirname(resolve(distDir, hdrPackagePath)), hdrArtifactPath)),
+);
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
   if (url === '/pack-index.json') {
     return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
-  if (url === hdrEntry.relativeUrl) {
+  if (url === hdrEntry.packageUrl) {
+    return {
+      ok: true,
+      json: () => Promise.resolve(hdrPackage),
+      arrayBuffer: () => Promise.resolve(hdrPackageBytes.buffer.slice(hdrPackageBytes.byteOffset, hdrPackageBytes.byteOffset + hdrPackageBytes.byteLength)),
+    };
+  }
+  if (url === hdrArtifactUrl) {
     const buffer = new ArrayBuffer(hdrBytes.byteLength);
     new Uint8Array(buffer).set(hdrBytes);
     return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(buffer) };

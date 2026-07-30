@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { gltfImporter } from '@forgeax/engine-gltf';
+import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
@@ -30,7 +31,7 @@ export default defineConfig({
         resolve(monorepoRoot, 'forgeax-engine-assets/collectathon-audio'),
         resolve(monorepoRoot, 'forgeax-engine-assets/dejavu-fonts'),
       ],
-      importers: [imageImporter, gltfImporter, fbxImporter],
+        importers: [audioImporter, imageImporter, gltfImporter, fbxImporter],
     }),
   ],
   server: {

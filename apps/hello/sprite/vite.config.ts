@@ -43,7 +43,7 @@ export default defineConfig({
     // R-01 guard (mirrors learn-render-1.4-textures): vite-plugin-pack
     // emits the imported RGBA bytes as `assets/<guid>-<hash>.bin`. Rollup's
     // default `build.assetsInlineLimit` (4 KiB) would inline anything
-    // below the threshold -> the pack-index relativeUrl would point at
+    // below the threshold -> the pack-index packageUrl would point at
     // a non-existent file, breaking runtime fetch. The callback opts
     // .bin out of inlining regardless of size.
     assetsInlineLimit: (filePath: string): boolean | undefined =>

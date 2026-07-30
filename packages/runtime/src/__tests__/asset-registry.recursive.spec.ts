@@ -200,8 +200,8 @@ describe('AC-07 — transitive failure attribution', () => {
 
     // Pack-index: scene + mesh present, material missing.
     const packIndex = [
-      { guid: SCENE_GUID, relativeUrl: '/packs/scene.pack.json', kind: 'scene' },
-      { guid: MESH_GUID, relativeUrl: '/packs/mesh.pack.json', kind: 'mesh' },
+      { guid: SCENE_GUID, packageUrl: '/packs/scene.pack.json', kind: 'scene' },
+      { guid: MESH_GUID, packageUrl: '/packs/mesh.pack.json', kind: 'mesh' },
       // MISSING_SUB_GUID intentionally absent
     ];
 
@@ -211,7 +211,7 @@ describe('AC-07 — transitive failure attribution', () => {
     // scene envelope's refs[] (GUID-string projection) drives the unified
     // recursive for-loop. MESH_GUID -> refs[0], MISSING_SUB_GUID -> refs[1].
     const scenePack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -235,7 +235,7 @@ describe('AC-07 — transitive failure attribution', () => {
     };
 
     const meshPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -347,10 +347,10 @@ describe('AC-08 — in-flight dedup + cycle', () => {
   it('concurrent loadByGuid(g) 3-way shares in-flight promise — only 1 pack fetch', async () => {
     const reg = makeRegistry();
 
-    const packIndex = [{ guid: MESH_GUID, relativeUrl: '/packs/mesh.pack.json', kind: 'mesh' }];
+    const packIndex = [{ guid: MESH_GUID, packageUrl: '/packs/mesh.pack.json', kind: 'mesh' }];
 
     const meshPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -426,12 +426,12 @@ describe('AC-08 — in-flight dedup + cycle', () => {
     // (fast-path hit) / inFlight Promise satisfies it → no stack overflow.
 
     const packIndex = [
-      { guid: CYCLE_A_GUID, relativeUrl: '/packs/a.pack.json', kind: 'scene' },
-      { guid: CYCLE_B_GUID, relativeUrl: '/packs/b.pack.json', kind: 'scene' },
+      { guid: CYCLE_A_GUID, packageUrl: '/packs/a.pack.json', kind: 'scene' },
+      { guid: CYCLE_B_GUID, packageUrl: '/packs/b.pack.json', kind: 'scene' },
     ];
 
     const sceneAPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -454,7 +454,7 @@ describe('AC-08 — in-flight dedup + cycle', () => {
     };
 
     const sceneBPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -538,11 +538,11 @@ describe('AC-02 — material recursive loadByGuid', () => {
     });
 
     const packIndex = [
-      { guid: MATERIAL_PARENT_GUID, relativeUrl: '/packs/material.pack.json', kind: 'material' },
+      { guid: MATERIAL_PARENT_GUID, packageUrl: '/packs/material.pack.json', kind: 'material' },
     ];
 
     const materialPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -603,10 +603,10 @@ describe('AC-04 — skin recursive loadByGuid', () => {
       jointCount: 2,
     });
 
-    const packIndex = [{ guid: SKIN_GUID, relativeUrl: '/packs/skin.pack.json', kind: 'skin' }];
+    const packIndex = [{ guid: SKIN_GUID, packageUrl: '/packs/skin.pack.json', kind: 'skin' }];
 
     const skinPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -661,8 +661,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     // + material, and the material's paramValues reference a texture GUID.
     // The recursive walk must reach all three kinds.
     //
-    // Texture is pre-registered in dev mode (fast-path compatible) because
-    // the texture upstream-entry path requires .bin URLs + metadata; the
+    // Texture is pre-registered in dev mode (fast-path compatible); the
     // material envelope's refs[] carries the texture GUIDs from paramValues,
     // and the recursive loadByGuid hits the dev fast-path.
 
@@ -672,7 +671,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
 
     const reg = makeRegistry();
 
-    // Pre-register texture in dev mode
+    // Pre-register texture in dev mode.
     reg.catalog(parseGuid(TEXTURE_C_GUID), {
       kind: 'texture' as const,
       width: 4,
@@ -684,17 +683,17 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     });
 
     const packIndex = [
-      { guid: SCENE_GLTF_GUID, relativeUrl: '/packs/scene-gltf.pack.json', kind: 'scene' },
-      { guid: MESH_GUID, relativeUrl: '/packs/mesh.pack.json', kind: 'mesh' },
+      { guid: SCENE_GLTF_GUID, packageUrl: '/packs/scene-gltf.pack.json', kind: 'scene' },
+      { guid: MESH_GUID, packageUrl: '/packs/mesh.pack.json', kind: 'mesh' },
       {
         guid: MATERIAL_A_GUID,
-        relativeUrl: '/packs/mat.pack.json',
+        packageUrl: '/packs/mat.pack.json',
         kind: 'material',
       },
     ];
 
     const scenePack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -720,7 +719,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     };
 
     const meshPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -745,7 +744,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     };
 
     const materialPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -812,7 +811,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
 // edges; the importer fills envelope.refs = [] for them. The spec-enumerated
 // leaves (mesh / texture / animation-clip / audio / font) plus extras
 // (sampler / shader / skeleton / render-pipeline) -- tested together for union
-// completeness. (equirect rides the upstream-entry .bin path, covered by
+// completeness. (equirect rides the Pack v2 artifact path, covered by
 // asset-registry-hdr-equirect.test.ts, not the inline-payload roundtrip here.)
 //
 // AC-05 per-leaf assertions:
@@ -1055,12 +1054,12 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     });
 
     const packIndex = [
-      { guid: SKIN_FIXUP_SCENE_GUID, relativeUrl: '/packs/scene.pack.json', kind: 'scene' },
-      { guid: SKIN_FIXUP_SKIN_GUID, relativeUrl: '/packs/skin.pack.json', kind: 'skin' },
+      { guid: SKIN_FIXUP_SCENE_GUID, packageUrl: '/packs/scene.pack.json', kind: 'scene' },
+      { guid: SKIN_FIXUP_SKIN_GUID, packageUrl: '/packs/skin.pack.json', kind: 'skin' },
     ];
 
     const scenePack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {
@@ -1088,7 +1087,7 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     };
 
     const skinPack = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       kind: 'internal-text-package',
       assets: [
         {

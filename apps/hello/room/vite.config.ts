@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
@@ -22,7 +23,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // the MaterialAsset.shadingModel discriminant (plan-strategy D-P4) resolve
 // to the same manifest hashes.
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  plugins: [forgeaxShader() as never, pluginPack({ roots: [resolve(here, 'assets')], refresh: reloadAssetHost() })],
   server: {
     fs: {
       allow: [monorepoRoot],

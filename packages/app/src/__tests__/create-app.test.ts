@@ -25,7 +25,7 @@ import { World } from '@forgeax/engine-ecs';
 import { Camera, orthographic, perspective } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
-import { syncCameraAspect } from '../create-app';
+import { syncCameraAspect, syncCanvasDrawingBuffer } from '../create-app';
 import { resolveRhiDebugFlag } from '../internal/rhi-debug-flag';
 
 describe('create-app.test.ts', () => {
@@ -92,6 +92,119 @@ describe('create-app.test.ts', () => {
         // Reading .captureFrame off an undefined __forgeax throws synchronously.
         (g.__forgeax as { captureFrame: (n: number) => unknown }).captureFrame(1);
       }).toThrow(TypeError);
+    });
+  });
+
+  describe('syncCanvasDrawingBuffer host boundary', () => {
+    it('matches the physical drawing buffer to CSS size at the device pixel ratio', () => {
+      const canvas = {
+        clientWidth: 800,
+        clientHeight: 400,
+        width: 300,
+        height: 150,
+        style: { width: '800px', height: '400px' },
+      };
+      const before = globalThis.devicePixelRatio;
+      Object.defineProperty(globalThis, 'devicePixelRatio', { configurable: true, value: 2 });
+      try {
+        syncCanvasDrawingBuffer(canvas);
+        expect(canvas.width).toBe(1600);
+        expect(canvas.height).toBe(800);
+      } finally {
+        Object.defineProperty(globalThis, 'devicePixelRatio', {
+          configurable: true,
+          value: before,
+        });
+      }
+    });
+
+    it('leaves a zero-sized host untouched', () => {
+      const canvas = { clientWidth: 0, clientHeight: 400, width: 300, height: 150 };
+      syncCanvasDrawingBuffer(canvas);
+      expect(canvas.width).toBe(300);
+      expect(canvas.height).toBe(150);
+    });
+
+    it('leaves a headless canvas without CSS dimensions untouched', () => {
+      const canvas = { width: 320, height: 180 } as HTMLCanvasElement;
+      syncCanvasDrawingBuffer(canvas);
+      expect(canvas.width).toBe(320);
+      expect(canvas.height).toBe(180);
+    });
+
+    it('preserves an intrinsic canvas drawing buffer without CSS dimensions', () => {
+      let width = 256;
+      let height = 256;
+      const canvas = {
+        get clientWidth() {
+          return width;
+        },
+        get clientHeight() {
+          return height;
+        },
+        get width() {
+          return width;
+        },
+        set width(value: number) {
+          width = value;
+        },
+        get height() {
+          return height;
+        },
+        set height(value: number) {
+          height = value;
+        },
+      };
+      const before = globalThis.devicePixelRatio;
+      Object.defineProperty(globalThis, 'devicePixelRatio', { configurable: true, value: 2 });
+      try {
+        syncCanvasDrawingBuffer(canvas);
+        syncCanvasDrawingBuffer(canvas);
+        expect(width).toBe(256);
+        expect(height).toBe(256);
+      } finally {
+        Object.defineProperty(globalThis, 'devicePixelRatio', {
+          configurable: true,
+          value: before,
+        });
+      }
+    });
+
+    it('does not repeatedly scale a CSS-sized canvas when layout follows width writes', () => {
+      let width = 256;
+      let height = 256;
+      const canvas = {
+        clientWidth: 256,
+        clientHeight: 256,
+        style: { width: '256px', height: '256px' },
+        get width() {
+          return width;
+        },
+        set width(value: number) {
+          width = value;
+          canvas.clientWidth = value;
+        },
+        get height() {
+          return height;
+        },
+        set height(value: number) {
+          height = value;
+          canvas.clientHeight = value;
+        },
+      };
+      const before = globalThis.devicePixelRatio;
+      Object.defineProperty(globalThis, 'devicePixelRatio', { configurable: true, value: 2 });
+      try {
+        syncCanvasDrawingBuffer(canvas);
+        syncCanvasDrawingBuffer(canvas);
+        expect(width).toBe(512);
+        expect(height).toBe(512);
+      } finally {
+        Object.defineProperty(globalThis, 'devicePixelRatio', {
+          configurable: true,
+          value: before,
+        });
+      }
     });
   });
 

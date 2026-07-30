@@ -33,16 +33,16 @@ function makeRegistry(): AssetRegistry {
 
 // ── pack fixture: two meshes sharing the same .pack.json ────────────────────
 
-function makePackIndex(): Array<{ guid: string; relativeUrl: string; kind: string }> {
+function makePackIndex(): Array<{ guid: string; packageUrl: string; kind: string }> {
   return [
-    { guid: MESH_A_GUID, relativeUrl: SHARED_PACK_URL, kind: 'mesh' },
-    { guid: MESH_B_GUID, relativeUrl: SHARED_PACK_URL, kind: 'mesh' },
+    { guid: MESH_A_GUID, packageUrl: SHARED_PACK_URL, kind: 'mesh' },
+    { guid: MESH_B_GUID, packageUrl: SHARED_PACK_URL, kind: 'mesh' },
   ];
 }
 
 function makeSharedPack(): unknown {
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -142,7 +142,7 @@ describe('pack-file cache', () => {
     const packIndex = [
       {
         guid: MESH_A_GUID,
-        relativeUrl: '../.forgeax/games/cow-survivor/assets/shared.pack.json',
+        packageUrl: '../.forgeax/games/cow-survivor/assets/shared.pack.json',
         kind: 'mesh',
       },
     ];
@@ -174,7 +174,7 @@ describe('pack-file cache', () => {
     const packUrl = 'https://cdn.example.test/cow/shared.pack.json';
     reg.configurePackIndex(packIndexUrl);
 
-    const packIndex = [{ guid: MESH_A_GUID, relativeUrl: packUrl, kind: 'mesh' }];
+    const packIndex = [{ guid: MESH_A_GUID, packageUrl: packUrl, kind: 'mesh' }];
     const sharedPack = makeSharedPack();
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url === packIndexUrl)
@@ -447,7 +447,7 @@ describe('transportOrFail packIndexCache concurrent patch (F20 / AC-08) [w14]', 
             ok: true,
             json: () =>
               Promise.resolve({
-                schemaVersion: '1.0.0',
+                schemaVersion: '2.0.0',
                 kind: 'internal-text-package',
                 assets: [
                   {
@@ -489,11 +489,11 @@ describe('transportOrFail packIndexCache concurrent patch (F20 / AC-08) [w14]', 
       // Settle the transport fetchPack calls with entries.
       resolvers[0]?.({
         ok: true,
-        entries: [{ guid: GUID_1, relativeUrl: PACK_1, kind: 'mesh' }],
+        entries: [{ guid: GUID_1, packageUrl: PACK_1, kind: 'mesh' }],
       });
       resolvers[1]?.({
         ok: true,
-        entries: [{ guid: GUID_2, relativeUrl: PACK_2, kind: 'mesh' }],
+        entries: [{ guid: GUID_2, packageUrl: PACK_2, kind: 'mesh' }],
       });
 
       await Promise.all([load1, load2]);
@@ -517,7 +517,7 @@ describe('transportOrFail packIndexCache concurrent patch (F20 / AC-08) [w14]', 
 });
 
 // -- transportOrFail patch preserves the transport's derived display name --
-// Regression: the incremental patch loop copied relativeUrl/kind/metadata but
+// Regression: the incremental patch loop copied packageUrl/kind/metadata but
 // dropped `name`, so a GLB imported at runtime (studio Content Browser) showed
 // its 1000+ sub-assets as blank rows. buildCatalog already derives the name
 // (basename of the source), the transport carries it, and listCatalog reads it
@@ -547,7 +547,7 @@ describe('transportOrFail packIndexCache patch preserves entry.name', () => {
     const importTransport = {
       fetchPack: vi.fn().mockResolvedValue({
         ok: true,
-        entries: [{ guid: GUID, relativeUrl: PACK, kind: 'scene', name: NAME }],
+        entries: [{ guid: GUID, packageUrl: PACK, kind: 'scene', name: NAME }],
       }),
     } as unknown as { fetchPack: ReturnType<typeof vi.fn> };
 
@@ -648,7 +648,7 @@ describe('integration: concurrent transportOrFail dual GUID (F20 / AC-07) [w18]'
             ok: true,
             json: () =>
               Promise.resolve({
-                schemaVersion: '1.0.0',
+                schemaVersion: '2.0.0',
                 kind: 'internal-text-package',
                 assets: [
                   {
@@ -687,11 +687,11 @@ describe('integration: concurrent transportOrFail dual GUID (F20 / AC-07) [w18]'
       // Both are blocked at fetchPack. Release both transports.
       resolvers[0]?.({
         ok: true,
-        entries: [{ guid: GUID_1, relativeUrl: PACK_1, kind: 'mesh' }],
+        entries: [{ guid: GUID_1, packageUrl: PACK_1, kind: 'mesh' }],
       });
       resolvers[1]?.({
         ok: true,
-        entries: [{ guid: GUID_2, relativeUrl: PACK_2, kind: 'mesh' }],
+        entries: [{ guid: GUID_2, packageUrl: PACK_2, kind: 'mesh' }],
       });
 
       const [r1, r2] = await Promise.all([load1, load2]);
@@ -741,7 +741,7 @@ describe('refreshCatalog re-fetches the pack-index immediately', () => {
 
     const NEW_GUID = 'f0000000-0000-4000-f000-0000000000a1';
     // First served index is empty; the second (post-"import") carries one row.
-    let served: Array<{ guid: string; relativeUrl: string; kind: string; name?: string }> = [];
+    let served: Array<{ guid: string; packageUrl: string; kind: string; name?: string }> = [];
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url === '/pack-index.json') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(served) });
@@ -757,7 +757,12 @@ describe('refreshCatalog re-fetches the pack-index immediately', () => {
 
       // Simulate an import writing a fresh pack-index, then refresh.
       served = [
-        { guid: NEW_GUID, relativeUrl: '/preview/new.glb', kind: 'scene', name: 'new.glb' },
+        {
+          guid: NEW_GUID,
+          packageUrl: '/preview/new.pack.json',
+          kind: 'scene',
+          name: 'new.pack.json',
+        },
       ];
       const second = await reg.refreshCatalog();
       expect(second).toBe(true);
@@ -765,7 +770,7 @@ describe('refreshCatalog re-fetches the pack-index immediately', () => {
       const row = reg.listCatalog().find((e) => e.guid === NEW_GUID.toLowerCase());
       expect(row).toBeDefined();
       expect(row?.kind).toBe('scene');
-      expect(row?.name).toBe('new.glb');
+      expect(row?.name).toBe('new.pack.json');
     } finally {
       // biome-ignore lint/suspicious/noExplicitAny: test teardown
       delete (globalThis as any).fetch;
@@ -786,7 +791,7 @@ const M5_GUID_B = 'f0000000-0000-4000-f000-0000000000a3';
 
 function makeRichImportedEntry(
   guid: string,
-  relativeUrl: string,
+  packageUrl: string,
   sourceIndex: number,
 ): PackIndexEntry {
   const provenance = {
@@ -796,7 +801,7 @@ function makeRichImportedEntry(
   };
   return {
     guid,
-    relativeUrl,
+    packageUrl,
     kind: 'mesh',
     sourcePath: `models/${guid}.source`,
     packageId: 'fixture-package',
@@ -831,7 +836,7 @@ function makeRichImportedEntry(
 
 function makeImportedMeshPack(guid: string): unknown {
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '2.0.0',
     kind: 'internal-text-package',
     assets: [
       {
@@ -846,6 +851,8 @@ function makeImportedMeshPack(guid: string): unknown {
           attributes: {},
           submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
         },
+        refs: [],
+        artifacts: {},
       },
     ],
   };
@@ -868,9 +875,9 @@ describe('M5 real import patch preserves CatalogRecord facts', () => {
   });
 
   it('keeps producer identity while resolving the imported locator', async () => {
-    const relativeUrl = './packs/imported-a.pack.json';
+    const packageUrl = './packs/imported-a.pack.json';
     const resolvedUrl = 'https://assets.example.test/game/packs/imported-a.pack.json';
-    const entry = makeRichImportedEntry(M5_GUID_A, relativeUrl, 4);
+    const entry = makeRichImportedEntry(M5_GUID_A, packageUrl, 4);
     const importTransport = {
       fetchPack: vi.fn().mockResolvedValue({ ok: true, entries: [entry] }),
     };
@@ -898,7 +905,7 @@ describe('M5 real import patch preserves CatalogRecord facts', () => {
     expect(importTransport.fetchPack).toHaveBeenCalledWith(M5_GUID_A);
     expect(reg.listCatalog()).toContainEqual({
       ...entry,
-      relativeUrl: resolvedUrl,
+      packageUrl: resolvedUrl,
     });
   });
 
@@ -924,7 +931,7 @@ describe('M5 real import patch preserves CatalogRecord facts', () => {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       const entry = entries.find(
-        (candidate) => url === new URL(candidate.relativeUrl, M5_PACK_INDEX_URL).href,
+        (candidate) => url === new URL(candidate.packageUrl, M5_PACK_INDEX_URL).href,
       );
       if (entry !== undefined) {
         return Promise.resolve({
@@ -949,7 +956,7 @@ describe('M5 real import patch preserves CatalogRecord facts', () => {
       expect.arrayContaining(
         entries.map((entry) => ({
           ...entry,
-          relativeUrl: new URL(entry.relativeUrl, M5_PACK_INDEX_URL).href,
+          packageUrl: new URL(entry.packageUrl, M5_PACK_INDEX_URL).href,
         })),
       ),
     );

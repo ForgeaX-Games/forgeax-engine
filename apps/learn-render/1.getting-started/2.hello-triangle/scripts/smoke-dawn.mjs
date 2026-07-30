@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const CLEAR_ONLY = process.env.SMOKE_CLEAR_ONLY === '1';
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -188,19 +189,21 @@ if (!ready.ok) {
 const world = new World();
 // LO 1.2 fragment shader literal: vec4(1.0, 0.5, 0.2, 1.0) flat orange.
 // M8 D-17: mint a user-tier column handle from the unlit MaterialAsset POD.
-const orangeMaterial = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
-world.spawn(
-  {
-    component: Transform,
-    data: {
-      pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
-  },
-  { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
-  {
-    component: MeshRenderer,
-    data: { materials: [orangeMaterial] },
-  },
-);
+if (!CLEAR_ONLY) {
+  const orangeMaterial = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
+  world.spawn(
+    {
+      component: Transform,
+      data: {
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
+    },
+    { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
+    {
+      component: MeshRenderer,
+      data: { materials: [orangeMaterial] },
+    },
+  );
+}
 world.spawn(
   {
     component: Transform,
@@ -209,7 +212,13 @@ world.spawn(
   },
   {
     component: Camera,
-    data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
+    data: {
+      fov: Math.PI / 4,
+      aspect: WIDTH / HEIGHT,
+      near: 0.1,
+      far: 100,
+      clearColor: [0.2, 0.3, 0.3, 1],
+    },
   },
 );
 
@@ -288,7 +297,10 @@ console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
 const distance = (a, b) =>
   Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
-const CLEAR_COLOR = [0.2, 0.3, 0.3];
+// The Camera authors linear [0.2, 0.3, 0.3]; rgba8unorm-srgb readback exposes
+// the encoded values below. Keeping this readback-space SSOT makes the
+// clear-only falsification compare against the actual clear frame.
+const CLEAR_COLOR = [0.4862745098, 0.5843137255, 0.5843137255];
 const meshSiteNames = ['ndcCenter', 'triLeft', 'triRight'];
 let meshedRenderCount = 0;
 const perSiteDistance = {};

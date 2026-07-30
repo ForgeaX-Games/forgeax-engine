@@ -1,6 +1,6 @@
 import { mountUi, type UiAsset, type UiError, type UiInstance } from '@forgeax/engine-ui';
 
-export type ViewMode = 'topdown' | 'orbit' | 'fps';
+export type ViewMode = 'topdown' | 'orbit' | 'fps' | 'pan';
 export const HUD_UI_GUID = '019f8354-6386-4386-849d-f2ab4b96229c';
 
 export interface HudHandle {
@@ -52,13 +52,15 @@ export function installHud(opts: {
   const popups = slot<HTMLElement>(shadow, 'popups');
   const popupTemplate = shadow.querySelector<HTMLTemplateElement>('[data-ui-template="score-popup"]');
   const applyMode = (mode: ViewMode): void => {
-    if (button) button.textContent = mode === 'topdown' ? 'View: Top-down > Orbit' : mode === 'orbit' ? 'View: Orbit > FPS' : 'View: FPS > Top-down';
+    if (button) button.textContent = mode === 'topdown' ? 'View: Top-down > Orbit' : mode === 'orbit' ? 'View: Orbit > FPS' : mode === 'fps' ? 'View: FPS > Map' : 'View: Map > Top-down';
     if (crosshair) crosshair.style.display = mode === 'fps' ? 'block' : 'none';
     if (hint) hint.textContent = mode === 'fps'
-      ? 'Click canvas to lock pointer - WASD move - F/click shoot - ESC release'
+      ? 'Click canvas to lock pointer - WASD move - Q/E fly - Shift run - wheel speed - F/click shoot - ESC release'
       : mode === 'orbit'
-        ? 'Orbit camera - click canvas for mouse look - WASD move - F/click shoot'
-        : 'WASD move - click shoot - aim toward cursor';
+        ? 'Orbit camera - wheel zoom - click canvas for mouse look - WASD move - F/click shoot'
+        : mode === 'pan'
+          ? 'Map camera - arrows pan - wheel zoom - F/click shoot'
+          : 'WASD move - wheel zoom - click shoot - aim toward cursor';
     if (lockStatus) lockStatus.style.display = mode === 'fps' || mode === 'orbit' ? 'block' : 'none';
   };
   const setScore = (n: number): void => { if (score) score.textContent = `Score  ${n}`; };
