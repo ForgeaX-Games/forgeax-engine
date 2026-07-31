@@ -52,7 +52,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 import './outline-solid.wgsl';
 
-const OUTLINE_SHADER_ID = 'learn-render::outline-solid';
+const OUTLINE_SHADER_ID = 'learn_render::outline_solid';
 
 const PACK_INDEX_URL = '/pack-index.json';
 

@@ -117,7 +117,12 @@ const material = (flipX = 0, flipY = 0) => ({
     { name: 'slicesAndMode', type: 'vec4', optional: true },
     { name: 'baseColorTexture', type: 'texture' },
   ],
-  values: { colorTint: [1, 1, 1, 1], baseColorTexture: textureId, sampler, pivotAndSize: [0.5, 0.5, 1, 1], flipX, flipY },
+  values: {
+    colorTint: [1, 1, 1, 1],
+    baseColorTexture: textureId,
+    region: [flipX === 1 ? 1 : 0, flipY === 1 ? 1 : 0, flipX === 1 ? -1 : 1, flipY === 1 ? -1 : 1],
+    pivotAndSize: [0.5, 0.5, 1, 1],
+  },
 });
 const mats = [world.allocSharedRef('MaterialAsset', material()), world.allocSharedRef('MaterialAsset', material(1)), world.allocSharedRef('MaterialAsset', material(0, 1))];
 for (const [x, mat] of [[-3, mats[0]], [0, mats[1]], [3, mats[2]]]) {

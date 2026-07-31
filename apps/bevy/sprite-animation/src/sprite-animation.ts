@@ -59,7 +59,7 @@ export function frameRegions(): Float32Array {
   return regions;
 }
 
-function spriteMaterial(texture: number, sampler: number): MaterialAsset {
+function spriteMaterial(texture: number): MaterialAsset {
   return {
     kind: 'material',
     passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
@@ -70,13 +70,12 @@ function spriteMaterial(texture: number, sampler: number): MaterialAsset {
       { name: 'slicesAndMode', type: 'vec4', optional: true },
       { name: 'baseColorTexture', type: 'texture' },
     ],
-    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1] },
+    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, pivotAndSize: [0.5, 0.5, 1, 1] },
   };
 }
 
 export function buildSpriteAnimationWorld(world: World, texture: number): void {
-  const sampler = world.allocSharedRef('SamplerAsset', { kind: 'sampler', magFilter: 'nearest', minFilter: 'nearest', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
-  const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture, sampler));
+  const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture));
   const regions = frameRegions();
   for (const [x, side, duration] of [[-2.1, 0, FRAME_DURATION_LEFT], [2.1, 1, FRAME_DURATION_RIGHT] as const]) {
     world.spawn(

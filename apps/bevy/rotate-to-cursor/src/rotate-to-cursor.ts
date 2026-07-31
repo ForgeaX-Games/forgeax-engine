@@ -36,7 +36,7 @@ export function makeShipPixels(): Uint8Array {
   return pixels;
 }
 
-function spriteMaterial(texture: number, sampler: number): MaterialAsset {
+function spriteMaterial(texture: number): MaterialAsset {
   return {
     kind: 'material',
     passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
@@ -50,23 +50,15 @@ function spriteMaterial(texture: number, sampler: number): MaterialAsset {
     values: {
       colorTint: [1, 1, 1, 1],
       baseColorTexture: texture,
-      sampler,
       pivotAndSize: [0.5, 0.5, 1, 1],
     },
   };
 }
 
 export function buildRotateToCursorWorld(world: World, texture: number): RotateToCursorScene {
-  const sampler = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'nearest',
-    minFilter: 'nearest',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
   const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
-    spriteMaterial(texture, sampler),
+    spriteMaterial(texture),
   );
   const ship = world.spawn(
     { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [64, 64, 1] } },

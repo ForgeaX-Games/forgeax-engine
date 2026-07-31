@@ -43,7 +43,7 @@ assets.configurePackIndex('/pack-index.json');
 assets.loaders.register(capstoneContentLoader());
 
 const scene = buildCapstoneScene(world);
-const pulseShaderId = 'my-game::pulse-material';
+const pulseShaderId = 'my_game::pulse_material';
 const pulseTexture = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
   kind: 'texture',
   width: 2,

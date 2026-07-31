@@ -236,7 +236,7 @@ const materialAsset = {
   kind: 'material',
   passes: [{ name: 'Forward', program: { module: DEMO_MATERIAL_SHADER_PATH }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
   values: {
-    baseColor: [0.7, 0.7, 0.7],
+    baseColor: [0.7, 0.7, 0.7, 1],
     baseColorTexture: baseColorTextureHandle,
     detailTexture: detailTextureHandle,
   },
@@ -303,12 +303,16 @@ const manifestParamSchema =
   typeof demoShaderEntry.paramSchema === 'string'
     ? JSON.parse(demoShaderEntry.paramSchema)
     : (demoShaderEntry.paramSchema ?? []);
+const composedUsesSampledTexture = (name) => {
+  const start = demoComposedWgsl.indexOf(`textureSample(${name}`);
+  return start >= 0 && demoComposedWgsl.slice(start, start + 320).includes(`${name}_sampler`);
+};
 if (
   !Array.isArray(manifestParamSchema) ||
   !manifestParamSchema.some((entry) => entry?.name === 'baseColorTexture' && entry?.type === 'texture2d') ||
   !manifestParamSchema.some((entry) => entry?.name === 'detailTexture' && entry?.type === 'texture2d') ||
-  !demoComposedWgsl.includes('textureSample(baseColorTexture, baseColorTexture_sampler') ||
-  !demoComposedWgsl.includes('textureSample(detailTexture, detailTexture_sampler')
+  !composedUsesSampledTexture('baseColorTexture') ||
+  !composedUsesSampledTexture('detailTexture')
 ) {
   console.error('[falsify-smoke] FAIL - multi-UV multi-texture schema/sample binding is missing');
   process.exit(1);

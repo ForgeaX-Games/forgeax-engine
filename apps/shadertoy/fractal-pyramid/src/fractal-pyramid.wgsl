@@ -21,13 +21,6 @@
 // them into one std140 uniform block: iResolution at offset 0 (8 bytes),
 // iTime at offset 8. The app mutates paramValues.iTime every frame.
 
-struct ShaderToyUniforms {
-  iResolution : vec2<f32>,
-  iTime       : f32,
-};
-
-@group(1) @binding(0) var<uniform> uniforms : ShaderToyUniforms;
-
 struct VsIn {
   @location(0) pos    : vec3<f32>,
   @location(1) normal : vec3<f32>,
@@ -61,7 +54,7 @@ fn rotate(p : vec2<f32>, a : f32) -> vec2<f32> {
 fn map(p_in : vec3<f32>) -> f32 {
   var p = p_in;
   for (var i = 0; i < 8; i = i + 1) {
-    let t = uniforms.iTime * 0.2;
+    let t = material.iTime * 0.2;
     let xz0 = rotate(p.xz, t);
     p.x = xz0.x;
     p.z = xz0.y;
@@ -99,11 +92,11 @@ fn rm(ro : vec3<f32>, rd : vec3<f32>) -> vec4<f32> {
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // Reconstruct fragCoord from UV. Flip V so the image matches the GLSL
   // bottom-left origin (WebGPU UV origin is top-left).
-  let fragCoord = vec2<f32>(in.uv.x, 1.0 - in.uv.y) * uniforms.iResolution;
-  let uv = (fragCoord - uniforms.iResolution * 0.5) / uniforms.iResolution.x;
+  let fragCoord = vec2<f32>(in.uv.x, 1.0 - in.uv.y) * material.iResolution;
+  let uv = (fragCoord - material.iResolution * 0.5) / material.iResolution.x;
 
   var ro = vec3<f32>(0.0, 0.0, -50.0);
-  let roxz = rotate(ro.xz, uniforms.iTime);
+  let roxz = rotate(ro.xz, material.iTime);
   ro.x = roxz.x;
   ro.z = roxz.y;
 

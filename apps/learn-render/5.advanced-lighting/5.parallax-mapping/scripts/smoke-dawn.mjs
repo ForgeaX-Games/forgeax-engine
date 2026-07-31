@@ -208,14 +208,14 @@ if (!existsSync(DEMO_MANIFEST_PATH)) {
 }
 const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
 const parallaxEntry = (demoManifest.materialShaders ?? []).find(
-  (m) => m && m.identifier === 'learn-render::5-5-parallax',
+  (m) => m && m.identifier === 'learn_render::5_5_parallax',
 );
 if (!parallaxEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing learn-render::5-5-parallax entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing learn_render::5_5_parallax entry');
   process.exit(1);
 }
-if (!shader.findMaterialArtifact('learn-render::5-5-parallax').ok) {
-  shader.installMaterialArtifact('learn-render::5-5-parallax', {
+if (!shader.findMaterialArtifact('learn_render::5_5_parallax').ok) {
+  shader.installMaterialArtifact('learn_render::5_5_parallax', {
     source: parallaxEntry.composedWgsl,
     paramSchema: JSON.parse(parallaxEntry.paramSchema),
   });
@@ -257,7 +257,7 @@ console.log(`[learn-render-5-5-parallax] registered bricks2 handle id=${diffuseH
 
 const matHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', program: { module: 'learn-render::5-5-parallax' }, renderState: { tags: { LightMode: 'Forward' } } }],
+  passes: [{ name: 'Forward', program: { module: 'learn_render::5_5_parallax' }, renderState: { tags: { LightMode: 'Forward' } } }],
   values: {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     heightScale: 0.1,

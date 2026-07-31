@@ -19,8 +19,9 @@
 //      'audio' emits a 4-field row per `subAssets[]` of kind 'audio'
 //      with no catalog-side artifact facts (feat-20260527-audio-system M4 w32). 'font'
 //      emits a 5-field atlas texture row + a thin font row. The reserved
-//      'shader' key never reaches here (shader sidecars are `.material.json`
-//      consumed by vite-plugin-shader, not scanned into the pack catalog).
+//      'shader' key never reaches here. Authored MaterialAsset packages are
+//      ordinary `*.pack.json` internal-text-package entries and are projected
+//      into the catalog by the first arm above.
 //
 // The `mipmap` token mapping (`'auto'` -> `true` / `'none'` -> `false`)
 // happens here in one place so runtime is unaware of the string form
@@ -51,15 +52,20 @@ import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import type {
+  AssetAuthoringCapability,
   AssetRelation,
   CatalogDiagnostic,
   PackIndexEntry,
   ProviderProvenance,
   ResourceRevision,
 } from '@forgeax/engine-types';
+import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
 
 export function projectPackageCatalog(
-  entries: readonly Pick<PackIndexEntry, 'guid' | 'kind' | 'sourcePath' | 'name' | 'refs'>[],
+  entries: readonly Pick<
+    PackIndexEntry,
+    'guid' | 'kind' | 'sourcePath' | 'name' | 'refs' | 'authoring'
+  >[],
   packageUrl: string,
 ): PackIndexEntry[] {
   return entries.map((entry) => ({
@@ -69,6 +75,7 @@ export function projectPackageCatalog(
     packageUrl: packageUrl,
     ...(entry.name === undefined ? {} : { name: entry.name }),
     ...(entry.refs === undefined ? {} : { refs: entry.refs }),
+    authoring: entry.authoring ?? authoringCapabilityForAssetKind(entry.kind),
   }));
 }
 
@@ -88,6 +95,7 @@ interface PackJson {
     readonly sourceKey?: string;
     readonly sourceIndex?: number;
     readonly relations?: PackIndexEntry['relations'];
+    readonly authoring?: AssetAuthoringCapability;
   }>;
 }
 
@@ -133,6 +141,7 @@ interface ExternalAssetMetaJson {
     readonly guid: string;
     readonly sourceIndex: number;
     readonly kind: string;
+    readonly authoring?: AssetAuthoringCapability;
     readonly sourceKey?: string;
     /** Optional display name from the source (e.g. glTF image.name / mesh.name). */
     readonly name?: string;
@@ -166,9 +175,11 @@ function producerFields(
   },
   output?: {
     readonly guid: string;
+    readonly kind: string;
     readonly sourceKey?: string;
     readonly sourceIndex?: number;
     readonly relations?: PackIndexEntry['relations'];
+    readonly authoring?: AssetAuthoringCapability;
   },
   refs?: readonly string[],
 ): Pick<
@@ -194,6 +205,11 @@ function producerFields(
     ...(producer.revision !== undefined ? { revision: producer.revision } : {}),
     ...(output?.sourceKey !== undefined ? { sourceKey: output.sourceKey } : {}),
     ...(output?.sourceIndex !== undefined ? { sourceIndex: output.sourceIndex } : {}),
+    ...(output === undefined
+      ? {}
+      : {
+          authoring: output.authoring ?? authoringCapabilityForAssetKind(output.kind),
+        }),
     ...(relations !== undefined ? { relations } : {}),
     ...(producer.diagnostics !== undefined ? { diagnostics: producer.diagnostics } : {}),
   };

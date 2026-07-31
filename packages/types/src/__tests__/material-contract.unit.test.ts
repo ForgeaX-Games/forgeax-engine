@@ -1,6 +1,7 @@
-import { describe, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { AssetGuid } from '../index.js';
 import type { MaterialAsset } from '../material/asset.js';
+import { resolveMaterialAsset } from '../material/resolve.js';
 
 const guid = new Uint8Array(16) as AssetGuid;
 
@@ -11,6 +12,19 @@ const standardProgram = {
 } as const;
 
 describe('MaterialAsset contract', () => {
+  it('accepts an erased numeric shared texture handle at runtime', () => {
+    const result = resolveMaterialAsset('demo', {
+      demo: {
+        kind: 'material',
+        passes: [{ name: 'forward', program: standardProgram }],
+        parameters: [{ name: 'baseColorTexture', type: 'texture' }],
+        values: { baseColorTexture: 1024 },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts a complete root contract and structured texture value', () => {
     const root = {
       kind: 'material',

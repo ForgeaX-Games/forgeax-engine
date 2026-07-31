@@ -36,7 +36,6 @@ import {
   toShared,
   type Handle,
   type MaterialAsset,
-  type SamplerAsset,
   type TilesetAsset,
 } from '@forgeax/engine-types';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
@@ -179,13 +178,6 @@ async function main(): Promise<void> {
   // tree. Needs a sprite material — register a lightweight placeholder so the
   // entity rides the sprite-bucket TransparentEntry queue alongside tilemap-
   // spawned per-cell entities (AC-13 anchor; plan-decisions L-1).
-  const samplerHandle = world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'nearest',
-    minFilter: 'nearest',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
   const spriteMaterialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
     {
@@ -201,7 +193,6 @@ async function main(): Promise<void> {
         // sprite.material.json paramSchema.
         colorTint: [1, 1, 1, 1],
         baseColorTexture: atlasA,
-        sampler: samplerHandle,
         region: [0, 0, 1, 1],
         pivotAndSize: [0.5, 0.5, 1, 1],
       },

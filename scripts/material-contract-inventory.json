@@ -1,0 +1,20 @@
+{
+  "materialSidecars": ["apps/hello/custom-shader/src/pulse-material.wgsl.meta.json"],
+  "materialPackages": [
+    "apps/bevy/animate-shader/src/animate-shader.pack.json",
+    "apps/bevy/parallax-mapping/src/parallax.pack.json",
+    "apps/bevy/shader-defs/src/shader-defs.pack.json",
+    "apps/bevy/shader-material/src/shader-material.pack.json",
+    "apps/hello-multi-uv/src/multi-uv-demo.pack.json",
+    "apps/hello/custom-shader/src/pulse-material.shader.pack.json",
+    "apps/hello/m8-integrated-capstone/src/pulse-material.pack.json",
+    "apps/hello/shadow-opt-out/shaders/cutout-shadow.pack.json",
+    "apps/learn-render/4.advanced-opengl/1.depth-testing/src/depth-viz.pack.json",
+    "apps/learn-render/4.advanced-opengl/2.stencil-testing/src/outline-solid.pack.json",
+    "apps/learn-render/4.advanced-opengl/3.blending/src/alpha-test.pack.json",
+    "apps/learn-render/5.advanced-lighting/1.advanced-lighting/src/blinn-phong.pack.json",
+    "apps/learn-render/5.advanced-lighting/5.parallax-mapping/src/parallax.pack.json",
+    "apps/shadertoy/fractal-pyramid/src/fractal-pyramid.pack.json",
+    "apps/shadertoy/happy-blob/src/happy-blob.pack.json"
+  ]
+}

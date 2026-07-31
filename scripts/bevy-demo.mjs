@@ -365,7 +365,44 @@ function runPnpm(root, args) {
   });
 }
 
-async function runSmokePair(root, pkg) {
+function runNodeSmoke(root, app) {
+  const script = 'scripts/smoke-dawn.mjs';
+  process.stdout.write(
+    `[bevy-smoke] ${process.execPath} ${relative(root, join(app.dir, script))}\n`,
+  );
+  return new Promise((resolveRun) => {
+    const child = spawn(process.execPath, [script], {
+      cwd: app.dir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let passObserved = false;
+    let outputTail = '';
+    let forceExitTimer;
+    const forward = (chunk, stream) => {
+      const text = chunk.toString();
+      stream.write(text);
+      const searchable = outputTail + text;
+      outputTail = searchable.slice(-128);
+      if (!passObserved && searchable.includes('[smoke] PASS')) {
+        passObserved = true;
+        // A native WebGPU child can keep Node alive after its evidence gate.
+        // Give stdout a brief flush window, then reap it at this process boundary.
+        forceExitTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+        forceExitTimer.unref();
+      }
+    };
+    child.stdout.on('data', (chunk) => forward(chunk, process.stdout));
+    child.stderr.on('data', (chunk) => forward(chunk, process.stderr));
+    child.once('error', (error) => resolveRun({ status: null, error }));
+    child.once('exit', (code, signal) => {
+      if (forceExitTimer) clearTimeout(forceExitTimer);
+      resolveRun({ status: passObserved && signal === 'SIGKILL' ? 0 : code, signal });
+    });
+  });
+}
+
+async function runSmokePair(root, app) {
+  const pkg = app.pkg;
   const args = ['--filter', pkg.name, 'build'];
   process.stdout.write(`[bevy-smoke] pnpm ${args.join(' ')}\n`);
   let result = await runPnpm(root, args);
@@ -379,8 +416,15 @@ async function runSmokePair(root, pkg) {
     );
   }
   const smokeArgs = ['--filter', pkg.name, 'smoke'];
-  process.stdout.write(`[bevy-smoke] pnpm ${smokeArgs.join(' ')}\n`);
-  result = await runPnpm(root, smokeArgs);
+  // Standard Dawn smokes are already direct Node entry points. Running them
+  // outside pnpm avoids a package-manager lifecycle wrapper retaining native
+  // Dawn descendants after the smoke has emitted its PASS evidence.
+  if (pkg.scripts?.smoke === 'node scripts/smoke-dawn.mjs') {
+    result = await runNodeSmoke(root, app);
+  } else {
+    process.stdout.write(`[bevy-smoke] pnpm ${smokeArgs.join(' ')}\n`);
+    result = await runPnpm(root, smokeArgs);
+  }
   if (result.status !== 0) {
     throw new Error(
       `[bevy-smoke] ${pkg.name} smoke failed with ${result.error?.message ?? result.signal ?? result.status}`,
@@ -404,7 +448,7 @@ async function commandSmokes(root, dryRun, concurrency, group, groups) {
         const app = apps[next++];
         if (app === undefined) return;
         try {
-          await runSmokePair(root, app.pkg);
+          await runSmokePair(root, app);
         } catch (error) {
           firstError = error;
         }

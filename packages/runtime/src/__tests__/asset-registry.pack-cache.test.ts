@@ -10,7 +10,11 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { PackIndexEntry, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
+import {
+  authoringCapabilityForAssetKind,
+  type PackIndexEntry,
+  type MeshAsset as TypesMeshAsset,
+} from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -803,6 +807,7 @@ function makeRichImportedEntry(
     guid,
     packageUrl,
     kind: 'mesh',
+    authoring: authoringCapabilityForAssetKind('mesh'),
     sourcePath: `models/${guid}.source`,
     packageId: 'fixture-package',
     provenance,

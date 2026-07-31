@@ -76,6 +76,14 @@ if (!existsSync(manifestPath)) {
 }
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
+const materialPackage = JSON.parse(
+  readFileSync(resolve(appRoot, 'src', 'shader-defs.pack.json'), 'utf8'),
+);
+const material = materialPackage.assets?.find((asset) => asset?.kind === 'material')?.payload;
+if (material === undefined) {
+  console.error('[smoke] FAIL - shader-defs.pack.json has no material asset payload');
+  process.exit(1);
+}
 
 const { World } = await import('@forgeax/engine-ecs');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
@@ -102,20 +110,14 @@ if (!ready.ok) {
   process.exit(1);
 }
 
+const shaderId = material.passes[0].program.module;
 const shaderEntry = (manifest.materialShaders ?? []).find(
-  (entry) => entry?.identifier === 'bevy::shader_defs',
+  (entry) => entry?.identifier === shaderId,
 );
-const shaderId = 'bevy::shader_defs';
 const shader = renderer.shader;
 if (shader === null || shaderEntry === undefined) {
   console.error('[smoke] FAIL - shader registry or bevy::shader_defs manifest entry missing');
   process.exit(1);
-}
-if (!shader.findMaterialArtifact(shaderId).ok) {
-  shader.installMaterialArtifact(shaderId, {
-    source: shaderEntry.composedWgsl,
-    paramSchema: JSON.parse(shaderEntry.paramSchema),
-  });
 }
 
 const geometry = createBoxGeometry(1, 1, 1);
@@ -140,20 +142,13 @@ const texture = world.allocSharedRef('TextureAsset', {
   mipmap: false,
 });
 const makeMaterial = (baseColor, isRed) => world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [{
-    name: 'Forward',
-    program: { module: shaderId, moduleSlots: { IS_RED: String(isRed) } },
+  ...material,
+  passes: material.passes.map((pass) => ({
+    ...pass,
+    program: { ...pass.program, module: shaderId, moduleSlots: { IS_RED: String(isRed) } },
     renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
-  }],
-  parameters: [
-    { name: 'baseColor', type: 'color' },
-    { name: 'time', type: 'f32' },
-    { name: 'speed', type: 'f32' },
-    { name: 'baseColorTexture', type: 'texture' },
-    { name: 'IS_RED', type: 'bool', static: true },
-  ],
-  values: { baseColor, time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
+  })),
+  values: { baseColor: [...baseColor, 1], time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
 });
 const blue = makeMaterial([0.05, 0.25, 1], false);
 const greenWithRedDefine = makeMaterial([0.05, 1, 0.1], true);

@@ -25,7 +25,7 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import './happy-blob.wgsl';
 
-const BLOB_SHADER_PATH = 'shadertoy::happy-blob';
+const BLOB_SHADER_PATH = 'shadertoy::happy_blob';
 
 // Render scale relative to CSS pixels. This raymarcher is fragment-bound
 // (up to 160 sphere-trace steps + soft shadow + AO per pixel), so cost is

@@ -42,7 +42,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 import './alpha-test.wgsl';
 
-const ALPHA_TEST_SHADER_ID = 'learn-render::alpha-test';
+const ALPHA_TEST_SHADER_ID = 'learn_render::alpha_test';
 
 const PACK_INDEX_URL = '/pack-index.json';
 

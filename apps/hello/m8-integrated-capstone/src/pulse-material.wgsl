@@ -13,16 +13,6 @@
 // User shaders pick their own `<package>::<id>` import path; only the
 // `forgeax::` prefix is engine-reserved (FORGEAX_RESERVED_PATH_PREFIX).
 
-struct PulseUniforms {
-  baseColor : vec4<f32>,
-  time      : f32,
-  speed     : f32,
-};
-
-@group(1) @binding(0) var<uniform> pulse : PulseUniforms;
-@group(1) @binding(1) var baseColorTexture_sampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-
 struct VsIn  {
   @location(0) pos    : vec3<f32>,
   @location(1) normal : vec3<f32>,
@@ -49,13 +39,13 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // Pulse modulates baseColor brightness via sin(time * speed) -> 0.5..1.0
   // window so the demo is always at least half-bright (AC-14: visible
   // brightness change over time, not a strobe to black).
-  let pulse_factor = sin(pulse.time * pulse.speed) * 0.25 + 0.75;
-  let modulated = pulse.baseColor.rgb * pulse_factor;
+  let pulse_factor = sin(material.time * material.speed) * 0.25 + 0.75;
+  let modulated = material.baseColor.rgb * pulse_factor;
   // Re-use the engine BRDF Fresnel helper to demonstrate that user shaders
   // can pull engine helpers via #import (charter P4 consistent abstraction).
   let n = normalize(in.worldNormal);
   let v = vec3<f32>(0.0, 0.0, 1.0);
   let f = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04));
   let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
-  return vec4<f32>(modulated * sampled.rgb * (vec3<f32>(1.0) - f * 0.1), pulse.baseColor.a * sampled.a);
+  return vec4<f32>(modulated * sampled.rgb * (vec3<f32>(1.0) - f * 0.1), material.baseColor.a * sampled.a);
 }

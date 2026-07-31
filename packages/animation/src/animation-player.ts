@@ -1,6 +1,6 @@
 // @forgeax/engine-animation - AnimationPlayer component (variable N-way SoA slots).
 //
-// Schema (10 fields, SoA variable arrays):
+// Schema (11 fields, SoA variable arrays):
 //   clips:   'array<shared<AnimationClip>>'   (layer-3 zero — empty, no slot active)
 //   times:   'array<f32>'                      (layer-3 zero — empty Float32Array)
 //   weights: 'array<f32>'                      (layer-3 zero — empty Float32Array)
@@ -9,6 +9,7 @@
 //   nodeWeights: 'array<f32>'                  (layer-3 zero — empty Float32Array)
 //   nodeTimes:   'array<f32>'                  (layer-3 zero — empty Float32Array)
 //   nodeSpeeds:  'array<f32>'                  (layer-3 zero — empty Float32Array)
+//   targetRoot:  'entity'                      (layer-3 null — optional named Transform root)
 //   paused:  'bool'                                (layer-2 false)
 //   looping: 'bool'                                (layer-2 true)
 //
@@ -75,6 +76,7 @@ export const AnimationPlayer = defineComponent('AnimationPlayer', {
   nodeWeights: { type: 'array<f32>' },
   nodeTimes: { type: 'array<f32>' },
   nodeSpeeds: { type: 'array<f32>' },
+  targetRoot: { type: 'entity', default: null },
   paused: { type: 'bool', default: false },
   looping: { type: 'bool', default: true },
 });

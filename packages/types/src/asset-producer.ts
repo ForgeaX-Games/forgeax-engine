@@ -6,6 +6,119 @@
 
 export type AssetSubjectType = 'asset' | 'package' | 'resource';
 
+/** Structured reason for an authoring capability that is not available. */
+export type AssetAuthoringUnavailableCode =
+  | 'unsupported-asset-kind'
+  | 'missing-producer-capability';
+
+export interface AssetAuthoringUnavailableReason {
+  readonly code: AssetAuthoringUnavailableCode;
+  readonly hint: string;
+}
+
+/** Engine-facing operation shape exposed by a producer-owned catalog row. */
+export type AssetPlacementCapability =
+  | { readonly operation: 'spawnEntity' }
+  | { readonly operation: 'addSceneAssetToScene' }
+  | { readonly operation: 'unavailable'; readonly reason: AssetAuthoringUnavailableReason };
+
+export interface AssetBindingTarget {
+  readonly component: string;
+  readonly field: string;
+  readonly assetType: string;
+  readonly cardinality: 'single' | 'array';
+}
+
+export type AssetBindingCapability =
+  | {
+      readonly operation: 'bindAssetRef' | 'createMaterialThenBindAssetRef';
+      readonly target: AssetBindingTarget;
+      readonly requiredSlots: 1;
+    }
+  | { readonly operation: 'unavailable'; readonly reason: AssetAuthoringUnavailableReason };
+
+/** Producer-owned placement and binding facts for one catalog asset. */
+export interface AssetAuthoringCapability {
+  readonly placement: AssetPlacementCapability;
+  readonly binding: AssetBindingCapability;
+}
+
+/** Built-in defaults for legacy rows that do not carry an explicit override. */
+export function authoringCapabilityForAssetKind(kind: string): AssetAuthoringCapability {
+  switch (kind) {
+    case 'scene':
+      return {
+        placement: { operation: 'addSceneAssetToScene' },
+        binding: {
+          operation: 'unavailable',
+          reason: {
+            code: 'unsupported-asset-kind',
+            hint: 'Scene assets are placed as a scene mount.',
+          },
+        },
+      };
+    case 'mesh':
+      return {
+        placement: { operation: 'spawnEntity' },
+        binding: {
+          operation: 'bindAssetRef',
+          target: {
+            component: 'MeshFilter',
+            field: 'assetHandle',
+            assetType: 'MeshAsset',
+            cardinality: 'single',
+          },
+          requiredSlots: 1,
+        },
+      };
+    case 'material':
+      return {
+        placement: { operation: 'spawnEntity' },
+        binding: {
+          operation: 'bindAssetRef',
+          target: {
+            component: 'MeshRenderer',
+            field: 'materials',
+            assetType: 'MaterialAsset',
+            cardinality: 'array',
+          },
+          requiredSlots: 1,
+        },
+      };
+    case 'texture':
+      return {
+        placement: { operation: 'spawnEntity' },
+        binding: {
+          operation: 'createMaterialThenBindAssetRef',
+          target: {
+            component: 'MeshRenderer',
+            field: 'materials',
+            assetType: 'MaterialAsset',
+            cardinality: 'array',
+          },
+          requiredSlots: 1,
+        },
+      };
+    default:
+      return {
+        placement: {
+          operation: 'unavailable',
+          reason: {
+            code: 'unsupported-asset-kind',
+            hint: `No placement capability is published for asset kind '${kind}'.`,
+          },
+        },
+        binding: {
+          operation: 'unavailable',
+          reason: {
+            code: 'unsupported-asset-kind',
+            hint: `No binding capability is published for asset kind '${kind}'.`,
+          },
+        },
+      };
+  }
+}
+
 /** Stable producer subject identity used by relations and diagnostics. */
 export interface AssetSubjectRef {
   readonly type: AssetSubjectType;

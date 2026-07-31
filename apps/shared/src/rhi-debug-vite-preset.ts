@@ -56,6 +56,7 @@ export interface RhiDebugViteOptions {
    * load via fetch rather than being base64-inlined (some demos need this).
    */
   readonly keepBinExternal?: boolean;
+  readonly materialPackages?: readonly string[];
 }
 
 /**
@@ -70,11 +71,19 @@ export interface RhiDebugViteOptions {
  *   export default withRhiDebug({ here, rootDepth: 4, port: 5190 });
  */
 export function withRhiDebug(opts: RhiDebugViteOptions) {
-  const { here, rootDepth, port, extraPlugins = [], keepBinExternal = false } = opts;
+  const {
+    here,
+    rootDepth,
+    port,
+    extraPlugins = [],
+    keepBinExternal = false,
+    materialPackages,
+  } = opts;
   const upSegments = Array.from({ length: rootDepth }, () => '..');
   const monorepoRoot = resolve(here, ...upSegments);
 
-  const plugins = [forgeaxShader(), vitePluginRhiDebug(), ...extraPlugins];
+  const shaderOptions = materialPackages === undefined ? {} : { materialPackages };
+  const plugins = [forgeaxShader(shaderOptions), vitePluginRhiDebug(), ...extraPlugins];
 
   return defineConfig({
     plugins,

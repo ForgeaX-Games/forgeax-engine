@@ -3,11 +3,14 @@ import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { assertMaterialAsset, type MaterialAsset, type TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import materialPackage from './shader-defs.pack.json';
 import './shader-defs.wgsl';
 
-const SHADER_ID = 'bevy::shader_defs';
+const authoredPayload = materialPackage.assets[0]?.payload;
+assertMaterialAsset(authoredPayload, 'shader-defs.pack.json');
+const authoredMaterial: MaterialAsset = authoredPayload;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-shader-defs: missing <canvas id="app">');
@@ -79,19 +82,16 @@ function makeMaterial(
   isRed: boolean,
   texture: import('@forgeax/engine-types').Handle<'TextureAsset', 'shared'>,
 ): import('@forgeax/engine-types').Handle<'MaterialAsset', 'shared'> {
-  const material: MaterialAsset = {
-    kind: 'material',
-    passes: [
-      { name: 'Forward', program: { module: SHADER_ID, moduleSlots: { IS_RED: String(isRed) } }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
-    ],
-    parameters: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'time', type: 'f32' },
-      { name: 'speed', type: 'f32' },
-      { name: 'baseColorTexture', type: 'texture' },
-      { name: 'IS_RED', type: 'bool', static: true },
-    ],
-    values: { baseColor, time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
-  };
+  const [authoredPass] = authoredMaterial.passes ?? [];
+  if (authoredPass === undefined) throw new Error('shader-defs material pack has no pass');
+  const material = {
+    ...authoredMaterial,
+    passes: [{
+      ...authoredPass,
+      program: { ...authoredPass.program, moduleSlots: { IS_RED: String(isRed) } },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+    }],
+    values: { baseColor: [...baseColor, 1], time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
+  } satisfies MaterialAsset;
   return world.allocSharedRef('MaterialAsset', material);
 }

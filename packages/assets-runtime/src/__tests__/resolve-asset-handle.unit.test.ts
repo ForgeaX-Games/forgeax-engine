@@ -94,7 +94,7 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     expect(res.value.values).toEqual({ a: 1, b: 20 }); // child overrides
   });
 
-  it('inherits and specializes the effective parameter contract by name', () => {
+  it('inherits the root parameter contract without child declaration merging', () => {
     const world = new World();
     const parent = mat({
       passes: [{ name: 'base', program: { module: 'forgeax::standard' } }],
@@ -116,8 +116,7 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     if (!res.ok) return;
     expect(res.value.parameters).toEqual([
       { name: 'baseColor', type: 'color' },
-      { name: 'roughness', type: 'f32', static: true },
-      { name: 'normalTexture', type: 'texture' },
+      { name: 'roughness', type: 'f32' },
     ]);
   });
 
@@ -146,14 +145,14 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     expect(byName.get('shadow')).toBe('forgeax::shadow'); // inherited
   });
 
-  it('errors (empty-passes / missing-parent) when the parent is not catalogued', () => {
+  it('errors when the parent is not catalogued', () => {
     const world = new World();
     const child = mat({ parent: 'missing-guid' as never });
     const handle = world.allocSharedRef('MaterialAsset', child);
     const res = walkMaterialPassesOverSharedRefs(world, handle, { lookup: () => undefined });
     expect(res.ok).toBe(false);
     if (res.ok) return;
-    expect((res.error as { code: string }).code).toBe('material-resolved-empty-passes');
+    expect((res.error as { code: string }).code).toBe('material-parent-not-found');
   });
 
   it('detects a parent cycle', () => {

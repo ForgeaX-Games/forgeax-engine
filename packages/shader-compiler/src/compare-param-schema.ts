@@ -217,12 +217,28 @@ function resourceKindCompatible(
   if (expected.texture !== undefined) {
     if (actual.texture === undefined) return false;
     if (expected.texture.viewDimension !== actual.texture.viewDimension) return false;
-    if (expected.texture.sampleType !== actual.texture.sampleType) return false;
+    // A generic MaterialAsset texture contract may be consumed through an
+    // explicit-LOD path (`textureSampleLevel`), which naga reflects as an
+    // unfilterable float view even though the authored contract remains the
+    // ordinary filtering `texture2d` shape. The sampler check below applies
+    // the same compatibility rule to the paired resource.
+    if (
+      expected.texture.sampleType !== actual.texture.sampleType &&
+      !(
+        expected.texture.sampleType === 'float' &&
+        actual.texture.sampleType === 'unfilterable-float'
+      )
+    ) {
+      return false;
+    }
     return true;
   }
   if (expected.sampler !== undefined) {
     if (actual.sampler === undefined) return false;
-    return expected.sampler.type === actual.sampler.type;
+    return (
+      expected.sampler.type === actual.sampler.type ||
+      (expected.sampler.type === 'filtering' && actual.sampler.type === 'non-filtering')
+    );
   }
   if (expected.storageTexture !== undefined) {
     return actual.storageTexture !== undefined;

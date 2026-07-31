@@ -104,7 +104,6 @@ import { Layer } from '@forgeax/engine-render';
 import type {
   Handle,
   MaterialAsset,
-  SamplerAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -243,17 +242,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // shared sampler is the minimum-surface route. addressMode='repeat'
   // mirrors wood-container.meta.json importSettings (linear /
   // repeat / mipmap=auto SSOT).
-  const samplerHandle: Handle<'SamplerAsset', 'shared'> = world.allocSharedRef<
-    'SamplerAsset',
-    SamplerAsset
-  >('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    addressModeU: 'repeat',
-    addressModeV: 'repeat',
-  });
-
   // The 3 sprite materials per scene share the same texture + sampler
   // but differ in `pivot`. We pre-mint 6 handles (3 colors x 2
   // pivots) at boot so scene switching does not re-mint material
@@ -273,7 +261,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const tint = SPRITE_COLOR_TINTS[i] ?? SPRITE_COLOR_TINTS[0];
       const material = buildSpriteMaterial({
         texture: textureHandle,
-        sampler: samplerHandle,
         colorTint: tint,
         pivot: PIVOT_BY_SCENE[sceneId],
       });
@@ -320,7 +307,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // The 9-slice entities are spawned once at boot and persist across
   // applyScene() switches (they sit at world-Y = +0.7 / -0.7 which
   // never overlaps the scene-A/B sprites at world-Y in [-0.3, 0.3]).
-  setupNineSliceSection(world, textureHandle, samplerHandle);
+  setupNineSliceSection(world, textureHandle);
 
   // Apply scene-A as the initial configuration (mode=0 layer-z).
   applyScene('A');
@@ -425,7 +412,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
 function buildSpriteMaterial(args: {
   texture: Handle<'TextureAsset', 'shared'> | undefined;
-  sampler: Handle<'SamplerAsset', 'shared'>;
   colorTint: readonly [number, number, number, number];
   pivot: readonly [number, number];
 }): MaterialAsset {
@@ -453,7 +439,6 @@ function buildSpriteMaterial(args: {
     values: {
       colorTint: args.colorTint,
       baseColorTexture: texture,
-      sampler: args.sampler,
       pivotAndSize: [args.pivot[0], args.pivot[1], 1, 1],
     },
   };
@@ -492,7 +477,6 @@ function buildSpriteMaterial(args: {
 function setupNineSliceSection(
   world: World,
   textureHandle: Handle<'TextureAsset', 'shared'> | undefined,
-  samplerHandle: Handle<'SamplerAsset', 'shared'>,
 ): void {
   const texture = textureHandle ?? (0 as unknown as Handle<'TextureAsset', 'shared'>);
 
@@ -517,7 +501,6 @@ function setupNineSliceSection(
     values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: texture,
-      sampler: samplerHandle,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.5, 1, 1],
       slicesAndMode: [0.25, 0.25, 0.25, 0.25], // .w>=0 -> stretch
@@ -540,7 +523,6 @@ function setupNineSliceSection(
     values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: texture,
-      sampler: samplerHandle,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.5, 1, 1],
       slicesAndMode: [0.3, 0.3, 0.3, -0.3], // .w<0 -> tile (sentinel)

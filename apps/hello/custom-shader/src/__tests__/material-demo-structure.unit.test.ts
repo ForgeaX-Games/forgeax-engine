@@ -16,6 +16,9 @@ describe('material-inheritance-demo structure', () => {
     expect(source).toContain('materialFromCookedRecord');
     expect(source).toContain('rootMaterialHandle');
     expect(source).toContain('derivedMaterialHandle');
+    expect(source).toContain('rebindNormalTexture');
+    expect(source).toContain('world.set(derivedEntity, MeshRenderer');
+    expect(source).toContain('liveMutation');
     expect(source).toContain("materials: [rootMaterialHandle]");
     expect(source).toContain("materials: [derivedMaterialHandle]");
     expect(source).not.toContain('const materialHandle');

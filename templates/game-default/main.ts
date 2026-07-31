@@ -108,7 +108,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const walkBlockers: Array<{ cx: number; cz: number; r: number }> = [];
   const flashables: Array<{ e: EntityHandle; mat: MatHandle; clearcoat?: boolean }> = []; // hit-flash targets (dynamic props)
   let animatedMaterial: AnimatedMaterialTarget | undefined;
-  let materialElapsed = 0;
+  // Time.elapsed is the engine-owned absolute clock. Keep only a reset origin
+  // so the authored animation returns to phase zero without another accumulator.
+  let materialElapsedOrigin = 0;
   if (loaded) {
     const phys = attachScenePhysics({ world }, loaded);
     walkBlockers.push(...phys.walkBlockers);
@@ -627,7 +629,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       if (physics?.hasBody(player)) physics.teleport(player, [px, jumpY, pz]);
     }
     gameplayAudio?.reset();
-    materialElapsed = 0;
+    materialElapsedOrigin = world.getResource(Time).elapsed;
     if (animatedMaterial) resetAnimatedMaterial(world, animatedMaterial);
   };
   const gameplayState = installGameplayState({ world, reset: resetGameplay });
@@ -942,8 +944,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           // dynamic target's pose sync and is visible in the next frame.
           stepRotatingTargets(world, world.getResource(Time).delta);
           if (animatedMaterial) {
-            materialElapsed += world.getResource(Time).delta;
-            stepAnimatedMaterial(world, animatedMaterial, materialElapsed);
+            const elapsed = world.getResource(Time).elapsed - materialElapsedOrigin;
+            stepAnimatedMaterial(world, animatedMaterial, elapsed);
           }
         },
       })

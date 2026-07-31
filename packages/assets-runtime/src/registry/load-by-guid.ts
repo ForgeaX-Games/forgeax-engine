@@ -858,6 +858,7 @@ export async function transportOrFail<T = Asset>(
           ...(e.packageId !== undefined ? { packageId: e.packageId } : {}),
           ...(e.provenance !== undefined ? { provenance: e.provenance } : {}),
           ...(e.revision !== undefined ? { revision: e.revision } : {}),
+          ...(e.authoring !== undefined ? { authoring: e.authoring } : {}),
           ...(e.sourceKey !== undefined ? { sourceKey: e.sourceKey } : {}),
           ...(e.sourceIndex !== undefined ? { sourceIndex: e.sourceIndex } : {}),
           ...(e.relations !== undefined ? { relations: e.relations } : {}),

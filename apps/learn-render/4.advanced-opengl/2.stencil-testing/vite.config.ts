@@ -14,6 +14,7 @@ export default withRhiDebug({
   here,
   rootDepth: 4,
   port: 5175,
+  materialPackages: [resolve(here, 'src/outline-solid.pack.json')],
   extraPlugins: [
     pluginPack({
       refresh: reloadAssetHost(),

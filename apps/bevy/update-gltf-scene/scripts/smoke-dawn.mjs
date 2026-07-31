@@ -145,4 +145,7 @@ if (renderer.backend !== 'webgpu' || frames < minFrames || luma <= 0.02 || motio
   process.exit(1);
 }
 console.log('[smoke] PASS - SceneAsset descendants updated through Children and rendered for the full frame gate');
-device.destroy?.();
+// Native Dawn teardown can block indefinitely after this reproduction's render
+// graph has completed. The smoke is an isolated process, so exit after the
+// evidence gate and let the OS reclaim the short-lived device resources.
+process.exit(0);

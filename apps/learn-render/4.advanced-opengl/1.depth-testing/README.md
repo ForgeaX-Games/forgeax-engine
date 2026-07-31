@@ -54,7 +54,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-1-depth-testing" type
 | Cube transforms | `glm::translate((-1,0,-1))` / `glm::translate((2,0,0))` | ECS `Transform` component: `pos=[-1, 0, -1]` / `pos=[2, 0, 0]` |
 | Texture loading | `stb_image.h` + `loadTexture(path)` with `GL_REPEAT` | `configurePackIndex` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` `importSettings.addressMode: 'repeat'` |
 | Camera | LO `Camera` class at (0,0,3), Zoom=45 deg | `Transform` (at (0,0,3)) + `Camera` (fov=PI/4, near=0.1, far=100) |
-| Custom shader | Separate GLSL program for depth-viz | `registerMaterialShader('learn-render::depth-viz', entry)` + pass-based MaterialAsset |
+| Custom shader | Separate GLSL program for depth-viz | `registerMaterialShader('learn_render::depth_viz', entry)` + pass-based MaterialAsset |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |
 
 ## Differences from the LearnOpenGL original

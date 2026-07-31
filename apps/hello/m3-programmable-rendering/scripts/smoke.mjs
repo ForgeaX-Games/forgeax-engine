@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -186,6 +186,39 @@ function readComposedSnapshot(root, falsifierLabel = 'falsified-second-texture-i
   };
 }
 
+function readLiveMaterialSnapshot(root) {
+  const composed = JSON.parse(readFileSync(resolve(root, 'live-material-browser.json'), 'utf8'));
+  const stableEvidence = (evidence) => ({
+    enabled: evidence.enabled,
+    applied: evidence.applied,
+    baseColorSlotChanged: evidence.baseColorSlotChanged,
+    detailSlotChanged: evidence.detailSlotChanged,
+    afterComponentMaterialMatchesAfter:
+      evidence.afterComponentMaterialHandle === evidence.afterMaterialHandle,
+    resizeHistory: evidence.resizeHistory,
+  });
+  const snapshotLeg = (leg) => ({
+    before: leg.before.state,
+    after: leg.after.state,
+    delta: leg.delta,
+    beforeEvidence: stableEvidence(leg.beforeEvidence),
+    afterEvidence: stableEvidence(leg.afterEvidence),
+    dawn: leg.rhi.dawnReadback,
+    draws: leg.rhi.draws,
+    inspectedDraw: leg.rhi.inspect?.drawCall
+      ? {
+          pipelineKind: leg.rhi.inspect.drawCall.pipelineKind,
+          vertexCount: leg.rhi.inspect.drawCall.vertexCount,
+          instanceCount: leg.rhi.inspect.drawCall.instanceCount,
+          firstVertex: leg.rhi.inspect.drawCall.firstVertex,
+          firstInstance: leg.rhi.inspect.drawCall.firstInstance,
+        }
+      : undefined,
+    screenshotSha256: sha256File(leg.after.png),
+  });
+  return { normal: snapshotLeg(composed.normal), falsifier: snapshotLeg(composed.falsifier) };
+}
+
 function readDepthSnapshot(root) {
   const depth = JSON.parse(readFileSync(resolve(root, 'depth-browser.json'), 'utf8'));
   return {
@@ -274,7 +307,8 @@ const customMaterialBrowserRuns = ['first', 'second'].map((repeat) => {
     result.status !== 0 ||
     evidence?.browserPath !== true ||
     evidence.rootArtifactDigest !== evidence.derivedArtifactDigest ||
-    typeof evidence.rootCookInputDigest !== 'string'
+    typeof evidence.rootCookInputDigest !== 'string' ||
+    evidence.textureHandlesDistinct !== true
   ) {
     console.error(`[m3-programmable] custom material browser ${repeat}: FAIL - semantic browser evidence missing`);
     process.exit(1);
@@ -295,6 +329,8 @@ console.log('[m3-programmable] custom material texture binding: PASS');
 const customMaterialBrowserFalsifiers = [
   ['missing-parent', 'missing-derived-parent', 'FORGEAX_FALSIFY_MISSING_PARENT'],
   ['uv-transform', 'uv0-transform-loss', 'FORGEAX_FALSIFY_UV0_TRANSFORM'],
+  ['missing-normal-resource', 'missing-normal-resource', 'FORGEAX_FALSIFY_MISSING_NORMAL_RESOURCE'],
+  ['swapped-normal-binding', 'swapped-normal-binding', 'FORGEAX_FALSIFY_SWAPPED_NORMAL_BINDING'],
 ];
 for (const [label, expected, envKey] of customMaterialBrowserFalsifiers) {
   for (const repeat of ['first', 'second']) {
@@ -310,6 +346,362 @@ for (const [label, expected, envKey] of customMaterialBrowserFalsifiers) {
   }
   console.log(`[m3-programmable] custom material browser ${label} falsifier: PASS repeats=2`);
 }
+
+const normalSlotVisualArtifactRoot = resolve(
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+    resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+  'custom-material-normal-slot-visual-causality',
+);
+mkdirSync(normalSlotVisualArtifactRoot, { recursive: true });
+const normalSlotVisualRuns = [];
+for (const repeat of ['first', 'second']) {
+  const normalArtifactDir = resolve(normalSlotVisualArtifactRoot, repeat, 'normal');
+  const swapArtifactDir = resolve(normalSlotVisualArtifactRoot, repeat, 'normal-slot-swap');
+  const normalBrowser = runCustomMaterialBrowser(`custom material normal-slot visual ${repeat} normal`, {
+    FORGEAX_MATERIAL_ARTIFACT_DIR: normalArtifactDir,
+  });
+  const swappedBrowser = runCustomMaterialBrowser(`custom material normal-slot visual ${repeat} swap`, {
+    FORGEAX_FALSIFY_NORMAL_SLOT_SWAP: '1',
+    FORGEAX_MATERIAL_ARTIFACT_DIR: swapArtifactDir,
+  });
+  const normalBrowserEvidence = normalBrowser.status === 0 ? readLastJsonLine(normalBrowser.output) : undefined;
+  const normalScreenshotPath = resolve(normalArtifactDir, 'custom-material.png');
+  const swappedScreenshotPath = resolve(swapArtifactDir, 'custom-material.png');
+  if (
+    normalBrowser.status !== 0 ||
+    normalBrowserEvidence?.browserPath !== true ||
+    normalBrowserEvidence?.renderedTextureHandles?.[0] !== normalBrowserEvidence?.resolvedTextureHandles?.[0] ||
+    normalBrowserEvidence?.renderedTextureHandles?.[1] !== normalBrowserEvidence?.resolvedTextureHandles?.[1] ||
+    swappedBrowser.status === 0 ||
+    !swappedBrowser.output.includes('FALSIFY_EXPECTED_FAILURE:normal-slot-swap')
+  ) {
+    console.error(
+      `[m3-programmable] custom material normal-slot visual ${repeat}: FAIL - ${JSON.stringify({ normalStatus: normalBrowser.status, swapStatus: swappedBrowser.status })}`,
+    );
+    process.exit(1);
+  }
+  const browserDelta = comparePngs(normalScreenshotPath, swappedScreenshotPath);
+  const normalDawn = run(
+    `custom material normal-slot Dawn ${repeat} normal`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-dawn'],
+  );
+  const swappedDawn = run(
+    `custom material normal-slot Dawn ${repeat} swap`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-dawn'],
+    { FORGEAX_MATERIAL_DAWN_VARIANT: 'normal-slot-swap' },
+  );
+  const normalDawnEvidence = normalDawn.status === 0 ? readLastJsonLine(normalDawn.output) : undefined;
+  const swappedDawnEvidence = swappedDawn.status === 0 ? readLastJsonLine(swappedDawn.output) : undefined;
+  if (
+    browserDelta.meanRgbDelta <= 0.01 ||
+    normalDawn.status !== 0 ||
+    swappedDawn.status !== 0 ||
+    normalDawnEvidence?.variant !== 'normal' ||
+    swappedDawnEvidence?.variant !== 'normal-slot-swap' ||
+    JSON.stringify(normalDawnEvidence?.pixel) === JSON.stringify(swappedDawnEvidence?.pixel)
+  ) {
+    console.error(
+      `[m3-programmable] custom material normal-slot visual ${repeat}: FAIL - ${JSON.stringify({ browserDelta, normalDawn: normalDawnEvidence, swappedDawn: swappedDawnEvidence })}`,
+    );
+    process.exit(1);
+  }
+  const snapshot = {
+    rootArtifactDigest: normalBrowserEvidence.rootArtifactDigest,
+    normalTextureSlot: normalDawnEvidence.normalTextureSlot,
+    browser: {
+      normalSha256: sha256File(normalScreenshotPath),
+      swappedSha256: sha256File(swappedScreenshotPath),
+      delta: browserDelta,
+    },
+    dawn: {
+      normal: normalDawnEvidence.pixel,
+      swapped: swappedDawnEvidence.pixel,
+    },
+  };
+  writeFileSync(resolve(normalSlotVisualArtifactRoot, `repeat-${repeat}.json`), `${JSON.stringify(snapshot, null, 2)}\n`);
+  normalSlotVisualRuns.push(snapshot);
+}
+if (repeatabilityDiff(normalSlotVisualRuns[0], normalSlotVisualRuns[1]) !== undefined) {
+  console.error(
+    `[m3-programmable] custom material normal-slot visual repeatability: FAIL - ${JSON.stringify({ first: normalSlotVisualRuns[0], second: normalSlotVisualRuns[1] })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] custom material normal-slot visual causality: PASS repeats=2 changedPixels=${normalSlotVisualRuns[0].browser.delta.changedPixels} meanRgbDelta=${normalSlotVisualRuns[0].browser.delta.meanRgbDelta.toFixed(4)} dawnPixels=${normalSlotVisualRuns[0].dawn.normal.join(',')}/${normalSlotVisualRuns[0].dawn.swapped.join(',')}`,
+);
+
+const normalSlotLiveArtifactRoot = resolve(
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+    resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+  'custom-material-normal-slot-live-mutation',
+);
+mkdirSync(normalSlotLiveArtifactRoot, { recursive: true });
+const normalSlotLiveRuns = [];
+for (const repeat of ['first', 'second']) {
+  const artifactDir = resolve(normalSlotLiveArtifactRoot, repeat);
+  const browser = runCustomMaterialBrowser(`custom material normal-slot live mutation ${repeat}`, {
+    FORGEAX_MATERIAL_LIVE_NORMAL_SLOT_SWAP: '1',
+    FORGEAX_MATERIAL_ARTIFACT_DIR: artifactDir,
+  });
+  const browserEvidence = browser.status === 0 ? readLastJsonLine(browser.output) : undefined;
+  const browserBeforePath = resolve(artifactDir, 'live-normal-slot-before.png');
+  const browserAfterPath = resolve(artifactDir, 'live-normal-slot-after.png');
+  const browserDelta =
+    browser.status === 0 && existsSync(browserBeforePath) && existsSync(browserAfterPath)
+      ? comparePngs(browserBeforePath, browserAfterPath)
+      : undefined;
+  const dawn = run(
+    `custom material normal-slot live Dawn ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    { FORGEAX_MATERIAL_ARTIFACT_DIR: artifactDir },
+  );
+  const dawnEvidence = dawn.status === 0 ? readLastJsonLine(dawn.output) : undefined;
+  if (
+    browser.status !== 0 ||
+    browserEvidence?.liveMutation?.enabled !== true ||
+    browserEvidence?.liveMutation?.applied !== true ||
+    browserEvidence?.liveMutation?.beforeTextureHandles?.[0] !==
+      browserEvidence?.liveMutation?.afterTextureHandles?.[0] ||
+    browserEvidence?.liveMutation?.beforeTextureHandles?.[1] ===
+      browserEvidence?.liveMutation?.afterTextureHandles?.[1] ||
+    browserEvidence?.liveVisual?.beforePath === undefined ||
+    browserEvidence?.liveVisual?.afterPath === undefined ||
+    browserDelta?.meanRgbDelta <= 0.01 ||
+    dawn.status !== 0 ||
+    dawnEvidence?.frontDoor !== 'engine-renderer-world-draw' ||
+    dawnEvidence?.material?.baseColorPreserved !== true ||
+    dawnEvidence?.material?.normalSlotChanged !== true ||
+    dawnEvidence?.delta?.meanRgbDelta <= 0.001
+  ) {
+    console.error(
+      `[m3-programmable] custom material normal-slot live mutation: FAIL - ${JSON.stringify({ browserStatus: browser.status, browserEvidence, browserDelta, dawnStatus: dawn.status, dawnEvidence })}`,
+    );
+    process.exit(1);
+  }
+  const snapshot = {
+    browser: {
+      mutation: browserEvidence.liveMutation,
+      beforeSha256: sha256File(browserBeforePath),
+      afterSha256: sha256File(browserAfterPath),
+      delta: browserDelta,
+    },
+    dawn: {
+      material: dawnEvidence.material,
+      before: dawnEvidence.before,
+      after: dawnEvidence.after,
+      delta: dawnEvidence.delta,
+    },
+  };
+  writeFileSync(resolve(normalSlotLiveArtifactRoot, `repeat-${repeat}.json`), `${JSON.stringify(snapshot, null, 2)}\n`);
+  normalSlotLiveRuns.push(snapshot);
+}
+if (repeatabilityDiff(normalSlotLiveRuns[0], normalSlotLiveRuns[1]) !== undefined) {
+  console.error(
+    `[m3-programmable] custom material normal-slot live mutation repeatability: FAIL - ${JSON.stringify({ first: normalSlotLiveRuns[0], second: normalSlotLiveRuns[1] })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] custom material normal-slot live mutation: PASS repeats=2 changedPixels=${normalSlotLiveRuns[0].browser.delta.changedPixels} meanRgbDelta=${normalSlotLiveRuns[0].browser.delta.meanRgbDelta.toFixed(4)} dawnChangedPixels=${normalSlotLiveRuns[0].dawn.delta.changedPixels}`,
+);
+
+const materialResizeArtifactRoot = resolve(
+  process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+  'custom-material-normal-slot-live-resize-rebuild',
+);
+mkdirSync(materialResizeArtifactRoot, { recursive: true });
+const materialResizeRuns = [];
+for (const repeat of ['first', 'second']) {
+  const normalDir = resolve(materialResizeArtifactRoot, `normal-${repeat}`);
+  const swapDir = resolve(materialResizeArtifactRoot, `swap-${repeat}`);
+  const normalBrowser = runCustomMaterialBrowser(`custom material normal-slot resize normal ${repeat}`, {
+    FORGEAX_MATERIAL_LIVE_NORMAL_SLOT_RESIZE: '1',
+    FORGEAX_MATERIAL_ARTIFACT_DIR: normalDir,
+  });
+  const swapBrowser = runCustomMaterialBrowser(`custom material normal-slot resize swap ${repeat}`, {
+    FORGEAX_MATERIAL_LIVE_NORMAL_SLOT_SWAP_RESIZE: '1',
+    FORGEAX_MATERIAL_ARTIFACT_DIR: swapDir,
+  });
+  const normalBrowserEvidence = normalBrowser.status === 0 ? readLastJsonLine(normalBrowser.output) : undefined;
+  const swapBrowserEvidence = swapBrowser.status === 0 ? readLastJsonLine(swapBrowser.output) : undefined;
+  const normalAfterPath = resolve(normalDir, 'live-normal-slot-resize-after.png');
+  const swapAfterPath = resolve(swapDir, 'live-normal-slot-resize-after.png');
+  const browserDelta =
+    normalBrowser.status === 0 && swapBrowser.status === 0 && existsSync(normalAfterPath) && existsSync(swapAfterPath)
+      ? comparePngs(normalAfterPath, swapAfterPath)
+      : undefined;
+  const normalDawn = run(
+    `custom material normal-slot resize Dawn normal ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    { FORGEAX_MATERIAL_LIVE_RESIZE_VARIANT: 'normal', FORGEAX_MATERIAL_ARTIFACT_DIR: normalDir },
+  );
+  const swapDawn = run(
+    `custom material normal-slot resize Dawn swap ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    { FORGEAX_MATERIAL_LIVE_RESIZE_VARIANT: 'swap', FORGEAX_MATERIAL_ARTIFACT_DIR: swapDir },
+  );
+  const normalDawnEvidence = normalDawn.status === 0 ? readLastJsonLine(normalDawn.output) : undefined;
+  const swapDawnEvidence = swapDawn.status === 0 ? readLastJsonLine(swapDawn.output) : undefined;
+  const dawnDelta =
+    normalDawn.status === 0 && swapDawn.status === 0
+      ? compareDawnReadbacks(
+          resolve(normalDir, 'live-normal-slot-after-resize.rgba'),
+          resolve(normalDir, 'live-normal-slot-after-resize.json'),
+          resolve(swapDir, 'live-normal-slot-after-resize.rgba'),
+          resolve(swapDir, 'live-normal-slot-after-resize.json'),
+        )
+      : undefined;
+  if (
+    normalBrowser.status !== 0 ||
+    swapBrowser.status !== 0 ||
+    normalBrowserEvidence?.resizeRebuild?.afterCanvas?.join('x') !== '384x192' ||
+    swapBrowserEvidence?.resizeRebuild?.afterCanvas?.join('x') !== '384x192' ||
+    swapBrowserEvidence?.liveMutation?.afterComponentMaterialHandle !== swapBrowserEvidence?.liveMutation?.afterMaterialHandle ||
+    swapBrowserEvidence?.resizeRebuild?.postResizeMaterialHandle !== swapBrowserEvidence?.liveMutation?.afterMaterialHandle ||
+    normalBrowserEvidence?.resizeRebuild?.postResizeMaterialHandle !== normalBrowserEvidence?.liveMutation?.beforeMaterialHandle ||
+    browserDelta?.meanRgbDelta <= 0.01 ||
+    normalDawn.status !== 0 ||
+    swapDawn.status !== 0 ||
+    normalDawnEvidence?.resize?.after?.join('x') !== '256x192' ||
+    swapDawnEvidence?.resize?.after?.join('x') !== '256x192' ||
+    swapDawnEvidence?.material?.normalSlotChanged !== true ||
+    dawnDelta?.meanRgbDelta <= 0.001
+  ) {
+    console.error(
+      `[m3-programmable] custom material normal-slot resize/rebuild: FAIL - ${JSON.stringify({ normalBrowser: normalBrowserEvidence, swapBrowser: swapBrowserEvidence, browserDelta, normalDawn: normalDawnEvidence, swapDawn: swapDawnEvidence, dawnDelta })}`,
+    );
+    process.exit(1);
+  }
+  const snapshot = {
+    browser: {
+      normal: { resize: normalBrowserEvidence.resizeRebuild, sha256: sha256File(normalAfterPath) },
+      swap: { mutation: swapBrowserEvidence.liveMutation, resize: swapBrowserEvidence.resizeRebuild, sha256: sha256File(swapAfterPath) },
+      delta: browserDelta,
+    },
+    dawn: {
+      normal: { material: normalDawnEvidence.material, resize: normalDawnEvidence.resize, sha256: normalDawnEvidence.after.sha256 },
+      swap: { material: swapDawnEvidence.material, resize: swapDawnEvidence.resize, sha256: swapDawnEvidence.after.sha256 },
+      delta: dawnDelta,
+    },
+  };
+  writeFileSync(resolve(materialResizeArtifactRoot, `repeat-${repeat}.json`), `${JSON.stringify(snapshot, null, 2)}\n`);
+  materialResizeRuns.push(snapshot);
+}
+if (repeatabilityDiff(materialResizeRuns[0], materialResizeRuns[1]) !== undefined) {
+  console.error(
+    `[m3-programmable] custom material normal-slot resize/rebuild repeatability: FAIL - ${JSON.stringify({ first: materialResizeRuns[0], second: materialResizeRuns[1] })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] custom material normal-slot resize/rebuild: PASS repeats=2 browserChangedPixels=${materialResizeRuns[0].browser.delta.changedPixels} browserMeanRgbDelta=${materialResizeRuns[0].browser.delta.meanRgbDelta.toFixed(4)} dawnChangedPixels=${materialResizeRuns[0].dawn.delta.changedPixels}`,
+);
+
+const twoSlotResizeArtifactRoot = resolve(
+  process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+  'custom-material-two-slot-live-resize-rebuild',
+);
+mkdirSync(twoSlotResizeArtifactRoot, { recursive: true });
+const twoSlotResizeRuns = [];
+for (const repeat of ['first', 'second']) {
+  const normalDir = resolve(twoSlotResizeArtifactRoot, `normal-${repeat}`);
+  const swapDir = resolve(twoSlotResizeArtifactRoot, `swap-${repeat}`);
+  const normalBrowser = run(
+    `custom material two-slot resize normal ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:browser'],
+    { FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE: '1', FORGEAX_MATERIAL_ARTIFACT_DIR: normalDir },
+  );
+  const swapBrowser = run(
+    `custom material two-slot resize swap ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:browser'],
+    { FORGEAX_MATERIAL_LIVE_TWO_SLOT_SWAP_RESIZE: '1', FORGEAX_MATERIAL_ARTIFACT_DIR: swapDir },
+  );
+  const normalBrowserEvidence = normalBrowser.status === 0 ? readLastJsonLine(normalBrowser.output) : undefined;
+  const swapBrowserEvidence = swapBrowser.status === 0 ? readLastJsonLine(swapBrowser.output) : undefined;
+  const normalAfterPath = resolve(normalDir, 'live-two-slot-resize-after.png');
+  const swapAfterPath = resolve(swapDir, 'live-two-slot-resize-after.png');
+  const browserDelta =
+    normalBrowser.status === 0 && swapBrowser.status === 0 && existsSync(normalAfterPath) && existsSync(swapAfterPath)
+      ? comparePngs(normalAfterPath, swapAfterPath)
+      : undefined;
+  const normalDawn = run(
+    `custom material two-slot resize Dawn normal ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    { FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE_VARIANT: 'normal', FORGEAX_MATERIAL_ARTIFACT_DIR: normalDir },
+  );
+  const swapDawn = run(
+    `custom material two-slot resize Dawn swap ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    { FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE_VARIANT: 'swap', FORGEAX_MATERIAL_ARTIFACT_DIR: swapDir },
+  );
+  const normalDawnEvidence = normalDawn.status === 0 ? readLastJsonLine(normalDawn.output) : undefined;
+  const swapDawnEvidence = swapDawn.status === 0 ? readLastJsonLine(swapDawn.output) : undefined;
+  const dawnDelta =
+    normalDawn.status === 0 && swapDawn.status === 0
+      ? compareDawnReadbacks(
+          resolve(normalDir, 'live-normal-slot-after-resize.rgba'),
+          resolve(normalDir, 'live-normal-slot-after-resize.json'),
+          resolve(swapDir, 'live-normal-slot-after-resize.rgba'),
+          resolve(swapDir, 'live-normal-slot-after-resize.json'),
+        )
+      : undefined;
+  if (
+    normalBrowser.status !== 0 ||
+    swapBrowser.status !== 0 ||
+    normalBrowserEvidence?.resizeRebuild?.afterCanvas?.join('x') !== '384x192' ||
+    swapBrowserEvidence?.resizeRebuild?.afterCanvas?.join('x') !== '384x192' ||
+    normalBrowserEvidence?.liveMutation?.baseColorSlotChanged !== false ||
+    normalBrowserEvidence?.liveMutation?.normalSlotChanged !== false ||
+    swapBrowserEvidence?.liveMutation?.baseColorSlotChanged !== true ||
+    swapBrowserEvidence?.liveMutation?.normalSlotChanged !== true ||
+    swapBrowserEvidence?.liveMutation?.beforeTextureHandles?.[0] === swapBrowserEvidence?.liveMutation?.afterTextureHandles?.[0] ||
+    swapBrowserEvidence?.liveMutation?.beforeTextureHandles?.[1] === swapBrowserEvidence?.liveMutation?.afterTextureHandles?.[1] ||
+    swapBrowserEvidence?.resizeRebuild?.postResizeMaterialHandle !== swapBrowserEvidence?.liveMutation?.afterMaterialHandle ||
+    normalBrowserEvidence?.resizeRebuild?.postResizeMaterialHandle !== normalBrowserEvidence?.liveMutation?.beforeMaterialHandle ||
+    browserDelta?.meanRgbDelta <= 0.01 ||
+    normalDawn.status !== 0 ||
+    swapDawn.status !== 0 ||
+    normalDawnEvidence?.resize?.after?.join('x') !== '256x192' ||
+    swapDawnEvidence?.resize?.after?.join('x') !== '256x192' ||
+    normalDawnEvidence?.material?.baseColorChanged !== false ||
+    normalDawnEvidence?.material?.afterHandle !== normalDawnEvidence?.material?.beforeHandle ||
+    swapDawnEvidence?.material?.baseColorChanged !== true ||
+    swapDawnEvidence?.material?.afterHandle === swapDawnEvidence?.material?.beforeHandle ||
+    swapDawnEvidence?.material?.normalSlotChanged !== true ||
+    swapDawnEvidence?.material?.beforeTextureHandles?.[0] === swapDawnEvidence?.material?.afterTextureHandles?.[0] ||
+    swapDawnEvidence?.material?.beforeTextureHandles?.[1] === swapDawnEvidence?.material?.afterTextureHandles?.[1] ||
+    dawnDelta?.meanRgbDelta <= 0.001
+  ) {
+    console.error(
+      `[m3-programmable] custom material two-slot resize/rebuild: FAIL - ${JSON.stringify({ normalBrowser: normalBrowserEvidence, swapBrowser: swapBrowserEvidence, browserDelta, normalDawn: normalDawnEvidence, swapDawn: swapDawnEvidence, dawnDelta })}`,
+    );
+    process.exit(1);
+  }
+  const snapshot = {
+    browser: {
+      normal: { resize: normalBrowserEvidence.resizeRebuild, sha256: sha256File(normalAfterPath) },
+      swap: { mutation: swapBrowserEvidence.liveMutation, resize: swapBrowserEvidence.resizeRebuild, sha256: sha256File(swapAfterPath) },
+      delta: browserDelta,
+    },
+    dawn: {
+      normal: { material: normalDawnEvidence.material, resize: normalDawnEvidence.resize, sha256: normalDawnEvidence.after.sha256 },
+      swap: { material: swapDawnEvidence.material, resize: swapDawnEvidence.resize, sha256: swapDawnEvidence.after.sha256 },
+      delta: dawnDelta,
+    },
+  };
+  writeFileSync(resolve(twoSlotResizeArtifactRoot, `repeat-${repeat}.json`), `${JSON.stringify(snapshot, null, 2)}\n`);
+  twoSlotResizeRuns.push(snapshot);
+}
+if (repeatabilityDiff(twoSlotResizeRuns[0], twoSlotResizeRuns[1]) !== undefined) {
+  console.error(
+    `[m3-programmable] custom material two-slot resize/rebuild repeatability: FAIL - ${JSON.stringify({ first: twoSlotResizeRuns[0], second: twoSlotResizeRuns[1] })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] custom material two-slot live resize/rebuild: PASS repeats=2 browserChangedPixels=${twoSlotResizeRuns[0].browser.delta.changedPixels} browserMeanRgbDelta=${twoSlotResizeRuns[0].browser.delta.meanRgbDelta.toFixed(4)} dawnChangedPixels=${twoSlotResizeRuns[0].dawn.delta.changedPixels}`,
+);
 
 const renderGraph = run('render graph seam', [
   'vitest',
@@ -470,6 +862,74 @@ if (
 }
 console.log('[m3-programmable] browser custom pipeline + post composition: PASS');
 console.log('[m3-programmable] browser multi-texture falsifier: PASS');
+
+const liveMaterialArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'live-material-two-slot-composed-repeatability');
+const liveMaterialRuns = [];
+for (const pass of ['first', 'second']) {
+  liveMaterialRuns.push({
+    pass,
+    result: run(
+      `browser composed two-slot material rebind ${pass}`,
+      ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+      {
+        FORGEAX_M3_LIVE_MATERIAL: '1',
+        FORGEAX_M3_MSAA: '1',
+        FORGEAX_M3_RESIZE_CHURN: '1',
+        FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+        FORGEAX_M3_ARTIFACT_DIR: resolve(liveMaterialArtifactRoot, pass),
+      },
+    ),
+  });
+}
+const liveMaterialSnapshots = liveMaterialRuns.map((runResult) => ({
+  pass: runResult.pass,
+  snapshot: readLiveMaterialSnapshot(resolve(liveMaterialArtifactRoot, runResult.pass)),
+}));
+for (const runResult of liveMaterialRuns) {
+  if (
+    runResult.result.status !== 0 ||
+    !runResult.result.output.includes('[m3-live-material] PASS pipeline=custom post=inversion msaa=true') ||
+    !runResult.result.output.includes('normalSlots=true/true') ||
+    !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
+  ) {
+    console.error(`[m3-programmable] composed two-slot material rebind ${runResult.pass}: FAIL`);
+    process.exit(1);
+  }
+}
+const firstLiveMaterial = liveMaterialSnapshots[0].snapshot;
+const secondLiveMaterial = liveMaterialSnapshots[1].snapshot;
+if (repeatabilityDiff(firstLiveMaterial, secondLiveMaterial) !== undefined) {
+  console.error(`[m3-programmable] composed two-slot material rebind repeatability: FAIL - ${JSON.stringify({ first: firstLiveMaterial, second: secondLiveMaterial })}`);
+  process.exit(1);
+}
+for (const leg of ['normal', 'falsifier']) {
+  const value = firstLiveMaterial[leg];
+  if (
+    value.after.pipeline !== 'M3_PIPELINE=custom' ||
+    value.after.post !== 'M3_POST_EFFECT=inversion' ||
+    value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
+    value.draws === 0 ||
+    value.inspectedDraw === undefined ||
+    value.dawn.nonBlackPixelCount === 0
+  ) {
+    console.error(`[m3-programmable] composed two-slot material RHI/Dawn evidence: FAIL - ${JSON.stringify({ leg, value })}`);
+    process.exit(1);
+  }
+}
+if (
+  firstLiveMaterial.normal.afterEvidence.baseColorSlotChanged !== true ||
+  firstLiveMaterial.normal.afterEvidence.detailSlotChanged !== true ||
+  firstLiveMaterial.normal.afterEvidence.afterComponentMaterialMatchesAfter !== true ||
+  firstLiveMaterial.falsifier.afterEvidence.baseColorSlotChanged === true && firstLiveMaterial.falsifier.afterEvidence.detailSlotChanged === true ||
+  firstLiveMaterial.normal.delta.changed < 1000 ||
+  firstLiveMaterial.falsifier.delta.changed < 100
+) {
+  console.error(`[m3-programmable] composed two-slot material oracle: FAIL - ${JSON.stringify(firstLiveMaterial)}`);
+  process.exit(1);
+}
+console.log(`[m3-programmable] composed two-slot material rebind repeatability: PASS normalChanged=${firstLiveMaterial.normal.delta.changed} falsifierChanged=${firstLiveMaterial.falsifier.delta.changed} normalDawnSha=${firstLiveMaterial.normal.dawn.sha256} falsifierDawnSha=${firstLiveMaterial.falsifier.dawn.sha256}`);
 
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',

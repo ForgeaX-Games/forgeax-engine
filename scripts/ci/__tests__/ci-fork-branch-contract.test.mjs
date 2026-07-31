@@ -68,9 +68,13 @@ test('collectathon browser boot uses the trusted Linux WebGPU capability', () =>
   assert.match(collectathonSmoke, /--disable-vulkan-surface/);
 });
 
-test('CI preserves in-flight evidence across newer commits', () => {
+test('CI preserves main evidence while PR runs may be superseded', () => {
+  assert.match(
+    workflow,
+    /cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}/,
+    'ci must cancel only superseded pull-request runs',
+  );
   for (const [name, source] of [
-    ['ci', workflow],
     ['bench', benchWorkflow],
     ['required-ci-checks', requiredWorkflow],
     ['post-merge-monitor', postMergeMonitor],

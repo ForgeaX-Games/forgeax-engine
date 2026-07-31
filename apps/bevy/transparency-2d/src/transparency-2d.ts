@@ -28,7 +28,7 @@ export function makeTransparencyPixels(): Uint8Array {
   return pixels;
 }
 
-function spriteMaterial(texture: number, sampler: number, color: readonly [number, number, number, number]): MaterialAsset {
+function spriteMaterial(texture: number, color: readonly [number, number, number, number]): MaterialAsset {
   return {
     kind: 'material',
     passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
@@ -39,14 +39,11 @@ function spriteMaterial(texture: number, sampler: number, color: readonly [numbe
       { name: 'slicesAndMode', type: 'vec4', optional: true },
       { name: 'baseColorTexture', type: 'texture' },
     ],
-    values: { colorTint: color, baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1] },
+    values: { colorTint: color, baseColorTexture: texture, pivotAndSize: [0.5, 0.5, 1, 1] },
   };
 }
 
 export function buildTransparencyWorld(world: World, texture: number, alphas: readonly [number, number, number] = DEFAULT_ALPHAS): void {
-  const sampler = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler', magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge',
-  });
   const colors: readonly (readonly [number, number, number, number])[] = [
     [1, 1, 1, alphas[0]],
     [0.1, 0.25, 1, alphas[1]],
@@ -54,7 +51,7 @@ export function buildTransparencyWorld(world: World, texture: number, alphas: re
   ];
   const positions: readonly (readonly [number, number, number])[] = [[-0.9, 0, 0], [0, 0, 0.1], [0.9, 0, 0.2]];
   for (let i = 0; i < positions.length; i++) {
-    const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture, sampler, colors[i]!));
+    const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture, colors[i]!));
     world.spawn(
       { component: Transform, data: { pos: positions[i]!, quat: [0, 0, 0, 1], scale: [2.8, 2.8, 1] } },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },

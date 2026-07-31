@@ -18,21 +18,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   console.warn(`[bevy-texture-atlas] backend=${app.renderer.backend}`);
   const atlases = [makeAtlas('unpadding'), makeAtlas('padding'), makeAtlas('unpadding'), makeAtlas('padding')];
-  const samplers = [
-    { magFilter: 'linear' as const, minFilter: 'linear' as const },
-    { magFilter: 'nearest' as const, minFilter: 'nearest' as const },
-    { magFilter: 'linear' as const, minFilter: 'linear' as const },
-    { magFilter: 'nearest' as const, minFilter: 'nearest' as const },
-  ];
-  const variants: Array<{ texture: number; sampler: number; atlas: AtlasTexture }> = [];
+  const variants: Array<{ texture: number; atlas: AtlasTexture }> = [];
   for (let index = 0; index < atlases.length; index += 1) {
     const atlas = atlases[index]!;
     const texture = { kind: 'texture' as const, width: atlas.size, height: atlas.size, format: 'rgba8unorm-srgb' as const, data: atlas.pixels, colorSpace: 'srgb' as const, mipmap: false };
     const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
     const upload = await app.renderer.store.uploadTexture(textureHandle, texture, { bytes: atlas.pixels, width: atlas.size, height: atlas.size, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
     if (!upload.ok) { console.error('[bevy-texture-atlas] texture upload failed:', upload.error.code, upload.error.hint); return; }
-    const samplerHandle = app.world.allocSharedRef('SamplerAsset', { kind: 'sampler', ...samplers[index], addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
-    variants.push({ texture: unwrapHandle(textureHandle), sampler: unwrapHandle(samplerHandle), atlas });
+    variants.push({ texture: unwrapHandle(textureHandle), atlas });
   }
   buildTextureAtlasWorld(app.world, variants);
   const started = app.start();

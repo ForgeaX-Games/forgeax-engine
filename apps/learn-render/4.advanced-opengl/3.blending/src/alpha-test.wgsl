@@ -16,20 +16,6 @@
 // so the PBR pipeline factory can build this pipeline from the same
 // BindGroupLayout templates as the engine-shipped unlit path.
 
-struct Material {
-  baseColor : vec4<f32>,
-  metallic  : f32,
-  roughness : f32,
-};
-
-@group(1) @binding(0) var<uniform> material : Material;
-@group(1) @binding(1) var baseColorSampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
 struct VsIn {
   @location(0) pos     : vec3<f32>,
   @location(1) normal  : vec3<f32>,
@@ -56,9 +42,9 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // wgpu GLES/WebGL2 needs an explicit LOD for this filtered sample. The
   // shared shader manifest compiles both branches; the runtime selects this
   // one from the backend capability while WebGPU keeps implicit derivatives.
-  let texSample = textureSampleLevel(baseColorTexture, baseColorSampler, in.uv, 0.0);
+  let texSample = textureSampleLevel(baseColorTexture, baseColorTexture_sampler, in.uv, 0.0);
 #else
-  let texSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
+  let texSample = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
 #endif
   let alpha = material.baseColor.a * texSample.a;
   if (alpha < 0.1) {

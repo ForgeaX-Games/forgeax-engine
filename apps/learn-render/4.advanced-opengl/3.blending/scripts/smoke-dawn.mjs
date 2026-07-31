@@ -304,8 +304,8 @@ if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
-if (!shader.findMaterialArtifact('learn-render::alpha-test').ok) {
-  shader.installMaterialArtifact('learn-render::alpha-test', {
+if (!shader.findMaterialArtifact('learn_render::alpha_test').ok) {
+  shader.installMaterialArtifact('learn_render::alpha_test', {
     source: COMPOSED_ALPHA_TEST_WGSL,
     paramSchema: [
       { name: 'baseColor', type: 'color' },
@@ -400,7 +400,7 @@ const grassMatHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      program: { module: 'learn-render::alpha-test' },
+      program: { module: 'learn_render::alpha_test' },
       renderState: { tags: { LightMode: 'Forward' } },
       queue: 3000, // RenderQueue.Transparent
       renderState: { depthWriteEnabled: false },

@@ -1,0 +1,63 @@
+{
+  "name": "@forgeax/bevy-animated-transform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Reproduction of Bevy's `animation/animated_transform` example using AnimationClip, AnimationGraph, AnimationPlayer, and named scene Transform targets.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
+  },
+  "forgeax": {
+    "bevyExample": {
+      "name": "animated_transform",
+      "category": "Animation",
+      "status": "implemented"
+    },
+    "smokeInvocation": "pnpm --filter @forgeax/bevy-animated-transform smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "animated transform demo; fps no-regression covered by hello-cube / hello-room gates"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "animated transform demo; bench focus on engine-math / pixel-parity"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-animated-transform smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy animated_transform reproduction"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.71",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

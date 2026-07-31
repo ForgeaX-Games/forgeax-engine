@@ -10,7 +10,7 @@
 //   1. Inject globalThis.navigator.gpu via the `webgpu` npm package.
 //   2. Build a mock HTMLCanvasElement + offscreen GPUCanvasContext.
 //   3. createRenderer with the built shader manifest; read the composed wgsl
-//      for shadertoy::happy-blob out of the manifest.
+//      for shadertoy::happy_blob out of the manifest.
 //   4. installMaterialArtifact + spawn fullscreen quad + camera.
 //   5. For t in {0.0, 0.6, 1.3} seconds: mutate values.iTime, draw N
 //      frames, copyTextureToBuffer + map, average the whole frame. Assert the
@@ -145,10 +145,10 @@ const manifestParsed = JSON.parse(manifestRaw);
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
 
 const matShaderEntry = (manifestParsed.materialShaders ?? []).find(
-  (m) => m && m.identifier === 'shadertoy::happy-blob',
+  (m) => m && m.identifier === 'shadertoy::happy_blob',
 );
 if (!matShaderEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing shadertoy::happy-blob entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing shadertoy::happy_blob entry');
   process.exit(1);
 }
 let composedWgsl;
@@ -200,8 +200,8 @@ if (shader === null || assets === null) {
   process.exit(1);
 }
 
-if (!shader.findMaterialArtifact('shadertoy::happy-blob').ok) {
-  shader.installMaterialArtifact('shadertoy::happy-blob', {
+if (!shader.findMaterialArtifact('shadertoy::happy_blob').ok) {
+  shader.installMaterialArtifact('shadertoy::happy_blob', {
     source: composedWgsl,
     paramSchema: [
       { name: 'iResolution', type: 'vec2' },
@@ -221,7 +221,7 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
   passes: [
     {
       name: 'Forward',
-      program: { module: 'shadertoy::happy-blob' },
+      program: { module: 'shadertoy::happy_blob' },
       renderState: { cullMode: 'none', tags: { LightMode: 'Forward' }, queue: 2000 },
     },
   ],

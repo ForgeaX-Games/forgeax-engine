@@ -666,9 +666,13 @@ function validateRenderables(
     // registry ref (D-2). A first-access miss builds the GPU buffers; later
     // frames hit the O(1) cache.
     const meshAssetHandle = toShared<'MeshAsset'>(r.assetHandle);
-    let meshHandles = internals.gpuStore.getMeshGpuHandles(meshAssetHandle);
+    let meshHandles = internals.gpuStore.getMeshGpuHandles(meshAssetHandle, r.worldId);
     if (meshHandles === undefined && r.assetHandle > BUILTIN_MESH_ID_MAX) {
-      const residentRes = internals.gpuStore.ensureResident(meshAssetHandle, assetRes.value);
+      const residentRes = internals.gpuStore.ensureResident(
+        meshAssetHandle,
+        assetRes.value,
+        r.worldId,
+      );
       if (residentRes.ok) {
         meshHandles = residentRes.value;
       } else if (residentRes.error instanceof RhiError) {

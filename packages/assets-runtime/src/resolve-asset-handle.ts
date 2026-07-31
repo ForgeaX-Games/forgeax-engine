@@ -15,19 +15,25 @@
 
 import type { World } from '@forgeax/engine-ecs';
 import { SharedRefStaleError, UniqueRefStaleError } from '@forgeax/engine-ecs';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { AssetGuid } from '@forgeax/engine-pack/guid';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import type {
   Asset,
   AssetError as AssetErrorType,
   Handle,
   MaterialAsset,
-  MaterialParameter,
+  MaterialError,
   MaterialPass,
 } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError, BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
+import {
+  ASSET_ERROR_HINTS,
+  AssetError,
+  BUILTIN_BASE,
+  handleSlot,
+  materialGuidText,
+  resolveMaterialAsset,
+} from '@forgeax/engine-types';
 import { BuiltinAssetRegistry } from './builtin-asset-registry';
-import { MaterialResolvedEmptyPassesError } from './errors/asset';
 
 /**
  * Resolve a handle to its asset payload with two-tier slot-range dispatch.
@@ -93,10 +99,10 @@ export function resolveAssetHandle<T extends Asset>(
  * the AssetRegistry catalogue ({@link AssetRegistry.lookup}). The registry
  * holds no handles -- it is the GUID->payload SSOT for parent resolution.
  *
- * Zero-cache (AC-04): every call full-walks. Cycle detection (W-1): returns
- * `AssetError` with code `'material-circular-inheritance'`. Empty passes
- * (AC-09, D-3): `MaterialResolvedEmptyPassesError` with `.detail.reason`
- * discriminating `'missing-parent'` vs `'no-pass-in-chain'`.
+ * Zero-cache (AC-04): every call builds the same table-shaped input and delegates
+ * inheritance semantics to the MaterialAsset resolver in `@forgeax/engine-types`.
+ * Compiler and runtime therefore share root-contract ownership and child-value
+ * override semantics instead of maintaining two subtly different walks.
  */
 export function walkMaterialPassesOverSharedRefs(
   world: World,
@@ -105,116 +111,38 @@ export function walkMaterialPassesOverSharedRefs(
 ): Result<
   {
     passes: MaterialPass[];
-    parameters: MaterialParameter[];
+    parameters: MaterialAsset['parameters'];
     values: Record<string, unknown>;
   },
-  AssetErrorType | MaterialResolvedEmptyPassesError | SharedRefStaleError | UniqueRefStaleError
+  AssetErrorType | MaterialError | SharedRefStaleError | UniqueRefStaleError
 > {
-  const visited = new Set<string>();
-  const chainNames: string[] = [];
-  let missingParent = false;
-
   // Resolve the root material payload from its column handle.
   const rootRes = resolveAssetHandle<MaterialAsset>(
     world,
     handle as unknown as Handle<string, 'shared'>,
   );
 
-  function mergeParameters(
-    parent: readonly MaterialParameter[],
-    child: readonly MaterialParameter[] | undefined,
-  ): MaterialParameter[] {
-    const merged = new Map(parent.map((parameter) => [parameter.name, parameter] as const));
-    for (const parameter of child ?? []) merged.set(parameter.name, parameter);
-    return [...merged.values()];
-  }
-
-  function walkPayload(
-    material: MaterialAsset | undefined,
-    label: string,
-  ): {
-    passes: MaterialPass[];
-    parameters: MaterialParameter[];
-    values: Record<string, unknown>;
-  } | null {
-    if (visited.has(label)) {
-      chainNames.push(label);
-      return null;
-    }
-    visited.add(label);
-    chainNames.push(label);
-
-    if (material === undefined) {
-      missingParent = true;
-      return { passes: [], parameters: [], values: {} };
-    }
-
-    let parentPasses: MaterialPass[] = [];
-    let parentParameters: MaterialParameter[] = [];
-    let parentValues: Record<string, unknown> = {};
-    if (material.parent !== undefined) {
-      const parentGuid = material.parent as AssetGuid;
-      const parentLabel = AssetGuid.format(parentGuid).toLowerCase();
-      const parentMaterial = registry.lookup(parentGuid) as MaterialAsset | undefined;
-      const parentResult = walkPayload(parentMaterial, parentLabel);
-      if (parentResult === null) return null;
-      parentPasses = parentResult.passes;
-      parentParameters = parentResult.parameters;
-      parentValues = parentResult.values;
-    }
-
-    // W-4: child values shallow-merge over parent.
-    const mergedParams: Record<string, unknown> = { ...parentValues };
-    if (material.values) {
-      for (const [k, v] of Object.entries(material.values)) {
-        mergedParams[k] = v;
-      }
-    }
-
-    // W-5: no passes -- full inheritance from parent.
-    if (!material.passes || material.passes.length === 0) {
-      return {
-        passes: parentPasses,
-        parameters: mergeParameters(parentParameters, material.parameters),
-        values: mergedParams,
-      };
-    }
-
-    // W-6: child passes override parent by name, new names append.
-    const mergedPasses: MaterialPass[] = [];
-    const seenNames = new Set<string>();
-    for (const cp of material.passes) {
-      seenNames.add(cp.name);
-      mergedPasses.push(cp);
-    }
-    for (const pp of parentPasses) {
-      if (!seenNames.has(pp.name)) {
-        mergedPasses.push(pp);
-      }
-    }
-    return {
-      passes: mergedPasses,
-      parameters: mergeParameters(parentParameters, material.parameters),
-      values: mergedParams,
-    };
-  }
-
   const rootLabel = `handle-${handleSlot(handle)}`;
-  const result = walkPayload(rootRes.ok ? rootRes.value : undefined, rootLabel);
-  if (result === null) {
-    // W-7: cycle.
-    return err(
-      new AssetError({
-        code: 'material-circular-inheritance',
-        expected: 'material parent chain forms no cycle',
-        hint: ASSET_ERROR_HINTS['material-circular-inheritance'],
-        detail: { cycle: chainNames.join(' -> ') },
-      }),
-    );
-  }
-  if (result.passes.length === 0) {
-    const reason = missingParent ? 'missing-parent' : 'no-pass-in-chain';
-    return err(new MaterialResolvedEmptyPassesError(rootLabel, reason, undefined));
-  }
-  return ok(result);
+  if (!rootRes.ok) return err(rootRes.error);
+
+  const table: Record<string, MaterialAsset> = {};
+  const visited = new Set<string>();
+  const collect = (label: string, material: MaterialAsset): void => {
+    if (visited.has(label)) return;
+    visited.add(label);
+    table[label] = material;
+    if (material.parent === undefined) return;
+    const parentId = materialGuidText(material.parent);
+    const parent = registry.lookup(material.parent);
+    if (parent?.kind === 'material') collect(parentId, parent);
+  };
+  collect(rootLabel, rootRes.value);
+
+  const resolved = resolveMaterialAsset(rootLabel, table);
+  if (!resolved.ok) return err(resolved.error);
+  return ok({
+    passes: [...(resolved.value.asset.passes ?? [])],
+    parameters: resolved.value.asset.parameters ?? [],
+    values: { ...(resolved.value.asset.values ?? {}) },
+  });
 }

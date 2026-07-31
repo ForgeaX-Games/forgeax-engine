@@ -46,6 +46,7 @@ import {
   type RhiDevice,
   RhiError,
   type Texture,
+  type TextureView,
 } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
@@ -175,8 +176,8 @@ type RegisterCube = (
 // fields and forwards .destroy() to the RHI shim.
 interface TextureGpuEntry {
   readonly texture: GpuTexture;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view (not a GpuResource)
-  readonly view: any;
+  /** Opaque RHI view handle; lifetime is bound to the parent texture. */
+  readonly view: TextureView;
 }
 
 // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M2 / w11
@@ -278,6 +279,16 @@ export class GpuResourceStore {
   // equirect source always resolves to the same cubemap (idempotent, A2).
   private readonly cubemapIdempotentMap: Map<number, Handle<'EquirectAsset', 'shared'>> = new Map();
   private readonly meshGpuHandles: Map<number, MeshGpuEntry> = new Map();
+
+  /**
+   * feat-20260723-cross-world-gpu-cache-collision: compose a cache key from
+   * the raw handle slot and the worldId so two worlds that independently
+   * allocate assets at the same slot number never collide in the GPU store.
+   * worldId=0 produces the bare slot (backward compat with single-world path).
+   */
+  private worldKey(slot: number, worldId: number): number {
+    return worldId === 0 ? slot : worldId * 0x1000000 + slot;
+  }
 
   /**
    * Wire the GPU device, shader-module factory, and cube-POD register relay.
@@ -382,8 +393,11 @@ export class GpuResourceStore {
    * can consume the aggregate result (D-3). Key not present -> no-op
    * returning {freed:0, errors:[]}.
    */
-  evictTexture(handle: Handle<'TextureAsset', 'shared'>): { freed: number; errors: RhiError[] } {
-    const id = handleSlot(handle);
+  evictTexture(
+    handle: Handle<'TextureAsset', 'shared'>,
+    worldId: number = 0,
+  ): { freed: number; errors: RhiError[] } {
+    const id = this.worldKey(handleSlot(handle), worldId);
     const entry = this.textureGpuHandles.get(id);
     if (entry === undefined) return { freed: 0, errors: [] };
 
@@ -404,8 +418,11 @@ export class GpuResourceStore {
     return { freed, errors };
   }
 
-  evictMesh(handle: Handle<'MeshAsset', 'shared'>): { freed: number; errors: RhiError[] } {
-    const id = handleSlot(handle);
+  evictMesh(
+    handle: Handle<'MeshAsset', 'shared'>,
+    worldId: number = 0,
+  ): { freed: number; errors: RhiError[] } {
+    const id = this.worldKey(handleSlot(handle), worldId);
     const entry = this.meshGpuHandles.get(id);
     if (entry === undefined) return { freed: 0, errors: [] };
 
@@ -581,17 +598,22 @@ export class GpuResourceStore {
    * @internal — test-only seam for cow-survivor / AC-02 integration tests; not
    * part of the engine's public API surface.
    */
-  _getTextureGpuTexture(handle: Handle<'TextureAsset', 'shared'>): GpuTexture | undefined {
-    return this.textureGpuHandles.get(handleSlot(handle))?.texture;
+  _getTextureGpuTexture(
+    handle: Handle<'TextureAsset', 'shared'>,
+    worldId: number = 0,
+  ): GpuTexture | undefined {
+    return this.textureGpuHandles.get(this.worldKey(handleSlot(handle), worldId))?.texture;
   }
 
   /**
    * Return the GPU texture-view for a `Handle<TextureAsset>` if it has been
    * made resident, else `undefined`.
    */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
-  getTextureGpuView(handle: Handle<'TextureAsset', 'shared'>): any | undefined {
-    return this.textureGpuHandles.get(handleSlot(handle))?.view;
+  getTextureGpuView(
+    handle: Handle<'TextureAsset', 'shared'>,
+    worldId: number = 0,
+  ): TextureView | undefined {
+    return this.textureGpuHandles.get(this.worldKey(handleSlot(handle), worldId))?.view;
   }
 
   /**
@@ -638,8 +660,11 @@ export class GpuResourceStore {
    * `Handle<MeshAsset>` if resident, else `undefined`. Consumers treat this
    * as the canonical "mesh asset has GPU residency" probe.
    */
-  getMeshGpuHandles(handle: Handle<'MeshAsset', 'shared'>): MeshGpuEntry | undefined {
-    return this.meshGpuHandles.get(handleSlot(handle));
+  getMeshGpuHandles(
+    handle: Handle<'MeshAsset', 'shared'>,
+    worldId: number = 0,
+  ): MeshGpuEntry | undefined {
+    return this.meshGpuHandles.get(this.worldKey(handleSlot(handle), worldId));
   }
 
   /**
@@ -659,6 +684,7 @@ export class GpuResourceStore {
   ensureResident(
     handle: Handle<'MeshAsset', 'shared'> | Handle<'TextureAsset', 'shared'>,
     pod: TypesMeshAsset | TextureAsset,
+    worldId: number = 0,
     // biome-ignore lint/suspicious/noExplicitAny: opaque GPU handle entry union
   ): Result<any, RhiError | AssetError | ImageError> {
     const id = handleSlot(handle);
@@ -671,25 +697,26 @@ export class GpuResourceStore {
     // path, not routed here).
     switch (pod.kind) {
       case 'mesh': {
-        const existing = this.meshGpuHandles.get(id);
+        const key = this.worldKey(id, worldId);
+        const existing = this.meshGpuHandles.get(key);
         if (existing !== undefined) return ok(existing);
         const projected = deriveRenderDataMesh(pod);
         if (!projected.ok) return projected;
-        return this.uploadMeshById(id, pod, projected.value);
+        return this.uploadMeshById(key, pod, projected.value);
       }
       case 'texture': {
-        const existing = this.textureGpuHandles.get(id);
+        const texKey = this.worldKey(id, worldId);
+        const existing = this.textureGpuHandles.get(texKey);
         if (existing !== undefined) return ok(existing);
         const projected = deriveRenderDataTexture(pod);
         if (!projected.ok) return projected;
-        // Synthesize the DecodedImage shape the upload prelude consumes from
-        // the TextureAsset POD: `data` carries the pixel bytes.
         const decoded: DecodedImage = decodedFromTexture(pod);
         return this.uploadTextureSync(
           handle as Handle<'TextureAsset', 'shared'>,
           pod,
           decoded,
           projected.value,
+          worldId,
         );
       }
     }
@@ -707,6 +734,7 @@ export class GpuResourceStore {
     handle: Handle<'TextureAsset', 'shared'>,
     pod: TextureAsset,
     decoded: DecodedImage,
+    worldId: number = 0,
   ): Promise<Result<void, AssetError | ImageError | RhiError>> {
     const device = this.gpuDevice;
     const projected = deriveRenderDataTexture(pod);
@@ -714,13 +742,10 @@ export class GpuResourceStore {
     const prepared = this.prepareTextureUpload(handle, pod, decoded, projected.value);
     if (!prepared.ok) return prepared;
     if (device === undefined) return ok(undefined);
-    const { id, tex, levels, gpuTexture } = prepared.value;
+    const { tex, levels, gpuTexture } = prepared.value;
+    const cacheKey = this.worldKey(handleSlot(handle), worldId);
     if (gpuTexture === undefined) return ok(undefined);
 
-    // feat-20260707 M5 / w36: compressed textures already have every mip level
-    // uploaded from `data` (prepareTextureUpload); the runtime blit path is
-    // uncompressed-only (compressed formats are not render targets, and the w35
-    // mip gate already blocked runtime mip-gen for them).
     if (!projected.value.compressed && decoded.mipmap === true && levels > 1) {
       const factory = this.asyncCreateShaderModule;
       if (factory === undefined) {
@@ -752,11 +777,14 @@ export class GpuResourceStore {
     }
 
     const viewRes = device.createTextureView(gpuTexture, {
-      label: `texture-view-${id}`,
+      label: `texture-view-${cacheKey}`,
       dimension: '2d',
     });
     if (!viewRes.ok) return viewRes;
-    this.textureGpuHandles.set(id, { texture: this.wrapTex(gpuTexture), view: viewRes.value });
+    this.textureGpuHandles.set(cacheKey, {
+      texture: this.wrapTex(gpuTexture),
+      view: viewRes.value,
+    });
     return ok(undefined);
   }
 
@@ -771,6 +799,7 @@ export class GpuResourceStore {
     pod: TextureAsset,
     decoded: DecodedImage,
     renderData: TextureRenderData,
+    worldId: number = 0,
   ): Result<TextureGpuEntry, AssetError | ImageError | RhiError> {
     const device = this.gpuDevice;
     const prepared = this.prepareTextureUpload(handle, pod, decoded, renderData);
@@ -784,10 +813,9 @@ export class GpuResourceStore {
         }),
       );
     }
-    const { id, tex, levels, gpuTexture } = prepared.value;
+    const { tex, levels, gpuTexture } = prepared.value;
+    const cacheKey = this.worldKey(handleSlot(handle), worldId);
 
-    // feat-20260707 M5 / w36: compressed mips are pre-uploaded from `data`; the
-    // blit path is uncompressed-only (see uploadTexture note).
     if (!renderData.compressed && decoded.mipmap === true && levels > 1) {
       const blitRes = blitMipmapsSync(device, gpuTexture, {
         format: tex.format,
@@ -799,12 +827,12 @@ export class GpuResourceStore {
     }
 
     const viewRes = device.createTextureView(gpuTexture, {
-      label: `texture-view-${id}`,
+      label: `texture-view-${cacheKey}`,
       dimension: '2d',
     });
     if (!viewRes.ok) return viewRes;
     const entry: TextureGpuEntry = { texture: this.wrapTex(gpuTexture), view: viewRes.value };
-    this.textureGpuHandles.set(id, entry);
+    this.textureGpuHandles.set(cacheKey, entry);
     return ok(entry);
   }
 
@@ -1574,8 +1602,9 @@ export class GpuResourceStore {
     handle: Handle<'MeshAsset', 'shared'>,
     newVertices: Float32Array,
     newIndices: Uint16Array,
+    worldId: number = 0,
   ): void {
-    const id = handleSlot(handle);
+    const id = this.worldKey(handleSlot(handle), worldId);
     this.updateMeshById(id, newVertices, newIndices);
   }
 }

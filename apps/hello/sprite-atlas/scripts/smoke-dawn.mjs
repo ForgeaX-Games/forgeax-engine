@@ -294,7 +294,6 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
     // 1:1 paramSchema forms directly.
     colorTint: [1, 1, 1, 1],
     baseColorTexture: textureHandle,
-    sampler: samplerHandle,
     region,
     pivotAndSize: [0.5, 0.5, 1, 1],
   },

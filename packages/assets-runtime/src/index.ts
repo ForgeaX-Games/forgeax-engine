@@ -113,4 +113,7 @@ export type { PostSpawnHook, SkinJointResolver } from './registry/instantiate';
 export { buildSceneChildContext } from './registry/instantiate';
 // ─── Handle-to-payload resolution ───────────────────────────────────────────
 export { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
+// Public scene-pack boundary: editor/play hosts reuse the engine's canonical
+// refs-index -> SceneAsset reconstruction when refreshing a saved SceneAsset.
+export { parseScenePayload } from './scene-payload';
 export { createDefaultLoaderRegistry, wireDefaultLoaders } from './wire-default-loaders';

@@ -30,20 +30,6 @@
 // schema lists heightScale + algoMode as the only two f32 fields and they map
 // to .heightScale / .algoMode here. (metallic/roughness are intentionally
 // absent — LO 5.5 uses fixed Blinn-Phong constants, not PBR params.)
-struct ParallaxMaterial {
-  baseColor   : vec4<f32>,
-  heightScale : f32,
-  algoMode    : f32,
-};
-
-@group(1) @binding(0) var<uniform> material : ParallaxMaterial;
-@group(1) @binding(1) var baseColorSampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var normalSampler : sampler;
-@group(1) @binding(4) var normalTexture : texture_2d<f32>;
-@group(1) @binding(5) var heightSampler : sampler;
-@group(1) @binding(6) var heightTexture : texture_2d<f32>;
-
 // LO 5.5 constants. The light orbits in the C++ tutorial; the demo keeps it
 // static (a single point light) so the parallax depth cue is unambiguous.
 const LIGHT_POS   : vec3<f32> = vec3<f32>(0.5, 1.0, 0.3);
@@ -107,7 +93,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 fn sampleHeight(uv : vec2<f32>) -> f32 {
   // textureSampleLevel (explicit LOD 0) is mandatory inside the march loop:
   // WGSL forbids implicit-LOD textureSample under non-uniform control flow.
-  return textureSampleLevel(heightTexture, heightSampler, uv, 0.0).r;
+  return textureSampleLevel(heightTexture, heightTexture_sampler, uv, 0.0).r;
 }
 
 // LOD-0 implicit-LOD read used ONLY in the uniform-control-flow basic path.
@@ -118,7 +104,7 @@ fn sampleHeight(uv : vec2<f32>) -> f32 {
 // reflects as `unfilterable-float` + `non-filtering` and fails the build-time
 // paramSchema-vs-WGSL binding check.
 fn sampleHeightFiltered(uv : vec2<f32>) -> f32 {
-  return textureSample(heightTexture, heightSampler, uv).r;
+  return textureSample(heightTexture, heightTexture_sampler, uv).r;
 }
 
 // LO 5.5 "Parallax Mapping" with offset limiting: shift the UV by the view
@@ -204,10 +190,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 
   // Tangent-space normal from the normal map (RG decode reuses the engine
   // helper; z is reconstructed under the unit-length constraint).
-  let normalRg = textureSample(normalTexture, normalSampler, texCoords).rg;
+  let normalRg = textureSample(normalTexture, normalTexture_sampler, texCoords).rg;
   let n = decodeTangentSpaceNormalRg(normalRg);
 
-  let color = textureSample(baseColorTexture, baseColorSampler, texCoords).rgb * material.baseColor.rgb;
+  let color = textureSample(baseColorTexture, baseColorTexture_sampler, texCoords).rgb * material.baseColor.rgb;
 
   let lightDir = normalize(in.tangentLightPos - in.tangentFragPos);
   let halfwayDir = normalize(lightDir + viewDir);

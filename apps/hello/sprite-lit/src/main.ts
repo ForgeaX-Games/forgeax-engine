@@ -41,7 +41,7 @@ import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engin
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
 
-import type { Handle, MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 type Mode = 'directional-only' | 'three-lights' | 'ab-compare';
@@ -150,13 +150,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const samplerHandle = world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
 
   // Step 3: lights. mode=directional-only spawns only the DirectionalLight;
   // three-lights + ab-compare spawn all 3. plan-strategy D-3 + D-8.
@@ -252,7 +245,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           // The legacy baseColor / texture / pivot names are gone.
           colorTint: slot.tint,
           baseColorTexture: textureHandle,
-          sampler: samplerHandle,
           region: [0, 0, 1, 1],
           pivotAndSize: [0.5, 0.5, 1, 1],
         },
@@ -276,7 +268,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           values: {
             colorTint: slot.tint,
             baseColorTexture: textureHandle,
-            sampler: samplerHandle,
             region: [0, 0, 1, 1],
             pivotAndSize: [0.5, 0.5, 1, 1],
           },

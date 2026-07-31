@@ -2,12 +2,6 @@
 
 #import forgeax_view::common::{view, meshes}
 
-struct AnimateUniforms {
-  time : f32,
-}
-
-@group(1) @binding(0) var<uniform> animate : AnimateUniforms;
-
 struct VsIn {
   @location(0) pos : vec3<f32>,
   @location(1) normal : vec3<f32>,
@@ -45,8 +39,8 @@ fn oklab_to_linear_srgb(c : vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let speed = 2.0;
-  let t1 = sin(animate.time * speed) * 0.5 + 0.5;
-  let t2 = cos(animate.time * speed) * 0.5 + 0.5;
+  let t1 = sin(material.time * speed) * 0.5 + 0.5;
+  let t2 = cos(material.time * speed) * 0.5 + 0.5;
   let distance_to_center = distance(in.uv, vec2<f32>(0.5)) * 1.4;
 
   let red = vec3<f32>(0.627955, 0.224863, 0.125846);

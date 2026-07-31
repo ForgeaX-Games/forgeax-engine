@@ -8,7 +8,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
 export default defineConfig({
-  plugins: [forgeaxShader() as never, vitePluginRhiDebug()],
+  plugins: [
+    forgeaxShader({ materialPackages: [resolve(here, 'src/shader-defs.pack.json')] }) as never,
+    vitePluginRhiDebug(),
+  ],
   server: { fs: { allow: [monorepoRoot] } },
   build: {
     target: 'esnext',

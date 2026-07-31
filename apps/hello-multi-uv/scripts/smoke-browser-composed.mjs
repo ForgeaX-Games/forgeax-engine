@@ -24,6 +24,7 @@ const useMsaa = process.env.FORGEAX_M3_MSAA === '1';
 const depthPost = process.env.FORGEAX_M3_DEPTH_POST === '1';
 const depthLiveSwitch = process.env.FORGEAX_M3_DEPTH_LIVE_SWITCH === '1';
 const depthReverseLiveSwitch = process.env.FORGEAX_M3_DEPTH_REVERSE_LIVE_SWITCH === '1';
+const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1';
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
   throw new Error(`unsupported start variant: ${startVariant}`);
@@ -233,6 +234,18 @@ async function captureRhi(page, label) {
   mkdirSync(rhiDir, { recursive: true });
   const tape = resolve(rhiDir, `${label}.tape.bin`);
   const report = resolve(rhiDir, `${label}.report.json`);
+  let reportJson;
+  const captureDeadline = Date.now() + 5_000;
+  while (Date.now() < captureDeadline) {
+    try {
+      reportJson = JSON.parse(readFileSync(sourceReport, 'utf8'));
+      if (readFileSync(sourceTape).byteLength > 0) break;
+    } catch {
+      reportJson = undefined;
+    }
+    await sleep(50);
+  }
+  if (reportJson === undefined) throw new Error(`RHI capture files were not complete: tape=${sourceTape} report=${sourceReport}`);
   copyFileSync(sourceTape, tape);
   copyFileSync(sourceReport, report);
   const cli = resolve(REPO_ROOT, 'packages/rhi-debug/dist/cli.mjs');
@@ -241,7 +254,6 @@ async function captureRhi(page, label) {
   const inspect = JSON.parse(execFileSync('node', [cli, 'inspect-offline', tape, String(inspectedDraw), '--fields=bindings,drawCall,rt'], { encoding: 'utf8' }));
   writeFileSync(resolve(rhiDir, `${label}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`);
   writeFileSync(resolve(rhiDir, `${label}.inspect.json`), `${JSON.stringify(inspect, null, 2)}\n`);
-  const reportJson = JSON.parse(readFileSync(report, 'utf8'));
   const { create, globals } = await import('webgpu');
   Object.assign(globalThis, globals);
   if (globalThis.navigator === undefined) {
@@ -287,6 +299,116 @@ async function captureRhi(page, label) {
   writeFileSync(resolve(rhiDir, `${label}.dawn-readback.json`), `${JSON.stringify(dawnReadback, null, 2)}\n`);
   device.value.destroy?.();
   return { tape, report, draws: summary.draws?.length ?? 0, inspectedDraw, inspect, dawnReadback };
+}
+
+async function runLiveMaterialScenario(baseUrl, page) {
+  const expectedHistory = doubleResizeChurn
+    ? '640x360>480x270>720x405>640x360>480x270>720x405>640x360'
+    : resizeChurn
+      ? '640x360>480x270>720x405>640x360'
+      : '640x360';
+
+  const runLeg = async (falsified, label) => {
+    const falsifierQuery = falsified ? '&falsify-live-material' : '';
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.goto(
+      `${baseUrl}/?pipeline=custom&variant=true&post=passthrough&live-material=two-slot-swap-resize${falsifierQuery}${querySuffix}`,
+      { waitUntil: 'networkidle', timeout: 30_000 },
+    );
+    await page.waitForFunction(
+      ({ expectedAntialias }) => document.querySelector('#variant-status')?.textContent === 'M3_MULTI_UV_VARIANT=true'
+        && document.querySelector('#pipeline-status')?.textContent === 'M3_PIPELINE=custom'
+        && document.querySelector('#post-status')?.textContent === 'M3_POST_EFFECT=passthrough'
+        && document.querySelector('#texture-status')?.textContent === 'M3_TEXTURE_BINDING=baseColorTexture+detailTexture'
+        && document.querySelector('#antialias-status')?.textContent === expectedAntialias
+        && globalThis.__forgeaxMultiUvEvidence?.ready === true,
+      { expectedAntialias: `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}` },
+      { timeout: 15_000 },
+    );
+    await waitForNonBlackCanvas(page, `${label} baseline`);
+    await select(page, '#post-select', 'inversion', '#post-status');
+    const resizeHistory = [];
+    await resizeCanvas(page, 640, 360, resizeHistory);
+    if (resizeChurn) {
+      await resizeCanvas(page, 480, 270, resizeHistory);
+      await resizeCanvas(page, 720, 405, resizeHistory);
+      await resizeCanvas(page, 640, 360, resizeHistory);
+      if (doubleResizeChurn) {
+        await resizeCanvas(page, 480, 270, resizeHistory);
+        await resizeCanvas(page, 720, 405, resizeHistory);
+        await resizeCanvas(page, 640, 360, resizeHistory);
+      }
+    }
+    await page.evaluate((history) => {
+      const evidence = globalThis.__forgeaxMultiUvEvidence;
+      if (evidence !== undefined) evidence.liveMaterial.resizeHistory = history;
+    }, resizeHistory);
+    await waitForNonBlackCanvas(page, `${label} resized before rebind`);
+    const before = await capture(page, `${label}-before`);
+    const beforeEvidence = await page.evaluate(() => globalThis.__forgeaxMultiUvEvidence?.liveMaterial);
+    const mutation = await page.evaluate(() => globalThis.__forgeaxMultiUvEvidence?.applyLiveMaterialRebind());
+    if (mutation?.ok !== true) throw new Error(`${label} live material rebind failed: ${JSON.stringify(mutation)}`);
+    await page.waitForFunction(() => globalThis.__forgeaxMultiUvEvidence?.liveMaterial.applied === true, null, { timeout: 10_000 });
+    await waitForNonBlackCanvas(page, `${label} resized after rebind`);
+    const after = await capture(page, `${label}-after`);
+    const rhi = await captureRhi(page, `${label}-after`);
+    const afterEvidence = await page.evaluate(() => globalThis.__forgeaxMultiUvEvidence?.liveMaterial);
+    return {
+      before,
+      after,
+      delta: changedPixels(before, after),
+      beforeEvidence,
+      afterEvidence,
+      rhi,
+    };
+  };
+
+  const normal = await runLeg(false, 'live-material-normal');
+  const falsifier = await runLeg(true, 'live-material-falsifier');
+  writeFileSync(resolve(ARTIFACT_DIR, 'live-material-browser.json'), `${JSON.stringify({
+    normal: {
+      before: { state: normal.before.state, png: normal.before.pngPath },
+      after: { state: normal.after.state, png: normal.after.pngPath },
+      delta: normal.delta,
+      beforeEvidence: normal.beforeEvidence,
+      afterEvidence: normal.afterEvidence,
+      rhi: normal.rhi,
+    },
+    falsifier: {
+      before: { state: falsifier.before.state, png: falsifier.before.pngPath },
+      after: { state: falsifier.after.state, png: falsifier.after.pngPath },
+      delta: falsifier.delta,
+      beforeEvidence: falsifier.beforeEvidence,
+      afterEvidence: falsifier.afterEvidence,
+      rhi: falsifier.rhi,
+    },
+  }, null, 2)}\n`);
+
+  const normalLive = normal.afterEvidence;
+  const falsifiedLive = falsifier.afterEvidence;
+  if (normal.delta === null || normal.delta.changed < 1000) throw new Error(`two-slot rebind did not change normal pixels: ${JSON.stringify(normal.delta)}`);
+  if (normalLive?.baseColorSlotChanged !== true || normalLive.detailSlotChanged !== true) {
+    throw new Error(`normal two-slot evidence did not change both slots: ${JSON.stringify(normalLive)}`);
+  }
+  if (normalLive.afterComponentMaterialHandle !== normalLive.afterMaterialHandle) {
+    throw new Error(`normal component handle did not follow rebind: ${JSON.stringify(normalLive)}`);
+  }
+  if (normal.after.state.pipeline !== 'M3_PIPELINE=custom' || normal.after.state.post !== 'M3_POST_EFFECT=inversion') {
+    throw new Error(`normal rebind left composed scene: ${JSON.stringify(normal.after.state)}`);
+  }
+  if (falsifiedLive?.baseColorSlotChanged === true && falsifiedLive.detailSlotChanged === true) {
+    throw new Error(`live-material falsifier still changed both slots: ${JSON.stringify(falsifiedLive)}`);
+  }
+  if (falsifier.delta === null || falsifier.delta.changed < 100) throw new Error(`live-material falsifier was not observable: ${JSON.stringify(falsifier.delta)}`);
+  for (const [label, leg] of [['normal', normal], ['falsifier', falsifier]]) {
+    if (leg.afterEvidence?.resizeHistory.join('>') !== expectedHistory) {
+      throw new Error(`${label} resize history wrong: ${leg.afterEvidence?.resizeHistory.join('>')}`);
+    }
+    if (leg.rhi.draws === 0 || leg.rhi.inspect?.drawCall === undefined || leg.rhi.dawnReadback.nonBlackPixelCount === 0) {
+      throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
+    }
+  }
+  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
 async function runDepthPostScenario(baseUrl, page) {
@@ -547,7 +669,11 @@ try {
     if (message.type() === 'error' && !message.text().includes('404')) consoleErrors.push(message.text());
   });
 
-  if (depthReverseLiveSwitch) {
+  if (liveMaterialScenario) {
+    await runLiveMaterialScenario(baseUrl, page);
+    if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
+    if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
+  } else if (depthReverseLiveSwitch) {
     await runDepthReverseLiveSwitchScenario(baseUrl, page);
     if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
     if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);

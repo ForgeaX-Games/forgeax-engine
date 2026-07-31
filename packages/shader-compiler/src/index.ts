@@ -549,6 +549,13 @@ export {
   type MaterialComposeRequest,
 } from './material/compose.js';
 export {
+  cookMaterialAsset,
+  type MaterialCookError,
+  type MaterialCookedAsset,
+  type MaterialCookedPass,
+  type MaterialCookRequest,
+} from './material/cook.js';
+export {
   characterizeMaterialWgslProfile,
   MATERIAL_WGSL_PROFILE,
   MATERIAL_WGSL_PROFILE_CAPABILITIES,

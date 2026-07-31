@@ -33,7 +33,13 @@ export function makeSpritePixels(): Uint8Array {
   return data;
 }
 
-function spriteMaterial(texture: number, sampler: number, flipX = 0, flipY = 0): MaterialAsset {
+function spriteMaterial(texture: number, flipX = 0, flipY = 0): MaterialAsset {
+  const region: readonly [number, number, number, number] = [
+    flipX === 1 ? 1 : 0,
+    flipY === 1 ? 1 : 0,
+    flipX === 1 ? -1 : 1,
+    flipY === 1 ? -1 : 1,
+  ];
   return {
     kind: 'material',
     passes: [
@@ -46,18 +52,15 @@ function spriteMaterial(texture: number, sampler: number, flipX = 0, flipY = 0):
       { name: 'slicesAndMode', type: 'vec4', optional: true },
       { name: 'baseColorTexture', type: 'texture' },
     ],
-    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1], flipX, flipY },
+    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, region, pivotAndSize: [0.5, 0.5, 1, 1] },
   };
 }
 
 /** Build the scene after the caller uploads the TextureAsset to the GPU. */
 export function buildSpriteFlippingWorld(world: World, texId: number): void {
-  const sampler = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler', magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat',
-  });
-  const normalMat = world.allocSharedRef('MaterialAsset', spriteMaterial(texId, sampler));
-  const flipXMat = world.allocSharedRef('MaterialAsset', spriteMaterial(texId, sampler, 1));
-  const flipYMat = world.allocSharedRef('MaterialAsset', spriteMaterial(texId, sampler, 0, 1));
+  const normalMat = world.allocSharedRef('MaterialAsset', spriteMaterial(texId));
+  const flipXMat = world.allocSharedRef('MaterialAsset', spriteMaterial(texId, 1));
+  const flipYMat = world.allocSharedRef('MaterialAsset', spriteMaterial(texId, 0, 1));
 
   for (const [x, material] of [[-2.6, normalMat], [0, flipXMat], [2.6, flipYMat]] as const) {
     world.spawn(

@@ -378,7 +378,6 @@ async function mintSpriteAssets(world, layout) {
           // slot kept for std140 byte stability (sprite.wgsl ignores it).
           colorTint: SPRITE_COLOR_TINTS[i],
           baseColorTexture: textureHandle,
-          sampler: samplerHandle,
           region: [0, 0, 1, 1],
           pivotAndSize: [layout.pivot[0], layout.pivot[1], 1, 1],
         },
@@ -710,7 +709,6 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
       // slices[4] (LTRB) + sliceMode (mode>=0 stretch, <0 tile) into vec4.
       colorTint: [1, 1, 1, 1],
       baseColorTexture: ninesliceTextureHandle,
-      sampler: clampSamplerHandle,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.5, 1, 1],
       slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], -ninesliceSlices[3]],

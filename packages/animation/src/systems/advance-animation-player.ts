@@ -58,7 +58,7 @@ import {
   Entity,
   queryRun,
 } from '@forgeax/engine-ecs';
-import { Name, Transform } from '@forgeax/engine-scene';
+import { Children, Name, Transform } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
 import { AnimationPlayer } from '../animation-player';
@@ -182,6 +182,7 @@ interface PlayerColumns {
   readonly speeds: Float32Array;
   readonly paused: boolean;
   readonly looping: boolean;
+  readonly targetRoot: EntityHandle | null;
 }
 
 /**
@@ -222,7 +223,79 @@ function advanceOnePlayer(world: World, entityRaw: number, dt: number): void {
   world.set(entity, AnimationPlayer, { times: newTimes });
 
   if (activeSlots.length === 0) return;
-  tickEntityJoints(world, entity, entityRaw, activeSlots);
+  if (ap.targetRoot !== null && ap.targetRoot !== ENTITY_NULL_RAW) {
+    tickEntityTargets(world, entityRaw, ap.targetRoot, activeSlots);
+  } else {
+    tickEntityJoints(world, entity, entityRaw, activeSlots);
+  }
+}
+
+/**
+ * Apply channels to ordinary scene Transforms rooted at AnimationPlayer.targetRoot.
+ * Skin playback remains a separate path because Skin.joints is already the
+ * resolved binding for imported rigs; code-authored scenes use the same clip
+ * channel contract with Name/Children path resolution instead.
+ */
+function tickEntityTargets(
+  world: World,
+  entityRaw: number,
+  targetRoot: EntityHandle,
+  activeSlots: ActiveSlot[],
+): void {
+  const accumulators = new Map<EntityHandle, JointAccumulator>();
+  for (const slot of activeSlots) {
+    for (let chIdx = 0; chIdx < slot.clip.channels.length; chIdx++) {
+      const channel = slot.clip.channels[chIdx];
+      if (channel === undefined) continue;
+      const target = resolveTargetPath(world, targetRoot, channel.targetPath);
+      if (target === undefined) {
+        emitTargetMismatchWarn(world, entityRaw, slot.clipHandleRaw, chIdx, channel.targetPath);
+        continue;
+      }
+      const sampled = sampleChannel(channel.sampler, slot.time);
+      if (sampled === undefined) continue;
+      let acc = accumulators.get(target);
+      if (acc === undefined) {
+        acc = createAccumulator();
+        accumulators.set(target, acc);
+      }
+      foldChannelIntoAccumulator(acc, channel.property, sampled, slot.weight);
+    }
+  }
+  for (const [target, acc] of accumulators) {
+    if (!world.get(target, Transform).ok) continue;
+    const partial = finalizeAccumulator(acc);
+    if (Object.keys(partial).length > 0) world.set(target, Transform, partial);
+  }
+}
+
+function resolveTargetPath(
+  world: World,
+  root: EntityHandle,
+  path: readonly string[],
+): EntityHandle | undefined {
+  if (path.length === 0) return undefined;
+  let current = root;
+  let index = 0;
+  const rootName = world.get(current, Name);
+  if (rootName.ok && rootName.value.value === path[0]) index = 1;
+  for (; index < path.length; index++) {
+    const wanted = path[index];
+    if (wanted === undefined) return undefined;
+    const children = world.get(current, Children);
+    if (!children.ok) return undefined;
+    let next: EntityHandle | undefined;
+    for (const child of children.value.entities) {
+      const childName = world.get(child as EntityHandle, Name);
+      if (childName.ok && childName.value.value === wanted) {
+        next = child as EntityHandle;
+        break;
+      }
+    }
+    if (next === undefined) return undefined;
+    current = next;
+  }
+  return current;
 }
 
 /**
@@ -409,6 +482,20 @@ function emitLeafMismatchWarn(
   if (!shouldWarnOnce(world, entityRaw, clipHandleRaw, chIdx, 'channel-leaf-mismatch')) return;
   console.warn(
     `[advanceAnimationPlayer] entity=${entityRaw} channel=${clipHandleRaw}:${chIdx} reason=channel-leaf-mismatch joint=${leaf} hint=add a Skin joint named '${leaf}' or rename the clip's targetPath leaf`,
+  );
+}
+
+function emitTargetMismatchWarn(
+  world: World,
+  entityRaw: number,
+  clipHandleRaw: number,
+  chIdx: number,
+  path: readonly string[],
+): void {
+  if (!isAnimDevMode()) return;
+  if (!shouldWarnOnce(world, entityRaw, clipHandleRaw, chIdx, 'channel-leaf-mismatch')) return;
+  console.warn(
+    `[advanceAnimationPlayer] entity=${entityRaw} channel=${clipHandleRaw}:${chIdx} reason=channel-leaf-mismatch targetPath=${path.join('/')} hint=add matching Name and ChildOf components below AnimationPlayer.targetRoot`,
   );
 }
 

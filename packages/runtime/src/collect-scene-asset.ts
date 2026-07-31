@@ -780,6 +780,10 @@ export function rootsToSceneAsset(
             }
             fieldValues[fieldName] = mapped;
           } else {
+            // A nullable entity field uses the ECS null sentinel and is omitted
+            // from the scene payload just like a null shared handle. It is not
+            // an out-of-closure reference.
+            if (rawValue === null) continue;
             const lid2 = _rlid(rawValue as number);
             if (lid2 === undefined) {
               return err(

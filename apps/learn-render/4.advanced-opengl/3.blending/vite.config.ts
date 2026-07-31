@@ -9,7 +9,7 @@ const monorepoRoot = resolve(here, '..', '..', '..', '..');
 
 export default defineConfig({
   plugins: [
-    forgeaxShader() as never,
+    forgeaxShader({ materialPackages: [resolve(here, 'src/alpha-test.pack.json')] }) as never,
     pluginPack({
       refresh: reloadAssetHost(),
       roots: [

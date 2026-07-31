@@ -11,7 +11,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // pack through the same catalog path used by a shipped app.
 export default defineConfig({
   plugins: [
-    forgeaxShader() as never,
+    forgeaxShader({ materialPackages: [resolve(here, 'src/pulse-material.shader.pack.json')] }) as never,
     pluginPack({ roots: [resolve(here, 'assets')] }) as never,
   ],
   server: {

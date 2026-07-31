@@ -40,7 +40,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 import './depth-viz.wgsl';
 
-const DEPTH_VIZ_SHADER_ID = 'learn-render::depth-viz';
+const DEPTH_VIZ_SHADER_ID = 'learn_render::depth_viz';
 
 // Toggle: set to true to render depth visualization (grayscale near=dark
 // far=light). When false, the scene renders with PBR textured materials.

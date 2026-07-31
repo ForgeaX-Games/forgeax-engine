@@ -30,7 +30,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 import './parallax.wgsl';
 
-const PARALLAX_SHADER_ID = 'learn-render::5-5-parallax' as const;
+const PARALLAX_SHADER_ID = 'learn_render::5_5_parallax' as const;
 
 // 2. example glue
 

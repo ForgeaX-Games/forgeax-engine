@@ -8,6 +8,9 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 import { websocketListenerCommands } from './packages/net-websocket/__tests__/support/ws-listener-commands';
+import materialContractInventory from './scripts/material-contract-inventory.json' with {
+  type: 'json',
+};
 
 // Monorepo-root anchor for pluginPack roots (see browser project below).
 // `new URL('.', import.meta.url)` already yields this file's directory
@@ -16,6 +19,7 @@ import { websocketListenerCommands } from './packages/net-websocket/__tests__/su
 // `.worktrees/` under worktree checkouts and break pluginPack root resolution.
 // charter F1 prefers the single-step explicit form for grep traceability.
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
+const materialPackages = materialContractInventory.materialPackages;
 
 // Root vitest config - declares projects per K-3 split policy:
 //
@@ -138,7 +142,7 @@ export default defineConfig({
         // server sandbox to the monorepo root so main.ts's import.meta.url
         // fetch of Sponza.gltf (outside the per-test dir) is served.
         plugins: [
-          forgeaxShader(),
+          forgeaxShader({ materialPackages }),
           pluginPack({
             roots: [
               resolve(rootDir, 'apps/learn-render/1.getting-started/4.textures/assets'),

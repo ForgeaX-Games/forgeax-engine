@@ -15,6 +15,7 @@ export default withRhiDebug({
   rootDepth: 4,
   port: 5175,
   keepBinExternal: true,
+  materialPackages: [resolve(here, 'src/blinn-phong.pack.json')],
   extraPlugins: [
     pluginPack({
       refresh: reloadAssetHost(),

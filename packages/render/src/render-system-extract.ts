@@ -99,7 +99,6 @@
 
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
-  MaterialResolvedEmptyPassesError,
   resolveAssetHandle,
   walkMaterialPassesOverSharedRefs,
 } from '@forgeax/engine-assets-runtime';
@@ -3146,14 +3145,15 @@ export function extractFrame(
             // a black screen indistinguishable from a content bug.
             const err = resolvedResult.error;
             switch (err.code) {
-              case 'material-resolved-empty-passes':
-                worldInternal._routeError(
-                  err instanceof MaterialResolvedEmptyPassesError ? err : (err as unknown as Error),
-                  {
-                    severity: Severity.Error,
-                    systemName: 'RenderSystem.extract (material-resolved-empty-passes)',
-                  },
-                );
+              case 'material-parent-not-found':
+              case 'material-no-effective-pass':
+              case 'material-value-unknown':
+              case 'material-value-type-mismatch':
+              case 'material-contract-program-mismatch':
+                worldInternal._routeError(err as unknown as Error, {
+                  severity: Severity.Error,
+                  systemName: `RenderSystem.extract (${err.code})`,
+                });
                 break;
               case 'material-circular-inheritance':
                 worldInternal._routeError(err as unknown as Error, {

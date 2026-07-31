@@ -1,4 +1,5 @@
 import type {
+  AssetAuthoringCapability,
   AssetRelation,
   CatalogDiagnostic,
   ProviderProvenance,
@@ -24,6 +25,8 @@ export interface CatalogEntry {
   /** GUID-to-pack navigation only; artifact paths live inside Pack v2. */
   readonly packageUrl: string;
   readonly kind: string;
+  /** Producer-owned placement/binding facts; absent only on legacy rows. */
+  readonly authoring?: AssetAuthoringCapability;
   /** Source declaration navigation for diagnostics, not runtime content. */
   readonly sourcePath: string;
   /** Stable package identity; path is a locator, never the package identity. */

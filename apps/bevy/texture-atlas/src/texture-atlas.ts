@@ -93,7 +93,7 @@ export function makeAtlas(variant: AtlasVariant): AtlasTexture {
   return { pixels, size, regions };
 }
 
-function spriteMaterial(texture: number, sampler: number): MaterialAsset {
+function spriteMaterial(texture: number): MaterialAsset {
   return {
     kind: 'material',
     passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
@@ -104,7 +104,7 @@ function spriteMaterial(texture: number, sampler: number): MaterialAsset {
       { name: 'slicesAndMode', type: 'vec4', optional: true },
       { name: 'baseColorTexture', type: 'texture' },
     ],
-    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1] },
+    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, pivotAndSize: [0.5, 0.5, 1, 1] },
   };
 }
 
@@ -119,9 +119,9 @@ function spawnSprite(world: World, material: Handle<'MaterialAsset', 'shared'>, 
 
 export function buildTextureAtlasWorld(
   world: World,
-  variants: ReadonlyArray<{ texture: number; sampler: number; atlas: AtlasTexture }>,
+  variants: ReadonlyArray<{ texture: number; atlas: AtlasTexture }>,
 ): void {
-  const materials = variants.map(({ texture, sampler }) => world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', spriteMaterial(texture, sampler)));
+  const materials = variants.map(({ texture }) => world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', spriteMaterial(texture)));
   spawnSprite(world, materials[0]!, [-4.1, 1.75, 0], 2.35, [0, 0, 1, 1]);
   spawnSprite(world, materials[1]!, [4.1, 1.75, 0], 2.35, [0, 0, 1, 1]);
   const samples = [

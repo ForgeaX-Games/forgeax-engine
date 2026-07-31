@@ -23,7 +23,7 @@
 //       no static literal in createRenderer hardcodes a non-empty schema
 //       for this identifier.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendInjection } from '@forgeax/engine-render/internal';
@@ -47,15 +47,10 @@ describe('shadow_caster empty schema (M4 w21)', () => {
     expect(out.userRegionBindingEnd).toBe(0);
   });
 
-  it('(b) shadow_caster sidecar carries identity but no parameter schema', () => {
+  it('(b) shadow_caster has no material sidecar', () => {
     const sourcePath = join(repoRoot, 'packages', 'shader', 'src', 'shadow_caster.wgsl');
     expect(readFileSync(sourcePath, 'utf8')).toContain('shadow_caster.wgsl');
-    const sidecar = JSON.parse(readFileSync(`${sourcePath}.meta.json`, 'utf8')) as {
-      importSettings?: { materialShaderIdentifier?: string };
-      paramSchema?: unknown;
-    };
-    expect(sidecar.importSettings?.materialShaderIdentifier).toBe('forgeax::default-shadow-caster');
-    expect(sidecar).not.toHaveProperty('paramSchema');
+    expect(existsSync(`${sourcePath}.meta.json`)).toBe(false);
   });
 
   it('(c) appendInjection on empty user-region starts at binding 0', () => {

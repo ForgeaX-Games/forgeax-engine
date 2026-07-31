@@ -31,8 +31,17 @@ describe('user material shader variant manifest', () => {
     );
     const source = await readFile(sourcePath, 'utf8');
 
-    const plugin = forgeaxShader({ engineEntries: false });
+    const plugin = forgeaxShader({
+      engineEntries: false,
+      materialPackages: [
+        resolve(
+          repoRoot,
+          'apps/learn-render/4.advanced-opengl/3.blending/src/alpha-test.pack.json',
+        ),
+      ],
+    });
     const ctx = mockContext();
+    await plugin.buildStart?.call(ctx as never);
     await plugin.transform?.call(ctx as never, source, sourcePath);
     plugin.generateBundle?.call(ctx as never);
 
@@ -42,6 +51,7 @@ describe('user material shader variant manifest', () => {
     const manifest = JSON.parse(manifestAsset.source) as {
       materialShaders: Array<{
         identifier: string;
+        sourcePath: string;
         composedWgsl: string;
         variants: Array<{
           definesKey: string;
@@ -55,6 +65,8 @@ describe('user material shader variant manifest', () => {
     );
     expect(entry).toBeDefined();
     if (entry === undefined) return;
+    expect(entry.sourcePath).toContain('alpha-test.wgsl');
+    expect(entry.composedWgsl).toContain('discard');
     expect(entry.variants).toHaveLength(4);
     const webgl = entry.variants.find(
       (variant) =>
@@ -85,8 +97,17 @@ describe('user material shader variant manifest', () => {
     );
     const source = await readFile(sourcePath, 'utf8');
 
-    const plugin = forgeaxShader({ engineEntries: false });
+    const plugin = forgeaxShader({
+      engineEntries: false,
+      materialPackages: [
+        resolve(
+          repoRoot,
+          'apps/learn-render/5.advanced-lighting/1.advanced-lighting/src/blinn-phong.pack.json',
+        ),
+      ],
+    });
     const ctx = mockContext();
+    await plugin.buildStart?.call(ctx as never);
     await plugin.transform?.call(ctx as never, source, sourcePath);
     plugin.generateBundle?.call(ctx as never);
 

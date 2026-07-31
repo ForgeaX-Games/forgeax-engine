@@ -49,6 +49,7 @@ import {
   type AssetEvidence,
   type AssetEvidenceError,
   type AssetRef,
+  authoringCapabilityForAssetKind,
   type CatalogEntry,
   type EngineMetrics,
   type Handle,
@@ -1436,6 +1437,7 @@ export class AssetRegistry {
     revision?: CatalogEntry['revision'];
     sourceKey?: CatalogEntry['sourceKey'];
     sourceIndex?: CatalogEntry['sourceIndex'];
+    authoring?: CatalogEntry['authoring'];
     relations?: CatalogEntry['relations'];
     diagnostics?: CatalogEntry['diagnostics'];
     refs?: readonly string[];
@@ -1459,6 +1461,7 @@ export class AssetRegistry {
       revision?: CatalogEntry['revision'];
       sourceKey?: CatalogEntry['sourceKey'];
       sourceIndex?: CatalogEntry['sourceIndex'];
+      authoring?: CatalogEntry['authoring'];
       relations?: CatalogEntry['relations'];
       diagnostics?: CatalogEntry['diagnostics'];
       refs?: readonly string[];
@@ -1480,6 +1483,7 @@ export class AssetRegistry {
           ...(entry.revision !== undefined ? { revision: entry.revision } : {}),
           ...(entry.sourceKey !== undefined ? { sourceKey: entry.sourceKey } : {}),
           ...(entry.sourceIndex !== undefined ? { sourceIndex: entry.sourceIndex } : {}),
+          authoring: entry.authoring ?? authoringCapabilityForAssetKind(entry.kind),
           ...(entry.relations !== undefined ? { relations: entry.relations } : {}),
           ...(entry.diagnostics !== undefined ? { diagnostics: entry.diagnostics } : {}),
           ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
@@ -1500,6 +1504,7 @@ export class AssetRegistry {
           kind: envelope.payload.kind,
           name,
           packageUrl: '',
+          authoring: authoringCapabilityForAssetKind(envelope.payload.kind),
           ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((r) => r.guid) } : {}),
         });
       }

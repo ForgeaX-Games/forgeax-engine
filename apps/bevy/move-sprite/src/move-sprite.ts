@@ -36,7 +36,7 @@ export function makeSpritePixels(): Uint8Array {
   return data;
 }
 
-function spriteMaterial(texture: number, sampler: number): MaterialAsset {
+function spriteMaterial(texture: number): MaterialAsset {
   return {
     kind: 'material',
     passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
@@ -50,17 +50,13 @@ function spriteMaterial(texture: number, sampler: number): MaterialAsset {
     values: {
       colorTint: [1, 1, 1, 1],
       baseColorTexture: texture,
-      sampler,
       pivotAndSize: [0.5, 0.5, 1, 1],
     },
   };
 }
 
 export function buildMoveSpriteWorld(world: World, texture: number): void {
-  const sampler = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler', magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat',
-  });
-  const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture, sampler));
+  const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture));
   world.spawn(
     { component: Transform, data: { pos: [MIN_X, 0, 0], quat: [0, 0, 0, 1], scale: [2, 2, 1] } },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },

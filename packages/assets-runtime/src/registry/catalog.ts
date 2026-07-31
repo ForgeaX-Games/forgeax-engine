@@ -2,9 +2,11 @@ import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
   type Asset,
+  type AssetAuthoringCapability,
   type AssetEnvelope,
   AssetError,
   type AssetRelation,
+  authoringCapabilityForAssetKind,
   type CatalogDiagnostic,
   type ProviderProvenance,
   type ResourceRevision,
@@ -15,6 +17,7 @@ import type { AssetRegistry } from '../asset-registry';
 export interface CatalogRecord {
   readonly packageUrl: string;
   readonly kind: string;
+  readonly authoring?: import('@forgeax/engine-types').AssetAuthoringCapability;
   readonly name?: string;
   readonly refs?: readonly string[];
   readonly sourcePath?: string;
@@ -36,6 +39,7 @@ export function createInlineCatalogRecord(
   return {
     packageUrl: '',
     kind: envelope.payload.kind,
+    authoring: authoringCapabilityForAssetKind(envelope.payload.kind),
     name,
     ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((ref) => ref.guid) } : {}),
   };
@@ -172,6 +176,9 @@ export function parseCatalog(
     const row: CatalogRecord = {
       packageUrl: resolvedUrl,
       kind: rawRow.kind,
+      ...(rawRow.authoring !== undefined
+        ? { authoring: rawRow.authoring as AssetAuthoringCapability }
+        : {}),
       ...(typeof rawRow.name === 'string' ? { name: rawRow.name } : {}),
       ...(typeof rawRow.sourcePath === 'string' ? { sourcePath: rawRow.sourcePath } : {}),
       ...(refs !== undefined ? { refs: refs as readonly string[] } : {}),

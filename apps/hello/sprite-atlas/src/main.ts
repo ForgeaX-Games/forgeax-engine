@@ -42,12 +42,7 @@ import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engin
 import { SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
-import type {
-  Handle,
-  MaterialAsset,
-  SamplerAsset,
-  TextureAsset,
-} from '@forgeax/engine-types';
+import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const ATLAS_GUID = '0e8657b1-c0ab-4940-a4f6-27fcd976823c';
@@ -149,17 +144,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   //     baseColorTexture (was texture), pivotAndSize (was pivot).
   //     SpriteRegionOverride still writes the .region vec4 into
   //     paramSnapshot every frame, untouched by the rename.
-  const samplerHandle: Handle<'SamplerAsset', 'shared'> = world.allocSharedRef<
-    'SamplerAsset',
-    SamplerAsset
-  >('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'nearest',
-    minFilter: 'nearest',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
-
   const material: MaterialAsset = {
     kind: 'material',
     passes: [
@@ -168,7 +152,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     values: {
       colorTint: [1.0, 1.0, 1.0, 1.0],
       baseColorTexture: textureHandle,
-      sampler: samplerHandle,
       region: [...WALK_REGION_FRAME_0],
       pivotAndSize: [0.5, 0.5, 1, 1],
     },

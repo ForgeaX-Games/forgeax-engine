@@ -15,6 +15,7 @@ export default withRhiDebug({
   rootDepth: 4,
   port: 5189,
   keepBinExternal: true,
+  materialPackages: [resolve(here, 'src/parallax.pack.json')],
   extraPlugins: [
     pluginPack({
       refresh: reloadAssetHost(),

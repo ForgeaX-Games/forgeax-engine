@@ -1,3 +1,4 @@
+import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { projectPackageCatalog } from '../build-catalog.js';
 
@@ -19,6 +20,7 @@ describe('catalog builder v2', () => {
         name: 'body',
         refs: ['b'],
         packageUrl: '/preview/packages/model',
+        authoring: authoringCapabilityForAssetKind('mesh'),
       },
       {
         guid: 'b',
@@ -27,6 +29,7 @@ describe('catalog builder v2', () => {
         name: 'albedo',
         refs: [],
         packageUrl: '/preview/packages/model',
+        authoring: authoringCapabilityForAssetKind('texture'),
       },
     ]);
   });
@@ -42,5 +45,21 @@ describe('catalog builder v2', () => {
     expect(row).not.toHaveProperty('metadata');
     expect(row).not.toHaveProperty('compression');
     expect(row).not.toHaveProperty('artifacts');
+    expect(row?.authoring).toEqual(authoringCapabilityForAssetKind('host-kind'));
+  });
+
+  it('preserves a producer override for a new kind without consumer knowledge', () => {
+    const authoring = {
+      placement: { operation: 'spawnEntity' as const },
+      binding: {
+        operation: 'unavailable' as const,
+        reason: { code: 'missing-producer-capability' as const, hint: 'provider-owned' },
+      },
+    };
+    const [row] = projectPackageCatalog(
+      [{ guid: 'custom', kind: 'host/new-kind', sourcePath: 'custom.meta.json', authoring }],
+      '/preview/custom',
+    );
+    expect(row?.authoring).toEqual(authoring);
   });
 });

@@ -4,7 +4,12 @@
 // + not-imported miss), resolveName / packageOf / rename, invalidate /
 // invalidateAll, inspect, listCatalog. Uses a mock ShaderRegistry (no GPU).
 
-import type { MaterialAsset, MeshAsset, TilesetAsset } from '@forgeax/engine-types';
+import {
+  authoringCapabilityForAssetKind,
+  type MaterialAsset,
+  type MeshAsset,
+  type TilesetAsset,
+} from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import type { CatalogRecord } from '../registry/catalog';
@@ -265,12 +270,21 @@ describe('inspect / listCatalog', () => {
     ]);
 
     expect(reg.listCatalog()).toEqual([
-      { guid: GUID_A.toLowerCase(), ...canonicalRow },
-      { guid: GUID_B.toLowerCase(), ...legacyRow },
+      {
+        guid: GUID_A.toLowerCase(),
+        ...canonicalRow,
+        authoring: authoringCapabilityForAssetKind(canonicalRow.kind),
+      },
+      {
+        guid: GUID_B.toLowerCase(),
+        ...legacyRow,
+        authoring: authoringCapabilityForAssetKind(legacyRow.kind),
+      },
     ]);
     expect(reg.listCatalog()[1]).toEqual({
       guid: GUID_B.toLowerCase(),
       ...legacyRow,
+      authoring: authoringCapabilityForAssetKind(legacyRow.kind),
     });
   });
 

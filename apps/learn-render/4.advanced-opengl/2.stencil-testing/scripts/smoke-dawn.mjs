@@ -300,8 +300,8 @@ if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
-if (!shader.findMaterialArtifact('learn-render::outline-solid').ok) {
-  shader.installMaterialArtifact('learn-render::outline-solid', {
+if (!shader.findMaterialArtifact('learn_render::outline_solid').ok) {
+  shader.installMaterialArtifact('learn_render::outline_solid', {
     source: COMPOSED_OUTLINE_WGSL,
     paramSchema: [{ name: 'baseColor', type: 'color' }],
     bindingLayout: [],
@@ -397,7 +397,7 @@ const outlineMatHandle = world.allocSharedRef('MaterialAsset', {
       // requires LightMode=Forward to be selected; pass-name
       // 'ForwardOutline' documents intent within the multi-pass material).
       name: 'ForwardOutline',
-      program: { module: 'learn-render::outline-solid' },
+      program: { module: 'learn_render::outline_solid' },
       renderState: {
         stencilReadMask: 0xFF,
         stencil: { compare: 'not-equal' },

@@ -77,7 +77,7 @@ struct ParallaxMaterial { baseColor: vec4<f32>, heightScale: f32, algoMode: f32 
 
 ```ts
 // index.ts — register the shader, then mutate values by reference on keydown.
-shader.registerMaterialShader('learn-render::5-5-parallax', {
+shader.registerMaterialShader('learn_render::5_5_parallax', {
   source: parallaxShader.wgsl,
   paramSchema: [
     { name: 'baseColor', type: 'color' },

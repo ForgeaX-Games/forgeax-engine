@@ -42,7 +42,6 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import type {
   Handle,
   MaterialAsset,
-  SamplerAsset,
   TextureAsset,
   TilesetAsset,
   TilesetRegion,
@@ -175,14 +174,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const idleTex = registerTexture(world, idlePng);
   const moveTex = registerTexture(world, movePng);
 
-  const sampler = world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'nearest',
-    minFilter: 'nearest',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
-
   // Combined TilesetAsset: terrain entries first, then object entries.
   // OBJECT_TILE_OFFSET = terrain length so TileLayer.tiles can encode
   // object id N as (OBJECT_TILE_OFFSET + N + 1), which engine resolves
@@ -197,8 +188,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     combined,
   );
 
-  const playerIdleMaterial = registerCharacterMaterial({ world, texture: idleTex, sampler });
-  const playerMoveMaterial = registerCharacterMaterial({ world, texture: moveTex, sampler });
+  const playerIdleMaterial = registerCharacterMaterial({ world, texture: idleTex });
+  const playerMoveMaterial = registerCharacterMaterial({ world, texture: moveTex });
 
   setHud('spawning scene...');
 
@@ -587,7 +578,6 @@ function toEngineCollider(c: TsjCollider): TilesetTileCollider {
 interface RegisterCharacterMaterialArgs {
   readonly world: World;
   readonly texture: Handle<'TextureAsset', 'shared'>;
-  readonly sampler: Handle<'SamplerAsset', 'shared'>;
 }
 
 function registerCharacterMaterial(
@@ -605,7 +595,6 @@ function registerCharacterMaterial(
       // pivotAndSize replace the legacy baseColor / texture / pivot keys.
       colorTint: [1, 1, 1, 1],
       baseColorTexture: args.texture,
-      sampler: args.sampler,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.0, 1, 1],
       flipY: 1,

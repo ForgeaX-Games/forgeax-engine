@@ -4203,6 +4203,12 @@ export interface ImageMetadata {
 }
 
 export type {
+  AssetAuthoringCapability,
+  AssetAuthoringUnavailableCode,
+  AssetAuthoringUnavailableReason,
+  AssetBindingCapability,
+  AssetBindingTarget,
+  AssetPlacementCapability,
   AssetRelation,
   AssetRelationPolicy,
   AssetRelationType,
@@ -4224,6 +4230,7 @@ export type {
   TopologyDiff,
   TopologyPreserved,
 } from './asset-producer';
+export { authoringCapabilityForAssetKind } from './asset-producer';
 /**
  * One row in the pack-index catalog (`pack-index.json` for build path,
  * `/__pack/index` JSON response for dev path).

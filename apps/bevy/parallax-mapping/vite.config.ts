@@ -10,7 +10,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 
 export default defineConfig({
   plugins: [
-    forgeaxShader() as never,
+    forgeaxShader({ materialPackages: [resolve(here, 'src/parallax.pack.json')] }) as never,
     vitePluginRhiDebug(),
     pluginPack({
       refresh: reloadAssetHost(),

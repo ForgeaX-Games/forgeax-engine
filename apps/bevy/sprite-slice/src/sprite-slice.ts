@@ -23,7 +23,7 @@ export function makeSlicePixels(): Uint8Array {
   return pixels;
 }
 
-function material(texture: number, sampler: number, slicesAndMode: readonly [number, number, number, number]): MaterialAsset {
+function material(texture: number, slicesAndMode: readonly [number, number, number, number]): MaterialAsset {
   return {
     kind: 'material',
     passes: [{ name: 'Forward', program: { module: 'forgeax::sprite' }, renderState: { ...{ blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND }, tags: { LightMode: 'Forward' }, queue: 3000 } }],
@@ -34,12 +34,11 @@ function material(texture: number, sampler: number, slicesAndMode: readonly [num
       { name: 'slicesAndMode', type: 'vec4', optional: true },
       { name: 'baseColorTexture', type: 'texture' },
     ],
-    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, sampler, pivotAndSize: [0.5, 0.5, 1, 1], slicesAndMode },
+    values: { colorTint: [1, 1, 1, 1], baseColorTexture: texture, pivotAndSize: [0.5, 0.5, 1, 1], slicesAndMode },
   };
 }
 
 export function buildSpriteSliceWorld(world: World, texture: number): void {
-  const sampler = world.allocSharedRef('SamplerAsset', { kind: 'sampler', magFilter: 'nearest', minFilter: 'nearest', addressModeU: 'repeat', addressModeV: 'repeat' });
   const panels = [
     { x: -2.9, y: 0.7, scale: [1.5, 2.5] as [number, number], slices: STRETCH_SLICES },
     { x: 0, y: 0.7, scale: [2.4, 2.5] as [number, number], slices: STRETCH_SLICES },
@@ -48,7 +47,7 @@ export function buildSpriteSliceWorld(world: World, texture: number): void {
     { x: 1.8, y: -1.7, scale: [1.7, 1.5] as [number, number], slices: STRETCH_SLICES },
   ];
   for (const panel of panels) {
-    const handle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material(texture, sampler, panel.slices));
+    const handle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material(texture, panel.slices));
     world.spawn(
       { component: Transform, data: { pos: [panel.x, panel.y, 0], quat: [0, 0, 0, 1], scale: [panel.scale[0], panel.scale[1], 1] } },
       { component: MeshFilter, data: { assetHandle: HANDLE_NINESLICE_QUAD } },

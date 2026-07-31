@@ -79,4 +79,33 @@ describe('compareParamSchemaSuperset (M2 / w6)', () => {
     );
     expect(result.ok).toBe(true);
   });
+
+  it('accepts a generic texture contract reflected through explicit-LOD sampling', () => {
+    const result = compareParamSchemaSuperset(
+      [{ name: 'baseColorTexture', type: 'texture2d' }],
+      [
+        {
+          entries: [
+            {
+              binding: 0,
+              visibility: 0x2 as GPUShaderStageFlags,
+              sampler: { type: 'non-filtering' },
+            },
+            {
+              binding: 1,
+              visibility: 0x2 as GPUShaderStageFlags,
+              texture: {
+                sampleType: 'unfilterable-float',
+                viewDimension: '2d',
+                multisampled: false,
+              },
+            },
+          ],
+        },
+      ],
+      PATH,
+    );
+
+    expect(result.ok).toBe(true);
+  });
 });

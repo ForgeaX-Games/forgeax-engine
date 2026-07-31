@@ -22,20 +22,6 @@
 // layout is shared with the engine's standard PBR pipeline and a
 // new binding would collide with the irradianceMap (binding 7).
 
-struct Material {
-  baseColor : vec4<f32>,
-  metallic  : f32,
-  roughness : f32,
-};
-
-@group(1) @binding(0) var<uniform> material : Material;
-@group(1) @binding(1) var baseColorSampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
 // LO 5.1 constants — the demo never animates these, so they live in
 // the shader as `const` rather than a binding(7) UBO.
 const LIGHT_POS   : vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
@@ -78,7 +64,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let diff = max(dot(N, L), 0.0) * LIGHT_COLOR;
   let spec = pow(max(dot(N, H), 0.0), SHININESS) * LIGHT_COLOR;
 
-  let texColor = textureSample(baseColorTexture, baseColorSampler, in.uv).rgb;
+  let texColor = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv).rgb;
   let result = (ambient + diff + spec) * texColor;
 
   return vec4<f32>(result, 1.0);

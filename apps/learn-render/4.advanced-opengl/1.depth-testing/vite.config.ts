@@ -14,6 +14,7 @@ export default withRhiDebug({
   here,
   rootDepth: 4,
   port: 5174,
+  materialPackages: [resolve(here, 'src/depth-viz.pack.json')],
   extraPlugins: [
     pluginPack({
       refresh: reloadAssetHost(),

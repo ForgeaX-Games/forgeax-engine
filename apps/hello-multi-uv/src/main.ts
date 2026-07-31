@@ -43,6 +43,28 @@ import depthOverlayMsaaShader from './post-depth-overlay-msaa.wgsl';
 import inversionShader from './post-inversion.wgsl';
 import passthroughShader from './post-passthrough.wgsl';
 
+declare global {
+  var __forgeaxMultiUvEvidence:
+    | {
+        ready: boolean;
+        mode: string | null;
+        liveMaterial: {
+          enabled: boolean;
+          applied: boolean;
+          beforeMaterialHandle: number | null;
+          afterMaterialHandle: number | null;
+          beforeTextureHandles: readonly [number, number];
+          afterTextureHandles: readonly [number, number];
+          baseColorSlotChanged: boolean;
+          detailSlotChanged: boolean;
+          afterComponentMaterialHandle: number | null;
+          resizeHistory: string[];
+        };
+        applyLiveMaterialRebind: () => { ok: boolean; code?: string };
+      }
+    | undefined;
+}
+
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
 const CUSTOM_PIPELINE_ID = 'hello-multi-uv::custom-render-graph';
 const CUSTOM_PIPELINE_INVERSION_ID = 'hello-multi-uv::custom-render-graph-inversion';
@@ -229,6 +251,9 @@ if (!app.ok) {
   const world = app.value.world;
   const assets = app.value.renderer.assets;
   const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
+  const liveMaterialMode = params.get('live-material');
+  const liveMaterialEnabled = liveMaterialMode === 'two-slot-swap-resize';
+  const falsifyLiveMaterial = params.has('falsify-live-material');
   const falsifyVariantSelection = params.has('falsify');
   const variantControl = document.createElement('label');
   variantControl.id = 'variant-control';
@@ -312,8 +337,30 @@ if (!app.ok) {
     'TextureAsset',
     detailTexture,
   );
+  const liveBaseColorTexture: TextureAsset = {
+    ...baseColorTexture,
+    data: new Uint8Array([
+      64, 255, 128, 255, 64, 255, 128, 255, 64, 255, 128, 255, 64, 255, 128, 255,
+    ]),
+  };
+  const liveDetailTexture: TextureAsset = {
+    ...detailTexture,
+    data: new Uint8Array([
+      255, 64, 192, 255, 255, 64, 192, 255, 255, 64, 192, 255, 255, 64, 192, 255,
+    ]),
+  };
+  const liveBaseColorTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>(
+    'TextureAsset',
+    liveBaseColorTexture,
+  );
+  const liveDetailTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>(
+    'TextureAsset',
+    liveDetailTexture,
+  );
   assets.catalog('guid:3d3d3d3d-0000-0000-0000-3d3d3d3d3d3d', baseColorTexture);
   assets.catalog('guid:4e4e4e4e-0000-0000-0000-4e4e4e4e4e4e', detailTexture);
+  assets.catalog('guid:5f5f5f5f-0000-0000-0000-5f5f5f5f5f5f', liveBaseColorTexture);
+  assets.catalog('guid:6a6a6a6a-0000-0000-0000-6a6a6a6a6a6a', liveDetailTexture);
   const textureStatus = document.createElement('span');
   textureStatus.id = 'texture-status';
   textureStatus.textContent = 'M3_TEXTURE_BINDING=baseColorTexture+detailTexture';
@@ -391,7 +438,13 @@ if (!app.ok) {
   // built-in PBR is deliberately NOT used here so the engine core stays
   // single-UV-zero-regression clean.
   const falsifyDetailTexture = new URLSearchParams(location.search).has('falsify-texture');
-  const materialAsset = (variant: 'true' | 'false') => ({
+  const materialAsset = (
+    variant: 'true' | 'false',
+    textures: { baseColor: number; detail: number } = {
+      baseColor: baseColorTextureHandle,
+      detail: detailTextureHandle,
+    },
+  ) => ({
     kind: 'material' as const,
     passes: [
       {
@@ -406,13 +459,17 @@ if (!app.ok) {
       },
     ],
     values: {
-      baseColor: [0.7, 0.7, 0.7],
-      baseColorTexture: baseColorTextureHandle,
-      ...(falsifyDetailTexture ? {} : { detailTexture: detailTextureHandle }),
+      baseColor: [0.7, 0.7, 0.7, 1],
+      baseColorTexture: textures.baseColor,
+      ...(falsifyDetailTexture ? {} : { detailTexture: textures.detail }),
     },
   });
   const defaultMaterial = materialAsset('true');
   const falseMaterial = materialAsset('false');
+  const liveMaterial = materialAsset('true', {
+    baseColor: liveBaseColorTextureHandle,
+    detail: falsifyLiveMaterial ? detailTextureHandle : liveDetailTextureHandle,
+  });
 
   // catalog acquires the GUID -> payload mapping (for loadByGuid fast-path);
   // allocSharedRef mints the ECS column handles needed by MeshFilter.assetHandle
@@ -424,6 +481,7 @@ if (!app.ok) {
   const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
   const defaultMatHandle = world.allocSharedRef('MaterialAsset', defaultMaterial);
   const falseMatHandle = world.allocSharedRef('MaterialAsset', falseMaterial);
+  const liveMatHandle = world.allocSharedRef('MaterialAsset', liveMaterial);
 
   const planeEntity = world
     .spawn(
@@ -440,14 +498,17 @@ if (!app.ok) {
     )
     .unwrap();
 
+  let activeMaterialHandle = startupVariant === 'true' ? defaultMatHandle : falseMatHandle;
   const selectVariant = (variant: 'true' | 'false') => {
+    const nextMaterialHandle = variant === 'true' ? defaultMatHandle : falseMatHandle;
     const result = world.set(planeEntity, MeshRenderer, {
-      materials: [variant === 'true' ? defaultMatHandle : falseMatHandle],
+      materials: [nextMaterialHandle],
     });
     if (!result.ok) {
       console.error('[multi-uv] variant selection failed:', result.error);
       return;
     }
+    activeMaterialHandle = nextMaterialHandle;
     variantSelect.value = variant;
     variantStatus.textContent = `M3_MULTI_UV_VARIANT=${variant}`;
   };
@@ -455,6 +516,40 @@ if (!app.ok) {
     selectVariant(variantSelect.value === 'false' ? 'false' : 'true');
   });
   selectVariant(startupVariant);
+  globalThis.__forgeaxMultiUvEvidence = {
+    ready: true,
+    mode: liveMaterialMode,
+    liveMaterial: {
+      enabled: liveMaterialEnabled,
+      applied: false,
+      beforeMaterialHandle: activeMaterialHandle,
+      afterMaterialHandle: liveMaterialEnabled ? liveMatHandle : null,
+      beforeTextureHandles: [baseColorTextureHandle, detailTextureHandle],
+      afterTextureHandles: [
+        liveBaseColorTextureHandle,
+        liveMaterial
+          ? falsifyLiveMaterial
+            ? detailTextureHandle
+            : liveDetailTextureHandle
+          : detailTextureHandle,
+      ],
+      baseColorSlotChanged: liveBaseColorTextureHandle !== baseColorTextureHandle,
+      detailSlotChanged: !falsifyLiveMaterial,
+      afterComponentMaterialHandle: null,
+      resizeHistory: [],
+    },
+    applyLiveMaterialRebind: () => {
+      const evidence = globalThis.__forgeaxMultiUvEvidence;
+      if (evidence === undefined || !evidence.liveMaterial.enabled)
+        return { ok: false, code: 'disabled' };
+      const result = world.set(planeEntity, MeshRenderer, { materials: [liveMatHandle] });
+      if (!result.ok) return { ok: false, code: result.error.code };
+      activeMaterialHandle = liveMatHandle;
+      evidence.liveMaterial.applied = true;
+      evidence.liveMaterial.afterComponentMaterialHandle = liveMatHandle;
+      return { ok: true };
+    },
+  };
   world.spawn(
     {
       component: Transform,

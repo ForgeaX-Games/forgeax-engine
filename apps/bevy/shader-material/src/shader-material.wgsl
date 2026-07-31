@@ -2,14 +2,6 @@
 
 #import forgeax_view::common::{view, meshes}
 
-struct MaterialUniforms {
-  baseColor : vec4<f32>,
-}
-
-@group(1) @binding(0) var<uniform> material : MaterialUniforms;
-@group(1) @binding(1) var baseColorTexture_sampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-
 struct VsIn {
   @location(0) pos : vec3<f32>,
   @location(1) normal : vec3<f32>,

@@ -4121,6 +4121,20 @@ async function buildReadyWebGPU(
   let bloomBlurModule: ShaderModule | null = null;
   let bloomCompositeModule: ShaderModule | null = null;
   let ssaoModule: ShaderModule | null = null;
+  const findEngineManifestEntry = (identifier: string): ManifestEntry | undefined => {
+    const materialEntry = Array.from(registry.materialShaderManifestEntries()).find(
+      (candidate) => candidate.identifier === identifier,
+    );
+    if (materialEntry === undefined) return undefined;
+    return (
+      manifestEntries.find((entry) => entry.wgsl === materialEntry.composedWgsl) ?? {
+        hash: `engine:${identifier}`,
+        wgsl: materialEntry.composedWgsl,
+        glsl: undefined,
+        bindings: '',
+      }
+    );
+  };
   if (manifestEntries.length > 0) {
     // Merge of bug-20260519 D-1 + D-3 (manifest-zero gate, this branch's
     // outer `if (manifestEntries.length > 0)`) + main feat-20260519-tonemap
@@ -4144,8 +4158,8 @@ async function buildReadyWebGPU(
     //     (equirectToCube_fs / irradianceConvolve_fs / prefilterEnv_fs /
     //     brdfLutBake_fs) which survive naga_oil composition unchanged.
     //   - unlit.wgsl: none of the above markers → falls into the unlit slot.
-    let pbrEntry: ManifestEntry | undefined;
-    let unlitEntry: ManifestEntry | undefined;
+    let pbrEntry = findEngineManifestEntry('forgeax::default-standard-pbr');
+    let unlitEntry = findEngineManifestEntry('forgeax::default-unlit');
     let tonemapEntry: ManifestEntry | undefined;
     let spriteEntry: ManifestEntry | undefined;
     // sprite-lit identification marker is the `spriteLitShadeAccum`

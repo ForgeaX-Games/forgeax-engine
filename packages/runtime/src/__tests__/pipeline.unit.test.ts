@@ -4094,7 +4094,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // the renderer was created without `shaderManifestUrl`, render-time access
   // to the now-nullable `pipelineState.{unlitPipeline,standardPipeline}` must
   // feat-20260529 D-3: materials without passes are caught at extract stage
-  // as `material-resolved-empty-passes` (RuntimeErrorCode 9th member), before
+  // as `material-no-effective-pass` (the shared MaterialError), before
   // reaching the record-stage pipeline-pick branch. The test's original
   // bug-20260519 AC-03 intent — "zero-manifest renderer fires structured error
   // not crash" — is preserved; the detection point has moved upstream.
@@ -4102,9 +4102,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // After D-3, the material registered below has `kind:'material'` +
   // `baseColor` but zero passes — the extract stage
   // walks the parent chain (no parent), finds zero passes, and fires
-  // `material-resolved-empty-passes` with `.detail.reason === 'no-pass-in-chain'`.
+  // `material-no-effective-pass` with a recovery hint for adding a pass.
   describe('Renderer.draw(world) bug-20260519 zero-manifest mesh path (AC-03)', () => {
-    it('MeshRenderer + no shaderManifestUrl -> render-time fires material-resolved-empty-passes', async () => {
+    it('MeshRenderer + no shaderManifestUrl -> render-time fires material-no-effective-pass', async () => {
       const { device } = makeMockGPUDevice();
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
       const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
@@ -4145,7 +4145,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       //   - on `renderer.draw([world], { owner: 0 })` the per-entity loop in
       //     `render-system-extract.ts` walks the material parent chain (none),
       //     finds zero passes, and fires
-      //     `material-resolved-empty-passes` (RuntimeError).
+      //     `material-no-effective-pass` (MaterialError).
       const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
       const ready = (await renderer.ready) as { ok: boolean };
       expect(ready.ok).toBe(true);
@@ -4164,12 +4164,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
       // Mint a material with zero passes (no parent chain) as a user-tier column
       // handle. The extract stage's material walk returns Err with
-      // `material-resolved-empty-passes` reason='no-pass-in-chain'.
+      // `material-no-effective-pass`.
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         baseColor: [1, 0, 0, 1],
       });
-      // feat-20260529 D-3: extract-stage errors (material-resolved-empty-passes)
+      // feat-20260529 D-3: extract-stage errors (material-no-effective-pass)
       // route through the world's errorHandler, not the renderer's errorRegistry.
       // Capture them here to assert the structured error surface (charter P3).
       world.setErrorHandler((err) => {
@@ -4227,16 +4227,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(world.update(1 / 60).ok).toBe(true);
 
       renderer.draw([world], { owner: 0 });
-
       // Property-access assertions only (charter P3 + P5: structured error
       // surface; no string-parse on `.message`).
-      // feat-20260529 D-3: empty-passes fires at extract stage as
-      // `material-resolved-empty-passes` (RuntimeErrorCode), not at record
-      // as `shader-compile-failed` (RhiError). The detection point moved
-      // upstream; the structured-error-routing contract is preserved.
-      const emptyPassesErr = errors.find((e) => e.code === 'material-resolved-empty-passes');
+      // The shared Material resolver reports an empty effective pass set at
+      // extract time, not later as `shader-compile-failed` (RhiError).
+      const emptyPassesErr = errors.find((e) => e.code === 'material-no-effective-pass');
       expect(emptyPassesErr).toBeDefined();
-      expect(emptyPassesErr?.hint).toContain('no pass declarations');
+      expect(emptyPassesErr?.hint).toContain('add a pass');
     });
   });
 }

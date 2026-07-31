@@ -2,6 +2,7 @@
 #pragma variant_axis M3_MULTI_UV_VARIANT
 
 #import forgeax_view::common::{view, meshes, instances}
+#import forgeax_material::parameters::{material, baseColorTexture, baseColorTexture_sampler, detailTexture, detailTexture_sampler}
 
 // multi-uv-demo.wgsl - feat-20260629-multi-uv-set-support AC-10 visual anchor.
 //
@@ -28,16 +29,6 @@
 // set. If uv1 collapses to uv0 (clamp) or the pipeline is broken, the
 // checkerboard variance disappears -- the smoke's AC-10 falsification variant
 // relies on this while retaining the texture binding in the same material.
-
-struct DemoUniforms {
-  baseColor : vec4<f32>,
-};
-
-@group(1) @binding(0) var<uniform> demo : DemoUniforms;
-@group(1) @binding(1) var baseColorTexture_sampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var detailTexture_sampler : sampler;
-@group(1) @binding(4) var detailTexture : texture_2d<f32>;
 
 struct VsIn  {
   @location(0) pos     : vec3<f32>,
@@ -82,5 +73,5 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 #endif
   let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
   let detail = textureSample(detailTexture, detailTexture_sampler, in.uv);
-  return vec4<f32>(demo.baseColor.rgb * sampled.rgb * detail.rgb * pattern * variantTint, demo.baseColor.a * sampled.a * detail.a);
+  return vec4<f32>(material.baseColor.rgb * sampled.rgb * detail.rgb * pattern * variantTint, material.baseColor.a * sampled.a * detail.a);
 }

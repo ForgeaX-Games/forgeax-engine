@@ -19,7 +19,8 @@
                 "baseColorTexture": "baseColorTexture",
                 "normalTexture": "normalTexture"
               }
-            }
+            },
+            "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 }
           }
         ],
         "parameters": [
@@ -54,8 +55,8 @@
           "schemaVersion": "material-cook/1",
           "guid": "01935b00-7d8c-7c4e-9f12-345678abcd02",
           "resolved": {
-            "passes": [{ "name": "Forward", "program": { "module": "my-game::pulse-material", "vertexEntry": "vs_main", "fragmentEntry": "fs_main" } }],
-            "parameters": [{ "name": "baseColor", "type": "color" }, { "name": "time", "type": "f32" }, { "name": "speed", "type": "f32" }, { "name": "baseColorUvTransform", "type": "vec4" }, { "name": "normalUvTransform", "type": "vec4" }],
+            "passes": [{ "name": "Forward", "program": { "module": "my-game::pulse-material", "vertexEntry": "vs_main", "fragmentEntry": "fs_main" }, "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 } }],
+            "parameters": [{ "name": "baseColor", "type": "color" }, { "name": "time", "type": "f32" }, { "name": "speed", "type": "f32" }, { "name": "baseColorUvTransform", "type": "vec4" }, { "name": "normalUvTransform", "type": "vec4" }, { "name": "baseColorTexture", "type": "texture" }, { "name": "normalTexture", "type": "texture" }],
             "values": { "baseColor": [0.95, 0.45, 0.2, 1], "time": 0, "speed": 2, "baseColorUvTransform": [0, 0, 1, 1], "normalUvTransform": [0.125, 0.25, 2, 2] }
           },
           "refs": { "parent": [], "textures": [], "samplers": [], "modules": ["my-game::pulse-material"] },
@@ -80,8 +81,8 @@
           "schemaVersion": "material-cook/1",
           "guid": "01935b00-7d8c-7c4e-9f12-345678abcd03",
           "resolved": {
-            "passes": [{ "name": "Forward", "program": { "module": "my-game::pulse-material", "vertexEntry": "vs_main", "fragmentEntry": "fs_main" } }],
-            "parameters": [{ "name": "baseColor", "type": "color" }, { "name": "time", "type": "f32" }, { "name": "speed", "type": "f32" }, { "name": "baseColorUvTransform", "type": "vec4" }, { "name": "normalUvTransform", "type": "vec4" }],
+            "passes": [{ "name": "Forward", "program": { "module": "my-game::pulse-material", "vertexEntry": "vs_main", "fragmentEntry": "fs_main" }, "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 } }],
+            "parameters": [{ "name": "baseColor", "type": "color" }, { "name": "time", "type": "f32" }, { "name": "speed", "type": "f32" }, { "name": "baseColorUvTransform", "type": "vec4" }, { "name": "normalUvTransform", "type": "vec4" }, { "name": "baseColorTexture", "type": "texture" }, { "name": "normalTexture", "type": "texture" }],
             "values": { "baseColor": [0.95, 0.45, 0.2, 1], "time": 0, "speed": 2, "baseColorUvTransform": [0, 0, 1, 1], "normalUvTransform": [0.125, 0.25, 2, 2] }
           },
           "refs": { "parent": ["01935b00-7d8c-7c4e-9f12-345678abcd02"], "textures": [], "samplers": [], "modules": ["my-game::pulse-material"] },

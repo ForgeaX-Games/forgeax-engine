@@ -13,13 +13,6 @@
 //     positions directly (unit plane scaled x2), bypassing the camera.
 //     iResolution / iTime ride in the @group(1) @binding(0) material UBO.
 
-struct ShaderToyUniforms {
-  iResolution : vec2<f32>,
-  iTime       : f32,
-};
-
-@group(1) @binding(0) var<uniform> uniforms : ShaderToyUniforms;
-
 struct VsIn {
   @location(0) pos    : vec3<f32>,
   @location(1) normal : vec3<f32>,
@@ -383,10 +376,10 @@ fn render(ro : vec3<f32>, rd : vec3<f32>, t : f32) -> vec3<f32> {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // fragCoord with bottom-left origin (flip V from WebGPU top-left UV).
-  let fragCoord = vec2<f32>(in.uv.x, 1.0 - in.uv.y) * uniforms.iResolution;
-  let p = (2.0 * fragCoord - uniforms.iResolution) / uniforms.iResolution.y;
+  let fragCoord = vec2<f32>(in.uv.x, 1.0 - in.uv.y) * material.iResolution;
+  let p = (2.0 * fragCoord - material.iResolution) / material.iResolution.y;
 
-  let t = uniforms.iTime;
+  let t = material.iTime;
 
   // camera orbits slowly and looks at the creature.
   let an = 0.5 * sin(t * 0.25);
@@ -412,7 +405,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   col = clamp((col - 0.5) * 1.08 + 0.5, vec3<f32>(0.0), vec3<f32>(1.0));
 
   // gentle vignette
-  let q = fragCoord / uniforms.iResolution;
+  let q = fragCoord / material.iResolution;
   col *= 0.5 + 0.5 * pow(16.0 * q.x * q.y * (1.0 - q.x) * (1.0 - q.y), 0.2);
 
   return vec4<f32>(col, 1.0);

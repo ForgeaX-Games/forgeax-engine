@@ -28,7 +28,7 @@ export function makeSpritePixels(): Uint8Array {
   return data;
 }
 
-export function spriteMaterial(texture: number, sampler: number): MaterialAsset {
+export function spriteMaterial(texture: number): MaterialAsset {
   return {
     kind: 'material',
     passes: [
@@ -44,21 +44,13 @@ export function spriteMaterial(texture: number, sampler: number): MaterialAsset 
     values: {
       colorTint: [1, 1, 1, 1],
       baseColorTexture: texture,
-      sampler,
       pivotAndSize: [0.5, 0.5, 1, 1],
     },
   };
 }
 
 export function buildSpriteWorld(world: World, texture: number): void {
-  const sampler = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
-  const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture, sampler));
+  const material = world.allocSharedRef('MaterialAsset', spriteMaterial(texture));
 
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [4, 4, 1] } },

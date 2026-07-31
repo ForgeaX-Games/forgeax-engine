@@ -7,7 +7,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  plugins: [forgeaxShader({ materialPackages: [resolve(here, 'shaders/cutout-shadow.pack.json')] }) as never],
   server: {
     fs: {
       allow: [monorepoRoot],

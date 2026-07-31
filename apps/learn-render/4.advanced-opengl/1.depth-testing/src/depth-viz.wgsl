@@ -23,20 +23,6 @@
 // layout); the fragment shader only reads @builtin(position).z and
 // outputs vec4<f32> gray.
 
-struct Material {
-  baseColor : vec4<f32>,
-  metallic  : f32,
-  roughness : f32,
-};
-
-@group(1) @binding(0) var<uniform> material : Material;
-@group(1) @binding(1) var baseColorSampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
 struct VsIn {
   @location(0) pos     : vec3<f32>,
   @location(1) normal  : vec3<f32>,

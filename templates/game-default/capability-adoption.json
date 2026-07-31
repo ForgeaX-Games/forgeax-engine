@@ -1054,6 +1054,450 @@
       ],
       "reason": "The canonical app proves a procedural sampling/render contract: after the prescribed root pnpm build refreshed a fresh worktree's package dist, typecheck/build pass, Dawn runs 300 frames on webgpu, the wireframe cube and random point scene are non-black and colored, and RHI errors are zero. It is nevertheless an unseeded Math.random() gallery that code-spawns persistent points, reads low-level S/D/M keyboard edges directly, has no browser smoke, no reset/despawn owner, and no gameplay outcome. game-default already owns one frozen InputSnapshot/InputMap boundary, authored SceneAsset content, bounded transient spawns, typed R reset, and browser semantic evidence; copying this gallery would add a second input owner and teach non-reproducible lifecycle. Revisit only with a deterministic seed or public sampling contract that changes a resettable gameplay outcome.",
       "betterConsumer": "apps/bevy/random-sampling"
+    },
+    {
+      "id": "app:bevy/rotate-environment-map",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/rotate-environment-map/src/main.ts",
+        "apps/bevy/rotate-environment-map/src/rotate-environment-map.ts",
+        "apps/bevy/rotate-environment-map/scripts/smoke-dawn.mjs",
+        "apps/bevy/rotate-environment-map/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-202956-classify-rotate-environment-map-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves GUID-loaded EquirectAsset composition: typecheck/build pass, Dawn runs 300 frames on webgpu, shared SkyboxBackground and Skylight rotation advance (angle=0.065) with a non-dark HDR render (maxLuma=1.0000) and zero engine errors. It is nevertheless a static code-spawned PBR sphere/floor with time-only environment rotation, no browser smoke, input/reset/re-entry or gameplay owner, and it reuses the same HDR environment concept already authored in game-default's SceneAsset (Skylight + SkyboxBackground) with asset-content evidence and typed reset. Copying it would duplicate the environment/asset owner rather than compose a new feature-loop mechanic; revisit when environment rotation changes a resettable gameplay outcome through the existing InputMap and browser evidence.",
+      "betterConsumer": "apps/bevy/rotate-environment-map"
+    },
+    {
+      "id": "app:bevy/run-conditions",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/run-conditions/src/main.ts",
+        "apps/bevy/run-conditions/src/run-conditions.ts",
+        "apps/bevy/run-conditions/scripts/smoke-dawn.mjs",
+        "apps/bevy/run-conditions/scripts/smoke-browser.mjs",
+        "apps/bevy/run-conditions/artifacts/frame-early.png",
+        "apps/bevy/run-conditions/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-210329-classify-run-conditions-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a useful ECS scheduling oracle: typecheck/build pass, Dawn runs 300 frames with the set gate closed for 124 frames then open, gatedRuns=176, pulseRuns=1, motionMeanDelta=0.01225, lateFrameMaxBright=1.0000, and Chrome reaches the same gate/pulse state with no console errors. It is nevertheless a synthetic two-bar time gate with no input, authored scene, gameplay outcome, reset/re-entry owner, asset lifecycle, or recovery path. game-default already owns typed GameState Play/Reset runIf gates across Update and FixedUpdate, state-scoped cleanup, and browser semantic evidence; adding a second defineSystemSet showcase would duplicate scheduling ownership rather than compose a feature-loop mechanic. Keep the focused run-conditions app canonical and revisit only when a real gameplay subsystem needs a shared system-set condition beyond inState.",
+      "betterConsumer": "apps/bevy/run-conditions"
+    },
+    {
+      "id": "app:bevy/scale",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/scale/src/main.ts",
+        "apps/bevy/scale/src/scale.ts",
+        "apps/bevy/scale/scripts/smoke-dawn.mjs",
+        "apps/bevy/scale/artifacts/frame-early.png",
+        "apps/bevy/scale/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-213000-classify-scale-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves bounded non-uniform Transform.scale scheduling: typecheck/build pass, Dawn runs 300 frames on webgpu, the lit cube renders with motionMeanDelta=0.00134 above the 0.0005 floor, finalScale=[1,1.3000006675720215,1], finalDirection=[0,-1,0], and RHI errors are zero; early and late captures show the silhouette changing. It is nevertheless a static code-spawned single-cube transform gallery driven only by Time, with no input action, authored asset/scene, gameplay outcome, reset/re-entry owner, browser witness, or recovery boundary. game-default already owns authored Transform hierarchy, gameplay-driven target motion, deferred projectiles, typed R reset, and browser semantic evidence; copying this cube would duplicate a lower-level transform oracle rather than compose a feature-loop mechanic. Keep apps/bevy/scale canonical and revisit when scale changes a resettable gameplay outcome through the existing input/state owners.",
+      "betterConsumer": "apps/bevy/scale"
+    },
+    {
+      "id": "app:bevy/screenshot",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/screenshot/src/main.ts",
+        "apps/bevy/screenshot/src/screenshot.ts",
+        "apps/bevy/screenshot/scripts/smoke-dawn.mjs",
+        "apps/bevy/screenshot/dist/smoke/screenshot-scene.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-222328-classify-screenshot-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves renderer readback and input edge semantics: typecheck/build pass, Dawn renders a lit plane/cube scene with center pixel R=171 G=161 B=150 A=255, Space rising edge triggers exactly once, held Space does not retrigger, and RHI errors are zero. It is nevertheless a code-spawned static window scene whose only outcome is a developer-triggered PNG download; the browser path uses a module-global screenshotDue flag, perpetual requestAnimationFrame polling, temporary canvas toDataURL, and no browser smoke or host cleanup registration. game-default already owns one semantic InputMap/InputSnapshot boundary, authored gameplay, typed R reset, controlled UI cleanup, and browser semantic/pixel evidence; FORGE.md treats UI screenshots as auxiliary. Adding a second browser-only download owner would duplicate the evidence boundary and lifecycle risk rather than compose gameplay. Revisit when a host-neutral screenshot service has an explicit lifecycle owner and a resettable photo-mode outcome.",
+      "betterConsumer": "apps/bevy/screenshot"
+    },
+    {
+      "id": "app:bevy/shader-defs",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/shader-defs/src/main.ts",
+        "apps/bevy/shader-defs/src/shader-defs.wgsl",
+        "apps/bevy/shader-defs/src/shader-defs.wgsl.meta.json",
+        "apps/bevy/shader-defs/scripts/smoke-dawn.mjs",
+        "apps/bevy/shader-defs/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-230845-classify-shader-defs-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves build-time shader composition and a static module-slot variant: typecheck/build pass, the generated manifest contains the bevy::shader_defs artifact, Dawn renders 100 frames on webgpu, left/right readback pixels are [63,137,255] and [255,63,63], and RHI errors are zero; the PNG shows the blue and red variant cubes. It is nevertheless a code-spawned two-cube shader gallery with a static IS_RED define, no input action, authored scene, gameplay outcome, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns build-time custom WGSL, authored MaterialAsset parameter mutation, hit feedback, animated shader time, GUID/meta shader packages, and browser render evidence; copying a second static variant gallery would duplicate the shader lesson without composing the feature loop. Keep apps/bevy/shader-defs canonical and revisit when a variant axis changes a resettable gameplay outcome through the template's existing material and input owners.",
+      "betterConsumer": "apps/bevy/shader-defs"
+    },
+    {
+      "id": "app:bevy/shader-material",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/shader-material/src/main.ts",
+        "apps/bevy/shader-material/src/scene.ts",
+        "apps/bevy/shader-material/src/shader-material.wgsl",
+        "apps/bevy/shader-material/src/shader-material.wgsl.meta.json",
+        "apps/bevy/shader-material/scripts/smoke-dawn.mjs",
+        "apps/bevy/shader-material/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-235009-classify-shader-material-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a composed custom MaterialAsset path: typecheck/build pass, Dawn renders 300 frames on webgpu with visiblePixels=3526, brightPixels=817, colorBins=125, zero renderer errors, and the PNG shows a four-color textured cube with transparent borders. It combines a generated checker TextureAsset upload, a color uniform, custom WGSL, and premultiplied alpha blending. It is nevertheless a static code-spawned cube gallery with no input action, authored scene, gameplay outcome, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns build-time custom WGSL, hit-flash premultiplied alpha, a runtime-uploaded checker texture on the projectile, authored MaterialAsset mutation, typed R reset, and browser render evidence; copying this gallery would duplicate the material/texture lesson rather than compose the feature loop. Keep apps/bevy/shader-material canonical and revisit when the texture/material state changes a resettable gameplay outcome through the template's existing input and asset owners.",
+      "betterConsumer": "apps/bevy/shader-material"
+    },
+    {
+      "id": "app:bevy/shadow-biases",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/shadow-biases/src/main.ts",
+        "apps/bevy/shadow-biases/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-002114-classify-shadow-biases-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public shadow-bias fields: typecheck/build pass, Dawn observes 102 webgpu frames, DirectionalLight.depthBias and normalBias are supplied to the shadowed scene, and RHI errors are zero. It is nevertheless a static code-spawned plane/sphere tuning gallery with direct low-level keyboard polling, no authored scene, browser smoke, reset/re-entry owner, gameplay/settings lifecycle, or recovery boundary. game-default already owns authored directional shadows, one normalized InputSnapshot/InputMap boundary, typed R reset, and browser render evidence; adding a second keyboard-driven bias gallery would duplicate the rendering oracle rather than compose the feature loop. Keep apps/bevy/shadow-biases canonical and revisit when bias changes a resettable gameplay/settings outcome through the template's existing owners.",
+      "betterConsumer": "apps/bevy/shadow-biases"
+    },
+    {
+      "id": "app:bevy/shadow-caster-receiver",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/shadow-caster-receiver/src/main.ts",
+        "apps/bevy/shadow-caster-receiver/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-004325-classify-shadow-caster-receiver-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves that Materials.standard({ castShadow: false }) reaches the shadow-caster path: typecheck/build pass, Dawn observes 102 webgpu frames, the red sphere uses the default caster path, the blue material opts out, and RHI errors are zero. It is nevertheless a static code-spawned plane/two-sphere gallery with no authored scene, browser smoke, input action, gameplay/settings lifecycle, reset/re-entry owner, or recovery boundary. game-default already owns an authored directional-shadow scene, a material-level projectile castShadow=false use, typed R reset, and browser render evidence; adding a second opt-out gallery would duplicate the rendering oracle rather than compose the feature loop. Keep apps/bevy/shadow-caster-receiver canonical and revisit when per-material shadow participation changes a resettable gameplay or settings outcome through the template's existing owners.",
+      "betterConsumer": "apps/bevy/shadow-caster-receiver"
+    },
+    {
+      "id": "app:bevy/skybox",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/skybox/src/main.ts",
+        "apps/bevy/skybox/src/skybox.ts",
+        "apps/bevy/skybox/scripts/smoke-dawn.mjs",
+        "apps/bevy/skybox/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-020119-classify-skybox-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the full HDR skybox path: typecheck/build pass, Dawn observes 132 webgpu frames with a skybox pass, maxLuma=1.0000, a PNG artifact, zero engine errors, and FALSIFY=remove-skybox darkens the frame to maxLuma=0.0000. The GUID-loaded Newport Loft equirect reaches SkyboxBackground and Skylight through pack-index/runtime loading. It is nevertheless a static code-spawned presentation scene with no authored scene, input action, gameplay/settings lifecycle, reset/re-entry owner, or recovery boundary. game-default already authors SkyboxBackground and Skylight in assets/scene.pack.json, exposes HDR GUID reload/intensity/missing-asset evidence, typed R reset, and browser rendering; adding a second HDR gallery would duplicate the same asset/presentation lesson rather than compose the feature loop. Keep apps/bevy/skybox canonical and revisit when skybox mode changes a resettable gameplay or settings outcome through the template's existing asset and lifecycle owners.",
+      "betterConsumer": "apps/bevy/skybox"
+    },
+    {
+      "id": "app:bevy/smooth-follow",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/smooth-follow/src/main.ts",
+        "apps/bevy/smooth-follow/src/smooth-follow.ts",
+        "apps/bevy/smooth-follow/scripts/smoke-dawn.mjs",
+        "apps/bevy/smooth-follow/artifacts/frame-early.png",
+        "apps/bevy/smooth-follow/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-022503-classify-smooth-follow-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a shared frame-rate-independent motion path: typecheck/build pass, Dawn observes 100 webgpu frames, lateFrameMaxBright=0.9451, motionMeanDelta=0.00770, follower distance shrinks 2.5395 to 0.6346 (ratio 0.250), early/late PNGs show the follower catching the target, and RHI errors are zero. The app and smoke import the same World/step SSOT, so the engine oracle is strong. It is nevertheless a static code-spawned two-sphere gallery with no authored scene, input action, gameplay/settings lifecycle, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns exponential camera damping, authored moving targets, typed R reset, and browser render evidence; adding a second standalone damping gallery would duplicate the motion lesson rather than compose the feature loop. Keep apps/bevy/smooth-follow canonical and revisit when damping changes a resettable gameplay or camera-setting outcome through the template's existing owners.",
+      "betterConsumer": "apps/bevy/smooth-follow"
+    },
+    {
+      "id": "app:bevy/soundtrack",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/soundtrack/src/main.ts",
+        "apps/bevy/soundtrack/src/soundtrack.ts",
+        "apps/bevy/soundtrack/scripts/smoke-dawn.mjs",
+        "apps/bevy/soundtrack/scripts/smoke-browser.mjs",
+        "apps/bevy/soundtrack/artifacts/soundtrack-before.png",
+        "apps/bevy/soundtrack/artifacts/soundtrack-after.png",
+        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/src/settings.ts",
+        "templates/game-default/AGENTS.md",
+        "forgeax-engine-assets/learn-opengl/audio/breakout.mp3.meta.json",
+        ".forgeax-harness/solo/game-default/experiments/20260731-024923-classify-soundtrack-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves two GUID-backed AudioSources and a public music-bus crossfade: typecheck/build pass, Dawn runs 100 webgpu frames with AudioEngine present and zero renderer errors, Chrome loads 2/2 clips, a Space gesture starts real Web Audio, peaceful transitions to battle at peaceful=0.00/battle=1.00, screenshots show the HUD state change, and app.stop closes the context with activeSourceCount=0. It is nevertheless a static code-spawned two-sphere gallery with no authored pack content, gameplay state owner, typed reset/re-entry, or recovery UI. The peaceful GUID is the same engine-authored bgm-loop.wav already owned by game-default, while the battle GUID is the learn-opengl breakout.mp3 vendor asset and is not a commercial-compatible template asset. game-default already teaches music bus settings, spatial hit SFX, one-shot re-arm, and reset cleanup; copying this demo would duplicate audio ownership and import a license-bound track. Keep apps/bevy/soundtrack canonical and revisit only with a template-authored second track plus a real gameplay state transition through existing owners.",
+      "betterConsumer": "apps/bevy/soundtrack"
+    },
+    {
+      "id": "app:bevy/spatial-audio-2d",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/spatial-audio-2d/src/main.ts",
+        "apps/bevy/spatial-audio-2d/src/spatial-audio-2d.ts",
+        "apps/bevy/spatial-audio-2d/scripts/smoke-dawn.mjs",
+        "apps/bevy/spatial-audio-2d/scripts/smoke-browser.mjs",
+        "apps/bevy/spatial-audio-2d/artifacts/spatial-audio-before.png",
+        "apps/bevy/spatial-audio-2d/artifacts/spatial-audio-listener-left.png",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-031525-classify-spatial-audio-2d-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public 2D listener/emitter path: typecheck/build pass, Dawn runs 100 webgpu frames with AudioEngine present and zero renderer errors, Chrome starts the same GUID-backed SFX after Space with active=1, moving the listener to (-1.8, 0.0) changes the HUD to pan=R, toggling M yields mute=1, screenshots show the before/after HUD and markers, and app.stop closes the context with activeSourceCount=0. It is nevertheless a static code-spawned listener/ear/emitter gallery with no authored pack content, gameplay state, typed reset/re-entry, or recovery owner. The GUID is the exact dragon-studio-correct clip already owned by game-default; the template already attaches AudioListener to the authored player, uses spatialBlend=1 on hit SFX, exposes Map movement, and resets/reclaims the same audio path. Adding a second 2D audio scene would duplicate ownership instead of composing the feature loop. Keep apps/bevy/spatial-audio-2d canonical and revisit only when a real template mechanic needs 2D attenuation/pan beyond the existing player hit-SFX contract.",
+      "betterConsumer": "apps/bevy/spatial-audio-2d"
+    },
+    {
+      "id": "app:bevy/specular-tint",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/specular-tint/src/main.ts",
+        "apps/bevy/specular-tint/src/specular-tint.ts",
+        "apps/bevy/specular-tint/scripts/smoke-dawn.mjs",
+        "apps/bevy/specular-tint/artifacts/smoke-frame.png",
+        "forgeax-engine-assets/learn-opengl/textures/container2_specular_colored.png.meta.json",
+        ".forgeax-harness/solo/game-default/experiments/20260731-034412-classify-specular-tint-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves public MaterialAsset.specularTint scalar and texture paths: typecheck/build pass, Dawn runs 100 webgpu frames, HDR and tint GUID rows load through pack-index, zero engine errors, and readback means separate neutral=0.4335,0.3823,0.3222, solid=0.4745,0.4022,0.3650, and mapped=0.3432,0.2893,0.2515; the PNG visibly shows the three distinct spheres. It is nevertheless a static code-spawned three-sphere material matrix with no authored scene, input, gameplay/settings lifecycle, reset/re-entry, browser smoke, or recovery owner. The tint texture is the learn-opengl container2_specular_colored.png vendor asset, not a commercial-compatible template-authored payload. game-default already owns authored PBR/IBL, clearcoat, material hit feedback, and reset; copying another matrix would duplicate presentation and import a license-bound asset. Keep apps/bevy/specular-tint canonical and revisit with a license-safe engine-authored tint texture plus a real resettable gameplay/settings outcome.",
+      "betterConsumer": "apps/bevy/specular-tint"
+    },
+    {
+      "id": "app:bevy/spotlight",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/spotlight/src/main.ts",
+        "apps/bevy/spotlight/src/spotlight.ts",
+        "apps/bevy/spotlight/scripts/smoke-dawn.mjs",
+        "apps/bevy/spotlight/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-040433-classify-spotlight-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public SpotLight cone path: typecheck/build pass, Dawn runs 100 webgpu frames, the NDC-center sample is [0.7412,0.7412,0.7412], the ground plane, four cone lights, and deterministic cube set are visible, and RHI errors are zero. It is nevertheless a static code-spawned gallery with no authored scene, asset delivery, input, gameplay/settings lifecycle, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns authored directional/point lighting, a live gameplay target loop, typed reset, and browser render evidence; copying another light gallery would duplicate presentation without adding a feature-loop behavior. Keep apps/bevy/spotlight canonical and revisit only when a license-safe authored lighting slice gives the player a resettable gameplay or settings outcome through the template's existing owners.",
+      "betterConsumer": "apps/bevy/spotlight"
+    },
+    {
+      "id": "app:bevy/sprite",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/sprite/src/main.ts",
+        "apps/bevy/sprite/src/sprite.ts",
+        "apps/bevy/sprite/scripts/smoke-dawn.mjs",
+        "apps/bevy/sprite/scripts/smoke-browser.mjs",
+        "apps/bevy/sprite/artifacts/smoke-frame.png",
+        "apps/bevy/sprite/artifacts/sprite-browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-043836-classify-sprite-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public image-backed sprite path: typecheck/build pass, Dawn runs 100 webgpu frames with visiblePixels=5600 and channelSpreadPixels=5600, Chrome reaches the ready marker with a 960x540 canvas and screenshot, and renderer errors are zero. It is nevertheless a single static code-generated sprite with no authored source asset/sidecar/GUID, input, gameplay/settings outcome, reset/re-entry owner, or recovery boundary. game-default already owns a resettable 3D gameplay loop, authored HUD and scene assets, runtime texture/material mutation, and browser smoke; copying a lone sprite would create a second presentation path rather than a feature-loop behavior. Keep apps/bevy/sprite canonical and revisit as a template HUD/gameplay marker only with a license-safe authored asset through the normal pack path and a resettable user outcome.",
+      "betterConsumer": "apps/bevy/sprite"
+    },
+    {
+      "id": "app:bevy/sprite-flipping",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/sprite-flipping/src/main.ts",
+        "apps/bevy/sprite-flipping/src/texture.ts",
+        "apps/bevy/sprite-flipping/scripts/smoke-dawn.mjs",
+        "apps/bevy/sprite-flipping/scripts/smoke-browser.mjs",
+        "apps/bevy/sprite-flipping/artifacts/smoke-frame.png",
+        "apps/bevy/sprite-flipping/artifacts/sprite-flipping-browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-045623-classify-sprite-flipping-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public forgeax::sprite flipX/flipY path: typecheck/build pass, Dawn runs 100 webgpu frames, all three asymmetric normal/flipX/flipY orientation samples match, Chrome reaches the uploaded-texture ready marker on a 960x540 canvas, and renderer errors are zero. It is nevertheless a static three-sprite gallery with a procedurally generated texture and no authored source asset/sidecar/GUID, input, gameplay/settings outcome, reset/re-entry owner, or recovery boundary. game-default already owns authored asset delivery, a resettable 3D gameplay loop, material mutation, and browser smoke; copying another orientation gallery would duplicate presentation rather than add a feature-loop behavior. Keep apps/bevy/sprite-flipping canonical and revisit only when flip state affects a license-safe authored HUD/gameplay asset with a resettable user outcome.",
+      "betterConsumer": "apps/bevy/sprite-flipping"
+    },
+    {
+      "id": "app:bevy/ssao",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/ssao/src/main.ts",
+        "apps/bevy/ssao/src/ssao.ts",
+        "apps/bevy/ssao/scripts/smoke-dawn.mjs",
+        "apps/bevy/ssao/scripts/smoke-browser.mjs",
+        "apps/bevy/ssao/artifacts/ssao-off.png",
+        "apps/bevy/ssao/artifacts/ssao-on.png",
+        "apps/bevy/ssao/artifacts/ssao-browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260730-000445-classify-ssao-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the HDRP SSAO pipeline end to end: typecheck/build pass, Dawn observes 300 frames with ssaoDiffMean=31.9766 and changedPixels=6344, both ssao-calc and ssao-blur passes, and zero renderer errors; Chrome reaches enabled=true with meshCount=7 and pipeline=forgeax::hdrp without page or console errors. It is nevertheless a static seven-mesh occlusion gallery with no input, gameplay/settings lifecycle, reset/re-entry, authored asset boundary, or recovery owner. game-default already owns a URP camera with bloom, FXAA, authored scene content, and one settings/reset owner; replacing that pipeline or adding a hidden HDRP switch would split presentation ownership rather than compose a feature-loop behavior. Keep apps/bevy/ssao canonical until a public pipeline-level SSAO feature can compose with the existing game world while preserving its post-processing and reset evidence.",
+      "betterConsumer": "apps/bevy/ssao"
+    },
+    {
+      "id": "app:bevy/states",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/states/src/main.ts",
+        "apps/bevy/states/src/states.ts",
+        "apps/bevy/states/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-053726-classify-states-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves defineState, setNextState, and OnEnter/OnExit callbacks: typecheck/build pass, Dawn runs 100 webgpu frames, menu exits, in-game enters, final state is in-game, and RHI errors are zero. It is nevertheless a static code-spawned transition with no authored scene, input, browser witness, reset/re-entry behavior, asset delivery, gameplay outcome, or recovery owner. game-default already owns a typed Play/Reset state machine, state-scoped entity cleanup, deferred reset return, and Preview render/audio evidence; adding an independent AppState would duplicate lifecycle authority rather than compose the feature loop. Keep apps/bevy/states canonical until a distinct state transition changes authored gameplay and proves reset/re-entry in Preview.",
+      "betterConsumer": "apps/bevy/states"
+    },
+    {
+      "id": "app:bevy/system-closure",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/system-closure/src/main.ts",
+        "apps/bevy/system-closure/src/system-closure.ts",
+        "apps/bevy/system-closure/scripts/smoke-dawn.mjs",
+        "apps/bevy/system-closure/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-055647-classify-system-closure-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves SystemDescriptor.fn closure capture and persistent local state: typecheck/build pass, Dawn runs 180 frames with simple/stateful/captured counters all at 180, persistentValue=180, capturedValue=9.88, moving marker positions, and zero renderer errors; Chrome reaches ready with no page, console, or HTTP errors and observes all three closure counters. It is nevertheless a static three-marker gallery with no authored asset, input, gameplay/settings outcome, reset/re-entry owner, or recovery path. game-default already demonstrates focused Update/FixedUpdate systems, typed Play/Reset state, frozen InputSnapshot actions, and semantic/browser evidence; copying closure mechanics would add implementation detail without a feature-loop behavior. Keep apps/bevy/system-closure canonical until a real authored gameplay mechanic needs distinct persistent system-local state and can prove reset/re-entry.",
+      "betterConsumer": "apps/bevy/system-closure"
+    },
+    {
+      "id": "app:bevy/system-param",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/system-param/src/main.ts",
+        "apps/bevy/system-param/src/system-param.ts",
+        "apps/bevy/system-param/scripts/smoke-dawn.mjs",
+        "apps/bevy/system-param/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-061652-classify-system-param-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves defineSystemParam with a reusable query-plus-resource resolver: typecheck/build pass, Dawn runs 180 webgpu frames with runs=180, playerCount=3, resourceValue=3, moving counterX, and zero renderer errors; Chrome reaches ready with no page, console, or HTTP errors and observes the same resolved values. It is nevertheless a static four-marker gallery spawned in code with no authored scene/asset delivery, input, gameplay/settings outcome, reset/re-entry owner, or recovery path. game-default already owns focused Update/FixedUpdate systems, typed resources, query filters, Play/Reset state, and browser evidence; copying a parameter-bundle gallery would add an ECS access idiom without a feature-loop behavior. Keep apps/bevy/system-param canonical until a real gameplay mechanic needs a reusable multi-query/resource contract that can prove reset/re-entry.",
+      "betterConsumer": "apps/bevy/system-param"
+    },
+    {
+      "id": "app:bevy/texture",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/texture/src/main.ts",
+        "apps/bevy/texture/src/texture.ts",
+        "apps/bevy/texture/scripts/smoke-dawn.mjs",
+        "apps/bevy/texture/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-063315-classify-texture-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves TextureAsset upload and baseColorTexture sampling: typecheck/build pass, Dawn runs 100 webgpu frames, the checkerboard is visible with NDC-center distance 0.9985 from black, and renderer errors are zero. It is nevertheless a static code-spawned three-quad gallery with no authored source asset/sidecar/GUID, input, gameplay/settings outcome, reset/re-entry owner, or recovery path. game-default already owns a stronger texture composition in custom-projectile-mesh.ts: it uploads a TextureAsset, binds it to a standard material on a hand-authored mesh, mutates UVs with G, and restores them through the single R reset owner. Copying the gallery would duplicate texture delivery without a feature-loop behavior. Keep apps/bevy/texture canonical until an authored import/compression or lifecycle lesson exceeds that existing boundary.",
+      "betterConsumer": "apps/bevy/texture"
+    },
+    {
+      "id": "app:bevy/time-elapsed",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/src/animated-target-material.ts",
+        "apps/bevy/time-elapsed/src/main.ts",
+        "apps/bevy/time-elapsed/src/time-elapsed.ts",
+        "apps/bevy/time-elapsed/scripts/smoke-dawn.mjs",
+        "apps/bevy/time-elapsed/artifacts/frame-early.png",
+        "apps/bevy/time-elapsed/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-065109-classify-time-elapsed-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the engine-owned Time.elapsed contract: typecheck/build pass, Dawn runs 100 webgpu frames with lateFrameMaxBright=0.6980, motionMeanDelta=0.00632, maxYErr=5.774e-8 against the closed-form oscillator, and zero renderer errors; early/late PNGs show the motion. game-default adopts the public concept in its authored animated YellowPillar: the Update system reads Time.elapsed minus a reset-time origin, eliminating the former materialElapsed += Time.delta duplicate while preserving R phase-zero reset. The canonical app remains the closed-form clock oracle; the template owns the integrated gameplay/reset composition.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/timers",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/timers/src/main.ts",
+        "apps/bevy/timers/src/timers.ts",
+        "apps/bevy/timers/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-072433-classify-timers-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves repeating, one-shot, and entity-scoped timer behavior over 100 webgpu frames: typecheck/build pass, Dawn reports backend=webgpu, zero RHI errors, countdownFired=8, entityTimerFired=true, and percentage samples. Its Timer interface is app-local and manually accumulates Time.delta in string-keyed resources; the engine exposes no public Timer component/resource or reset/re-entry contract. game-default already owns shootCd, flashUntil, and bullet age as policy in their respective gameplay mechanics, and one typed reset owner clears all of them. Copying the gallery would add a second state authority rather than teach an engine feature; keep the canonical app until a documented reset-safe Timer contract can compose with ECS ownership.",
+      "betterConsumer": "apps/bevy/timers"
+    },
+    {
+      "id": "app:bevy/tonemapping",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/bevy/tonemapping/src/main.ts",
+        "apps/bevy/tonemapping/src/tonemapping.ts",
+        "apps/bevy/tonemapping/scripts/smoke-dawn.mjs",
+        "apps/bevy/tonemapping/artifacts/tonemap-none.png",
+        "apps/bevy/tonemapping/artifacts/tonemap-agx.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-080116-classify-tonemapping-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the seven-mode HDR tonemap path: typecheck/build pass, the 120-frame webgpu Dawn smoke exercises all modes, five produce material pixel differences, the tonemap pass is present, and renderer errors are zero. It is nevertheless a static code-spawned 21-sphere comparison field with keyboard-only mode cycling and no authored assets, gameplay outcome, reset/re-entry owner, or browser witness. game-default already owns an authored Camera with TONEMAP_REINHARD_EXTENDED, HDR skybox, bloom, antialiasing, and one settings/reset boundary; copying the gallery would duplicate presentation rather than add a feature-loop behavior. Revisit only when a real first-user settings requirement needs a reset-safe mode selector extending the existing camera/settings owner.",
+      "betterConsumer": "apps/bevy/tonemapping"
+    },
+    {
+      "id": "app:bevy/touch-input",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/touch-input/src/main.ts",
+        "apps/bevy/touch-input/src/touch-input.ts",
+        "apps/bevy/touch-input/scripts/smoke-dawn.mjs",
+        "apps/bevy/touch-input/scripts/smoke-browser.mjs",
+        "apps/bevy/touch-input/artifacts/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-083645-classify-touch-input-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves normalized touch semantics at the frozen InputSnapshot boundary: typecheck/build pass, Dawn runs 100 webgpu frames with two presses, one release, one cancel, three active-contact frames, and zero renderer errors, while Chrome proves the same edges and active coordinates. It is nevertheless a diagnostic three-marker scene with no authored asset delivery, gameplay outcome, settings boundary, typed reset/re-entry owner, or recovery path. game-default already owns one InputSnapshot/InputMap boundary for pointer-lock look, screen-pick aim, click-to-shoot, wheel camera controls, keyboard actions, and gamepad parity, with R as the single reset owner; adding a parallel touch resource would split input authority and duplicate pointer semantics. Revisit when a touch-first mechanic needs to extend that existing boundary.",
+      "betterConsumer": "apps/bevy/touch-input"
+    },
+    {
+      "id": "app:bevy/transform",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/transform/src/main.ts",
+        "apps/bevy/transform/src/transform.ts",
+        "apps/bevy/transform/scripts/smoke-dawn.mjs",
+        "apps/bevy/transform/artifacts/frame-early.png",
+        "apps/bevy/transform/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-090031-classify-transform-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves public Transform mutation and math composition: typecheck/build pass, Dawn runs 100 webgpu frames with motionMeanDelta=0.00221, orbitDistance=3.0231, center scale=0.6372, visible early/late PNGs, and zero RHI errors. It is nevertheless a code-spawned sphere/cube orbit oracle with app-local Orbiting and CenterSphere components and no authored asset delivery, input, gameplay/settings outcome, typed reset/re-entry owner, browser witness, or recovery path. game-default already teaches Transform through its authored SceneAsset, Player hierarchy, camera modes, projectile movement/orientation, physics writeback, YellowPillar rotation, hit feedback, debug axes, and one R reset owner; copying this gallery would duplicate the Transform concept and split motion/reset ownership. Revisit only for a distinct authored-hierarchy or physics-ordering mechanic.",
+      "betterConsumer": "apps/bevy/transform"
+    },
+    {
+      "id": "app:bevy/translation",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/translation/src/main.ts",
+        "apps/bevy/translation/src/translation.ts",
+        "apps/bevy/translation/scripts/smoke-dawn.mjs",
+        "apps/bevy/translation/artifacts/frame-early.png",
+        "apps/bevy/translation/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-092417-classify-translation-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves local-axis Transform translation and speed reversal: typecheck/build pass, Dawn runs 100 webgpu frames with NDC-center distance 0.1019, motionMeanDelta=0.00524, early/late PNGs, and zero RHI errors. It is nevertheless a static code-spawned cube/ground scene with app-local Movable state and no authored asset delivery, input, gameplay/settings outcome, typed reset/re-entry owner, browser witness, or recovery path. game-default already owns authored Transform data, Player/camera/projectile motion, physics writeback, local-space quaternion math, target rotation, hit feedback, debug axes, and one R reset owner; copying this gallery would duplicate motion presentation and split movement/reset ownership. Revisit only for a distinct translation mechanic that composes with the existing owner.",
+      "betterConsumer": "apps/bevy/translation"
+    },
+    {
+      "id": "app:bevy/transparency-3d",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/transparency-3d/src/main.ts",
+        "apps/bevy/transparency-3d/src/transparency-3d.ts",
+        "apps/bevy/transparency-3d/scripts/smoke-dawn.mjs",
+        "apps/bevy/transparency-3d/artifacts/frame-early.png",
+        "apps/bevy/transparency-3d/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-094452-classify-transparency-3d-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves four public 3D transparency paths: typecheck/build pass, Dawn runs 300 webgpu frames with alphaMeanDelta=0.00440, alphaStateDelta=0.48176, lateMaxLuma=1.0000, early/late PNGs, and zero RHI errors. It is nevertheless a static code-spawned material gallery with no authored source asset, input-driven gameplay outcome, typed reset/re-entry owner, browser witness, or recovery path. game-default already owns authored premultiplied transparent hit feedback with depthWriteEnabled=false, transparent sorting, custom WGSL premultiplication, a target hit/reset loop, and browser semantic/pixel evidence; apps/bevy/blend-modes remains the canonical multi-mode blend oracle. Copying this gallery would add a second transient material owner without a distinct feature-loop behavior. Revisit when an authored target needs alpha masking or alpha-to-coverage as a reset-safe settings/gameplay choice.",
+      "betterConsumer": "apps/bevy/transparency-3d"
+    },
+    {
+      "id": "app:bevy/update-gltf-scene",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/update-gltf-scene/src/main.ts",
+        "apps/bevy/update-gltf-scene/src/update-gltf-scene.ts",
+        "apps/bevy/update-gltf-scene/scripts/smoke-dawn.mjs",
+        "apps/bevy/update-gltf-scene/scripts/smoke-browser.mjs",
+        "apps/bevy/update-gltf-scene/artifacts/update-gltf-scene-browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-101420-classify-update-gltf-scene-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real glTF and sidecar chain: typecheck/build pass, Dawn runs 100 webgpu frames with meanLuma=0.0273, descendants=1, motionDelta=0.02298, Chrome reaches ready=1 at 960x540 with no page/console/HTTP errors, and the browser PNG is visible. It is nevertheless a static one-box reproduction that reuses apps/hello/gltf/assets/box.gltf, performs an app-local parse/catalog bridge instead of consuming a template-owned cooked source asset, and has no authored gameplay/settings outcome, input action, typed reset/re-entry owner, or recovery path. game-default already owns GUID-loaded SceneAsset instantiation, an authored pack hierarchy, Transform/motion updates, physics writeback, material animation, debug axes, and one reset owner; copying the imported Box would duplicate the scene lesson or violate the pack-vs-runtime authoring boundary. Revisit when a cooked, license-safe glTF source composes with a real gameplay target and survives reset/re-entry/browser evidence.",
+      "betterConsumer": "apps/bevy/update-gltf-scene"
     }
   ]
 }

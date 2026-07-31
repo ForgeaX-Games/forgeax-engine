@@ -15,7 +15,7 @@ const localAssets = resolve(here, 'assets');
 export default defineConfig({
   plugins: [
     vitePluginRhiDebug(),
-    forgeaxShader() as never,
+    forgeaxShader({ materialPackages: [resolve(here, 'src/pulse-material.pack.json')] }) as never,
     pluginPack({ roots: [sfxRoot, localAssets], importers: [audioImporter, capstoneContentImporter()], refresh: reloadAssetHost() }),
   ],
   server: {

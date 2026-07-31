@@ -292,7 +292,6 @@ const spriteMaterialResult = assets.register({
     // feat-20260625 M3/w11 (D-4): UBO-aligned 1:1 with sprite.material.json.
     colorTint: [1, 1, 1, 1],
     baseColorTexture: atlasA,
-    sampler: samplerResult.value,
     region: [0, 0, 1, 1],
     pivotAndSize: [0.5, 0.5, 1, 1],
   },

@@ -22,10 +22,9 @@
 //   - plan-strategy §5.1 M3 TDD red-then-green: w14 lands red (this file)
 //     before w15 turns vs_main green.
 //   - plan-strategy §D-4: tile path is sampler.addressMode='repeat' driven
-//     -- this fixture EXPLICITLY constructs the tile entity's sampler with
-//     `addressModeU/V: 'repeat'` so the tile mode pixels wrap as designed
-//     (else D-9 register-time soft-warn fires later in M4 / w18 -- not
-//     this fixture's concern).
+//     -- the sprite pipeline's renderer-owned default sampler supplies the
+//     repeat address mode, so the material contract does not carry a sampler
+//     value of its own.
 //   - requirements §AC-07: stretch + tile dual-mode pixel parity.
 //   - requirements §AC-02: single sprite pipeline / single fragment entry --
 //     the fixture binds two sprite entities through the SAME pipeline, no
@@ -51,7 +50,7 @@ import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authori
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
-import type { MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 const WIDTH = 64;
@@ -203,21 +202,10 @@ async function renderOneFrame(opts: {
   expect(texUploadRes.ok).toBe(true);
   if (!texUploadRes.ok) throw new Error('texture upload failed');
 
-  // D-4 explicit constraint: tile mode REQUIRES sampler.addressMode='repeat'
-  // so vertex-shader-emitted uv > 1 wraps via the hardware sampler. The
-  // stretch entity could in principle use 'clamp-to-edge' but we use the
-  // SAME sampler config across both scenes so the only material-level
-  // difference is `sliceMode`, and any divergence in rendered pixels can
-  // be attributed to the shader's mode-discriminating logic alone.
-  const samplerHandle = world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
-    kind: 'sampler',
-    addressModeU: 'repeat',
-    addressModeV: 'repeat',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    mipmapFilter: 'nearest',
-  });
-
+  // D-4 explicit constraint: tile mode uses the sprite pipeline's shared
+  // renderer-owned repeat sampler, so vertex-shader-emitted uv > 1 wraps via
+  // the hardware sampler. Both scenes use that same configuration; the only
+  // material-level difference is `sliceMode`.
   const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
@@ -246,7 +234,6 @@ async function renderOneFrame(opts: {
       // `slicesAndMode` vec4 directly: `.xyz` = [left, top, right] in UV,
       // `.w` carries the sliceMode sentinel (>=0 stretch, <0 tile).
       baseColorTexture: { texture: texHandle as unknown as never },
-      sampler: { texture: samplerHandle as unknown as never },
       slicesAndMode: [0.25, 0.25, 0.25, opts.sliceMode === 1 ? -0.25 : 0.25],
     },
   });

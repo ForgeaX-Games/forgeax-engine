@@ -2,7 +2,7 @@
 // validate (covered by the dawn + browser smokes); this unit test guards the
 // SOURCE STRUCTURE that the smokes assume: all three LO 5.5 algorithm paths are
 // present and discriminable, the engine TBN helper is imported, and the
-// @group(1) texture bindings follow the sampler-first order the engine derives.
+// source does not duplicate the generated MaterialAsset interface.
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SHADER_PATH = resolve(here, '..', 'parallax.wgsl');
-const META_PATH = resolve(here, '..', 'parallax.material.json');
+const PACK_PATH = resolve(here, '..', 'parallax.pack.json');
 const src = readFileSync(SHADER_PATH, 'utf8');
 
 describe('parallax.wgsl source structure (LO 5.5)', () => {
@@ -40,35 +40,38 @@ describe('parallax.wgsl source structure (LO 5.5)', () => {
     expect(src).toContain('/ viewDir.z'); // present in steep/POM
   });
 
-  it('declares @group(1) textures sampler-first (baseColor/normal/height)', () => {
-    // The derived BGL emits, per texture, a sampler at the odd binding then the
-    // texture at the next. Assert the exact ordering for all three textures.
-    expect(src).toMatch(/@group\(1\)\s+@binding\(1\)\s+var\s+\w*[Ss]ampler\s*:\s*sampler/);
-    expect(src).toMatch(/@group\(1\)\s+@binding\(2\)\s+var\s+baseColorTexture\s*:\s*texture_2d/);
-    expect(src).toMatch(/@group\(1\)\s+@binding\(4\)\s+var\s+normalTexture\s*:\s*texture_2d/);
-    expect(src).toMatch(/@group\(1\)\s+@binding\(6\)\s+var\s+heightTexture\s*:\s*texture_2d/);
-    // No user binding above 6 (engine reserves 7.. for IBL + emissive/AO).
-    expect(src).not.toMatch(/@group\(1\)\s+@binding\([7-9]\d*\)/);
+  it('consumes the generated interface without redeclaring group-1 bindings', () => {
+    expect(src).toContain('baseColorTexture_sampler');
+    expect(src).toContain('normalTexture_sampler');
+    expect(src).toContain('heightTexture_sampler');
+    expect(src).not.toMatch(/struct\s+ParallaxMaterial/);
+    expect(src).not.toMatch(/@group\(1\)\s+@binding\(/);
   });
 });
 
-describe('parallax.material.json paramSchema', () => {
-  const meta = JSON.parse(readFileSync(META_PATH, 'utf8')) as {
-    importSettings: { materialShaderIdentifier: string };
-    paramSchema: Array<{ name: string; type: string }>;
+describe('parallax.pack.json MaterialAsset payload', () => {
+  const pack = JSON.parse(readFileSync(PACK_PATH, 'utf8')) as {
+    assets: Array<{
+      kind: string;
+      payload: {
+        passes: Array<{ program: { module: string } }>;
+        parameters: Array<{ name: string; type: string }>;
+      };
+    }>;
   };
+  const material = pack.assets.find((asset) => asset.kind === 'material')?.payload;
 
   it('matches the registered shader identifier', () => {
-    expect(meta.importSettings.materialShaderIdentifier).toBe('learn-render::5-5-parallax');
+    expect(material?.passes[0]?.program.module).toBe('learn_render::5_5_parallax');
   });
 
   it('declares three texture fields incl. heightTexture (the per-shader BGL win)', () => {
-    const textures = meta.paramSchema.filter((p) => p.type === 'texture2d').map((p) => p.name);
+    const textures = material?.parameters.filter((p) => p.type === 'texture').map((p) => p.name);
     expect(textures).toEqual(['baseColorTexture', 'normalTexture', 'heightTexture']);
   });
 
   it('orders heightScale + algoMode as the only two f32 fields (UBO overlay slots 4/5)', () => {
-    const f32s = meta.paramSchema.filter((p) => p.type === 'f32').map((p) => p.name);
+    const f32s = material?.parameters.filter((p) => p.type === 'f32').map((p) => p.name);
     expect(f32s).toEqual(['heightScale', 'algoMode']);
   });
 });

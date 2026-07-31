@@ -16,7 +16,13 @@ import { toMaterialAsset, type GltfMaterialIr } from '@forgeax/engine-gltf';
 import { createMaterialLoader } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { CookedMaterialRecord } from '@forgeax/engine-pack';
-import type { Handle, MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
+import type {
+  Handle,
+  MaterialAsset,
+  MaterialTextureValue,
+  MaterialValue,
+  TextureAsset,
+} from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import './pulse-material.wgsl';
@@ -35,10 +41,37 @@ declare global {
       rootCookInputDigest: string;
       derivedCookInputDigest: string;
       renderedMaterialGuids: readonly [string, string];
+      renderedTextureHandles: readonly [number, number];
+      resolvedTextureHandles: readonly [number, number];
       values: Readonly<Record<string, unknown>>;
       resolvedValues: Readonly<Record<string, unknown>>;
       renderedSamplingInput: Readonly<Record<string, readonly number[]>>;
       resolvedSamplingInput: Readonly<Record<string, readonly number[]>>;
+      liveMutation: {
+        enabled: boolean;
+        applied: boolean;
+        appliedFrame: number | null;
+        beforeMaterialHandle: number;
+        afterMaterialHandle: number;
+        beforeTextureHandles: readonly [number, number];
+        afterTextureHandles: readonly [number, number];
+        baseColorSlotChanged: boolean;
+        normalSlotChanged: boolean;
+        afterComponentMaterialHandle: number | null;
+      };
+      resizeRebuild: {
+        enabled: boolean;
+        applied: boolean;
+        requestedCanvas: readonly [number, number];
+        beforeCanvas: readonly [number, number];
+        afterCanvas: readonly [number, number] | null;
+        postResizeMaterialHandle: number | null;
+        postResizeBindGroupCreateCount: number | null;
+      };
+      rendererErrorCodes: readonly string[];
+      drawErrorCodes: readonly string[];
+      bindGroupCreateCounts: readonly number[];
+      frameCount: number;
     }
     | undefined;
 }
@@ -57,7 +90,7 @@ const UV0_SAMPLING_INPUT = {
 
 function materialFromCookedRecord(
   record: CookedMaterialRecord,
-  textureHandle: number,
+  textureHandles: Readonly<{ baseColor: number; normal: number }>,
   samplingInput: Readonly<Record<string, readonly number[]>>,
 ): MaterialAsset {
   const [firstPass, ...remainingPasses] = record.resolved.passes;
@@ -72,7 +105,7 @@ function materialFromCookedRecord(
       ...record.resolved.values,
       ...samplingInput,
       baseColorTexture: {
-        texture: textureHandle as unknown as AssetGuid,
+        texture: textureHandles.baseColor as unknown as AssetGuid,
         coordinates: {
           set: 0,
           transform: {
@@ -82,7 +115,7 @@ function materialFromCookedRecord(
         },
       },
       normalTexture: {
-        texture: textureHandle as unknown as AssetGuid,
+        texture: textureHandles.normal as unknown as AssetGuid,
         coordinates: {
           set: 1,
           transform: {
@@ -95,8 +128,40 @@ function materialFromCookedRecord(
   };
 }
 
+function rebindMaterialTextures(
+  material: MaterialAsset,
+  textureHandles: Readonly<{ baseColor?: number; normal?: number }>,
+): MaterialAsset {
+  const values = material.values ?? {};
+  const nextValues: Record<string, MaterialValue | null> = { ...values };
+  for (const [slot, handle] of Object.entries(textureHandles)) {
+    if (handle === undefined) continue;
+    const valueKey = slot === 'baseColor' ? 'baseColorTexture' : 'normalTexture';
+    const textureValue = values[valueKey];
+    if (textureValue === null || typeof textureValue !== 'object' || Array.isArray(textureValue)) {
+      throw new Error(`[custom-shader] derived material has no structured ${valueKey} value`);
+    }
+    nextValues[valueKey] = {
+      ...(textureValue as MaterialTextureValue),
+      texture: handle as unknown as AssetGuid,
+    };
+  }
+  return {
+    ...material,
+    values: nextValues,
+  };
+}
+
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-custom-shader: missing <canvas id="app"> in index.html');
+
+const liveMode = new URLSearchParams(globalThis.location?.search ?? '').get('live');
+const liveNormalSlotSwap = liveMode === 'normal-slot-swap' || liveMode === 'normal-slot-swap-resize';
+const liveResizeRebuild = liveMode === 'normal-slot-resize' || liveMode === 'normal-slot-swap-resize';
+const liveTwoSlotSwap = liveMode === 'two-slot-swap' || liveMode === 'two-slot-swap-resize';
+const liveTwoSlotResize = liveMode === 'two-slot-resize' || liveMode === 'two-slot-swap-resize';
+const liveMutationEnabled = liveNormalSlotSwap || liveTwoSlotSwap;
+const liveResizeEnabled = liveResizeRebuild || liveTwoSlotResize;
 
 bootstrap(canvas).catch((err: unknown) => {
   if (err instanceof EngineEnvironmentError) {
@@ -108,6 +173,10 @@ bootstrap(canvas).catch((err: unknown) => {
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const rendererErrorCodes: string[] = [];
+  const drawErrorCodes: string[] = [];
+  const bindGroupCreateCounts: number[] = [];
+  renderer.onError((error) => rendererErrorCodes.push(error.code));
   // Configure canvas context (mirrors hello-cube; canvas-context migration
   // bridge from the M4 RHI rework).
   const ctxResult = acquireCanvasContext(target);
@@ -187,6 +256,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const falsify = new URLSearchParams(globalThis.location?.search ?? '').get('falsify');
   if (falsify === 'missing-derived-parent') throw new Error('FALSIFY_EXPECTED_FAILURE:missing-derived-parent');
+  if (falsify === 'missing-normal-resource') throw new Error('FALSIFY_EXPECTED_FAILURE:missing-normal-resource');
 
   const world = new World();
 
@@ -195,7 +265,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     throw new Error('[custom-shader] cooked shader module is absent from the build manifest');
   }
 
-  const texturePayload: TextureAsset = {
+  const baseColorTexturePayload: TextureAsset = {
     kind: 'texture',
     width: 2,
     height: 2,
@@ -209,19 +279,66 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     colorSpace: 'srgb',
     mipmap: false,
   };
-  const pulseTextureHandle = world.allocSharedRef('TextureAsset', texturePayload);
-  const uploadResult = await renderer.store.uploadTexture(pulseTextureHandle, texturePayload, {
-    bytes: texturePayload.data,
-    width: texturePayload.width,
-    height: texturePayload.height,
-    mime: 'image/png',
-    colorSpace: texturePayload.colorSpace,
-    mipmap: texturePayload.mipmap,
-  });
-  if (!uploadResult.ok) {
-    console.error('[custom-shader] pulse texture upload failed:', uploadResult.error);
-    return;
+  const normalTexturePayload: TextureAsset = {
+    ...baseColorTexturePayload,
+    data: new Uint8Array([
+      32, 224, 32, 255,
+      224, 32, 32, 255,
+      224, 32, 32, 255,
+      32, 224, 32, 255,
+    ]),
+  };
+  const liveSwapNormalTexturePayload: TextureAsset = {
+    ...baseColorTexturePayload,
+    data: new Uint8Array([
+      224, 32, 224, 255,
+      32, 32, 224, 255,
+      32, 32, 224, 255,
+      224, 32, 224, 255,
+    ]),
+  };
+  const liveSwapBaseColorTexturePayload: TextureAsset = {
+    ...baseColorTexturePayload,
+    data: new Uint8Array([
+      32, 224, 224, 255,
+      224, 224, 32, 255,
+      224, 224, 32, 255,
+      32, 224, 224, 255,
+    ]),
+  };
+  const baseColorTextureHandle = world.allocSharedRef('TextureAsset', baseColorTexturePayload);
+  const normalTextureHandle = world.allocSharedRef('TextureAsset', normalTexturePayload);
+  const liveSwapNormalTextureHandle = world.allocSharedRef('TextureAsset', liveSwapNormalTexturePayload);
+  const liveSwapBaseColorTextureHandle = world.allocSharedRef('TextureAsset', liveSwapBaseColorTexturePayload);
+  for (const [label, handle, payload] of [
+    ['base-color', baseColorTextureHandle, baseColorTexturePayload],
+    ['normal', normalTextureHandle, normalTexturePayload],
+    ['live-swap-normal', liveSwapNormalTextureHandle, liveSwapNormalTexturePayload],
+    ['live-swap-base-color', liveSwapBaseColorTextureHandle, liveSwapBaseColorTexturePayload],
+  ] as const) {
+    const uploadResult = await renderer.store.uploadTexture(handle, payload, {
+      bytes: payload.data,
+      width: payload.width,
+      height: payload.height,
+      mime: 'image/png',
+      colorSpace: payload.colorSpace,
+      mipmap: payload.mipmap,
+    });
+    if (!uploadResult.ok) {
+      console.error(`[custom-shader] ${label} texture upload failed:`, uploadResult.error);
+      return;
+    }
   }
+  const resolvedTextureHandles = {
+    baseColor: baseColorTextureHandle,
+    normal: normalTextureHandle,
+  };
+  const renderedTextureHandles =
+    falsify === 'normal-slot-swap'
+      ? { baseColor: baseColorTextureHandle, normal: baseColorTextureHandle }
+      : falsify === 'swapped-normal-binding'
+        ? { baseColor: normalTextureHandle, normal: baseColorTextureHandle }
+        : resolvedTextureHandles;
   const gltfMaterial = toMaterialAsset(
     {
       name: 'material-inheritance-demo-gltf',
@@ -234,7 +351,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         transform: { offset: [0, 0], scale: [1, 1] },
       },
       normalTexture: {
-        texture: 0,
+        texture: 1,
         texCoord: 1,
         transform: { offset: [0.125, 0.25], scale: [2, 2] },
         scale: 0.8,
@@ -242,34 +359,57 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     } satisfies GltfMaterialIr,
     {
       textureHandles: new Map([
-        [0, pulseTextureHandle as unknown as Handle<'TextureAsset', 'shared'>],
+        [0, renderedTextureHandles.baseColor as unknown as Handle<'TextureAsset', 'shared'>],
+        [1, renderedTextureHandles.normal as unknown as Handle<'TextureAsset', 'shared'>],
       ]),
     },
   );
   const gltfValues = gltfMaterial.values as Record<string, MaterialValue | null>;
+  const gltfTextureValues: Record<string, MaterialValue | null> = {};
+  for (const textureName of ['baseColorTexture', 'normalTexture'] as const) {
+    const value = gltfValues[textureName];
+    if (value !== undefined) gltfTextureValues[textureName] = value;
+  }
   const resolvedSamplingInput = RESOLVED_SAMPLING_INPUT;
   const renderedSamplingInput =
     falsify === 'uv0-transform-loss' ? UV0_SAMPLING_INPUT : resolvedSamplingInput;
   const rootMaterialBase = materialFromCookedRecord(
     rootReady.record,
-    pulseTextureHandle,
+    renderedTextureHandles,
     renderedSamplingInput,
   );
   const derivedMaterialBase = materialFromCookedRecord(
     derivedReady.record,
-    pulseTextureHandle,
+    renderedTextureHandles,
     renderedSamplingInput,
   );
   const rootMaterial: MaterialAsset = {
     ...rootMaterialBase,
-    values: { ...rootMaterialBase.values, ...gltfValues },
+    values: { ...rootMaterialBase.values, ...gltfTextureValues },
   };
   const derivedMaterial: MaterialAsset = {
     ...derivedMaterialBase,
-    values: { ...derivedMaterialBase.values, ...gltfValues },
+    values: { ...derivedMaterialBase.values, ...gltfTextureValues },
   };
+  const liveSwapMaterial = rebindMaterialTextures(derivedMaterial, { normal: liveSwapNormalTextureHandle });
+  const liveTwoSlotSwapMaterial = rebindMaterialTextures(derivedMaterial, {
+    baseColor: liveSwapBaseColorTextureHandle,
+    normal: liveSwapNormalTextureHandle,
+  });
   const rootMaterialHandle = world.allocSharedRef('MaterialAsset', rootMaterial);
   const derivedMaterialHandle = world.allocSharedRef('MaterialAsset', derivedMaterial);
+  const liveSwapMaterialHandle = world.allocSharedRef('MaterialAsset', liveSwapMaterial);
+  const liveTwoSlotSwapMaterialHandle = world.allocSharedRef('MaterialAsset', liveTwoSlotSwapMaterial);
+  const liveReplacementMaterialHandle = liveTwoSlotSwap
+    ? liveTwoSlotSwapMaterialHandle
+    : liveNormalSlotSwap
+      ? liveSwapMaterialHandle
+      : derivedMaterialHandle;
+  const liveReplacementTextureHandles: readonly [number, number] = liveTwoSlotSwap
+    ? [liveSwapBaseColorTextureHandle, liveSwapNormalTextureHandle]
+    : liveNormalSlotSwap
+      ? [renderedTextureHandles.baseColor, liveSwapNormalTextureHandle]
+      : [renderedTextureHandles.baseColor, renderedTextureHandles.normal];
   const derivedValues = derivedMaterial.values as Record<string, MaterialValue | null>;
   globalThis.__forgeaxMaterialEvidence = {
     ready: true,
@@ -282,10 +422,37 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     rootCookInputDigest: rootReady.record.receipt.inputDigest,
     derivedCookInputDigest: derivedReady.record.receipt.inputDigest,
     renderedMaterialGuids: [rootReady.record.guid, derivedReady.record.guid],
+    renderedTextureHandles: [renderedTextureHandles.baseColor, renderedTextureHandles.normal],
+    resolvedTextureHandles: [resolvedTextureHandles.baseColor, resolvedTextureHandles.normal],
     values: rootReady.record.resolved.values,
     resolvedValues: derivedReady.record.resolved.values,
     renderedSamplingInput,
     resolvedSamplingInput,
+    liveMutation: {
+      enabled: liveMutationEnabled,
+      applied: false,
+      appliedFrame: null,
+      beforeMaterialHandle: derivedMaterialHandle,
+      afterMaterialHandle: liveReplacementMaterialHandle,
+      beforeTextureHandles: [renderedTextureHandles.baseColor, renderedTextureHandles.normal],
+      afterTextureHandles: liveReplacementTextureHandles,
+      baseColorSlotChanged: renderedTextureHandles.baseColor !== liveReplacementTextureHandles[0],
+      normalSlotChanged: renderedTextureHandles.normal !== liveReplacementTextureHandles[1],
+      afterComponentMaterialHandle: null,
+    },
+    resizeRebuild: {
+      enabled: liveResizeEnabled,
+      applied: false,
+      requestedCanvas: [384, 192],
+      beforeCanvas: [target.width, target.height],
+      afterCanvas: null,
+      postResizeMaterialHandle: null,
+      postResizeBindGroupCreateCount: null,
+    },
+    rendererErrorCodes,
+    drawErrorCodes,
+    bindGroupCreateCounts,
+    frameCount: 0,
   };
 
   // Procedural box (12-floats stride: position + normal + uv + tangent).
@@ -312,7 +479,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       { component: MeshRenderer, data: { materials: [rootMaterialHandle] } },
     )
     .unwrap();
-  world
+  const derivedEntity = world
     .spawn(
       { component: Name, data: { value: 'pulse-derived' } as never },
       { component: Transform, data: { pos: [0.9, 0, 0] } },
@@ -338,11 +505,60 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Animate the runtime material values to exercise the cooked shader path.
   const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  let renderedFrameCount = 0;
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    derivedValues.time = (now - startTime) / 1000;
+    derivedValues.time = liveResizeEnabled || liveMutationEnabled ? 0 : (now - startTime) / 1000;
     const r = renderer.draw([world], { owner: 0 });
-    if (!r.ok) console.error('[custom-shader] draw error:', r.error);
+    if (!r.ok) {
+      drawErrorCodes.push(r.error.code);
+      console.error('[custom-shader] draw error:', r.error);
+    }
+    renderedFrameCount += 1;
+    if (globalThis.__forgeaxMaterialEvidence !== undefined) {
+      globalThis.__forgeaxMaterialEvidence.frameCount = renderedFrameCount;
+      if (liveMutationEnabled && renderedFrameCount === 120) {
+        const mutation = world.set(derivedEntity, MeshRenderer, {
+          materials: [liveReplacementMaterialHandle],
+        });
+        if (!mutation.ok) {
+          console.error('[custom-shader] live normal-slot rebind failed:', mutation.error);
+        } else {
+          globalThis.__forgeaxMaterialEvidence.liveMutation.applied = true;
+          globalThis.__forgeaxMaterialEvidence.liveMutation.appliedFrame = renderedFrameCount;
+          const currentRenderer = world.get(derivedEntity, MeshRenderer);
+          if (currentRenderer.ok) {
+            const materials = currentRenderer.value.materials as unknown as ArrayLike<number>;
+            globalThis.__forgeaxMaterialEvidence.liveMutation.afterComponentMaterialHandle =
+              materials[0] ?? null;
+          }
+        }
+      }
+      if (liveResizeEnabled && renderedFrameCount === 150) {
+        target.width = 384;
+        target.height = 192;
+        globalThis.__forgeaxMaterialEvidence.resizeRebuild.applied = true;
+      }
+      if (
+        liveResizeEnabled &&
+        globalThis.__forgeaxMaterialEvidence.resizeRebuild.applied &&
+        globalThis.__forgeaxMaterialEvidence.resizeRebuild.afterCanvas === null &&
+        (target.width !== globalThis.__forgeaxMaterialEvidence.resizeRebuild.beforeCanvas[0] ||
+          target.height !== globalThis.__forgeaxMaterialEvidence.resizeRebuild.beforeCanvas[1])
+      ) {
+        const currentRenderer = world.get(derivedEntity, MeshRenderer);
+        if (currentRenderer.ok) {
+          const materials = currentRenderer.value.materials as unknown as ArrayLike<number>;
+          globalThis.__forgeaxMaterialEvidence.resizeRebuild.afterCanvas = [target.width, target.height];
+          globalThis.__forgeaxMaterialEvidence.resizeRebuild.postResizeMaterialHandle = materials[0] ?? null;
+          globalThis.__forgeaxMaterialEvidence.resizeRebuild.postResizeBindGroupCreateCount =
+            renderer.bindGroupCounts.createBindGroup;
+        }
+      }
+      if (liveMutationEnabled && globalThis.__forgeaxMaterialEvidence.liveMutation.applied) {
+        bindGroupCreateCounts.push(renderer.bindGroupCounts.createBindGroup);
+      }
+    }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

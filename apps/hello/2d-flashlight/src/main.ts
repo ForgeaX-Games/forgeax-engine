@@ -47,7 +47,7 @@ import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engin
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
 
-import type { Handle, MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const SPRITE_LIT_PARAMETERS = [
@@ -101,17 +101,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const mode = readModeFromUrl();
   console.warn(`[2d-flashlight] mode=${mode}`);
 
-  const samplerHandle = world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'nearest',
-    minFilter: 'nearest',
-    addressModeU: 'repeat',
-    addressModeV: 'repeat',
-  });
-
   const textureHandle = await uploadCheckerboardTexture(world, app);
 
-  buildScene({ mode, world, textureHandle, samplerHandle });
+  buildScene({ mode, world, textureHandle });
 
   const startRes = app.start();
   if (!startRes.ok) {
@@ -125,7 +117,6 @@ interface SceneCtx {
   mode: Mode;
   world: World;
   textureHandle: Handle<'TextureAsset', 'shared'>;
-  samplerHandle: Handle<'SamplerAsset', 'shared'>;
 }
 
 // buildScene wires camera + lights + sprite geometry per mode. Each mode
@@ -153,7 +144,7 @@ function buildScene(ctx: SceneCtx): void {
 // smoothstep cone and near-max range attenuation, saturating the LDR
 // output ( > 0.5 normalized ).
 function buildSweepSpotScene(ctx: SceneCtx): void {
-  const { world, textureHandle, samplerHandle } = ctx;
+  const { world, textureHandle } = ctx;
 
   world.spawn(
     { component: Transform, data: { pos: [1.9, 0, 5], quat: [0, 0, 0, 1]} },
@@ -189,7 +180,7 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
   // Sprite plane covering x=[1, 3], y=[-1, 1]. Center world (2, 0) is
   // the AC-1 assertion point; sprite pivot 0.5 + size 1 + scale (2, 2)
   // gives the exact 2x2 footprint.
-  spawnSprite(world, textureHandle, samplerHandle, [1, 1, 1, 1], 2, 0, 0, 2, 2);
+  spawnSprite(world, textureHandle, [1, 1, 1, 1], 2, 0, 0, 2, 2);
 }
 
 // ─── point-circle: AC-2 harness ──────────────────────────────────────────────
@@ -198,7 +189,7 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
 // attenuation ~10000); edge world (1, 0) is outside the quartic window
 // (factor clamped to 0), so the smoke asserts center > 0.7 / edge < 0.1.
 function buildPointCircleScene(ctx: SceneCtx): void {
-  const { world, textureHandle, samplerHandle } = ctx;
+  const { world, textureHandle } = ctx;
 
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]} },
@@ -227,7 +218,7 @@ function buildPointCircleScene(ctx: SceneCtx): void {
   // Sprite plane covering x=[-1.2, 1.2], y=[-1.2, 1.2]. Center world (0, 0)
   // and edge world (1, 0) both sit on the sprite so the smoke can read
   // per-pixel light contribution vs zero (range boundary).
-  spawnSprite(world, textureHandle, samplerHandle, [1, 1, 1, 1], 0, 0, 0, 2.4, 2.4);
+  spawnSprite(world, textureHandle, [1, 1, 1, 1], 0, 0, 0, 2.4, 2.4);
 }
 
 // ─── both: interactive combined view ────────────────────────────────────────
@@ -235,7 +226,7 @@ function buildPointCircleScene(ctx: SceneCtx): void {
 // not overlap. Not covered by the AC-1 / AC-2 smoke assertions; visual
 // mode for AI users to eyeball both effects side by side.
 function buildBothScene(ctx: SceneCtx): void {
-  const { world, textureHandle, samplerHandle } = ctx;
+  const { world, textureHandle } = ctx;
 
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]} },
@@ -279,8 +270,8 @@ function buildBothScene(ctx: SceneCtx): void {
 
   // Two sprite regions: left plane receives the PointLight, right plane
   // receives the SpotLight; neither overlaps the other's light window.
-  spawnSprite(world, textureHandle, samplerHandle, [1, 0.9, 0.75, 1], -1.5, 0, 0, 2, 2);
-  spawnSprite(world, textureHandle, samplerHandle, [0.85, 0.9, 1.0, 1], 2.0, 0, 0, 2, 2);
+  spawnSprite(world, textureHandle, [1, 0.9, 0.75, 1], -1.5, 0, 0, 2, 2);
+  spawnSprite(world, textureHandle, [0.85, 0.9, 1.0, 1], 2.0, 0, 0, 2, 2);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -288,7 +279,6 @@ function buildBothScene(ctx: SceneCtx): void {
 function spawnSprite(
   world: World,
   texHandle: Handle<'TextureAsset', 'shared'>,
-  samplerHandle: Handle<'SamplerAsset', 'shared'>,
   tint: readonly [number, number, number, number],
   x: number,
   y: number,
@@ -307,7 +297,6 @@ function spawnSprite(
     values: {
       colorTint: tint,
       baseColorTexture: texHandle,
-      sampler: samplerHandle,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.5, 1, 1],
     },

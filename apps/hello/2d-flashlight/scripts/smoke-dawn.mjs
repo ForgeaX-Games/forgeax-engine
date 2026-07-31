@@ -258,7 +258,6 @@ function allocMaterial(world, tint, texHandle, samplerHandle) {
     values: {
       colorTint: tint,
       baseColorTexture: texHandle,
-      sampler: samplerHandle,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.5, 1, 1],
     },

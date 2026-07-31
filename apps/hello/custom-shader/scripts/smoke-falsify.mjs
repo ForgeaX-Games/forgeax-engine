@@ -18,6 +18,21 @@ export const FALSIFICATION_VARIANTS = Object.freeze({
     description: 'force every texture slot to UV0 and ignore transforms',
     environment: 'FORGEAX_FALSIFY_UV0_TRANSFORM',
   }),
+  'missing-normal-resource': Object.freeze({
+    name: 'missing-normal-resource',
+    description: 'remove the normal texture resource before material creation',
+    environment: 'FORGEAX_FALSIFY_MISSING_NORMAL_RESOURCE',
+  }),
+  'swapped-normal-binding': Object.freeze({
+    name: 'swapped-normal-binding',
+    description: 'swap the base-color and normal texture resources',
+    environment: 'FORGEAX_FALSIFY_SWAPPED_NORMAL_BINDING',
+  }),
+  'normal-slot-swap': Object.freeze({
+    name: 'normal-slot-swap',
+    description: 'replace only the normal texture resource with the base-color resource',
+    environment: 'FORGEAX_FALSIFY_NORMAL_SLOT_SWAP',
+  }),
 });
 
 export function falsificationEnvironment(variant) {

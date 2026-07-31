@@ -8,11 +8,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
 // The forgeaxShader plugin compiles happy-blob.wgsl at transform time; the
-// sidecar happy-blob.material.json routes it through the material-shader
+// sidecar happy-blob.pack.json routes it through the material-shader
 // compose path and lands the composed WGSL + paramSchema in the shader
 // manifest for ShaderRegistry.installMaterialArtifact at engine boot.
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  plugins: [forgeaxShader({ materialPackages: [resolve(here, 'src/happy-blob.pack.json')] }) as never],
   server: {
     fs: {
       allow: [monorepoRoot],

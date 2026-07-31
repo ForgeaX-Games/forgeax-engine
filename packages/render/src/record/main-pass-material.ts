@@ -276,11 +276,12 @@ export function residentTextureView(
   store: GpuResourceStore,
   runtime: RenderSystemRuntime,
   handle: Handle<'TextureAsset', 'shared'>,
+  worldId: number = 0,
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
 ): any | undefined {
   const podRes = resolveAssetHandle<TextureAsset>(world, handle);
   if (!podRes.ok) return undefined;
-  const residentRes = store.ensureResident(handle, podRes.value);
+  const residentRes = store.ensureResident(handle, podRes.value, worldId);
   if (!residentRes.ok) {
     // Preserve the concrete asset-capability boundary on the renderer error
     // channel. In particular, WebGL2 texture-dimension refusal must not
@@ -288,10 +289,9 @@ export function residentTextureView(
     if (residentRes.error instanceof RhiError || isImageError(residentRes.error)) {
       runtime.errorRegistry.fire(residentRes.error);
     }
-    // Degrade to the placeholder view after the structured error is surfaced.
     return undefined;
   }
-  return store.getTextureGpuView(handle);
+  return store.getTextureGpuView(handle, worldId);
 }
 
 // feat-20260623-world-space-video-asset M4 / w16 (D-3): resolve the

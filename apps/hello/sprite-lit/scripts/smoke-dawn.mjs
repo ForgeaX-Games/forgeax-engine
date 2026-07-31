@@ -283,7 +283,6 @@ async function buildWorld({ includePoint, includeSpot }) {
         values: {
           colorTint: slot.tint,
           baseColorTexture: textureHandle,
-          sampler: samplerHandle,
           region: [0, 0, 1, 1],
           pivotAndSize: [0.5, 0.5, 1, 1],
         },
