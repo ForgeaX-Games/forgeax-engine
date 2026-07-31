@@ -39,7 +39,8 @@
     "@webgpu/types": "^0.1.71"
   },
   "devDependencies": {
-    "@forgeax/engine-skinning": "workspace:*"
+    "@forgeax/engine-skinning": "workspace:*",
+    "@webgpu/types": "^0.1.71"
   },
   "forgeax": {
     "metrics": {

@@ -617,6 +617,27 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/eased-motion": {
+      "name": "@forgeax/bevy-eased-motion",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-animation": "workspace:*",
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/easing": {
       "name": "@forgeax/bevy-easing",
       "version": "0.0.0",
@@ -4221,6 +4242,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-skinning": "workspace:*",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/audio": {
@@ -4444,6 +4466,14 @@
       },
       "devDependencies": {
         "@types/ws": "^8.5.10",
+      },
+    },
+    "packages/npc": {
+      "name": "@forgeax/engine-npc",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
       },
     },
     "packages/pack": {
@@ -5219,6 +5249,8 @@
 
     "@forgeax/bevy-depth-of-field": ["@forgeax/bevy-depth-of-field@workspace:apps/bevy/depth-of-field"],
 
+    "@forgeax/bevy-eased-motion": ["@forgeax/bevy-eased-motion@workspace:apps/bevy/eased-motion"],
+
     "@forgeax/bevy-easing": ["@forgeax/bevy-easing@workspace:apps/bevy/easing"],
 
     "@forgeax/bevy-empty": ["@forgeax/bevy-empty@workspace:apps/bevy/empty"],
@@ -5398,6 +5430,8 @@
     "@forgeax/engine-net": ["@forgeax/engine-net@workspace:packages/net"],
 
     "@forgeax/engine-net-websocket": ["@forgeax/engine-net-websocket@workspace:packages/net-websocket"],
+
+    "@forgeax/engine-npc": ["@forgeax/engine-npc@workspace:packages/npc"],
 
     "@forgeax/engine-pack": ["@forgeax/engine-pack@workspace:packages/pack"],
 

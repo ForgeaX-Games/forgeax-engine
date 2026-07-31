@@ -1274,6 +1274,49 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/bevy/eased-motion:
+    dependencies:
+      '@forgeax/engine-animation':
+        specifier: workspace:*
+        version: link:../../../packages/animation
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-assets-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/assets-runtime
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../../packages/math
+      '@forgeax/engine-render':
+        specifier: workspace:*
+        version: link:../../../packages/render
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-scene':
+        specifier: workspace:*
+        version: link:../../../packages/scene
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/bevy/easing:
     dependencies:
       '@forgeax/engine-app':
@@ -8761,6 +8804,9 @@ importers:
       '@forgeax/engine-skinning':
         specifier: workspace:*
         version: link:../skinning
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
 
   packages/audio:
     dependencies:
@@ -9068,6 +9114,15 @@ importers:
       '@types/ws':
         specifier: ^8.5.10
         version: 8.18.1
+
+  packages/npc:
+    dependencies:
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../ecs
+      '@forgeax/engine-plugin':
+        specifier: workspace:*
+        version: link:../plugin
 
   packages/pack:
     dependencies:

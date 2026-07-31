@@ -1498,6 +1498,35 @@
       ],
       "reason": "The canonical app proves a real glTF and sidecar chain: typecheck/build pass, Dawn runs 100 webgpu frames with meanLuma=0.0273, descendants=1, motionDelta=0.02298, Chrome reaches ready=1 at 960x540 with no page/console/HTTP errors, and the browser PNG is visible. It is nevertheless a static one-box reproduction that reuses apps/hello/gltf/assets/box.gltf, performs an app-local parse/catalog bridge instead of consuming a template-owned cooked source asset, and has no authored gameplay/settings outcome, input action, typed reset/re-entry owner, or recovery path. game-default already owns GUID-loaded SceneAsset instantiation, an authored pack hierarchy, Transform/motion updates, physics writeback, material animation, debug axes, and one reset owner; copying the imported Box would duplicate the scene lesson or violate the pack-vs-runtime authoring boundary. Revisit when a cooked, license-safe glTF source composes with a real gameplay target and survives reset/re-entry/browser evidence.",
       "betterConsumer": "apps/bevy/update-gltf-scene"
+    },
+    {
+      "id": "app:bevy/viewport-to-world",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/viewport-to-world/src/main.ts",
+        "apps/bevy/viewport-to-world/src/viewport-to-world.ts",
+        "apps/bevy/viewport-to-world/scripts/smoke-dawn.mjs",
+        "apps/bevy/viewport-to-world/dist/smoke/viewport-early.png",
+        "apps/bevy/viewport-to-world/dist/smoke/viewport-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-103438-classify-viewport-to-world-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public viewportToWorld ray and cursor-to-ground intersection: typecheck/build pass, Dawn runs 100 webgpu frames with marker moved=true, maxBright=0.8941, and zero renderer errors; early/late PNGs are captured and the late image was inspected. It is nevertheless a static code-spawned plane/marker scene with no authored asset, browser smoke, gameplay/settings outcome, typed reset/re-entry owner, or recovery path. game-default already composes the same screen-to-ray/picking contract with normalized input, top-down and Map camera modes, click-to-shoot target selection, target feedback, and one R reset owner; copying the marker would split the input/picking lesson without adding a distinct feature-loop behavior. Revisit when an authored placement/build mechanic extends the existing owner with browser semantic and visual proof.",
+      "betterConsumer": "apps/bevy/viewport-to-world"
+    },
+    {
+      "id": "app:bevy/window-resizing",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/window-resizing/src/main.ts",
+        "apps/bevy/window-resizing/src/window-resizing.ts",
+        "apps/bevy/window-resizing/scripts/smoke-dawn.mjs",
+        "apps/bevy/window-resizing/artifacts/window-resizing-ref.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-105434-classify-window-resizing-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the public InputSnapshot key-edge path, canvas resize, renderer survival, and perspective camera aspect synchronization: typecheck/build pass, Dawn runs 100 webgpu frames with initial/steady/resized non-black renders, aspect=1.7778 for 640x360, and zero RHI errors; the reference PNG is visually inspected. It is nevertheless a static code-spawned diagnostic scene whose 1/2/3 keys manually mutate canvas dimensions and camera state, with no authored asset, browser smoke, gameplay/settings outcome, typed reset/re-entry owner, or recovery path. game-default already sizes the canvas from host/client dimensions and DPR, switches camera modes, and relies on engine-owned resize graph/resource invalidation; app/runtime tests cover autoAspect resize and post-resize rendering. Copying this demo would create a second resize policy without a distinct feature-loop mechanic. Revisit only for a user-facing responsive layout or split-screen owner with browser and reset evidence.",
+      "betterConsumer": "apps/bevy/window-resizing"
     }
   ]
 }

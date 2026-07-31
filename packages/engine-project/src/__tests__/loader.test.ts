@@ -48,6 +48,17 @@ const WITHOUT_DEFAULT_SCENE = JSON.stringify({
   schemaVersion: '1.0.0',
 });
 
+const WITH_NPC_POLICY = JSON.stringify({
+  id: 'npc-game',
+  name: 'NPC Game',
+  schemaVersion: '1.0.0',
+  npc: {
+    model: 'deepseek-v4-flash-openai',
+    maxTokens: 220,
+    budget: { maxCallsPerMinute: 30, maxTokensPerMinute: 120000, maxConcurrent: 4 },
+  },
+});
+
 // ── return path 1: forge.json missing ──────────────────────────────────────
 describe('loadGameProject — return path 1: file missing', () => {
   it('returns {ok:false} with code forge-missing when read throws', async () => {
@@ -131,6 +142,15 @@ describe('loadGameProject — return path 5: valid forge.json', () => {
     if (result.ok) {
       expect(result.value.id).toBe('no-default');
       expect(result.value.defaultScene).toBeUndefined();
+    }
+  });
+
+  it('accepts the Digital Life NPC policy in forge.json', async () => {
+    const result = await loadGameProject(makeRead(WITH_NPC_POLICY));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.npc?.model).toBe('deepseek-v4-flash-openai');
+      expect(result.value.npc?.budget?.maxConcurrent).toBe(4);
     }
   });
 

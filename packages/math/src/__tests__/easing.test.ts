@@ -1,8 +1,8 @@
 // easing.test.ts — value tests for the easing namespace (solo round 20260713-233409)
 //
 // Regression guard for the friction that motivated the namespace: forgeax's math had no
-// easing functions, so non-linear motion forced hand-rolling t*t*(3-2t) + the [0,1] clamp.
-// These tests pin, for smoothstep (3t²−2t³) and smootherstep (6t⁵−15t⁴+10t³):
+// easing functions, so non-linear motion forced hand-rolling curves + the [0,1] clamp.
+// These tests pin the polynomial curves and the ElasticInOut endpoint contract:
 //   1. endpoints f(0)=0, f(1)=1,
 //   2. input clamp: t<0 → 0, t>1 → 1 (saturate, not extrapolate),
 //   3. symmetric midpoint f(0.5)=0.5,
@@ -13,7 +13,19 @@
 import { describe, expect, it } from 'vitest';
 import { easing } from '../index';
 
-const { smoothstep, smootherstep } = easing;
+const { cubicInOut, elasticInOut, smoothstep, smootherstep } = easing;
+
+describe('easing.cubicInOut', () => {
+  it('matches Bevy cubic in/out and clamps input', () => {
+    expect(cubicInOut(-1)).toBe(0);
+    expect(cubicInOut(0)).toBe(0);
+    expect(cubicInOut(0.25)).toBeCloseTo(0.0625, 12);
+    expect(cubicInOut(0.5)).toBeCloseTo(0.5, 12);
+    expect(cubicInOut(0.75)).toBeCloseTo(0.9375, 12);
+    expect(cubicInOut(1)).toBe(1);
+    expect(cubicInOut(2)).toBe(1);
+  });
+});
 
 describe('easing.smoothstep', () => {
   it('endpoints: f(0)=0, f(1)=1', () => {
@@ -78,5 +90,20 @@ describe('easing.smootherstep', () => {
     expect(smootherstep(0.15)).toBeLessThan(smoothstep(0.15));
     expect(smootherstep(0.25)).toBeLessThan(0.25);
     expect(smootherstep(0.75)).toBeGreaterThan(0.75);
+  });
+});
+
+describe('easing.elasticInOut', () => {
+  it('clamps and preserves exact endpoints', () => {
+    expect(elasticInOut(-1)).toBe(0);
+    expect(elasticInOut(0)).toBe(0);
+    expect(elasticInOut(0.5)).toBeCloseTo(0.5, 12);
+    expect(elasticInOut(1)).toBe(1);
+    expect(elasticInOut(2)).toBe(1);
+  });
+
+  it('has the expected overshoot on both halves', () => {
+    expect(elasticInOut(0.35)).toBeLessThan(0);
+    expect(elasticInOut(0.65)).toBeGreaterThan(1);
   });
 });

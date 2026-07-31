@@ -302,6 +302,7 @@ async function captureRhi(page, label) {
 }
 
 async function runLiveMaterialScenario(baseUrl, page) {
+  const expectedVariant = `M3_MULTI_UV_VARIANT=${startVariant}`;
   const expectedHistory = doubleResizeChurn
     ? '640x360>480x270>720x405>640x360>480x270>720x405>640x360'
     : resizeChurn
@@ -312,17 +313,17 @@ async function runLiveMaterialScenario(baseUrl, page) {
     const falsifierQuery = falsified ? '&falsify-live-material' : '';
     await page.setViewportSize({ width: 800, height: 600 });
     await page.goto(
-      `${baseUrl}/?pipeline=custom&variant=true&post=passthrough&live-material=two-slot-swap-resize${falsifierQuery}${querySuffix}`,
+      `${baseUrl}/?pipeline=custom&variant=${startVariant}&post=passthrough&live-material=two-slot-swap-resize${falsifierQuery}${querySuffix}`,
       { waitUntil: 'networkidle', timeout: 30_000 },
     );
     await page.waitForFunction(
-      ({ expectedAntialias }) => document.querySelector('#variant-status')?.textContent === 'M3_MULTI_UV_VARIANT=true'
+      ({ expectedAntialias, expectedVariant }) => document.querySelector('#variant-status')?.textContent === expectedVariant
         && document.querySelector('#pipeline-status')?.textContent === 'M3_PIPELINE=custom'
         && document.querySelector('#post-status')?.textContent === 'M3_POST_EFFECT=passthrough'
         && document.querySelector('#texture-status')?.textContent === 'M3_TEXTURE_BINDING=baseColorTexture+detailTexture'
         && document.querySelector('#antialias-status')?.textContent === expectedAntialias
         && globalThis.__forgeaxMultiUvEvidence?.ready === true,
-      { expectedAntialias: `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}` },
+      { expectedAntialias: `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}`, expectedVariant },
       { timeout: 15_000 },
     );
     await waitForNonBlackCanvas(page, `${label} baseline`);
@@ -408,7 +409,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
       throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
     }
   }
-  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
+  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} startVariant=${startVariant} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
 async function runDepthPostScenario(baseUrl, page) {

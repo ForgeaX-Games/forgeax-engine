@@ -931,6 +931,84 @@ if (
 }
 console.log(`[m3-programmable] composed two-slot material rebind repeatability: PASS normalChanged=${firstLiveMaterial.normal.delta.changed} falsifierChanged=${firstLiveMaterial.falsifier.delta.changed} normalDawnSha=${firstLiveMaterial.normal.dawn.sha256} falsifierDawnSha=${firstLiveMaterial.falsifier.dawn.sha256}`);
 
+const noMsaaLiveMaterialArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'live-material-two-slot-composed-no-msaa-repeatability');
+function runNoMsaaLiveMaterialRepeatability(startVariant) {
+  const scenarioRoot = resolve(noMsaaLiveMaterialArtifactRoot, `start-${startVariant}`);
+  const noMsaaLiveMaterialRuns = [];
+  for (const pass of ['first', 'second']) {
+    noMsaaLiveMaterialRuns.push({
+      pass,
+      result: run(
+        `browser composed two-slot material rebind no-MSAA start=${startVariant} ${pass}`,
+        ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-composed'],
+        {
+          FORGEAX_M3_LIVE_MATERIAL: '1',
+          FORGEAX_M3_MSAA: '0',
+          FORGEAX_M3_START_VARIANT: startVariant,
+          FORGEAX_M3_RESIZE_CHURN: '1',
+          FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+          FORGEAX_M3_ARTIFACT_DIR: resolve(scenarioRoot, pass),
+        },
+      ),
+    });
+  }
+  const noMsaaLiveMaterialSnapshots = noMsaaLiveMaterialRuns.map((runResult) => ({
+    pass: runResult.pass,
+    snapshot: readLiveMaterialSnapshot(resolve(scenarioRoot, runResult.pass)),
+  }));
+  const expectedVariant = `M3_MULTI_UV_VARIANT=${startVariant}`;
+  for (const runResult of noMsaaLiveMaterialRuns) {
+    if (
+      runResult.result.status !== 0 ||
+      !runResult.result.output.includes(`[m3-live-material] PASS pipeline=custom post=inversion msaa=false startVariant=${startVariant}`) ||
+      !runResult.result.output.includes('normalSlots=true/true') ||
+      !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
+    ) {
+      console.error(`[m3-programmable] composed two-slot material rebind no-MSAA start=${startVariant} ${runResult.pass}: FAIL`);
+      process.exit(1);
+    }
+  }
+  const firstNoMsaaLiveMaterial = noMsaaLiveMaterialSnapshots[0].snapshot;
+  const secondNoMsaaLiveMaterial = noMsaaLiveMaterialSnapshots[1].snapshot;
+  if (repeatabilityDiff(firstNoMsaaLiveMaterial, secondNoMsaaLiveMaterial) !== undefined) {
+    console.error(`[m3-programmable] composed two-slot material rebind no-MSAA start=${startVariant} repeatability: FAIL - ${JSON.stringify({ first: firstNoMsaaLiveMaterial, second: secondNoMsaaLiveMaterial })}`);
+    process.exit(1);
+  }
+  for (const leg of ['normal', 'falsifier']) {
+    const value = firstNoMsaaLiveMaterial[leg];
+    if (
+      value.before.variant !== expectedVariant ||
+      value.after.variant !== expectedVariant ||
+      value.after.pipeline !== 'M3_PIPELINE=custom' ||
+      value.after.post !== 'M3_POST_EFFECT=inversion' ||
+      value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
+      value.draws === 0 ||
+      value.inspectedDraw === undefined ||
+      value.dawn.nonBlackPixelCount === 0
+    ) {
+      console.error(`[m3-programmable] composed two-slot material no-MSAA start=${startVariant} RHI/Dawn evidence: FAIL - ${JSON.stringify({ leg, value })}`);
+      process.exit(1);
+    }
+  }
+  if (
+    firstNoMsaaLiveMaterial.normal.afterEvidence.baseColorSlotChanged !== true ||
+    firstNoMsaaLiveMaterial.normal.afterEvidence.detailSlotChanged !== true ||
+    firstNoMsaaLiveMaterial.normal.afterEvidence.afterComponentMaterialMatchesAfter !== true ||
+    (firstNoMsaaLiveMaterial.falsifier.afterEvidence.baseColorSlotChanged === true &&
+      firstNoMsaaLiveMaterial.falsifier.afterEvidence.detailSlotChanged === true) ||
+    firstNoMsaaLiveMaterial.normal.delta.changed < 1000 ||
+    firstNoMsaaLiveMaterial.falsifier.delta.changed < 100
+  ) {
+    console.error(`[m3-programmable] composed two-slot material no-MSAA start=${startVariant} oracle: FAIL - ${JSON.stringify(firstNoMsaaLiveMaterial)}`);
+    process.exit(1);
+  }
+  console.log(`[m3-programmable] composed two-slot material no-MSAA start=${startVariant} rebind repeatability: PASS normalChanged=${firstNoMsaaLiveMaterial.normal.delta.changed} falsifierChanged=${firstNoMsaaLiveMaterial.falsifier.delta.changed} normalDawnSha=${firstNoMsaaLiveMaterial.normal.dawn.sha256} falsifierDawnSha=${firstNoMsaaLiveMaterial.falsifier.dawn.sha256}`);
+}
+runNoMsaaLiveMaterialRepeatability('true');
+runNoMsaaLiveMaterialRepeatability('false');
+
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',
   ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],

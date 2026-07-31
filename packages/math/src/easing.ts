@@ -1,15 +1,21 @@
 // easing.ts — easing-function namespace (solo round 20260713-233409)
 //
-// 2-function surface: smoothstep / smootherstep — the two most-used Hermite S-curves
+// 4-function surface: cubicInOut / smoothstep / smootherstep / elasticInOut
 // (GLSL `smoothstep`, Perlin's smootherstep; Bevy `EaseFunction::SmoothStep`/`SmootherStep`).
-// Scalar time-remaps t → number: take a normalized parameter and return an eased value with
-// zero endpoint derivatives (slow-in / slow-out). The growable home for Bevy's `EaseFunction`
-// family — further variants (sine / quad / cubic / elastic) land here add-only.
+// Scalar time-remaps t → number: take a normalized parameter and return an eased value. The
+// growable home for Bevy's `EaseFunction` family — further variants (sine / quad / bounce /
+// steps) land here add-only.
 //
-// Both clamp the input to [0, 1] first (GLSL / Bevy semantics), so out-of-range t saturates
-// to the endpoints rather than extrapolating the polynomial.
+// Every function clamps the input to [0, 1] first (GLSL / Bevy semantics), so out-of-range t
+// saturates to the endpoints rather than extrapolating the curve.
 
 import { clamp } from './_internal/scalar';
+
+/** Cubic ease-in-out: Bevy `EaseFunction::CubicInOut`, clamped to [0, 1]. */
+export function cubicInOut(t: number): number {
+  const x = clamp(t, 0, 1);
+  return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
+}
 
 /**
  * Smoothstep S-curve: `3t² − 2t³` on the clamped input. GLSL `smoothstep` (with edges 0/1),
@@ -30,4 +36,14 @@ export function smoothstep(t: number): number {
 export function smootherstep(t: number): number {
   const x = clamp(t, 0, 1);
   return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+/** Elastic ease-in-out: Bevy `EaseFunction::ElasticInOut`, clamped to [0, 1]. */
+export function elasticInOut(t: number): number {
+  const x = clamp(t, 0, 1);
+  if (x === 0 || x === 1) return x;
+  const c5 = (2 * Math.PI) / 4.5;
+  return x < 0.5
+    ? -(2 ** (20 * x - 10) * Math.sin((20 * x - 11.125) * c5)) / 2
+    : (2 ** (-20 * x + 10) * Math.sin((20 * x - 11.125) * c5)) / 2 + 1;
 }

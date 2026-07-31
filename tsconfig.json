@@ -121,6 +121,9 @@
     },
     {
       "path": "./packages/vfx-compiler"
+    },
+    {
+      "path": "./packages/npc"
     }
   ]
 }

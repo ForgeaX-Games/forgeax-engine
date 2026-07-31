@@ -36,6 +36,25 @@ const SkinSchema = z
 
 const PreviewSchema = z.object({ skin: SkinSchema }).passthrough();
 
+// Digital Life NPC runtime policy embedded in forge.json. The Brain owns
+// prompt/model execution; the game manifest only declares the bounded model
+// and governor ceilings consumed by the server-side NPC adapter.
+const NpcBudgetSchema = z
+  .object({
+    maxCallsPerMinute: z.number().int().positive().optional(),
+    maxTokensPerMinute: z.number().int().positive().optional(),
+    maxConcurrent: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const NpcConfigSchema = z
+  .object({
+    model: z.string().min(1).optional(),
+    maxTokens: z.number().int().positive().optional(),
+    budget: NpcBudgetSchema.optional(),
+  })
+  .strict();
+
 // ── GameProjectSchema: strict zod object (AC-03, AC-05) ─────────────────────
 // This schema is the authoritative field list for forge.json (charter P2) —
 // read it instead of prose docs. Each field carries its contract inline.
@@ -59,6 +78,8 @@ export const GameProjectSchema = z
     input: z.string().optional(),
     /** Optional editor preview config (skin scene/clips for the launcher card). */
     preview: PreviewSchema.optional(),
+    /** Optional Digital Life NPC Brain policy consumed by the server adapter. */
+    npc: NpcConfigSchema.optional(),
   })
   .strict();
 
