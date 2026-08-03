@@ -431,6 +431,10 @@ export type {
   SceneInstantiateFlatOk,
   SceneInstantiateOk,
   WorldInspection,
+  WorldScheduleData,
+  WorldScheduleQueryData,
+  WorldScheduleSetData,
+  WorldScheduleSystemData,
 } from './world';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -463,6 +467,7 @@ export type {
   ComponentId,
   FieldDescriptor,
   FieldReflection,
+  FieldShapeKind,
   SchemaOf,
   TypeMetadataRow,
 } from './component';

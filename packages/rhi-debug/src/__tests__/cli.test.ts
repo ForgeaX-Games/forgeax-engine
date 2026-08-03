@@ -23,9 +23,11 @@ import { describe, expect, it } from 'vitest';
 import {
   getCaptureFrameHelp,
   getInspectAtHelp,
+  getMergeabilityHelp,
   getSummaryHelp,
   getTriggerBrowserHelp,
   parseTriggerBrowserArgs,
+  runMergeability,
   runSummary,
 } from '../cli';
 import { serializeTape } from '../tape-format';
@@ -441,5 +443,38 @@ describe('summary subcommand', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('tape-format-version-mismatch');
     }
+  });
+});
+
+describe('mergeability subcommand', () => {
+  it('help text declares the analysis-only contract', () => {
+    const help = getMergeabilityHelp();
+    expect(help).toContain('Usage: mergeability <tapePath>');
+    expect(help).toContain('pure analysis');
+    expect(help).toContain('theoretical draw reduction');
+  });
+
+  it('runMergeability emits a conservative report for an on-disk tape', () => {
+    const { json, blob } = serializeTape(makeSummaryTape());
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mergeability-cli-'));
+    const tapePath = path.join(dir, 'frame-0.tape.bin');
+    const reportPath = path.join(dir, 'frame-0.report.json');
+    const parsed = JSON.parse(json) as { header: unknown; events: unknown };
+    fs.writeFileSync(tapePath, Buffer.from(blob));
+    fs.writeFileSync(reportPath, JSON.stringify(parsed));
+
+    const result = runMergeability({ tapePath });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const report = JSON.parse(result.value) as {
+      schemaVersion: string;
+      totalDraws: number;
+      theoreticalDrawReduction: number;
+    };
+    expect(report.schemaVersion).toBe('rhi-mergeability/v1');
+    expect(report.totalDraws).toBe(1);
+    expect(report.theoreticalDrawReduction).toBe(0);
+
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

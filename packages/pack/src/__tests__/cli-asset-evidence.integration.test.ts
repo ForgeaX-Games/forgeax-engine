@@ -82,6 +82,30 @@ afterEach(async () => {
 });
 
 describe('asset evidence CLI contract', () => {
+  it('advertises the complete AI inspection and recovery vocabulary', async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await runCliAsset(['--help'], {
+      stdoutWrite: (line) => stdout.push(line),
+      stderrWrite: (line) => stderr.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(stderr).toEqual([]);
+    const help = stdout.join('\n');
+    for (const operation of [
+      'inspect',
+      'rebuild',
+      'cold-cook',
+      'preview-LKG',
+      'override',
+      'promote',
+      'stop-publish',
+    ]) {
+      expect(help).toContain(operation);
+    }
+  });
+
   it('returns the shared evidence JSON for lookup --guid --json', async () => {
     const project = await evidenceFixture();
     const stdout: string[] = [];

@@ -50,6 +50,20 @@ function readFs() {
   };
 }
 
+function multiMeta(
+  overrides: readonly (Partial<RunImportMeta['subAssets'][number]> | undefined)[] = [],
+): RunImportMeta {
+  const entries = [
+    { guid: GUID, sourceKey: 'scene/main', sourceIndex: 0, kind: 'mesh' },
+    { guid: DEPENDENCY_GUID, sourceKey: 'scene/detail', sourceIndex: 1, kind: 'mesh' },
+  ];
+  return {
+    importer: 'fixture',
+    source: 'models/fixture.glb',
+    subAssets: entries.map((entry, index) => ({ ...entry, ...(overrides[index] ?? {}) })),
+  };
+}
+
 function meta(facts: Record<string, unknown> = {}): RunImportMeta {
   return {
     importer: 'fixture',
@@ -68,6 +82,46 @@ function meta(facts: Record<string, unknown> = {}): RunImportMeta {
 }
 
 describe('import runner producer fact propagation', () => {
+  it('rejects sourceIndex-only declarations before reading source or invoking importer', async () => {
+    let reads = 0;
+    const keyedMeta = multiMeta();
+    const sourceIndexOnlyMeta: RunImportMeta = {
+      ...keyedMeta,
+      subAssets: keyedMeta.subAssets.map(
+        ({ sourceKey: _sourceKey, ...declaration }) => declaration,
+      ),
+    };
+    const result = await runImport(sourceIndexOnlyMeta, registry(), {
+      readSource: async () => {
+        reads += 1;
+        return { ok: true as const, value: new Uint8Array([1]) };
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('source-validation-failed');
+      expect(result.error.detail).toMatchObject({
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ code: 'source-key-required' }),
+        ]),
+      });
+    }
+    expect(reads).toBe(0);
+  });
+
+  it('rejects duplicate, empty, and malformed sourceKey before Meta publication', async () => {
+    for (const override of [
+      { sourceKey: 'scene/main' },
+      { sourceKey: '   ' },
+      { sourceKey: 7 as unknown as string },
+    ]) {
+      const result = await runImport(multiMeta([undefined, override]), registry(), readFs());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('source-validation-failed');
+    }
+  });
+
   it('preserves complete producer facts on the DDC row matched by GUID', async () => {
     const facts = {
       packageId: 'package/fixture',
@@ -92,6 +146,19 @@ describe('import runner producer fact propagation', () => {
         sourceKey: 'scene/main',
         sourceIndex: 0,
         relations: [relation],
+      }),
+    ]);
+    expect(result.value.cookProducts).toEqual([
+      expect.objectContaining({
+        guid: GUID,
+        payload: MESH,
+        refs: [DEPENDENCY_GUID],
+        artifacts: {},
+        receipt: expect.objectContaining({
+          guid: GUID,
+          origin: 'sourceMeta',
+          status: 'succeeded',
+        }),
       }),
     ]);
   });

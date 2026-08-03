@@ -1539,6 +1539,15 @@ const V1_WHITELIST = new Set([
         const results = await scanPaths([root]);
         expect(results).toEqual([]);
       });
+
+      it('skips .forgeax directory', async () => {
+        const root = await setupTmpDir();
+        const state = join(root, '.forgeax');
+        await mkdir(state);
+        await writeFile(join(state, 'game.meta.json'), JSON.stringify({ test: true }));
+        const results = await scanPaths([root]);
+        expect(results).toEqual([]);
+      });
     });
 
     describe('scan - whitelist override', () => {

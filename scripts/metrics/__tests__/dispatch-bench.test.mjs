@@ -110,6 +110,17 @@ describe('dispatchBench retry-once semantics (M3 w11 / K-6 / AC-09)', () => {
     expect(result.status).toBe('ok');
   });
 
+  it('dispatches the package that owns the missing benchmark artefact', () => {
+    const spawnFn = vi.fn().mockImplementation(() => {
+      writeBenchResult(pkgRoot, fakeBenchPayload(0.001));
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const result = dispatchBench('engine-vfx', pkgRoot, { enabled: true }, { spawnFn });
+
+    expect(spawnFn.mock.calls[0][1]).toEqual(['-F', '@forgeax/engine-vfx', 'bench:json']);
+    expect(result.status).toBe('ok');
+  });
+
   it('(iv) default spawn injection - dispatchBench exported with optional spawnFn parameter', () => {
     // Structural assertion: importing dispatchBench from run-all.mjs works and
     // accepts the (_pkgName, pkgRoot, decl, opts?) signature shape. Without

@@ -277,3 +277,39 @@ describe('m1-1 DrawEntry.indexBuffer — mirrors setIndexBuffer event', () => {
     expect(draw?.indexBuffer?.offset).toBe(8);
   });
 });
+
+describe('large-frame analysis', () => {
+  it('keeps whole-frame model construction bounded for real-sized draw lists', {
+    timeout: 2_000,
+  }, () => {
+    const drawCount = 12_000;
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 0 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:large',
+        passHandleId: 'pass:large',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      ...Array.from(
+        { length: drawCount },
+        (_, index): RhiCallEvent => ({
+          kind: 'drawIndexed',
+          passHandleId: 'pass:large',
+          indexCount: index === drawCount - 1 ? 5_469_426 : 36,
+          instanceCount: 1,
+          firstIndex: 0,
+          baseVertex: 0,
+          firstInstance: 0,
+        }),
+      ),
+      { kind: 'endRenderPass', passHandleId: 'pass:large' },
+    ];
+
+    const model = buildFrameModel(makeTape(events));
+
+    expect(model.meta.totalDraws).toBe(drawCount);
+    expect(model.draws.at(-1)?.drawCall.indexCount).toBe(5_469_426);
+  });
+});

@@ -82,6 +82,23 @@ Each parameter definition gets an independent per-World query-state cache. Missi
 
 All five APIs require a schedule token as the first argument. There is no optional-schedule overload.
 
+### Schedule data projection
+
+`world.scheduleData()` returns a JSON-safe, read-only projection of every registered schedule. It
+derives the current DAG before capture, so tooling can inspect the same ordering facts that
+`world.update(delta)` will execute without mutating game state.
+
+| Projection | Contents |
+|:--|:--|
+| `name` | Schedule token name (`Update`, `FixedUpdate`, or `FrameEnd`) |
+| `systems` | System names, set membership, before/after references, query component names, and resources |
+| `systemSets` | Set membership, set-level before/after edges, and `chained` policy |
+| `dependencies` | Expanded direct `[source, target]` DAG edges, including the `FixedUpdate` anchor in `Update` |
+
+The projection deliberately lives beside `world.inspect()` rather than widening its existing
+lightweight `schedules` summary. That keeps existing inspector consumers stable while exposing the
+dependency and access facts needed by schedule tooling.
+
 ### Time and FixedTime resources
 
 The engine owns two protected resources:

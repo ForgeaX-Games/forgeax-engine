@@ -8,7 +8,7 @@ import {
   serializeMaterialCookReceipt,
 } from '@forgeax/engine-pack';
 import { createMaterialSpecializationKey } from '@forgeax/engine-shader-compiler';
-import type { MaterialAsset } from '@forgeax/engine-types';
+import type { CookProduct, MaterialAsset } from '@forgeax/engine-types';
 
 export interface MaterialCookRequest {
   readonly guid: string;
@@ -25,7 +25,7 @@ export interface MaterialCookCatalogEntry {
   readonly artifactDigest: string;
 }
 
-export interface MaterialCookResult {
+interface MaterialCookPublication {
   readonly cache: 'cold' | 'hit';
   readonly key: string;
   readonly record: CookedMaterialRecord;
@@ -34,6 +34,15 @@ export interface MaterialCookResult {
   readonly artifactBytes: Uint8Array;
   readonly receiptBytes: Uint8Array;
   readonly catalog: MaterialCookCatalogEntry;
+}
+
+const publications = new WeakMap<object, MaterialCookPublication>();
+
+/** @internal Publication bytes stay outside the shared CookProduct contract. */
+export function materialCookPublication(
+  product: CookProduct<MaterialAsset>,
+): MaterialCookPublication | undefined {
+  return publications.get(product);
 }
 
 export interface MaterialCookFinalizerOptions {
@@ -66,14 +75,18 @@ function buildKey(request: MaterialCookRequest, refs: MaterialCookRefs): string 
 }
 
 export function createMaterialCookFinalizer(options: MaterialCookFinalizerOptions) {
-  const cache = new Map<string, MaterialCookResult>();
+  const cache = new Map<string, CookProduct<MaterialAsset>>();
 
   return {
-    async cook(request: MaterialCookRequest): Promise<MaterialCookResult> {
+    async cook(request: MaterialCookRequest): Promise<CookProduct<MaterialAsset>> {
       const refs = collectMaterialCookRefs(request.material);
       const key = buildKey(request, refs);
       const previous = cache.get(key);
-      if (previous !== undefined) return { ...previous, cache: 'hit' };
+      if (previous !== undefined) {
+        const publication = publications.get(previous);
+        if (publication !== undefined) publications.set(previous, { ...publication, cache: 'hit' });
+        return previous;
+      }
       const artifactBytes = await options.compile(request);
       const artifactDigest = createMaterialArtifactDigest(artifactBytes);
       const artifactPath = `materials/${request.guid}/shader.wgsl`;
@@ -103,7 +116,29 @@ export function createMaterialCookFinalizer(options: MaterialCookFinalizerOption
         artifact,
         receipt,
       };
-      const result: MaterialCookResult = {
+      const refsList = [...refs.parent, ...refs.textures, ...refs.samplers, ...refs.modules];
+      const artifactDescriptor = {
+        path: artifactPath,
+        mediaType: artifact.mediaType,
+        byteLength: artifactBytes.byteLength,
+        integrity: { algorithm: 'sha256' as const, digest: artifactDigest },
+      };
+      const productReceipt = {
+        guid: request.guid,
+        origin: 'authoredPack' as const,
+        status: 'succeeded' as const,
+        inputFingerprint: `sha256:${key}`,
+        outputDigest: artifactDigest,
+      };
+      const result: CookProduct<MaterialAsset> = {
+        guid: request.guid,
+        payload: request.material,
+        refs: refsList,
+        artifacts: { [artifactPath]: artifactDescriptor },
+        digest: artifactDigest,
+        receipt: productReceipt,
+      };
+      publications.set(result, {
         cache: 'cold',
         key,
         record,
@@ -112,7 +147,7 @@ export function createMaterialCookFinalizer(options: MaterialCookFinalizerOption
         artifactBytes,
         receiptBytes: encode(serializeMaterialCookReceipt(receipt)),
         catalog: { guid: request.guid, key, artifactPath, artifactDigest },
-      };
+      });
       cache.set(key, result);
       return result;
     },

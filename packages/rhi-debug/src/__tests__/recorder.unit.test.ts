@@ -45,6 +45,7 @@ interface MockEnv {
   createComputePipelineSpy: ReturnType<typeof vi.fn>;
   createCommandEncoderSpy: ReturnType<typeof vi.fn>;
   beginRenderPassSpy: ReturnType<typeof vi.fn>;
+  queueDrainSpy: ReturnType<typeof vi.fn>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,7 +56,16 @@ function h(): any {
 function buildMockInstance(): { inst: any; env: MockEnv } {
   const writeBufferSpy = vi.fn(() => rOk(undefined));
   const submitSpy = vi.fn(() => rOk(undefined));
-  const createBufferSpy = vi.fn(() => rOk(h()));
+  const createBufferSpy = vi.fn(() =>
+    rOk({
+      mapAsync: vi.fn(async () =>
+        rOk({
+          getMappedRange: () => rOk(new ArrayBuffer(1024)),
+          unmap: vi.fn(),
+        }),
+      ),
+    }),
+  );
   const createTextureSpy = vi.fn(() => rOk(h()));
   const createTextureViewSpy = vi.fn(() => rOk(h()));
   const createSamplerSpy = vi.fn(() => rOk(h()));
@@ -122,12 +132,13 @@ function buildMockInstance(): { inst: any; env: MockEnv } {
     };
   }
 
+  const queueDrainSpy = vi.fn(async () => undefined);
   const mockQueue: any = {
     writeBuffer: writeBufferSpy,
     writeTexture: vi.fn(() => rOk(undefined)),
     copyExternalImageToTexture: vi.fn(() => rOk(undefined)),
     submit: submitSpy,
-    onSubmittedWorkDone: vi.fn(() => Promise.resolve(undefined)),
+    onSubmittedWorkDone: queueDrainSpy,
   };
 
   const mockDevice: any = {
@@ -198,6 +209,7 @@ function buildMockInstance(): { inst: any; env: MockEnv } {
       createComputePipelineSpy,
       createCommandEncoderSpy,
       beginRenderPassSpy,
+      queueDrainSpy,
     },
   };
 }
@@ -1375,6 +1387,42 @@ describe('descriptor registry (w16)', () => {
 
     device.destroyTexture((res as any).value);
     expect(debugInst._getDescriptorTable().size).toBe(0);
+  });
+
+  it('skips a texture destroyed while an earlier snapshot readback awaits', async () => {
+    const { debugInst, env } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+    const first = device.createTexture({
+      size: { width: 4, height: 4 },
+      format: 'rgba8unorm',
+      sampleCount: 1,
+      usage: 0x10,
+    });
+    const second = device.createTexture({
+      size: { width: 4, height: 4 },
+      format: 'rgba8unorm',
+      sampleCount: 1,
+      usage: 0x10,
+    });
+    expect(first.ok && second.ok).toBe(true);
+
+    const table = debugInst._getDescriptorTable() as unknown as Map<string, unknown>;
+    const secondHandleId = [...table.keys()][1];
+    expect(secondHandleId).toBeDefined();
+    let drains = 0;
+    env.queueDrainSpy.mockImplementation(async () => {
+      drains += 1;
+      // Drain 1 is the initial queue fence. Drain 2 belongs to the first
+      // texture readback; destroy the second texture while that await is open.
+      if (drains === 2 && secondHandleId !== undefined) table.delete(secondHandleId);
+    });
+
+    debugInst.arm(1);
+    const snapshot = await debugInst.snapshotAllLiveResources();
+    expect(snapshot.ok).toBe(true);
+    expect(drains).toBe(2);
+    expect(debugInst.getEvents().filter((event) => event.kind === 'initialData')).toHaveLength(1);
   });
 
   it('create N + destroy N leaves the registry empty (no unbounded growth)', async () => {

@@ -23,6 +23,7 @@ const repoRoot = resolve(__dirname, '..', '..');
 const audit = resolve(repoRoot, 'scripts/bevy-coverage-audit.mjs');
 const fx = resolve(__dirname, 'fixtures/bevy-coverage');
 const fixtureBevy = resolve(fx, 'bevy/Cargo.toml');
+const fixtureRoadmap = resolve(fx, 'roadmap.md');
 
 interface RunResult {
   status: number;
@@ -95,5 +96,16 @@ describe('bevy-coverage-audit.mjs', () => {
     expect(r.stderr).toContain('[reason]');
     expect(r.stderr).toContain('[rerun]');
     expect(r.stderr).toContain('[hint]');
+  });
+
+  it('(f) roadmap overlay: counts exact shelved rows without creating fake app packages', () => {
+    const root = resolve(fx, 'happy');
+    const r = run(['--root', root, '--bevy', fixtureBevy, '--roadmap', fixtureRoadmap, '--json']);
+    expect(r.status, `stderr:\n${r.stderr}`).toBe(0);
+    const cats = JSON.parse(r.stdout).categories;
+    expect(cats['3D Rendering'].shelved).toBe(1); // roadmap marks bloom_3d
+    expect(cats['3D Rendering'].uncovered).toHaveLength(0);
+    expect(cats['2D Rendering'].covered).toBe(1); // app metadata wins over roadmap text
+    expect(cats['2D Rendering'].shelved).toBe(0);
   });
 });

@@ -78,4 +78,27 @@ describe('AssetEvidence lifecycle', () => {
     expect(conflict.error.hint).toBeTruthy();
     expect(conflict.error.detail).toMatchObject({ guid });
   });
+
+  it('does not treat a failed recook as current evidence', () => {
+    const failed = projectAssetEvidence(
+      input({
+        source: { origin: 'sourceMeta', inputFingerprint: 'fp-2' },
+        receipt: {
+          ...receipt,
+          inputFingerprint: 'fp-1',
+          status: 'failed',
+          error: {
+            code: 'producer-failed',
+            expected: 'a validated output',
+            hint: 'repair the source and recook',
+          },
+        },
+      }),
+    );
+
+    expect(failed.ok).toBe(true);
+    if (!failed.ok) return;
+    expect(failed.value.cook.status).toBe('failed');
+    expect(failed.value.cook.freshness).not.toBe('current');
+  });
 });

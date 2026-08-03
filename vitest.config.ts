@@ -156,7 +156,10 @@ export default defineConfig({
               // onerror-gate (shipped path, no ImportTransport) needs the objects/
               // root scanned for the gltf scene + diffuse/specular/normal textures.
               resolve(rootDir, 'forgeax-engine-assets/learn-opengl/objects'),
-              resolve(rootDir, 'forgeax-engine-assets/khronos-gltf-samples/Sponza'),
+              resolve(
+                rootDir,
+                'forgeax-engine-assets/khronos-gltf-samples/Sponza/Sponza.gltf.meta.json',
+              ),
               // apps/preview e2e (preview.browser.test.ts): the game-default
               // template's assets/ holds the scene pack + material packs (the
               // scene is a GUID-discoverable asset, forge.json.defaultScene); the
@@ -164,7 +167,7 @@ export default defineConfig({
               // this middleware). Select its sidecar explicitly so the
               // mirrored UI sidecars are not scanned twice; explicit file
               // roots are supported by the pack scanner.
-              resolve(rootDir, 'templates/game-default'),
+              resolve(rootDir, 'templates/game-default/assets'),
               resolve(
                 rootDir,
                 'forgeax-engine-assets/demo-assets/template-game-default/sky.hdr.meta.json',

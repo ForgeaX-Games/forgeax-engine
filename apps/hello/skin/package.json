@@ -15,11 +15,18 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
-    "bevyExample": {
-      "name": "gltf_skinned_mesh",
-      "category": "glTF",
-      "status": "implemented"
-    },
+    "bevyExample": [
+      {
+        "name": "gltf_skinned_mesh",
+        "category": "glTF",
+        "status": "implemented"
+      },
+      {
+        "name": "animated_mesh",
+        "category": "Animation",
+        "status": "implemented"
+      }
+    ],
     "smokeInvocation": "pnpm --filter @forgeax/hello-skin smoke",
     "metrics": {
       "bundle-size": {

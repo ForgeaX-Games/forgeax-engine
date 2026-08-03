@@ -11,6 +11,9 @@
 //     `name` is the join key — it matches a Bevy [[example]] `name` in Cargo.toml.
 //   - The Bevy demo list is DERIVED from the synced Bevy checkout's Cargo.toml
 //     (architecture-principle §2 Derive, Don't Duplicate) — never hand-copied here.
+//   - Shelved/routed status is DERIVED from the bevy-examples ROADMAP live-corrections
+//     table when that harness clone is present. App declarations remain the stronger
+//     source for any declared demo, so the overlay cannot downgrade a real app.
 //   - This is a LOOP INSTRUMENT, not a CI gate: the Bevy checkout lives under the
 //     gitignored .forgeax-harness/ and is ABSENT in CI + fresh worktrees. When the
 //     checkout is missing the script degrades gracefully (§9): it prints the
@@ -20,7 +23,8 @@
 //
 // Usage:
 //   node scripts/bevy-coverage-audit.mjs [--root <dir>] [--bevy <cargoTomlPath>]
-//                                        [--json] [--category <name>]
+//                                        [--roadmap <markdownPath>] [--json]
+//                                        [--category <name>]
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -31,6 +35,7 @@ const args = { json: false };
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--root' && argv[i + 1]) args.root = argv[++i];
   else if (argv[i] === '--bevy' && argv[i + 1]) args.bevy = argv[++i];
+  else if (argv[i] === '--roadmap' && argv[i + 1]) args.roadmap = argv[++i];
   else if (argv[i] === '--category' && argv[i + 1]) args.category = argv[++i];
   else if (argv[i] === '--json') args.json = true;
 }
@@ -39,12 +44,37 @@ const root = resolve(args.root ?? process.cwd());
 const bevyCargo = resolve(
   args.bevy ?? `${root}/.forgeax-harness/knowledge-base/references/repos/bevy/Cargo.toml`,
 );
+const roadmapPath = resolve(
+  args.roadmap ?? `${root}/.forgeax-harness/solo/bevy-examples/ROADMAP.md`,
+);
 
 function fail(code, expected, hint) {
   process.stderr.write(
     `[reason] ${code}: ${expected}\n[rerun]  node scripts/bevy-coverage-audit.mjs\n[hint]   ${hint}\n`,
   );
   process.exit(1);
+}
+
+// The ROADMAP is the solo notebook's status authority. Only the exact
+// `shelved` word in the Live corrections table is projected here; implemented
+// and abandoned rows stay visible to humans without changing coverage math.
+// Missing harness state is expected in CI/fresh worktrees, so this is best
+// effort and never turns the coverage instrument red.
+function readRoadmapShelvedNames(path) {
+  if (!existsSync(path) || !statSync(path).isFile()) return new Set();
+  const names = new Set();
+  for (const raw of readFileSync(path, 'utf8').split('\n')) {
+    const line = raw.trim();
+    if (!line.startsWith('|') || !line.endsWith('|')) continue;
+    const cells = line
+      .slice(1, -1)
+      .split('|')
+      .map((cell) => cell.trim());
+    if (cells.length < 3 || cells[0] === 'Pillar' || cells[0].startsWith(':')) continue;
+    const demo = cells[1].match(/^`([^`]+)`$/)?.[1];
+    if (demo && /\bshelved\b/i.test(cells[2])) names.add(demo);
+  }
+  return names;
 }
 
 // --- 1. Enumerate apps + read self-declared forgeax.bevyExample ------------
@@ -183,6 +213,7 @@ if (!bevyPresent) {
 }
 
 const bevy = parseBevyExamples(readFileSync(bevyCargo, 'utf8'));
+const roadmapShelved = readRoadmapShelvedNames(roadmapPath);
 
 // --- 4. Validate declared names against the Bevy SSOT ----------------------
 for (const d of declared) {
@@ -212,7 +243,8 @@ for (const ex of bevy.values()) {
   c.total++;
   const decls = declaredByName.get(ex.name);
   if (decls?.some((d) => d.status === 'implemented')) c.covered++;
-  else if (decls?.some((d) => d.status === 'shelved')) c.shelved++;
+  else if (decls?.some((d) => d.status === 'shelved') || (!decls && roadmapShelved.has(ex.name)))
+    c.shelved++;
   else c.uncovered.push(ex.display ?? ex.name);
 }
 
@@ -238,7 +270,7 @@ let gTotal = 0,
   gCovered = 0,
   gShelved = 0;
 process.stdout.write(
-  'Bevy examples ↔ forgeax coverage (SSOT: Bevy Cargo.toml + apps forgeax.bevyExample)\n\n',
+  'Bevy examples ↔ forgeax coverage (SSOT: Bevy Cargo.toml + apps forgeax.bevyExample + optional bevy-examples ROADMAP shelved rows)\n\n',
 );
 process.stdout.write('  category                        covered  shelved  uncovered  total\n');
 process.stdout.write(`  ${'-'.repeat(70)}\n`);

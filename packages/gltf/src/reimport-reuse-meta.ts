@@ -121,7 +121,7 @@ export function reimportReuseMeta(
     // Stage 1: (kind, name, indexFallback) exact match. Existing entries
     // do not store `name`, so stage 1 collapses to the indexKey lookup
     // *unless* the group is conflicted (in which case stage 1 is skipped).
-    if (groupKey !== null && !conflictedGroups.has(groupKey) && sourceKey !== undefined) {
+    if (sourceKey !== undefined && (groupKey === null || !conflictedGroups.has(groupKey))) {
       reused = stage1Index.get(sourceKey);
     }
     // Stage 2: (kind, indexFallback) only.

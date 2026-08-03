@@ -9,6 +9,7 @@ import {
   type ParticleSimulation,
   type ParticleSimulationAssets,
   type ParticleSimulationObservation,
+  type ParticleSpaceResolver,
   particleSimulationPlugin,
 } from '../index.js';
 
@@ -43,6 +44,22 @@ function publicConsumerTypeCheck(): void {
     assets,
     cpuExecutors: new ParticleCpuExecutorRegistry(),
   });
+  const resolver: ParticleSpaceResolver = {
+    resolve: () => ({
+      ok: true,
+      value: {
+        space: 'local',
+        phase: 'extract',
+        matrix: new Float32Array(16),
+        source: 'root',
+      },
+    }),
+  };
+  const pluginWithScene = particleSimulationPlugin({
+    assets,
+    cpuExecutors: new ParticleCpuExecutorRegistry(),
+    spaceResolver: resolver,
+  });
   const enabled = runPlugins(world, defaultSet, [plugin]);
 
   expectTypeOf(enabled).toEqualTypeOf<Promise<Result<Map<string, Plugin>, PluginError>>>();
@@ -51,6 +68,7 @@ function publicConsumerTypeCheck(): void {
   const simulation = world.getResource<ParticleSimulation>(PARTICLE_SIMULATION_RESOURCE_KEY);
   const observation = simulation.read(player);
   const replay = simulation.replay(player);
+  void pluginWithScene;
   expectTypeOf(observation).toEqualTypeOf<ParticleSimulationObservation | undefined>();
   expectTypeOf(replay.ok).toEqualTypeOf<boolean>();
 }

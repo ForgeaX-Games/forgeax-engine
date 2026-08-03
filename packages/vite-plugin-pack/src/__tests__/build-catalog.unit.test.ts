@@ -140,6 +140,45 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       refs: [],
     });
   });
+
+  it('indexes sampler sub-assets declared by a glTF sidecar', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-gltf-sampler-'));
+    try {
+      await writeFile(join(root, 'Fox.glb'), new Uint8Array([0x00]));
+      await writeFile(
+        join(root, 'Fox.glb.meta.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind: 'external-asset-package',
+          importer: 'gltf',
+          source: 'Fox.glb',
+          importSettings: { defaultSceneIndex: 0 },
+          subAssets: [
+            {
+              guid: '019f0000-0000-7000-8000-000000000021',
+              sourceKey: 'material/main',
+              sourceIndex: 0,
+              kind: 'material',
+            },
+            {
+              guid: '019f0000-0000-7000-8000-000000000022',
+              sourceKey: 'sampler/main',
+              sourceIndex: 0,
+              kind: 'sampler',
+            },
+          ],
+        }),
+        'utf8',
+      );
+      const result = await buildCatalogStrict([root]);
+      expect(result.errors).toEqual([]);
+      expect(result.catalog.find((entry) => entry.guid.endsWith('000000000022'))).toMatchObject({
+        kind: 'sampler',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 }
 
 {
@@ -1810,7 +1849,7 @@ console.log('import-hdr-test entry');
       // Default passthrough: the host sub.kind becomes the pack-index kind
       // verbatim (no engine remap, no whitelist gate).
       expect(row?.kind).toBe('reel-level');
-      expect(row?.packageUrl.endsWith('level.reel')).toBe(true);
+      expect(row?.packageUrl).toBe(`/__forgeax-ddc/${HOST_GUID_A}.pack.json`);
       expect(row?.sourcePath.endsWith('level.reel')).toBe(true);
     });
 
@@ -1887,9 +1926,16 @@ console.log('import-hdr-test entry');
           .map((r) => ({ guid: r.guid.toLowerCase(), kind: r.kind, sourcePath: r.sourcePath }))
           .sort((x, y) => x.guid.localeCompare(y.guid));
       expect(norm(devRows)).toEqual(norm(buildResult.catalog));
-      // Both kinds passed through verbatim.
+      // Both kinds passed through verbatim and share the deterministic Pack v2
+      // route owned by the registered provider.
       const kinds = new Set(devRows.map((r) => r.kind));
       expect(kinds).toEqual(new Set(['reel-level', 'reel-actor']));
+      expect(new Set(devRows.map((r) => r.packageUrl))).toEqual(
+        new Set([
+          `/__forgeax-ddc/${HOST_GUID_A}.pack.json`,
+          `/__forgeax-ddc/${HOST_GUID_B}.pack.json`,
+        ]),
+      );
     });
 
     it('(f) unregistered importer: dev path and build path both keep a raw-source row, no error (AC-08 consistency, w10)', async () => {

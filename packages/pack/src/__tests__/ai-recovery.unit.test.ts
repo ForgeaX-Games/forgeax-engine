@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type {
   CatalogEntry,
   ImportedOutputDeclaration,
@@ -54,6 +55,26 @@ function repairDuplicateKey(
 }
 
 describe('AI recovery from canonical catalog fields', () => {
+  it('keeps every non-current lifecycle on a safe recovery path', () => {
+    const schema = JSON.parse(
+      readFileSync(new URL('../../../../asset-authority.schema.json', import.meta.url), 'utf8'),
+    ) as {
+      'x-forgeax-audit': {
+        aiOperations: string[];
+        recoveryByLifecycle: Record<string, string[]>;
+      };
+    };
+    const { aiOperations, recoveryByLifecycle } = schema['x-forgeax-audit'];
+    for (const lifecycle of ['missing', 'cooking', 'current', 'stale', 'failed']) {
+      const actions = recoveryByLifecycle[lifecycle];
+      expect(actions?.every((action) => aiOperations.includes(action))).toBe(true);
+      if (lifecycle !== 'current') expect(actions?.length).toBeGreaterThan(0);
+    }
+    expect(aiOperations).toEqual(
+      expect.arrayContaining(['inspect', 'rebuild', 'cold-cook', 'preview-LKG', 'stop-publish']),
+    );
+  });
+
   it('consumes the producer validator result and repairs a duplicate key', () => {
     const outputs: ImportedOutputDeclaration[] = [
       { guid: DUPLICATE_GUID, kind: 'nebula/fragment', sourceKey: 'fragment/main', sourceIndex: 0 },

@@ -35,4 +35,14 @@ describe('semantic DDC key', () => {
     });
     expect(a).toBe(b);
   });
+
+  it('does not use path or publish fields as semantic identity', () => {
+    const a = semanticDdcKey(input());
+    const b = semanticDdcKey({
+      ...input(),
+      sourceDependencies: [{ path: 'moved/a.png', digest: 'aaa' }],
+      publish: { base: '/other/', url: 'other/a.bin', hash: 'other-hash' },
+    });
+    expect(a).toBe(b);
+  });
 });

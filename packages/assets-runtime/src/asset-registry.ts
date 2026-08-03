@@ -51,6 +51,7 @@ import {
   type AssetRef,
   authoringCapabilityForAssetKind,
   type CatalogEntry,
+  catalogOperationsFor,
   type EngineMetrics,
   type Handle,
   handleSlot,
@@ -1441,6 +1442,10 @@ export class AssetRegistry {
     relations?: CatalogEntry['relations'];
     diagnostics?: CatalogEntry['diagnostics'];
     refs?: readonly string[];
+    subject?: import('@forgeax/engine-types').CatalogSubject;
+    execution?: import('@forgeax/engine-types').CookExecution;
+    lifecycle?: import('@forgeax/engine-types').CatalogLifecycle;
+    projection?: import('@forgeax/engine-types').CatalogProjection;
     /**
      * On-disk source-file path for external imported assets (FBX / GLB / HDR /
      * audio / font), relative to the game root. Editors locate the
@@ -1465,6 +1470,10 @@ export class AssetRegistry {
       relations?: CatalogEntry['relations'];
       diagnostics?: CatalogEntry['diagnostics'];
       refs?: readonly string[];
+      subject?: import('@forgeax/engine-types').CatalogSubject;
+      execution?: import('@forgeax/engine-types').CookExecution;
+      lifecycle?: import('@forgeax/engine-types').CatalogLifecycle;
+      projection?: import('@forgeax/engine-types').CatalogProjection;
       sourcePath?: string;
       cookReceiptUrl?: string;
     }[] = [];
@@ -1489,6 +1498,10 @@ export class AssetRegistry {
           ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
           ...(entry.sourcePath !== undefined ? { sourcePath: entry.sourcePath } : {}),
           ...(entry.cookReceiptUrl !== undefined ? { cookReceiptUrl: entry.cookReceiptUrl } : {}),
+          ...(entry.subject !== undefined ? { subject: entry.subject } : {}),
+          ...(entry.execution !== undefined ? { execution: entry.execution } : {}),
+          ...(entry.lifecycle !== undefined ? { lifecycle: entry.lifecycle } : {}),
+          ...(entry.projection !== undefined ? { projection: entry.projection } : {}),
         });
       }
     }
@@ -1505,6 +1518,19 @@ export class AssetRegistry {
           name,
           packageUrl: '',
           authoring: authoringCapabilityForAssetKind(envelope.payload.kind),
+          subject: 'internal-asset',
+          execution: 'direct',
+          lifecycle: 'current',
+          projection: {
+            subject: 'internal-asset',
+            execution: 'direct',
+            lifecycle: 'current',
+            operations: catalogOperationsFor({
+              subject: 'internal-asset',
+              execution: 'direct',
+              lifecycle: 'current',
+            }),
+          },
           ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((r) => r.guid) } : {}),
         });
       }

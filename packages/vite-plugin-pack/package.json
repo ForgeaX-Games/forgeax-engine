@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@forgeax/engine-codec": "workspace:*",
+    "@forgeax/engine-ddc": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",

@@ -264,6 +264,76 @@ test('t15: writes only the assigned shard artifact paths to its report output', 
   }
 });
 
+test('m2: DDC snapshot merge copies complete entries and excludes staging and leases', () => {
+  const root = fixture(['alpha']);
+  const snapshots = join(root, 'ddc-snapshots');
+  const output = join(root, 'ddc-merged');
+  mkdirSync(join(snapshots, '0', 'entries', 'aaaa'), { recursive: true });
+  mkdirSync(join(snapshots, '0', 'staging', 'attempt'), { recursive: true });
+  mkdirSync(join(snapshots, '0', 'lease'), { recursive: true });
+  writeFileSync(join(snapshots, '0', 'entries', 'aaaa', 'integrity.json'), 'complete');
+  writeFileSync(join(snapshots, '0', 'entries', 'aaaa', 'receipt.json'), 'receipt');
+  writeFileSync(join(snapshots, '0', 'staging', 'attempt', 'payload.bin'), 'partial');
+  writeFileSync(join(snapshots, '0', 'lease', 'lock'), 'lease');
+  try {
+    const result = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--merge-ddc',
+      '--snapshots-dir',
+      snapshots,
+      '--ddc-output-dir',
+      output,
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    assert.equal(existsSync(join(output, 'entries', 'aaaa', 'integrity.json')), true);
+    assert.equal(existsSync(join(output, 'staging')), false);
+    assert.equal(existsSync(join(output, 'lease')), false);
+    const second = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--merge-ddc',
+      '--snapshots-dir',
+      snapshots,
+      '--ddc-output-dir',
+      output,
+    ]);
+    assert.equal(second.exitCode, 0, second.stderr || second.stdout);
+    assert.deepEqual(JSON.parse(second.stdout), JSON.parse(result.stdout));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('m2: DDC snapshot merge rejects an entry without receipt and integrity', () => {
+  const root = fixture(['alpha']);
+  const snapshots = join(root, 'ddc-snapshots');
+  const output = join(root, 'ddc-merged');
+  mkdirSync(join(snapshots, '0', 'entries', 'bbbb'), { recursive: true });
+  writeFileSync(join(snapshots, '0', 'entries', 'bbbb', 'payload.json'), '{}');
+  try {
+    const result = runPlanner(root, [
+      '--shard-count',
+      '1',
+      '--shard-index',
+      '0',
+      '--merge-ddc',
+      '--snapshots-dir',
+      snapshots,
+      '--ddc-output-dir',
+      output,
+    ]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ddc-snapshot-entry-incomplete');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('repair: bounds each shard build with the shared machine-adaptive runner', () => {
   const planner = readFileSync(plannerPath, 'utf8');
   const runner = readFileSync(join(repoRoot, 'scripts', 'build-apps.mjs'), 'utf8');

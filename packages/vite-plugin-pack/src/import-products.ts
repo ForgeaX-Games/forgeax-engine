@@ -149,6 +149,13 @@ export function logicalPackageFromImportProduct(
   };
 }
 
+/** Keep importer traversal and build projection as one producer boundary. */
+export function projectImportProductForBuild(
+  product: Pick<ImportProduct<unknown>, 'assets'>,
+): LogicalPackage {
+  return logicalPackageFromImportProduct(product);
+}
+
 function cookedPayload(asset: ImportedAsset<unknown>): Record<string, unknown> {
   const payload = asset.payload as unknown as Record<string, unknown>;
   if (Object.keys(asset.artifacts).length === 0) return payload;

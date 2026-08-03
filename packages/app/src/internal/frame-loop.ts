@@ -4,6 +4,7 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
 
 import type { AppErrorCode, AppErrorDetailFor } from '../errors';
 import { AppError } from '../errors';
+import type { FramePhase, FramePhaseObserver } from '../types';
 
 export type FrameState = 'idle' | 'running' | 'paused' | 'stopped';
 
@@ -14,6 +15,7 @@ export interface FrameLoopOptions {
   readonly now?: () => number;
   readonly raf?: (cb: (t: number) => void) => number;
   readonly caf?: (id: number) => void;
+  readonly framePhaseObserver?: FramePhaseObserver;
   readonly drawSource?: () =>
     | { worlds: readonly World[]; cameraOwner: number; resourceOwner: number }
     | undefined;
@@ -105,52 +107,108 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
   let state: FrameState = 'idle';
   let lastTimestamp = 0;
   let pendingFrameId = 0;
+  let frameSeq = 0;
+
+  function notifyPhase(
+    seq: number,
+    phase: FramePhase,
+    boundary: 'begin' | 'end',
+    worldCount?: number,
+  ): void {
+    const observer = opts.framePhaseObserver;
+    if (observer === undefined) return;
+    try {
+      observer.onEvent({
+        frameSeq: seq,
+        phase,
+        boundary,
+        ...(worldCount === undefined ? {} : { worldCount }),
+      });
+    } catch {
+      // Diagnostics must never change the frame-loop's production behavior.
+    }
+  }
+
+  function runPhase<T>(seq: number, phase: FramePhase, action: () => T, worldCount?: number): T {
+    if (opts.framePhaseObserver === undefined) return action();
+    notifyPhase(seq, phase, 'begin', worldCount);
+    try {
+      return action();
+    } finally {
+      notifyPhase(seq, phase, 'end', worldCount);
+    }
+  }
 
   function tick(): void {
     if (state !== 'running') return;
 
-    const timestamp = now();
-    const deltaSeconds = (timestamp - lastTimestamp) / 1000;
-    lastTimestamp = timestamp;
-    const fireError = opts.onError;
+    const seq = ++frameSeq;
+    runPhase(seq, 'frame-total', () => {
+      const timestamp = now();
+      const deltaSeconds = (timestamp - lastTimestamp) / 1000;
+      lastTimestamp = timestamp;
+      const fireError = opts.onError;
 
-    try {
-      fireWorldUpdateResult(world.update(deltaSeconds), fireError);
-    } catch (cause: unknown) {
-      if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
-    }
+      runPhase(
+        seq,
+        'world-update-primary',
+        () => {
+          try {
+            fireWorldUpdateResult(world.update(deltaSeconds), fireError);
+          } catch (cause: unknown) {
+            if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
+          }
+        },
+        1,
+      );
 
-    let injected:
-      | { worlds: readonly World[]; cameraOwner: number; resourceOwner: number }
-      | undefined;
-    if (opts.drawSource !== undefined) {
-      try {
-        injected = opts.drawSource();
-      } catch (cause: unknown) {
-        if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
-      }
-    }
-    if (injected !== undefined) {
-      updateInjectedWorlds(injected.worlds, world, deltaSeconds, fireError);
-    }
-
-    try {
-      const drawResult =
-        injected !== undefined
-          ? renderer.draw([...injected.worlds], {
-              cameraOwner: injected.cameraOwner,
-              resourceOwner: injected.resourceOwner,
-            })
-          : renderer.draw([world], { owner: 0 });
-      if (drawResult !== undefined) {
-        const result = drawResult as { ok: boolean; error?: RhiError };
-        if (!result.ok && result.error !== undefined && fireError !== undefined) {
-          fireError(result.error);
+      let injected:
+        | { worlds: readonly World[]; cameraOwner: number; resourceOwner: number }
+        | undefined;
+      runPhase(seq, 'draw-source', () => {
+        if (opts.drawSource === undefined) return;
+        try {
+          injected = opts.drawSource();
+        } catch (cause: unknown) {
+          if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
         }
-      }
-    } catch (cause: unknown) {
-      if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
-    }
+      });
+
+      const injectedWorldCount =
+        injected === undefined
+          ? 0
+          : injected.worlds.filter((injectedWorld) => injectedWorld !== world).length;
+      runPhase(
+        seq,
+        'world-update-injected',
+        () => {
+          if (injected !== undefined) {
+            updateInjectedWorlds(injected.worlds, world, deltaSeconds, fireError);
+          }
+        },
+        injectedWorldCount,
+      );
+
+      runPhase(seq, 'renderer-draw', () => {
+        try {
+          const drawResult =
+            injected !== undefined
+              ? renderer.draw([...injected.worlds], {
+                  cameraOwner: injected.cameraOwner,
+                  resourceOwner: injected.resourceOwner,
+                })
+              : renderer.draw([world], { owner: 0 });
+          if (drawResult !== undefined) {
+            const result = drawResult as { ok: boolean; error?: RhiError };
+            if (!result.ok && result.error !== undefined && fireError !== undefined) {
+              fireError(result.error);
+            }
+          }
+        } catch (cause: unknown) {
+          if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
+        }
+      });
+    });
     pendingFrameId = raf(tick);
   }
 

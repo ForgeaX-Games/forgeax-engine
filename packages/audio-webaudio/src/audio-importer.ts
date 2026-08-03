@@ -26,6 +26,12 @@
 
 import type { ImportContext, ImportedAsset, Importer, ImportResult } from '@forgeax/engine-types';
 
+/** Audio output identity is semantic and independent of source path/index. */
+export function sourceKeyForAudioOutput(kind = 'audio'): string | undefined {
+  const normalizedKind = kind.trim();
+  return normalizedKind.length === 0 ? undefined : `audio:${normalizedKind}`;
+}
+
 function audioMediaType(source: string): string {
   const lower = source.toLowerCase();
   if (lower.endsWith('.wav')) return 'audio/wav';
@@ -40,10 +46,9 @@ async function importAudio(ctx: ImportContext): Promise<ImportResult> {
   // happens here -- decodeAudioData is the runtime loader's job.
   const read = await ctx.readSource();
   if (!read.ok) {
-    return {
-      ok: true,
-      value: { assets: [], sourceDependencies: [] },
-    };
+    throw new Error(
+      `audioImporter: readSource failed: ${read.error instanceof Error ? read.error.message : String(read.error)}`,
+    );
   }
 
   const out: ImportedAsset[] = [];

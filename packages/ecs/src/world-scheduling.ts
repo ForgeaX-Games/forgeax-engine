@@ -45,7 +45,13 @@ import {
   Time,
   type TimeResource,
 } from './time';
-import type { World, WorldInspection } from './world';
+import type {
+  World,
+  WorldInspection,
+  WorldScheduleData,
+  WorldScheduleQueryData,
+  WorldScheduleSystemData,
+} from './world';
 
 const FIXED_ANCHOR_NAME = FixedUpdate.name;
 type ResourceKey = string | { readonly name: string };
@@ -355,6 +361,72 @@ export function worldInspect(world: World): WorldInspection {
       return schedules.find((entry) => entry.schedule === token)?.systems.length ?? 0;
     },
   };
+}
+
+function referenceName(reference: string | ScheduleToken): string {
+  return typeof reference === 'string' ? reference : reference.name;
+}
+
+function componentNames(components: readonly { readonly name: string }[] | undefined): string[] {
+  return (components ?? []).map((component) => component.name);
+}
+
+function queryData(query: QueryDescriptor): WorldScheduleQueryData {
+  return {
+    with: componentNames(query.with),
+    without: componentNames(query.without),
+    optional: componentNames(query.optional),
+    changed: componentNames(query.changed),
+    added: componentNames(query.added),
+  };
+}
+
+/** Project schedule registration into a JSON-safe graph for tooling and AI inspection. */
+export function worldScheduleData(world: World): ReadonlyArray<WorldScheduleData> {
+  return [...world._getSchedules()].map(([token, schedule]) => {
+    if (schedule.dirty) buildSchedule(schedule);
+
+    const systems: WorldScheduleSystemData[] = [...schedule.systems.entries()]
+      .filter(([name]) => name !== FIXED_ANCHOR_NAME)
+      .map(([name, record]) => {
+        const descriptor = record.descriptor;
+        const params = (descriptor.params ?? []) as ReadonlyArray<{
+          readonly queries?: readonly QueryDescriptor[];
+          readonly resources?: readonly string[];
+        }>;
+        const queries = [
+          ...descriptor.queries,
+          ...params.flatMap((param) => param.queries ?? []),
+        ].map(queryData);
+        const resources = [
+          ...(descriptor.resources ?? []),
+          ...params.flatMap((param) => param.resources ?? []),
+        ];
+        return {
+          name,
+          sets: [...schedule.sets].flatMap(([setName, set]) =>
+            set.members.has(name) ? [setName] : [],
+          ),
+          before: (descriptor.before ?? []).map((reference) => referenceName(reference)),
+          after: (descriptor.after ?? []).map((reference) => referenceName(reference)),
+          queries,
+          resources: [...new Set(resources)],
+        };
+      });
+
+    const systemSets = [...schedule.sets].map(([name, set]) => ({
+      name,
+      members: [...set.members].filter((member) => schedule.systems.has(member)),
+      before: [...set.before],
+      after: [...set.after],
+      chained: set.chained,
+    }));
+    const dependencies = [...schedule.predecessors].flatMap(([target, predecessors]) =>
+      [...predecessors].map((source) => [source, target] as const),
+    );
+
+    return { name: token.name, systems, systemSets, dependencies };
+  });
 }
 
 export function worldAllocUniqueRef<Target extends string, T>(

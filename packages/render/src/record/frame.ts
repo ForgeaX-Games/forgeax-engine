@@ -610,24 +610,20 @@ function validateRenderables(
   // so each ValidatedRenderable carries its per-material renderState
   // override without an O(n^2) back-scan in the draw loop.
   const renderStateByRenderableIdx = new Map<number, MaterialRenderState | undefined>();
-  for (const de of transparentDispatch) {
-    if (de.renderableIndex !== undefined) {
-      renderStateByRenderableIdx.set(de.renderableIndex, de.renderState);
-    }
-  }
   // w10: also build a renderableIndex -> stencilReference map from
   // dispatch entries for per-draw setStencilReference calls.
   const stencilRefByRenderableIdx = new Map<number, number | undefined>();
-  for (const de of transparentDispatch) {
-    if (de.renderableIndex !== undefined) {
-      stencilRefByRenderableIdx.set(de.renderableIndex, de.stencilReference);
-    }
-  }
   const variantSetByRenderableIdx = new Map<number, string | undefined>();
+  // Keep these three independent maps because each overlay has its own
+  // consumer and the last dispatch entry remains authoritative.  Populate
+  // them in one pass: the old code walked the same dispatch list three times
+  // and repeated the same renderableIndex branch / hash writes.
   for (const de of transparentDispatch) {
-    if (de.renderableIndex !== undefined) {
-      variantSetByRenderableIdx.set(de.renderableIndex, variantSetFromDefines(de.defines));
-    }
+    const renderableIndex = de.renderableIndex;
+    if (renderableIndex === undefined) continue;
+    renderStateByRenderableIdx.set(renderableIndex, de.renderState);
+    stencilRefByRenderableIdx.set(renderableIndex, de.stencilReference);
+    variantSetByRenderableIdx.set(renderableIndex, variantSetFromDefines(de.defines));
   }
   const validated: ValidatedRenderable[] = [];
   for (let rIdx = 0; rIdx < renderables.length; rIdx++) {

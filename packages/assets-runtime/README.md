@@ -1,5 +1,17 @@
 # @forgeax/engine-assets-runtime
 
+## Authoring and recovery index
+
+The authority map is [`asset-authority.schema.json`](../../asset-authority.schema.json). Runtime reads Catalog decisions and validated Pack/DDC projections by GUID; it never writes Pack, Meta, DDC, or authoring state.
+
+| Lifecycle | Runtime action | Recovery |
+|:--|:--|:--|
+| `current` | Load the validated projection | Inspect evidence if a dependency fails |
+| `missing` / `cooking` | Return structured not-ready failure | Rebuild in the studio/build host |
+| `stale` / `failed` | Do not use raw source | Cold cook, or explicitly preview last-known-good |
+
+Use [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs) to inspect the owner and runtime-source conclusion before changing a producer.
+
 > [!IMPORTANT]
 > Runtime material consumption is `configurePackIndex` -> `loadByGuid<MaterialAsset>` -> cooked readiness -> `world.allocSharedRef`. The registry returns the loaded payload and follows its dependency graph; it does not create an app-owned shader artifact or a parallel material authoring surface.
 

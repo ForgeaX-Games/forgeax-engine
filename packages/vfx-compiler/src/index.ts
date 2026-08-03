@@ -27,12 +27,20 @@ export {
 export type {
   CanonicalParticleEmitter,
   CanonicalParticleProgram,
+  ParticleEmitterOperatorPrograms,
   ParticleProgramArtifact,
   ParticleProgramInput,
 } from './canonicalize.js';
 export { canonicalizeParticleProgram } from './canonicalize.js';
-export type { ParticleCookError, ParticleCookProduct } from './cook.js';
-export { cookParticleEffect } from './cook.js';
+export type {
+  ParticleCookError,
+  ParticleEffectNativeCookInput,
+} from './cook.js';
+export {
+  cookParticleEffect,
+  cookParticleEffectProduct,
+  createParticleEffectNativeCooker,
+} from './cook.js';
 export { PARTICLE_EFFECT_IMPORTER_KEY, particleEffectImporter } from './importer.js';
 export type {
   ParticleBackend,
@@ -51,3 +59,12 @@ export type {
   ParticleOperatorUnknownDetail,
 } from './operator-registry.js';
 export { ParticleOperatorRegistry } from './operator-registry.js';
+export { createStockParticleOperatorDefinitions } from './stock/compiler-definitions.js';
+export type {
+  StockParticlePairingDetail,
+  StockParticlePairingError,
+} from './stock/paired-registry.js';
+export {
+  createStockParticleOperatorRegistry,
+  validateStockParticleOperatorPairing,
+} from './stock/paired-registry.js';

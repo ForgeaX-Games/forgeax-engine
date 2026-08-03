@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import type { ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { semanticDdcKey } from '../ddc-cache.js';
 import { importTextureEntry } from '../import-texture.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,28 @@ const FIXTURE_PNG = Buffer.from(
 );
 
 const GUID = '019e3969-1d48-7c3b-ac24-6d68f457065f';
+
+describe('texture cache semantic identity', () => {
+  it('does not use texture publication path as a cache key input', () => {
+    const base = {
+      schemaVersion: '2.0.0',
+      importerVersion: 'image@4',
+      codecVersion: 'basis@3',
+      sourceDependencies: [{ path: 'textures/old.png', digest: 'same-source' }],
+      settings: { compressionMode: 'none' },
+      declaredGuids: [GUID],
+      cookProfile: 'release',
+      publish: { path: 'dist/old.bin' },
+    };
+    expect(semanticDdcKey(base)).toBe(
+      semanticDdcKey({
+        ...base,
+        sourceDependencies: [{ path: 'textures/moved.png', digest: 'same-source' }],
+        publish: { path: 'dist/moved.bin' },
+      }),
+    );
+  });
+});
 
 /** A texture pack-index row with the given compressionMode token in metadata. */
 function textureEntry(

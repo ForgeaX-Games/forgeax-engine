@@ -22,6 +22,22 @@ const manifest = `data:application/json,${encodeURIComponent(
       { hash: 'unlit000', wgsl: '/* unlit stub */', glsl: '', bindings: '' },
       { hash: 'tonemap0', wgsl: '/* tonemap stub */', glsl: '', bindings: '' },
     ],
+    materialShaders: [
+      {
+        identifier: 'forgeax::default-standard-pbr',
+        sourcePath: 'forgeax::default-standard-pbr.wgsl',
+        composedWgsl: '/* stub */',
+        paramSchema: '[]',
+        variants: [],
+      },
+      {
+        identifier: 'forgeax::default-unlit',
+        sourcePath: 'forgeax::default-unlit.wgsl',
+        composedWgsl: '/* stub */',
+        paramSchema: '[]',
+        variants: [],
+      },
+    ],
   }),
 )}`;
 

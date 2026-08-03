@@ -5,6 +5,41 @@
 // (parseImage -> raw RGBA bytes -> emitFile hashed `<guid>-[hash].bin`),
 // rewrites `packageUrl` to the hashed path, and emits `pack-index.json`.
 
+## Native authored Pack cookers
+
+An authored `.pack.json` may be runtime `direct` or `cooked`; the filename does
+not decide this. Register native producers at the app composition root so the
+same producer runs in dev and build mode:
+
+```ts
+pluginPack({
+  roots: ['assets'],
+  cookers: [particleEffectCooker],
+});
+```
+
+For a `cooked` asset row, the cooker owns the runtime payload, dependency refs,
+and artifact bytes. The plugin validates and finalizes that product before it
+publishes the catalog row as `internal-asset + cooked + current`. A cooked row
+without a registered producer is a build/dev error; raw authored payload must
+never silently reach the runtime loader.
+
+| Authored row | Producer output | Catalog after successful cook |
+|:--|:--|:--|
+| `execution: 'direct'` | authored payload | `internal-asset + direct + current` |
+| `execution: 'cooked'` | runtime payload + refs + artifacts | `internal-asset + cooked + current` |
+
+## Authoring and recovery index
+
+The audit input and category conclusions live in [`asset-authority.schema.json`](../../asset-authority.schema.json); the executable gate is [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs). This plugin projects producer facts into Catalog rows. It does not become the author authority, DDC owner, or Editor write gateway.
+
+| Need | Entry | Safe action |
+|:--|:--|:--|
+| Inspect | `buildCatalogResult()` and Catalog JSON | Branch on `authority`, `diagnostics`, and lifecycle fields |
+| Rebuild | Declared importer or native cooker | Re-run the producer and publish only validated output |
+| Preview LKG | Explicit evidence locator | Keep `lastKnownGood` read-only and out of shipped output |
+| Stop publish | Degraded authority or failed lifecycle | Block the release and follow the diagnostic recovery |
+
 ## Producer fields are catalog facts
 
 The build producer copies `packageId`, `provenance`, `revision`,

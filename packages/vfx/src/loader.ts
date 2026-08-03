@@ -326,7 +326,12 @@ function parseProgram(
     );
   }
 
-  const source = normalizeParticleEffectSource({ schemaVersion: 1, emitters: decoded.emitters });
+  const authoredEmitters = decoded.emitters.map((emitter) => {
+    if (!isRecord(emitter)) return emitter;
+    const { backendPlan: _backendPlan, programs: _programs, ...authored } = emitter;
+    return authored;
+  });
+  const source = normalizeParticleEffectSource({ schemaVersion: 1, emitters: authoredEmitters });
   if (!source.ok) {
     return programFailure(
       input,

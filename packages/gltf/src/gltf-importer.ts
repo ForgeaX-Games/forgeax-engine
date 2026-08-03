@@ -500,8 +500,8 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         refs: [],
         artifacts: {
           body: {
-            mediaType: extracted.mimeType,
-            assetCodec: { name: 'rgba8', version: '1' },
+            mediaType: decoded.value.mediaType ?? extracted.mimeType,
+            assetCodec: decoded.value.assetCodec ?? { name: 'rgba8', version: '1' },
             bytes: decoded.value.bytes,
           },
         },

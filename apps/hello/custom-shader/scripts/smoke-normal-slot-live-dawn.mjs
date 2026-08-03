@@ -22,11 +22,25 @@ const resizeVariant = process.env.FORGEAX_MATERIAL_LIVE_RESIZE_VARIANT;
 const twoSlotResizeVariant = process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE_VARIANT;
 const twoSlotResizeRebuild = twoSlotResizeVariant === 'normal' || twoSlotResizeVariant === 'swap';
 const twoSlotSwap = twoSlotResizeVariant === 'swap';
+const inheritanceLive = process.env.FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND === '1';
+const inheritanceFalsify = process.env.FORGEAX_FALSIFY_LIVE_INHERITANCE_REBIND === '1';
 const resizeRebuild = twoSlotResizeRebuild || resizeVariant === 'normal' || resizeVariant === 'swap';
 const liveSwap = twoSlotSwap || resizeVariant === 'swap' || (!resizeRebuild && twoSlotResizeVariant === undefined);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableJson(entry)]),
+    );
+  }
+  return value;
 }
 
 function materialFromRecord(record, baseColorHandle, normalHandle) {
@@ -96,11 +110,21 @@ const loader = createMaterialLoader({
   loadRecord: async (guid) => cookedByGuid.get(guid.toLowerCase()),
   loadReference: async () => true,
 });
+const root = await loader.load({
+  guid: '01935b00-7d8c-7c4e-9f12-345678abcd02',
+  specializationKey: 'my-game::pulse-material',
+});
 const derived = await loader.load({
   guid: '01935b00-7d8c-7c4e-9f12-345678abcd03',
   specializationKey: 'my-game::pulse-material',
 });
-assert(derived.status === 'Ready', 'derived material record is not runtime-ready');
+assert(root.status === 'Ready' && derived.status === 'Ready', 'inheritance material records are not runtime-ready');
+assert(root.artifact.digest === derived.artifact.digest, 'root and derived cooked artifacts differ');
+assert(root.record.receipt.inputDigest === derived.record.receipt.inputDigest, 'inheritance specialization inputs differ');
+assert(
+  JSON.stringify(stableJson(root.record.resolved.values)) === JSON.stringify(stableJson(derived.record.resolved.values)),
+  'inheritance runtime-resolved material values differ',
+);
 
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
@@ -217,8 +241,20 @@ for (const [label, handle, payload] of [
 const normalMaterial = materialFromRecord(derived.record, baseColorHandle, normalHandle);
 const swapMaterial = materialFromRecord(
   derived.record,
-  twoSlotSwap ? liveSwapBaseColorHandle : baseColorHandle,
-  liveSwap ? liveSwapNormalHandle : normalHandle,
+  inheritanceLive
+    ? inheritanceFalsify
+      ? baseColorHandle
+      : liveSwapBaseColorHandle
+    : twoSlotSwap
+      ? liveSwapBaseColorHandle
+      : baseColorHandle,
+  inheritanceLive
+    ? inheritanceFalsify
+      ? normalHandle
+      : liveSwapNormalHandle
+    : liveSwap
+      ? liveSwapNormalHandle
+      : normalHandle,
 );
 const normalMaterialHandle = world.allocSharedRef('MaterialAsset', normalMaterial);
 const swapMaterialHandle = world.allocSharedRef('MaterialAsset', swapMaterial);
@@ -309,9 +345,32 @@ const after = await readback(resizeRebuild ? 'after-resize' : 'after');
 const delta = resizeRebuild ? undefined : compareRgba(before.rgba, after.rgba, WIDTH, HEIGHT);
 assert(!resizeRebuild || (after.width === RESIZED_WIDTH && after.height === RESIZED_HEIGHT), 'Dawn resize did not reach the requested drawing buffer');
 if (delta !== undefined) {
-  assert(delta.changedPixels > 0 && delta.meanRgbDelta > 0.001, `normal-slot live rebind was not visually discriminative: ${JSON.stringify(delta)}`);
+  if (inheritanceFalsify) {
+    assert(delta.changedPixels === 0 && delta.meanRgbDelta === 0, `inheritance falsifier unexpectedly changed rendered pixels: ${JSON.stringify(delta)}`);
+  } else {
+    assert(delta.changedPixels > 0 && delta.meanRgbDelta > 0.001, `normal-slot live rebind was not visually discriminative: ${JSON.stringify(delta)}`);
+  }
 }
 assert(errors.length === 0, `renderer errors: ${errors.join(',')}`);
+
+const afterBaseColorHandle = inheritanceLive
+  ? inheritanceFalsify
+    ? baseColorHandle
+    : liveSwapBaseColorHandle
+  : twoSlotSwap
+    ? liveSwapBaseColorHandle
+    : baseColorHandle;
+const afterNormalHandle = inheritanceLive
+  ? inheritanceFalsify
+    ? normalHandle
+    : liveSwapNormalHandle
+  : liveSwap
+    ? liveSwapNormalHandle
+    : normalHandle;
+if (inheritanceFalsify) {
+  assert(afterBaseColorHandle === baseColorHandle && afterNormalHandle === normalHandle, 'inheritance falsifier unexpectedly changed replacement texture handles');
+  throw new Error('FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind');
+}
 
 const output = {
   status: 'pass',
@@ -322,18 +381,25 @@ const output = {
     beforeHandle: normalMaterialHandle,
     afterHandle: liveSwap ? swapMaterialHandle : normalMaterialHandle,
     beforeTextureHandles: [baseColorHandle, normalHandle],
-    afterTextureHandles: [twoSlotSwap ? liveSwapBaseColorHandle : baseColorHandle, liveSwap ? liveSwapNormalHandle : normalHandle],
-    baseColorPreserved: !twoSlotSwap,
-    baseColorChanged: twoSlotSwap,
-    normalSlotChanged: liveSwap,
+    afterTextureHandles: [afterBaseColorHandle, afterNormalHandle],
+    baseColorPreserved: inheritanceLive ? inheritanceFalsify : !twoSlotSwap,
+    baseColorChanged: inheritanceLive ? !inheritanceFalsify : twoSlotSwap,
+    normalSlotChanged: inheritanceLive ? !inheritanceFalsify : liveSwap,
     twoSlotSwap,
+    inheritanceBacked: inheritanceLive,
+    sourceDerivedGuid: derived.record.guid,
+    sourceArtifactDigest: derived.artifact.digest,
+    sourceCookInputDigest: derived.record.receipt.inputDigest,
   },
   before: { sha256: before.sha256, centerPixel: before.centerPixel },
   beforeResize: { sha256: beforeResize.sha256, centerPixel: beforeResize.centerPixel },
   after: { sha256: after.sha256, centerPixel: after.centerPixel, width: after.width, height: after.height },
   resize: { enabled: resizeRebuild, before: [WIDTH, HEIGHT], after: [after.width, after.height] },
   delta,
-  rootArtifactDigest: derived.artifact.digest,
+  rootArtifactDigest: root.artifact.digest,
+  derivedArtifactDigest: derived.artifact.digest,
+  rootCookInputDigest: root.record.receipt.inputDigest,
+  derivedCookInputDigest: derived.record.receipt.inputDigest,
 };
 console.log(JSON.stringify(output));
 sharedDevice.destroy();

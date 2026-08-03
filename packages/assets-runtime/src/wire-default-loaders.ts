@@ -12,17 +12,17 @@
 // default set. videoLoader lives in graphics-extras and is wired here. The
 // renderer supplies its concrete Web Audio loader through `extraLoaders`, so
 // this package remains independent of the Web Audio backend while the
-// production registry still has all 11 engine kinds.
+// production registry still has all 13 engine-owned kinds.
 //
-// Default set wired internally (11 kinds):
-//   inline pack-payload (6): mesh / scene / material / skeleton / skin /
-//     animation-clip
+// Default set wired internally (13 kinds):
+//   inline pack-payload (8): mesh / scene / sampler / material / skeleton /
+//     skin / animation-clip / animation-graph
 //   upstream-branch (3):     texture / font / equirect
 //   video (1):               video (videoLoader, graphics-extras)
 //   UI (1):                  ui (engine-ui)
 //
-// Deliberately NOT registered (AC-02 exclusion): sampler / render-pipeline /
-// shader -- these have no inline loader today; `loadByGuid` on them surfaces
+// Deliberately NOT registered (AC-02 exclusion): render-pipeline / shader --
+// these have no inline loader today; `loadByGuid` on them surfaces
 // `loader-not-registered` (charter P3) rather than a silent miss.
 
 import { videoLoader } from '@forgeax/engine-graphics-extras';
@@ -42,7 +42,7 @@ const uiLoader: Loader<UiAsset> = {
 };
 
 /**
- * Wire the engine's default loader set (11 engine-owned kinds: 6 inline +
+ * Wire the engine's default loader set (13 engine-owned kinds: 8 inline +
  * texture + font + equirect + video + UI) plus any `extraLoaders` onto `registry` in
  * one call. Returns the same `registry` for chaining (so `wireDefaultLoaders(new
  * LoaderRegistry())` is a one-expression wired registry). The `extraLoaders` are
@@ -55,7 +55,7 @@ const uiLoader: Loader<UiAsset> = {
  * const loaders = wireDefaultLoaders(new LoaderRegistry());
  * // loaders.get('mesh') / .get('texture') / .get('font') / .get('video') are
  * // non-undefined; audio is supplied via extraLoaders at the assembly point;
- * // sampler / render-pipeline / shader stay undefined.
+ * // render-pipeline / shader stay undefined.
  * ```
  */
 export function wireDefaultLoaders(

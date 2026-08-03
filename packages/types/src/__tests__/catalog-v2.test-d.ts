@@ -1,5 +1,13 @@
 import { describe, expectTypeOf, it } from 'vitest';
-import type { CatalogDelta, CatalogEntry } from '../catalog.js';
+import type {
+  CatalogDelta,
+  CatalogEntry,
+  CatalogEntryV2,
+  CatalogLifecycle,
+  CatalogProjection,
+  CatalogSubject,
+  CookExecution,
+} from '../catalog.js';
 
 describe('Catalog v2 POD contract', () => {
   it('uses packageUrl as the only package navigation field', () => {
@@ -30,5 +38,17 @@ describe('Catalog v2 POD contract', () => {
     expectTypeOf<CatalogDelta['added']>().toEqualTypeOf<readonly CatalogEntry[]>();
     expectTypeOf<CatalogDelta['changed']>().toEqualTypeOf<readonly CatalogEntry[]>();
     expectTypeOf<RemovedGuid>().toEqualTypeOf<EntryGuid>();
+  });
+
+  it('exposes the three axes as closed, machine-readable fields', () => {
+    expectTypeOf<CatalogSubject>().toEqualTypeOf<'internal-asset' | 'imported-output'>();
+    expectTypeOf<CookExecution>().toEqualTypeOf<'direct' | 'cooked'>();
+    expectTypeOf<CatalogLifecycle>().toEqualTypeOf<
+      'missing' | 'cooking' | 'current' | 'stale' | 'failed'
+    >();
+    expectTypeOf<CatalogProjection>().toHaveProperty('subject');
+    expectTypeOf<CatalogProjection>().toHaveProperty('execution');
+    expectTypeOf<CatalogProjection>().toHaveProperty('lifecycle');
+    expectTypeOf<CatalogEntryV2['projection']>().toEqualTypeOf<CatalogProjection>();
   });
 });

@@ -22,6 +22,16 @@ export interface ArtifactDescriptor {
   readonly integrity?: Integrity;
 }
 
+/** Shared completed output produced by every build-time asset producer. */
+export interface CookProduct<P = unknown> {
+  readonly guid: string;
+  readonly payload: P;
+  readonly refs: readonly string[];
+  readonly artifacts: Readonly<Record<string, ArtifactDescriptor>>;
+  readonly digest: string;
+  readonly receipt: import('./asset-evidence.js').CookReceipt;
+}
+
 export interface AssetEnvelopeV2<P = unknown> {
   readonly guid: string;
   readonly kind: string;
@@ -55,4 +65,4 @@ export type {
   PackageVerificationEvidence,
   SourceDeclarationEvidence,
 } from './asset-evidence.js';
-export { projectAssetEvidence } from './asset-evidence.js';
+export { projectAssetEvidence, projectCookProductEvidence } from './asset-evidence.js';

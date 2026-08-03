@@ -325,19 +325,19 @@ function makeStubGPU(): unknown {
   // M3 w9: AssetRegistry now internally builds its own LoaderRegistry via
   // createDefaultLoaderRegistry(). The public readonly `loaders` field gives
   // host code direct access to register custom loaders. This test verifies
-  // the pre-wired contract: default kinds (mesh, scene, texture, etc.) are
-  // registered, and unregistered kinds (sampler/render-pipeline/shader) are
+  // the pre-wired contract: default kinds (mesh, scene, sampler, texture, etc.)
+  // are registered, and unregistered kinds (render-pipeline/shader) are
   // deliberately absent.
   describe('AssetRegistry public readonly loaders field (M3 w9)', () => {
     it('loaders is a public readonly field pre-wired with default kinds', () => {
       const assets = new AssetRegistry(makeMockShaderRegistry());
       expect(assets.loaders).toBeDefined();
-      // Default loader set (10 kinds) includes mesh, scene, texture, font.
+      // Default loader set includes mesh, scene, sampler, texture, and font.
       expect(assets.loaders.get('mesh')).toBeDefined();
       expect(assets.loaders.get('texture')).toBeDefined();
       expect(assets.loaders.get('font')).toBeDefined();
-      // Deliberately NOT registered: sampler, render-pipeline, shader.
-      expect(assets.loaders.get('sampler')).toBeUndefined();
+      expect(assets.loaders.get('sampler')).toBeDefined();
+      // Deliberately NOT registered: render-pipeline and shader.
       expect(assets.loaders.get('render-pipeline')).toBeUndefined();
       expect(assets.loaders.get('shader')).toBeUndefined();
       // registeredKinds includes the default set.
@@ -466,12 +466,13 @@ function makeStubGPU(): unknown {
   }
 
   describe('inline pack-payload loaders (w4)', () => {
-    it('INLINE_PACK_LOADERS covers the 7 inline kinds in order', () => {
-      // feat-20260713 M4 / w30: animationGraphLoader ('animation-graph') appends
-      // after the clip loader, taking the inline set from 6 -> 7 kinds.
+    it('INLINE_PACK_LOADERS covers the 8 inline kinds in order', () => {
+      // Sampler is an engine-owned inline payload needed by material references;
+      // animationGraphLoader remains the final inline entry.
       expect(INLINE_PACK_LOADERS.map((l) => l.kind)).toEqual([
         'mesh',
         'scene',
+        'sampler',
         'material',
         'skeleton',
         'skin',
@@ -744,6 +745,7 @@ function makeStubGPU(): unknown {
   const REGISTERED_KINDS = [
     'mesh',
     'scene',
+    'sampler',
     'material',
     'skeleton',
     'skin',
@@ -752,11 +754,12 @@ function makeStubGPU(): unknown {
     'texture',
     'font',
     'equirect',
-    'audio',
     'video',
+    'ui',
+    'audio',
   ] as const;
 
-  const UNREGISTERED_STUBS = ['sampler', 'render-pipeline', 'shader'] as const;
+  const UNREGISTERED_STUBS = ['render-pipeline', 'shader'] as const;
 
   describe('wireDefaultLoaders (w5; D-2 extraLoaders w8; D-2 terminal M3 / w32)', () => {
     // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal):
@@ -769,27 +772,27 @@ function makeStubGPU(): unknown {
     // set is unchanged; only the internal/injected split shifts by one
     // (AC-05 allowed test attribution adjustment).
     //
-    // feat-20260713 M4 / w30: animationGraphLoader joins INLINE_PACK_LOADERS, so
-    // the internal default set is now 11 kinds (was 10) and the audio-injected
-    // full set is 12 kinds (was 11).
-    it('registers the 11 engine loaders + extraLoader (audio) = 12 kinds', () => {
+    // Sampler is an inline engine loader and UI remains a built-in projection;
+    // the audio-injected full set is 14 kinds.
+    it('registers the 13 engine loaders + extraLoader (audio) = 14 kinds', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg, [audioLoader]);
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
-      expect(reg.registeredKinds()).toHaveLength(13);
+      expect(reg.registeredKinds()).toHaveLength(14);
     });
 
-    it('default set (no extraLoaders) is the 11 engine-owned kinds (incl. video)', () => {
+    it('default set (no extraLoaders) is the 13 engine-owned kinds (incl. video and UI)', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg);
-      expect(reg.registeredKinds()).toHaveLength(12);
+      expect(reg.registeredKinds()).toHaveLength(13);
       expect(reg.get('video'), 'video is wired internally (graphics-extras)').toBeDefined();
+      expect(reg.get('ui'), 'ui is wired internally (engine-ui)').toBeDefined();
       expect(reg.get('audio'), 'audio is injected, not default').toBeUndefined();
     });
 
-    it('does NOT register sampler / render-pipeline / shader (AC-02 exclusion)', () => {
+    it('does NOT register render-pipeline / shader (AC-02 exclusion)', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg, [audioLoader]);
       for (const kind of UNREGISTERED_STUBS) {
@@ -940,7 +943,6 @@ function makeStubGPU(): unknown {
         vertices,
         indices: new Uint16Array([0, 1, 2, 2, 3, 0]),
         attributes: {}, // no position
-        aabb: new Float32Array(6),
         submeshes: [
           {
             indexOffset: 0,
@@ -972,7 +974,6 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
         attributes: {},
-        aabb: new Float32Array(6),
         submeshes: [
           {
             indexOffset: 0,

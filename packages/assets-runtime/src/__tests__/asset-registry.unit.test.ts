@@ -126,6 +126,70 @@ describe('loadByGuid', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect((res.error as { code: string }).code).toBe('asset-not-found');
   });
+
+  it('does not return a payload for a failed cooked projection', async () => {
+    const reg = makeRegistry();
+    reg.configurePackIndex('/pack-index.json');
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/pack-index.json')) {
+          return new Response(
+            JSON.stringify([
+              {
+                guid: GUID_A,
+                packageUrl: '/runtime/failed.pack.json',
+                kind: 'mesh',
+                sourcePath: 'authoring/mesh.pack.json',
+                subject: 'internal-asset',
+                execution: 'cooked',
+                lifecycle: 'failed',
+                projection: {
+                  subject: 'internal-asset',
+                  execution: 'cooked',
+                  lifecycle: 'failed',
+                  operations: {
+                    preview: { operation: 'preview', enabled: false },
+                    save: { operation: 'save', enabled: false },
+                    rebuild: { operation: 'rebuild', enabled: true },
+                    sourceOverride: { operation: 'sourceOverride', enabled: false },
+                    instanceOverride: { operation: 'instanceOverride', enabled: false },
+                    promote: { operation: 'promote', enabled: false },
+                  },
+                },
+              },
+            ]),
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: GUID_A,
+                kind: 'mesh',
+                payload: { vertices: new Array(36).fill(0), indices: [0, 1, 2] },
+                refs: [],
+                artifacts: {},
+              },
+            ],
+          }),
+        );
+      }),
+    );
+
+    try {
+      const result = await reg.loadByGuid(reg.parseGuid(GUID_A));
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('asset-not-imported');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe('resolveName / packageOf / rename', () => {

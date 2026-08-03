@@ -67,9 +67,12 @@ describe('particle simulation batches', () => {
     ]);
     expect(observation?.emitters.map((emitter) => emitter.emitterId)).toEqual(['first', 'second']);
     expect(validateParticleRenderBatch(observation?.batches).ok).toBe(true);
+    const simulation = world.getResource<ParticleSimulation>(PARTICLE_SIMULATION_RESOURCE_KEY);
+    const committed = observation;
 
     world.set(player, ParticleEffectPlayer, { playing: false }).unwrap();
     world.update(0.1).unwrap();
-    expect(observation?.batches.batches).toHaveLength(2);
+    expect(simulation.read(player)).toBe(committed);
+    expect(simulation.read(player)?.batches).toBe(committed?.batches);
   });
 });

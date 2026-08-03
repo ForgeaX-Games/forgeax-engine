@@ -37,6 +37,8 @@ export interface CookReceipt {
   };
 }
 
+export type { CookProduct } from './asset.js';
+
 /** Source-side declaration used to compare current input with a producer receipt. */
 export interface SourceDeclarationEvidence {
   readonly origin: CookOrigin;
@@ -110,6 +112,48 @@ export interface AssetEvidenceInputs {
   readonly artifacts?: Readonly<Record<string, ArtifactDescriptor>>;
   readonly artifactVerification?: Readonly<Record<string, ArtifactVerificationStatus>>;
   readonly runtime?: { readonly status: RuntimeEvidenceStatus };
+}
+
+/** Project the one public producer product into the shared evidence view. */
+export function projectCookProductEvidence(
+  product: import('./asset.js').CookProduct,
+  locator?: AssetEvidenceLocator,
+): Result<AssetEvidence, AssetEvidenceError> {
+  if (product.receipt.guid !== product.guid) {
+    return conflict(
+      'asset-evidence-receipt-conflict',
+      product.guid,
+      product.receipt.guid,
+      product.guid,
+    );
+  }
+  if (product.receipt.outputDigest !== product.digest) {
+    return conflict(
+      'asset-evidence-digest-mismatch',
+      product.guid,
+      product.digest,
+      product.receipt.outputDigest ?? 'missing receipt digest',
+    );
+  }
+  return projectAssetEvidence({
+    guid: product.guid,
+    source: {
+      origin: product.receipt.origin,
+      inputFingerprint: product.receipt.inputFingerprint,
+    },
+    ...(locator === undefined ? {} : { locator }),
+    receipt: product.receipt,
+    package: {
+      guid: product.guid,
+      digest: product.digest,
+      artifacts: Object.fromEntries(
+        Object.entries(product.artifacts).map(([key, descriptor]) => [
+          key,
+          { descriptor, verification: 'passed' as const },
+        ]),
+      ),
+    },
+  });
 }
 
 export { ASSET_EVIDENCE_ERROR_HINTS } from './asset-errors.js';

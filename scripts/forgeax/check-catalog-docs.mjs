@@ -105,6 +105,39 @@ const materialRecoveryCodes = [
   'material-value-type-mismatch',
   'material-reflection-binding-mismatch',
 ];
+
+const authorityAuditVocabulary = [
+  'subject',
+  'execution',
+  'lifecycle',
+  'lastKnownGood',
+  'sourceKey',
+  'author authority',
+  'runtime source',
+  'author-validation',
+  'external-declaration',
+  'import',
+  'native-cook',
+  'ddc-validation',
+  'runtime-parse',
+  'editor-capability',
+  'inspect',
+  'rebuild',
+  'cold cook',
+  'preview-LKG',
+  'override',
+  'promote',
+  'stop-publish',
+];
+const authorityAuditDocuments = [
+  'packages/pack/README.md',
+  'packages/import/README.md',
+  'packages/vite-plugin-pack/README.md',
+  'packages/assets-runtime/README.md',
+  'packages/vfx/README.md',
+  'packages/vfx-compiler/README.md',
+  'packages/ddc/README.md',
+];
 const materialRouteTokens = [
   'MaterialAsset',
   'passes',
@@ -215,8 +248,56 @@ async function checkDocuments(root, documents, label) {
   return failures;
 }
 
+async function checkAuthorityAuditContract(root) {
+  const failures = [];
+  const schemaPath = resolve(root, 'asset-authority.schema.json');
+  let schemaSource;
+  try {
+    schemaSource = await readFile(schemaPath, 'utf8');
+    JSON.parse(schemaSource);
+  } catch (error) {
+    failures.push(
+      `engine/asset-authority.schema.json: unreadable or invalid JSON (${error instanceof Error ? error.message : String(error)})`,
+    );
+    return failures;
+  }
+  for (const token of ['"subject"', '"execution"', '"lifecycle"', '"sourceKey"']) {
+    if (!schemaSource.includes(token))
+      failures.push(`engine/asset-authority.schema.json: add audit field ${JSON.stringify(token)}`);
+  }
+  const authoritySources = [schemaSource];
+  for (const relativePath of authorityAuditDocuments) {
+    const absolutePath = resolve(root, relativePath);
+    let source;
+    try {
+      source = await readFile(absolutePath, 'utf8');
+    } catch (error) {
+      failures.push(
+        `engine/${relativePath}: unreadable (${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+    authoritySources.push(source);
+    if (!source.includes('asset-authority.schema.json'))
+      failures.push(`engine/${relativePath}: link the authority audit schema`);
+    if (!/lifecycle/i.test(source))
+      failures.push(`engine/${relativePath}: document lifecycle evidence`);
+    if (!/runtime/i.test(source))
+      failures.push(`engine/${relativePath}: document the runtime boundary`);
+  }
+  const authorityCorpus = authoritySources.join('\n');
+  for (const token of authorityAuditVocabulary) {
+    if (!authorityCorpus.includes(token))
+      failures.push(
+        `engine/asset-authority.schema.json: add audit vocabulary ${JSON.stringify(token)}`,
+      );
+  }
+  return failures;
+}
+
 const failures = await checkDocuments(engineRoot, engineDocuments, 'engine');
 failures.push(...(await checkMaterialDocuments(engineRoot)));
+failures.push(...(await checkAuthorityAuditContract(engineRoot)));
 for (const [relativePath, term] of [
   ['packages/assets-runtime/README.md', 'forgeax:asset-changed'],
   ['packages/vite-plugin-pack/README.md', 'forgeax:asset-changed'],

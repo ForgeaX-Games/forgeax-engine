@@ -78,6 +78,10 @@ function qualify(identity: string, name: string): string {
   return `${identity}::${name}`;
 }
 
+function qualifyAttachment(identity: string, name: string): string {
+  return name === 'swapchain' ? name : qualify(identity, name);
+}
+
 function failed(identity: string, order: number): RenderFeatureStageFailedError {
   return new RenderFeatureStageFailedError(identity, order, 'contribute', 'next-frame');
 }
@@ -183,12 +187,12 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
     const resolvedGraphics = this.resolveGraphics?.(descriptor);
     if (resolvedGraphics !== undefined && !resolvedGraphics.ok) return err(resolvedGraphics.error);
     const qualifiedResources = descriptor.attachments.colors.map((attachment) =>
-      qualify(this.identity, attachment.resource),
+      qualifyAttachment(this.identity, attachment.resource),
     );
     const qualifiedDepth =
       descriptor.attachments.depthStencil === undefined
         ? undefined
-        : qualify(this.identity, descriptor.attachments.depthStencil.resource);
+        : qualifyAttachment(this.identity, descriptor.attachments.depthStencil.resource);
     const contributionPass: RenderFeatureContributionPass<Ctx> = {
       featureIdentity: this.identity,
       order: this.order,
@@ -330,6 +334,7 @@ export function composeRenderFeatureGraph<GraphCtx, FeatureCtx = RenderFeaturePa
   if (!merged.ok) return merged;
   const proxies = merged.value.passes.map((pass) => ({
     name: pass.name,
+    pass,
     delegate: toDelegate(pass.descriptor.execute),
   }));
   for (const resource of merged.value.resources) {
@@ -349,7 +354,9 @@ export function composeRenderFeatureGraph<GraphCtx, FeatureCtx = RenderFeaturePa
           executeCount += 1;
         }
         try {
-          project(ctx, pass, resolveCtx, (featureContext) => proxy.delegate?.(featureContext));
+          project(ctx, proxy.pass, resolveCtx, (featureContext) =>
+            proxy.delegate?.(featureContext),
+          );
         } catch (failure) {
           reportError?.(pass.featureIdentity, pass.order, failure);
         }
@@ -371,7 +378,10 @@ export function composeRenderFeatureGraph<GraphCtx, FeatureCtx = RenderFeaturePa
       }
       for (const [index, pass] of nextMerged.value.passes.entries()) {
         const proxy = proxies[index];
-        if (proxy !== undefined) proxy.delegate = toDelegate(pass.descriptor.execute);
+        if (proxy !== undefined) {
+          proxy.pass = pass;
+          proxy.delegate = toDelegate(pass.descriptor.execute);
+        }
       }
       currentSignature = nextMerged.value.topologySignature;
       return { topologyChanged: false };

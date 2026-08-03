@@ -60,7 +60,12 @@ function stubImporter(key: string): Importer {
     return {
       importer,
       source: 'model.gltf',
-      subAssets: guids.map((g, i) => ({ guid: g, sourceIndex: i, kind: 'mesh' })),
+      subAssets: guids.map((g, i) => ({
+        guid: g,
+        sourceIndex: i,
+        sourceKey: `fixture:mesh:${g}`,
+        kind: 'mesh',
+      })),
     };
   }
 

@@ -39,4 +39,31 @@ describe('offline evidence adapter', () => {
     expect(buildOfflineAssetEvidence.toString()).not.toContain('loadByGuid');
     expect(buildOfflineAssetEvidence.toString()).not.toContain('WebSocket');
   });
+
+  it('projects a verified cook product without requiring DDC storage', async () => {
+    const result = await buildOfflineAssetEvidence({
+      guid,
+      product: {
+        guid,
+        payload: { kind: 'direct-asset' },
+        refs: [],
+        artifacts: {
+          data: { path: 'assets/data.bin', mediaType: 'application/octet-stream' },
+        },
+        digest: 'digest-direct',
+        receipt: {
+          guid,
+          origin: 'authoredPack',
+          status: 'succeeded',
+          inputFingerprint: 'direct-input',
+          outputDigest: 'digest-direct',
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.cook.freshness).toBe('notApplicable');
+    expect(result.value.package?.status).toBe('passed');
+  });
 });

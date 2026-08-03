@@ -92,8 +92,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
+    return registerMeshWithAabb(world, new Float32Array([-1, -1, -1, 1, 1, 1]));
+  }
+
+  function registerMeshWithAabb(
+    world: World,
+    aabb: Float32Array | undefined,
+  ): Handle<'MeshAsset', 'shared'> {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+    const mesh: MeshAsset = {
       kind: 'mesh',
       vertices: new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
@@ -101,7 +108,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ]),
       indices: new Uint16Array([0, 1, 2]),
       attributes: { position: positions },
-      aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
       submeshes: [
         {
           indexOffset: 0,
@@ -110,7 +116,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           topology: 'triangle-list',
         },
       ],
-    });
+      ...(aabb !== undefined ? { aabb } : {}),
+    };
+    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', mesh);
   }
 
   function registerMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
@@ -130,7 +138,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('render-system-extract consumer migration (w9, AC-07 / AC-15)', () => {
     it('mesh-walk: RenderableSnapshot.transform.world is the resolved world mat4 (parent x child), zero per-snapshot compose', () => {
       const world = new World();
-      spawnCamera(world);
+      world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [12, 3, 5] } },
+          { component: Camera, data: cameraData },
+        )
+        .unwrap();
       const parent = world
         .spawn({ component: Transform, data: { ...identity(), pos: [10, 0, 0] } })
         .unwrap();
@@ -159,7 +172,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('mesh-walk: flat root world mat4 equals compose(local)', () => {
       const world = new World();
-      spawnCamera(world);
+      world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [5, 6, 12] } },
+          { component: Camera, data: cameraData },
+        )
+        .unwrap();
       world
         .spawn(
           { component: Transform, data: { ...identity(), pos: [5, 6, 7], scale: [2, 1, 1] } },
@@ -305,6 +323,67 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(propagateTransforms(world).ok).toBe(true);
         const frame = extractFrame(world);
         expect(frame.renderables).toHaveLength(1);
+      }
+    });
+
+    it('AC-02: builtin MeshAsset AABB enters the same frustum path as imported meshes', () => {
+      const world = new World();
+      spawnCamera(world);
+      world
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 200] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: {} },
+        )
+        .unwrap();
+
+      expect(propagateTransforms(world).ok).toBe(true);
+      const frame = extractFrame(world);
+
+      expect(frame.renderables).toHaveLength(0);
+      expect(frame.frustumStats).toEqual({ culled: 1, total: 1 });
+    });
+
+    it('AC-02: malformed MeshAsset AABBs stay conservative and out of cull statistics', () => {
+      const malformedAabbs: Array<Float32Array | undefined> = [
+        undefined,
+        new Float32Array([
+          Number.POSITIVE_INFINITY,
+          Number.POSITIVE_INFINITY,
+          Number.POSITIVE_INFINITY,
+          Number.NEGATIVE_INFINITY,
+          Number.NEGATIVE_INFINITY,
+          Number.NEGATIVE_INFINITY,
+        ]),
+        new Float32Array([1, 0, 0, 0, 1, 1]),
+        new Float32Array([0, 1, 0, 1, 0, 1]),
+        new Float32Array([0, 0, 1, 1, 1, 0]),
+        new Float32Array([Number.NaN, 0, 0, 1, 1, 1]),
+        new Float32Array([0, 0, 0, Number.POSITIVE_INFINITY, 1, 1]),
+        new Float32Array([0, 0, 0, 1]),
+      ];
+
+      for (const [index, aabb] of malformedAabbs.entries()) {
+        const world = new World();
+        spawnCamera(world);
+        const mesh = registerMeshWithAabb(world, aabb);
+        const material = registerMaterial(world);
+        world
+          .spawn(
+            { component: Transform, data: { ...identity(), pos: [0, 0, 200] } },
+            { component: MeshFilter, data: { assetHandle: mesh } },
+            { component: MeshRenderer, data: { materials: [material] } },
+          )
+          .unwrap();
+
+        expect(propagateTransforms(world).ok).toBe(true);
+        const frame = extractFrame(world);
+
+        // Invalid/missing bounds must never cause a false negative visibility
+        // result. They are a producer-contract failure, not a valid cull
+        // candidate, so they stay out of frustumStats.
+        expect(frame.renderables, `malformed AABB case ${index}`).toHaveLength(1);
+        expect(frame.frustumStats, `malformed AABB case ${index}`).toEqual({ culled: 0, total: 0 });
       }
     });
 

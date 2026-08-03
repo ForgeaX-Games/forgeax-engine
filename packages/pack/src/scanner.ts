@@ -35,6 +35,7 @@ function packErr<E>(error: E): ScanResult<never, E> {
 const BLACKLIST = new Set([
   'node_modules',
   '.forgeax-harness',
+  '.forgeax',
   '.git',
   'dist',
   '.forgeax-asset-cache',
@@ -203,8 +204,37 @@ export async function scan(
 
     // Step 3: validate GUIDs in pack
     const packObj = parsed as {
-      assets: { guid: string; refs: string[]; sourceKey?: string; sourceIndex?: number }[];
+      assets: {
+        guid: string;
+        kind: string;
+        execution?: 'direct' | 'cooked';
+        payload: unknown;
+        refs: string[];
+        artifacts?: Readonly<Record<string, unknown>>;
+        sourceKey?: string;
+        sourceIndex?: number;
+      }[];
     };
+    for (const asset of packObj.assets) {
+      if (
+        asset.kind === 'particle-effect' &&
+        asset.execution === 'direct' &&
+        (asset.refs.length > 0 || Object.keys(asset.artifacts ?? {}).length > 0)
+      ) {
+        return packErr(
+          makePackError('pack-malformed-pack', {
+            path: packPath,
+            ajvErrors: [
+              {
+                instancePath: '/assets',
+                message:
+                  'authored particle-effect assets are source-only; refs and artifacts must be empty',
+              },
+            ],
+          }),
+        );
+      }
+    }
     const producerAssets = packObj.assets.filter(
       (asset) => asset.sourceKey !== undefined || asset.sourceIndex !== undefined,
     );
@@ -359,7 +389,7 @@ export async function scan(
       }
       guidToPath.set(normalizedGuid, metaPath);
     }
-    const producerSubAssets = metaObj.subAssets.filter((sub) => sub.sourceKey !== undefined);
+    const producerSubAssets = metaObj.subAssets.length > 1 ? metaObj.subAssets : [];
     if (producerSubAssets.length > 0) {
       const topologyContract = validateProducerOutputs(
         producerSubAssets as unknown as readonly ImportedOutputDeclaration[],

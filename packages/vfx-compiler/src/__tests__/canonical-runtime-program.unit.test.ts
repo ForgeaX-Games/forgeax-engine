@@ -30,10 +30,12 @@ const input: ParticleProgramInput = {
   },
   backendPlans: { spark: { kind: 'cpu', backends: ['cpu'] } },
   operatorPrograms: {
-    'spawn:spawn-rate:1': { cpu: { opcode: 'spawn-rate', rate: 8 } },
-    'initialize:set-life:1': { cpu: { opcode: 'set-life', seconds: 1 } },
-    'update:gravity:1': { cpu: { opcode: 'gravity', y: -9.8 } },
-    'output:billboard:1': { cpu: { opcode: 'billboard', size: 0.5 } },
+    spark: {
+      'spawn:spawn-rate:1': { cpu: { opcode: 'spawn-rate', rate: 8 } },
+      'initialize:set-life:1': { cpu: { opcode: 'set-life', seconds: 1 } },
+      'update:gravity:1': { cpu: { opcode: 'gravity', y: -9.8 } },
+      'output:billboard:1': { cpu: { opcode: 'billboard', size: 0.5 } },
+    },
   },
 };
 

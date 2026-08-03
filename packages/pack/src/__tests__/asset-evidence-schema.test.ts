@@ -55,4 +55,32 @@ describe('AssetEvidence pack projection schema', () => {
     if (sourceArtifact === undefined) return;
     expect(sourceArtifact.verification).toBe('notChecked');
   });
+
+  it('rejects evidence projection when receipt GUID or digest is not the product GUID', async () => {
+    const { projectCookProductEvidence } = await import('@forgeax/engine-types');
+    const result = projectCookProductEvidence({
+      guid,
+      payload: { kind: 'host-config', value: 1 },
+      refs: [],
+      artifacts: {
+        source: {
+          path: 'artifacts/source.json',
+          mediaType: 'application/json',
+        },
+      },
+      digest: 'digest-1',
+      receipt: {
+        guid: '22222222-2222-4222-8222-222222222222',
+        origin: 'sourceMeta',
+        status: 'succeeded',
+        inputFingerprint: 'fp-1',
+        outputDigest: 'digest-2',
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'asset-evidence-receipt-conflict' },
+    });
+  });
 });

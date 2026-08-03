@@ -1,0 +1,62 @@
+{
+  "name": "@forgeax/hello-boss-lightning",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Boss Lightning CPU particle composition with billboard, mesh, and emissive strike outputs.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-boss-lightning smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "demo bundle size follows the engine runtime packages"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "demo smoke validates particle output structure and pixels"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "particle performance benchmarks are owned by the vfx package"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-boss-lightning smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "this is a production-facing demo, not a spike"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-vfx-compiler": "workspace:*",
+    "@webgpu/types": "^0.1.71",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

@@ -21,6 +21,9 @@ export type { PassOffset } from './tape-format';
 
 export { TAPE_FORMAT_VERSION } from './tape-format';
 
+/** Shared upper bound for the asynchronous frame-header GPU snapshot. */
+export const SNAPSHOT_TIMEOUT_MS = 30_000;
+
 // ============================================================================
 // generateRunId -- dual-source (globalThis.crypto || Math.random fallback)
 // ============================================================================

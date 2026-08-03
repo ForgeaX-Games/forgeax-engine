@@ -8,6 +8,10 @@ import {
   type AssetRelation,
   authoringCapabilityForAssetKind,
   type CatalogDiagnostic,
+  type CatalogLifecycle,
+  type CatalogProjection,
+  type CatalogSubject,
+  type CookExecution,
   type ProviderProvenance,
   type ResourceRevision,
 } from '@forgeax/engine-types';
@@ -29,6 +33,11 @@ export interface CatalogRecord {
   readonly sourceIndex?: number;
   readonly relations?: readonly AssetRelation[];
   readonly diagnostics?: readonly CatalogDiagnostic[];
+  /** Producer-owned projection axes; never infer these from locators. */
+  readonly subject?: CatalogSubject;
+  readonly execution?: CookExecution;
+  readonly lifecycle?: CatalogLifecycle;
+  readonly projection?: CatalogProjection;
 }
 
 /** Build the canonical row for an inline asset without inventing producer facts. */
@@ -108,7 +117,10 @@ export function resolveCatalogAssetUrl(registry: AssetRegistry, packageUrl: stri
 function isRawSourceLocator(packageUrl: string): boolean {
   const path = packageUrl.split(/[?#]/, 1)[0]?.toLowerCase() ?? packageUrl.toLowerCase();
   if (path.endsWith('.pack.json')) return false;
-  return /\.(bin|fbx|gltf|glb|hdr|jpg|jpeg|png|wav|mp3|ogg|ttf|otf|woff|woff2|svg)$/.test(path);
+  return (
+    /\.(bin|fbx|gltf|glb|hdr|jpg|jpeg|png|wav|mp3|ogg|ttf|otf|woff|woff2|svg)$/.test(path) ||
+    path.endsWith('.particle-effect.json')
+  );
 }
 
 /** Parse the shared pack-index/catalog wire shape without loading payloads. */
@@ -197,6 +209,22 @@ export function parseCatalog(
         : {}),
       ...(Array.isArray(rawRow.diagnostics)
         ? { diagnostics: rawRow.diagnostics as readonly CatalogDiagnostic[] }
+        : {}),
+      ...(rawRow.subject === 'internal-asset' || rawRow.subject === 'imported-output'
+        ? { subject: rawRow.subject }
+        : {}),
+      ...(rawRow.execution === 'direct' || rawRow.execution === 'cooked'
+        ? { execution: rawRow.execution }
+        : {}),
+      ...(rawRow.lifecycle === 'missing' ||
+      rawRow.lifecycle === 'cooking' ||
+      rawRow.lifecycle === 'current' ||
+      rawRow.lifecycle === 'stale' ||
+      rawRow.lifecycle === 'failed'
+        ? { lifecycle: rawRow.lifecycle }
+        : {}),
+      ...(rawRow.projection !== undefined
+        ? { projection: rawRow.projection as CatalogProjection }
         : {}),
     };
     catalog.set(guid, row);

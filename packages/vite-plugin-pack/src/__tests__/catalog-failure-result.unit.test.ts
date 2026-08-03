@@ -76,6 +76,22 @@ describe('catalog failure result', () => {
     });
   });
 
+  it('rejects shader source rows instead of silently skipping them', async () => {
+    const root = await makeRoot('shader-source');
+    await writeMeta(root, meta('shader', 'shader'));
+
+    const result = await buildCatalogResult([root]);
+
+    expect(result.authority).toBe('degraded');
+    expect(result.entries).toEqual([]);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: 'catalog-raw-source-unsupported',
+      expected: expect.stringContaining('cooked'),
+      actual: 'shader',
+      hint: expect.any(String),
+    });
+  });
+
   it('marks schema or scan failure as degraded with an affected root', async () => {
     const root = await makeRoot('schema-failure');
     await writeMeta(root, { ...meta('gltf', 'mesh'), importSettings: 'invalid' });

@@ -3,7 +3,7 @@
 // (feat-20260517-vite-plugin-image-build-time-cook M1 w3;
 //  feat-20260521-unify-sidecar-meta-dispatch-by-content unified sidecar dispatch).
 //
-// Two arms; image / gltf / audio split keyed on top-level `importer` field
+// Two arms; image / gltf / audio / font split keyed on top-level `importer` field
 // inside the .meta.json (not on filename form; sidecars are uniformly
 // `<source>.meta.json`). `importer` is the open string key the
 // @forgeax/engine-import runner dispatches on (feat-20260603-asset-import-loader-injection
@@ -59,12 +59,25 @@ import type {
   ProviderProvenance,
   ResourceRevision,
 } from '@forgeax/engine-types';
-import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
+import { catalogOperationsFor } from '@forgeax/engine-types';
+
+function projectionFor(
+  subject: 'internal-asset' | 'imported-output',
+  execution: 'direct' | 'cooked',
+  lifecycle: 'missing' | 'cooking' | 'current' | 'stale' | 'failed',
+) {
+  return {
+    subject,
+    execution,
+    lifecycle,
+    operations: catalogOperationsFor({ subject, execution, lifecycle }),
+  } as const;
+}
 
 export function projectPackageCatalog(
   entries: readonly Pick<
     PackIndexEntry,
-    'guid' | 'kind' | 'sourcePath' | 'name' | 'refs' | 'authoring'
+    'guid' | 'kind' | 'sourcePath' | 'name' | 'refs' | 'authoring' | 'execution'
   >[],
   packageUrl: string,
 ): PackIndexEntry[] {
@@ -75,7 +88,15 @@ export function projectPackageCatalog(
     packageUrl: packageUrl,
     ...(entry.name === undefined ? {} : { name: entry.name }),
     ...(entry.refs === undefined ? {} : { refs: entry.refs }),
-    authoring: entry.authoring ?? authoringCapabilityForAssetKind(entry.kind),
+    ...(entry.authoring === undefined ? {} : { authoring: entry.authoring }),
+    subject: 'internal-asset',
+    execution: entry.execution ?? 'direct',
+    lifecycle: entry.execution === 'cooked' ? 'missing' : 'current',
+    projection: projectionFor(
+      'internal-asset',
+      entry.execution ?? 'direct',
+      entry.execution === 'cooked' ? 'missing' : 'current',
+    ),
   }));
 }
 
@@ -92,6 +113,7 @@ interface PackJson {
     readonly name?: string;
     /** Outgoing dependency GUIDs (pack.schema.json assets[].refs). */
     readonly refs?: readonly string[];
+    readonly execution?: 'direct' | 'cooked';
     readonly sourceKey?: string;
     readonly sourceIndex?: number;
     readonly relations?: PackIndexEntry['relations'];
@@ -191,6 +213,10 @@ function producerFields(
   | 'sourceIndex'
   | 'relations'
   | 'diagnostics'
+  | 'subject'
+  | 'execution'
+  | 'lifecycle'
+  | 'projection'
 > {
   const provenance =
     producer.provenance ??
@@ -208,10 +234,14 @@ function producerFields(
     ...(output === undefined
       ? {}
       : {
-          authoring: output.authoring ?? authoringCapabilityForAssetKind(output.kind),
+          ...(output.authoring === undefined ? {} : { authoring: output.authoring }),
         }),
     ...(relations !== undefined ? { relations } : {}),
     ...(producer.diagnostics !== undefined ? { diagnostics: producer.diagnostics } : {}),
+    subject: 'imported-output',
+    execution: 'cooked',
+    lifecycle: 'missing',
+    projection: projectionFor('imported-output', 'cooked', 'missing'),
   };
 }
 
@@ -305,6 +335,7 @@ const ENGINE_BUILTIN_KINDS: ReadonlySet<string> = new Set([
   'mesh',
   'material',
   'scene',
+  'sampler',
   'skeleton',
   'skin',
   'animation-clip',
@@ -401,6 +432,19 @@ async function processMetaSidecar(
 
   const meta = metaRaw as ExternalAssetMetaJson;
 
+  if (meta.importer === 'shader') {
+    return {
+      code: 'catalog-raw-source-unsupported',
+      path: rawPath,
+      message:
+        'shader sidecars are not runtime catalog assets; publish cooked shader output before cataloging',
+      expected: 'shader source to be consumed by vite-plugin-shader and published as cooked output',
+      actual: 'shader',
+      hint: 'remove shader source from the pack catalog roots or publish its cooked runtime module',
+      subjects: [rawPath],
+    };
+  }
+
   // Compute the source file path once for deriveAssetName. The source file is
   // the "package" for the meta.json arm: each subAsset is an artifact produced
   // from that source (e.g. a glTF file produces mesh/material/scene/texture
@@ -483,7 +527,7 @@ async function processMetaSidecar(
   }
 
   // importer === 'gltf': fold each subAsset of kind 'mesh' / 'material' /
-  // 'scene' / 'texture' into PackIndexEntry rows. 'mesh' / 'material' /
+  // 'scene' / 'sampler' / 'texture' into PackIndexEntry rows. 'mesh' / 'material' /
   // 'scene' are thin 4-field rows (metadata undefined) that the runtime
   // loader resolves via parseGltfFromFile / parseGlbFromFile at consumption
   // time (feat-20260523-vite-plugin-pack-dev-path-gltf-subasset-support).
@@ -514,6 +558,7 @@ async function processMetaSidecar(
         sub.kind === 'mesh' ||
         sub.kind === 'material' ||
         sub.kind === 'scene' ||
+        sub.kind === 'sampler' ||
         sub.kind === 'skeleton' ||
         sub.kind === 'skin' ||
         sub.kind === 'animation-clip'
@@ -540,7 +585,7 @@ async function processMetaSidecar(
   }
 
   // importer === 'fbx': fold each sub-asset kind (mesh / material / scene /
-  // texture / skeleton / skin / animation-clip) into a thin 4-field row
+  // sampler / texture / skeleton / skin / animation-clip) into a thin 4-field row
   // (metadata undefined). Mirrors the 'gltf' arm since fbxImporter emits the
   // same 7 sub-asset POD families resolved at runtime via the dev-server
   // POST /__import/:guid route. The native binding is Node.js-only, so the
@@ -555,6 +600,7 @@ async function processMetaSidecar(
         sub.kind === 'mesh' ||
         sub.kind === 'material' ||
         sub.kind === 'scene' ||
+        sub.kind === 'sampler' ||
         sub.kind === 'skeleton' ||
         sub.kind === 'skin' ||
         sub.kind === 'animation-clip'
@@ -645,8 +691,14 @@ async function processMetaSidecar(
   // Engine built-in arms above own their keys; this arm never runs for them.
   if (!ENGINE_BUILTIN_IMPORTER_KEYS.has(meta.importer)) {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-    const normalizedUrl = withBase(base, sourceRel);
     const isRegistered = registeredImporterKeys.has(meta.importer);
+    // Registered providers own a real cook path. Publish the deterministic
+    // Pack v2 URL up front so the runtime can fetch the authored package
+    // through the same catalog contract as engine-owned assets; the dev
+    // server fills this body on the first GET via the provider importer.
+    const normalizedUrl = isRegistered
+      ? metaPackageUrl(base, meta.subAssets[0]?.guid)
+      : withBase(base, sourceRel);
 
     if (isRegistered) {
       // D-7: a registered host importer must not pass through a kind the engine
@@ -743,6 +795,14 @@ async function foldPaths(
           ),
           name: deriveAssetName(packagePath, assetCount, asset.name),
           ...(asset.refs !== undefined ? { refs: asset.refs } : {}),
+          subject: 'internal-asset',
+          execution: asset.execution ?? 'direct',
+          lifecycle: asset.execution === 'cooked' ? 'missing' : 'current',
+          projection: projectionFor(
+            'internal-asset',
+            asset.execution ?? 'direct',
+            asset.execution === 'cooked' ? 'missing' : 'current',
+          ),
         });
       }
     } catch (e) {

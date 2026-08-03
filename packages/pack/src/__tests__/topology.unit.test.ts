@@ -69,4 +69,17 @@ describe('diffTopology', () => {
     expect(result.removed).toEqual([]);
     expect(result.ambiguous).toMatchObject([{ reason: 'source-index-ambiguous' }]);
   });
+
+  it('does not preserve a GUID when a producer key is duplicated', () => {
+    const result = diffTopology(
+      [
+        { guid: 'old-a', sourceKey: 'node/body', sourceIndex: 0, kind: 'mesh' },
+        { guid: 'old-b', sourceKey: 'node/body', sourceIndex: 1, kind: 'mesh' },
+      ],
+      [{ guid: 'new-body', sourceKey: 'node/body', sourceIndex: 0, kind: 'mesh' }],
+    );
+
+    expect(result.preserved).toEqual([]);
+    expect(result.ambiguous).toMatchObject([{ reason: 'duplicate-source-key' }]);
+  });
 });

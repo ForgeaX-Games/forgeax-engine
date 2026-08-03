@@ -17,7 +17,10 @@
 //      those CJS decoders live only behind the `./parse-image` (and
 //      transitively `./decode-image-from-file`) sub-exports.
 //
-//   4. packages/types/package.json and packages/image/package.json
+//   4. packages/pack/dist/index.mjs must not contain the Node-only native
+//      cooker registry; that registry is available only from ./native-cooker.
+//
+//   5. packages/types/package.json and packages/image/package.json
 //      `exports['./inspector-client']` / `exports['./parse-image']` /
 //      `exports['./decode-image-from-file']` each contain a `node` block
 //      and `"default": null`.
@@ -115,11 +118,33 @@ const failures = [];
   }
 }
 
-// ---- Check 4: package.json exports shape ----
+// ---- Check 4: pack root stays browser-safe ----
+{
+  const p = join(root, 'packages/pack/dist/index.mjs');
+  if (!existsSync(p)) {
+    failures.push(`missing file: ${p}`);
+  } else {
+    const content = readFileSync(p, 'utf8');
+    const patterns = [
+      { re: /node:crypto/, label: 'node:crypto' },
+      { re: /native-cooker-registry/, label: 'native-cooker-registry' },
+    ];
+    for (const { re, label } of patterns) {
+      const m = content.match(re);
+      if (m) {
+        const line = lineNumberOf(content, m.index);
+        failures.push(`${p}:${line} matched browser-banned pattern "${label}"`);
+      }
+    }
+  }
+}
+
+// ---- Check 5: package.json exports shape ----
 const exportPaths = [
   { pkg: 'types', subpath: './inspector-client' },
   { pkg: 'image', subpath: './parse-image' },
   { pkg: 'image', subpath: './decode-image-from-file' },
+  { pkg: 'pack', subpath: './native-cooker' },
 ];
 
 for (const { pkg, subpath } of exportPaths) {

@@ -575,6 +575,26 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/custom-skinned-mesh": {
+      "name": "@forgeax/bevy-custom-skinned-mesh",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-skinning": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/delayed-commands": {
       "name": "@forgeax/bevy-delayed-commands",
       "version": "0.0.0",
@@ -2059,6 +2079,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
@@ -2201,6 +2223,31 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/hello/boss-lightning": {
+      "name": "@forgeax/hello-boss-lightning",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-vfx": "workspace:*",
+        "@forgeax/engine-vfx-render": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vfx-compiler": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -4280,6 +4327,16 @@
         "@webgpu/types": "^0.1.71",
       },
     },
+    "packages/ddc": {
+      "name": "@forgeax/engine-ddc",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/node": "^20.14.0",
+        "tsup": "^8.3.5",
+        "typescript": "^5.8.3",
+        "vitest": "4.1.5",
+      },
+    },
     "packages/debug-draw": {
       "name": "@forgeax/engine-debug-draw",
       "version": "0.0.0",
@@ -4802,11 +4859,32 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-vfx": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
+      },
+    },
+    "packages/vfx-render": {
+      "name": "@forgeax/engine-vfx-render",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-vfx": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-null": "workspace:*",
       },
     },
     "packages/vite-plugin-pack": {
@@ -4814,6 +4892,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-codec": "workspace:*",
+        "@forgeax/engine-ddc": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-import": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
@@ -5245,6 +5324,8 @@
 
     "@forgeax/bevy-cubic-splines": ["@forgeax/bevy-cubic-splines@workspace:apps/bevy/cubic-splines"],
 
+    "@forgeax/bevy-custom-skinned-mesh": ["@forgeax/bevy-custom-skinned-mesh@workspace:apps/bevy/custom-skinned-mesh"],
+
     "@forgeax/bevy-delayed-commands": ["@forgeax/bevy-delayed-commands@workspace:apps/bevy/delayed-commands"],
 
     "@forgeax/bevy-depth-of-field": ["@forgeax/bevy-depth-of-field@workspace:apps/bevy/depth-of-field"],
@@ -5403,6 +5484,8 @@
 
     "@forgeax/engine-codec": ["@forgeax/engine-codec@workspace:packages/codec"],
 
+    "@forgeax/engine-ddc": ["@forgeax/engine-ddc@workspace:packages/ddc"],
+
     "@forgeax/engine-debug-draw": ["@forgeax/engine-debug-draw@workspace:packages/debug-draw"],
 
     "@forgeax/engine-ecs": ["@forgeax/engine-ecs@workspace:packages/ecs"],
@@ -5489,6 +5572,8 @@
 
     "@forgeax/engine-vfx-compiler": ["@forgeax/engine-vfx-compiler@workspace:packages/vfx-compiler"],
 
+    "@forgeax/engine-vfx-render": ["@forgeax/engine-vfx-render@workspace:packages/vfx-render"],
+
     "@forgeax/engine-vite-plugin-pack": ["@forgeax/engine-vite-plugin-pack@workspace:packages/vite-plugin-pack"],
 
     "@forgeax/engine-vite-plugin-rhi-debug": ["@forgeax/engine-vite-plugin-rhi-debug@workspace:packages/vite-plugin-rhi-debug"],
@@ -5508,6 +5593,8 @@
     "@forgeax/hello-audio": ["@forgeax/hello-audio@workspace:apps/hello/audio"],
 
     "@forgeax/hello-bloom": ["@forgeax/hello-bloom@workspace:apps/hello/bloom"],
+
+    "@forgeax/hello-boss-lightning": ["@forgeax/hello-boss-lightning@workspace:apps/hello/boss-lightning"],
 
     "@forgeax/hello-character": ["@forgeax/hello-character@workspace:apps/hello/character"],
 
@@ -6608,6 +6695,8 @@
     "@forgeax/bevy-spatial-audio-3d/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
 
     "@forgeax/collectathon/@types/node": ["@types/node@25.9.1", "", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg=="],
+
+    "@forgeax/engine-ddc/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@forgeax/engine-pack/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

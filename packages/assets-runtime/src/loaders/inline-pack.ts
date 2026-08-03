@@ -3,10 +3,13 @@
 // Pure move from asset-registry.ts; zero identifier changes.
 
 import type {
+  AddressMode,
   AnimationChannel,
   AnimationGraph,
   AnimationGraphNode,
   Asset,
+  CompareFunction,
+  FilterMode,
   Handle,
   LoadContext,
   Loader,
@@ -22,7 +25,7 @@ import { parseScenePayload } from '../scene-payload';
 // === Inline pack-payload loader bodies (feat-20260603-asset-import-loader-injection
 // M1 / w4) ===
 //
-// The seven `if (kind === ...)` arms that lived inside
+// The eight `if (kind === ...)` arms that lived inside
 // `AssetRegistry.parseAssetPayload` (research Finding 1) are extracted here as
 // module-level `{ kind, load }` objects so they register into a
 // `LoaderRegistry` (D-1) and can be imported by `wireDefaultLoaders` (w5). The
@@ -50,6 +53,15 @@ export const meshLoader: Loader = {
     const indexData = payload.indices;
     const rawAttributes = (payload.attributes as Record<string, unknown> | undefined) ?? {};
     const attributes: Record<string, unknown> = { ...rawAttributes };
+    const rawAabb = payload.aabb;
+    let aabb: Float32Array | undefined;
+    if (rawAabb instanceof Float32Array) {
+      aabb = rawAabb;
+    } else if (Array.isArray(rawAabb)) {
+      aabb = new Float32Array(rawAabb as number[]);
+    } else if (rawAabb !== undefined) {
+      return undefined;
+    }
 
     const skinIndexRaw = rawAttributes.skinIndex;
     if (skinIndexRaw instanceof Uint16Array) {
@@ -140,7 +152,7 @@ export const meshLoader: Loader = {
       vertices,
       ...(indices !== undefined ? { indices } : {}),
       attributes: attributes as TypesMeshAsset['attributes'],
-      aabb: new Float32Array(6),
+      ...(aabb !== undefined ? { aabb } : {}),
       submeshes,
     };
   },
@@ -184,6 +196,7 @@ export const meshLoader: Loader = {
         vertices: decoded.vertices,
         ...(decoded.indices !== undefined ? { indices: decoded.indices } : {}),
         ...(decoded.submeshes !== undefined ? { submeshes: decoded.submeshes } : {}),
+        ...(decoded.aabb !== undefined ? { aabb: decoded.aabb } : {}),
         attributes: {
           ...extraUvAttributes,
           ...(decoded.skinIndex !== undefined ? { skinIndex: decoded.skinIndex } : {}),
@@ -243,6 +256,17 @@ function collectShaderTextureFieldNames(
   return anyResolved ? collected : undefined;
 }
 
+function refGuidAt(refs: readonly unknown[] | undefined, index: number): string | undefined {
+  if (!Number.isInteger(index) || index < 0 || index >= (refs?.length ?? 0)) return undefined;
+  const guid = refs?.[index];
+  if (typeof guid === 'string') return guid;
+  if (typeof guid === 'object' && guid !== null && 'guid' in guid) {
+    const nestedGuid = (guid as { guid?: unknown }).guid;
+    return typeof nestedGuid === 'string' ? nestedGuid : undefined;
+  }
+  return undefined;
+}
+
 /** material loader — passes + values + serialized parent GUID -> parentGuid. */
 export const materialLoader: Loader = {
   kind: 'material',
@@ -258,10 +282,7 @@ export const materialLoader: Loader = {
       const idx = matPayload.parent;
       const refsArr = refs ?? [];
       if (idx >= 0 && idx < refsArr.length) {
-        const refGuid = refsArr[idx];
-        if (typeof refGuid === 'string') {
-          parentGuid = refGuid;
-        }
+        parentGuid = refGuidAt(refsArr, idx);
       }
       if (parentGuid === undefined) {
         return undefined;
@@ -286,32 +307,55 @@ export const materialLoader: Loader = {
     const values: Record<string, unknown> = { ...rawParamValues };
     if (refs && refs.length > 0) {
       const shaderTextureFields = collectShaderTextureFieldNames(passesFromPayload, ctx);
-      const candidateFields =
-        shaderTextureFields !== undefined ? shaderTextureFields : Object.keys(values);
+      // Walk every value so the structured MaterialTextureValue shape remains
+      // resolvable even when a shader is registered with an empty/late
+      // paramSchema (pbr-skin currently takes this path). Scalar values still
+      // require schema membership below, so metallic/roughness integers are
+      // never mistaken for refs indices merely because the schema is empty.
+      const candidateFields = Object.keys(values);
       for (const fieldName of candidateFields) {
         const value = values[fieldName];
-        if (typeof value !== 'number' || !Number.isInteger(value)) continue;
-        if (value < 0 || value >= refs.length) {
-          // Only emit a parse-error breadcrumb when the field is declared as
-          // a texture by the shader paramSchema (the OOB is unambiguous).
-          // For the graceful "try every int" fallback, OOB simply means
-          // "this scalar was not a refs index" — don't spam parse errors.
-          if (shaderTextureFields !== undefined) {
-            delete values[fieldName];
+        if (typeof value === 'number' && Number.isInteger(value)) {
+          if (shaderTextureFields !== undefined && !shaderTextureFields.has(fieldName)) {
+            continue;
           }
+          const refGuid = refGuidAt(refs, value);
+          if (refGuid === undefined) {
+            // Only emit a parse-error breadcrumb when the field is declared as
+            // a texture by the shader paramSchema (the OOB is unambiguous).
+            // For the graceful "try every int" fallback, OOB simply means
+            // "this scalar was not a refs index" — don't spam parse errors.
+            if (shaderTextureFields !== undefined) delete values[fieldName];
+            continue;
+          }
+          values[fieldName] = refGuid;
           continue;
         }
-        const refGuid = refs[value];
-        if (typeof refGuid !== 'string') {
-          if (shaderTextureFields !== undefined) {
-            delete values[fieldName];
+
+        // glTF materials use the engine's structured MaterialTextureValue
+        // shape (`{ texture: <refs index> }`), not the legacy scalar form.
+        // Resolve that nested index at the same loader boundary; leaving zero
+        // here is a valid-looking handle that silently renders the material
+        // white and never reaches the browser console as an exception.
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          const textureIndex = (value as { texture?: unknown }).texture;
+          if (typeof textureIndex !== 'number' || !Number.isInteger(textureIndex)) continue;
+          const textureGuid = refGuidAt(refs, textureIndex);
+          if (textureGuid === undefined) {
+            if (shaderTextureFields !== undefined) delete values[fieldName];
+            continue;
           }
-          continue;
+          const resolved: Record<string, unknown> = {
+            ...(value as Record<string, unknown>),
+            texture: textureGuid,
+          };
+          const samplerIndex = resolved.sampler;
+          if (typeof samplerIndex === 'number' && Number.isInteger(samplerIndex)) {
+            const samplerGuid = refGuidAt(refs, samplerIndex);
+            if (samplerGuid !== undefined) resolved.sampler = samplerGuid;
+          }
+          values[fieldName] = resolved;
         }
-        // feat-20260614 M8 (D-19): store the embedded sub-asset ref as its GUID
-        // string (dash-form). The ECS/render side resolves GUID -> column handle
-        // at use time via `world.allocSharedRef` -- the registry never mints.
-        values[fieldName] = refGuid;
       }
     }
 
@@ -333,6 +377,72 @@ export const materialLoader: Loader = {
     }
 
     return undefined;
+  },
+};
+
+/** sampler loader — preserve the serialised SamplerAsset descriptor. */
+export const samplerLoader: Loader = {
+  kind: 'sampler',
+  load(payload) {
+    const filters = new Set<FilterMode>(['nearest', 'linear']);
+    const mipmapFilters = new Set<GPUMipmapFilterMode>(['nearest', 'linear']);
+    const addressModes = new Set<AddressMode>(['clamp-to-edge', 'repeat', 'mirror-repeat']);
+    const compareFunctions = new Set<CompareFunction>([
+      'never',
+      'less',
+      'equal',
+      'less-equal',
+      'greater',
+      'not-equal',
+      'greater-equal',
+      'always',
+    ]);
+    const stringField = <T extends string>(
+      key: string,
+      allowed: ReadonlySet<T>,
+    ): T | undefined | null => {
+      const value = payload[key];
+      if (value === undefined) return undefined;
+      return typeof value === 'string' && allowed.has(value as T) ? (value as T) : null;
+    };
+    const magFilter = stringField('magFilter', filters);
+    const minFilter = stringField('minFilter', filters);
+    const mipmapFilter = stringField('mipmapFilter', mipmapFilters);
+    const addressModeU = stringField('addressModeU', addressModes);
+    const addressModeV = stringField('addressModeV', addressModes);
+    const addressModeW = stringField('addressModeW', addressModes);
+    const compare = stringField('compare', compareFunctions);
+    if (
+      magFilter === null ||
+      minFilter === null ||
+      mipmapFilter === null ||
+      addressModeU === null ||
+      addressModeV === null ||
+      addressModeW === null ||
+      compare === null
+    ) {
+      return undefined;
+    }
+    const numericField = (key: string): number | undefined | null => {
+      const value = payload[key];
+      if (value === undefined) return undefined;
+      return typeof value === 'number' && Number.isFinite(value) ? value : null;
+    };
+    const lodMinClamp = numericField('lodMinClamp');
+    const lodMaxClamp = numericField('lodMaxClamp');
+    if (lodMinClamp === null || lodMaxClamp === null) return undefined;
+    return {
+      kind: 'sampler',
+      ...(magFilter === undefined ? {} : { magFilter }),
+      ...(minFilter === undefined ? {} : { minFilter }),
+      ...(mipmapFilter === undefined ? {} : { mipmapFilter }),
+      ...(addressModeU === undefined ? {} : { addressModeU }),
+      ...(addressModeV === undefined ? {} : { addressModeV }),
+      ...(addressModeW === undefined ? {} : { addressModeW }),
+      ...(lodMinClamp === undefined ? {} : { lodMinClamp }),
+      ...(lodMaxClamp === undefined ? {} : { lodMaxClamp }),
+      ...(compare === undefined ? {} : { compare }),
+    };
   },
 };
 
@@ -508,7 +618,7 @@ export const animationGraphLoader: Loader = {
 };
 
 /**
- * The seven inline pack-payload loaders, in the historical `if`-chain order
+ * The eight inline pack-payload loaders, in the historical `if`-chain order
  * (the animation-graph loader, feat-20260713 M4 / w30, appends after the clip
  * loader). `wireDefaultLoaders` (w5) registers these plus the texture / font /
  * equirect loaders (w6) and the audio placeholder (w8).
@@ -516,6 +626,7 @@ export const animationGraphLoader: Loader = {
 export const INLINE_PACK_LOADERS: readonly Loader[] = [
   meshLoader,
   sceneLoader,
+  samplerLoader,
   materialLoader,
   skeletonLoader,
   skinLoader,

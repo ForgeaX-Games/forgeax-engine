@@ -33,6 +33,7 @@ function falsificationVariant() {
   if (process.env.FORGEAX_FALSIFY_MISSING_NORMAL_RESOURCE === '1') return 'missing-normal-resource';
   if (process.env.FORGEAX_FALSIFY_SWAPPED_NORMAL_BINDING === '1') return 'swapped-normal-binding';
   if (process.env.FORGEAX_FALSIFY_NORMAL_SLOT_SWAP === '1') return 'normal-slot-swap';
+  if (process.env.FORGEAX_FALSIFY_LIVE_INHERITANCE_REBIND === '1') return 'live-inheritance-rebind';
   return undefined;
 }
 
@@ -50,7 +51,8 @@ const liveTwoSlotResize =
   process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE === '1' ||
   process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_SWAP_RESIZE === '1';
 const liveTwoSlotSwapResize = process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_SWAP_RESIZE === '1';
-const liveMutationEnabled = liveNormalSlotSwap || liveTwoSlotSwap;
+const liveInheritanceRebind = process.env.FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND === '1';
+const liveMutationEnabled = liveNormalSlotSwap || liveTwoSlotSwap || liveInheritanceRebind;
 const liveResizeRebuild = liveNormalSlotResize || liveTwoSlotResize;
 const liveMode = liveTwoSlotSwapResize
   ? 'two-slot-swap-resize'
@@ -62,8 +64,10 @@ const liveMode = liveTwoSlotSwapResize
         ? 'normal-slot-swap-resize'
         : liveNormalSlotResize
           ? 'normal-slot-resize'
-          : liveNormalSlotSwap
+        : liveNormalSlotSwap
             ? 'normal-slot-swap'
+            : liveInheritanceRebind
+              ? 'inheritance-rebind'
             : undefined;
 
 function stableJson(value) {
@@ -252,7 +256,14 @@ try {
     const beforePath =
       artifactDir === undefined
         ? undefined
-        : resolve(artifactDir, liveTwoSlotSwap || liveTwoSlotResize ? 'live-two-slot-before.png' : 'live-normal-slot-before.png');
+        : resolve(
+            artifactDir,
+            liveInheritanceRebind
+              ? 'live-inheritance-before.png'
+              : liveTwoSlotSwap || liveTwoSlotResize
+                ? 'live-two-slot-before.png'
+                : 'live-normal-slot-before.png',
+          );
     if (beforePath !== undefined) {
       mkdirSync(artifactDir, { recursive: true });
       await page.screenshot({ path: beforePath, fullPage: false });
@@ -283,9 +294,11 @@ try {
             ? liveTwoSlotSwap || liveTwoSlotResize
               ? 'live-two-slot-resize-after.png'
               : 'live-normal-slot-resize-after.png'
-            : liveTwoSlotSwap
-              ? 'live-two-slot-after.png'
-              : 'live-normal-slot-after.png',
+            : liveInheritanceRebind
+              ? 'live-inheritance-after.png'
+              : liveTwoSlotSwap
+                ? 'live-two-slot-after.png'
+                : 'live-normal-slot-after.png',
         );
     if (afterPath !== undefined) {
       await page.screenshot({ path: afterPath, fullPage: false });
@@ -320,6 +333,17 @@ try {
     );
     throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
   }
+  if (variant === 'live-inheritance-rebind') {
+    const mutation = evidence.liveMutation;
+    assert(mutation?.inheritanceBacked === true, 'live inherited-material falsifier did not reach the derived replacement path');
+    assert(mutation.beforeMaterialHandle !== mutation.afterMaterialHandle, 'live inherited-material falsifier did not allocate a replacement material');
+    assert(
+      mutation.beforeTextureHandles[0] === mutation.afterTextureHandles[0] &&
+        mutation.beforeTextureHandles[1] === mutation.afterTextureHandles[1],
+      'live inherited-material falsifier did not collapse replacement texture causality',
+    );
+    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
+  }
   if (liveMutationEnabled || liveResizeRebuild) {
     const mutation = evidence.liveMutation;
     if (liveNormalSlotSwap) {
@@ -344,6 +368,21 @@ try {
         mutation.beforeTextureHandles[0] !== mutation.afterTextureHandles[0] &&
           mutation.beforeTextureHandles[1] !== mutation.afterTextureHandles[1],
         'live two-slot rebind did not change both authored texture resources',
+      );
+    }
+    if (liveInheritanceRebind) {
+      assert(mutation?.enabled === true, 'live inherited-material mutation was not enabled');
+      assert(mutation?.inheritanceBacked === true, 'live inherited-material mutation was not marked inheritance-backed');
+      assert(mutation?.applied === true, 'live inherited-material mutation was not applied');
+      assert(mutation.beforeMaterialHandle !== mutation.afterMaterialHandle, 'live inherited-material rebind reused the material handle');
+      assert(mutation.afterComponentMaterialHandle === mutation.afterMaterialHandle, 'World.set did not expose the inherited replacement material handle');
+      assert(mutation.sourceDerivedGuid === evidence.derivedGuid, 'live replacement did not originate from the derived material GUID');
+      assert(mutation.sourceArtifactDigest === evidence.derivedArtifactDigest, 'live replacement changed the cooked specialization artifact');
+      assert(mutation.sourceCookInputDigest === evidence.derivedCookInputDigest, 'live replacement changed the specialization input digest');
+      assert(
+        mutation.beforeTextureHandles[0] !== mutation.afterTextureHandles[0] &&
+          mutation.beforeTextureHandles[1] !== mutation.afterTextureHandles[1],
+        'live inherited-material rebind did not change both replacement texture handles',
       );
     }
     if (liveResizeRebuild) {
@@ -379,9 +418,12 @@ try {
     JSON.stringify({
       status: 'pass',
       browserPath: evidence.browserPath,
+      rootGuid: evidence.rootGuid,
+      derivedGuid: evidence.derivedGuid,
       rootArtifactDigest: evidence.rootArtifactDigest,
       derivedArtifactDigest: evidence.derivedArtifactDigest,
       rootCookInputDigest: evidence.rootCookInputDigest,
+      derivedCookInputDigest: evidence.derivedCookInputDigest,
       textureHandlesDistinct: evidence.renderedTextureHandles[0] !== evidence.renderedTextureHandles[1],
       liveMutation: evidence.liveMutation,
       resizeRebuild: evidence.resizeRebuild,

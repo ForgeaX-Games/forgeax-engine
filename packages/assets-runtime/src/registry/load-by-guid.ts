@@ -27,6 +27,7 @@ import type { AssetRegistry, ParsedPackFile } from '../asset-registry';
 import { readArtifact } from './artifact-io';
 import { fetchPackIndex, resolveCatalogAssetUrl } from './catalog';
 import { buildBreadcrumbHint, buildSceneChildContext } from './instantiate';
+import { resolveRuntimeProjection } from './runtime-projection';
 
 /**
  * Load an asset and all its transitively referenced sub-assets by GUID;
@@ -274,6 +275,11 @@ export async function loadByGuidProd<T = Asset>(
 
   const entry = await resolveCatalogEntry(registry, guidKey);
   if (entry !== undefined) {
+    const projection = resolveRuntimeProjection(guidKey, entry);
+    if (!projection.ok) return projection;
+    if (projection.value?.lifecycle !== undefined && projection.value.lifecycle !== 'current') {
+      return transportOrFail<T>(registry, guid, guidKey, 'asset-not-imported');
+    }
     // Catalog hit: try the DDC load path.
     const result = await ddcLoad<T>(registry, guid, guidKey, entry, parentContext);
     if (result.ok) return result;

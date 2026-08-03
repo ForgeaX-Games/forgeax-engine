@@ -150,6 +150,14 @@ export function validateProducerContract(value: unknown): ProducerContractResult
       'publish the provider-owned asset kind',
     );
   }
+  if ('execution' in value && value.execution !== 'direct' && value.execution !== 'cooked') {
+    return issue(
+      'invalid-producer-fact',
+      subjectId,
+      'execution must be either direct or cooked',
+      'publish the explicit authoring execution mode',
+    );
+  }
   const hasOutputIdentity = 'kind' in value || 'sourceIndex' in value || 'sourceKey' in value;
   if (!hasOutputIdentity) return facts;
   if (value.sourceKey !== undefined && !hasText(value.sourceKey)) {

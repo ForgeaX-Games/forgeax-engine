@@ -15,6 +15,11 @@ import type { RenderFeaturePreparedStateMismatchDetail } from './types';
 /** Closed prepared kinds: pipeline, bindings, vertex/index data, and attachment. */
 export type PreparedKind = 'pipeline' | 'bindings' | 'vertex-data' | 'index-data' | 'attachment';
 
+/** Canonical vertex layouts owned by the prepared-graphics host. */
+export const RENDER_FEATURE_VERTEX_LAYOUTS = Object.freeze({
+  positionSizeColorInstance: 'position-size-color-instance',
+} as const);
+
 /**
  * Opaque render-owned state identified by its prepared kind and device generation.
  * A generation change invalidates old references after device recovery or
@@ -179,6 +184,8 @@ export interface RenderFeaturePreparedGraphicsState {
   readonly generation: number;
   readonly attachments: readonly { readonly resource: string; readonly format: string }[];
   readonly pipeline: RenderFeaturePreparedRef | undefined;
+  /** All prepared pipelines available to the current graphics pass. */
+  readonly pipelines?: readonly RenderFeaturePreparedRef[];
   readonly bindings: readonly RenderFeaturePreparedRef[];
   readonly vertexData: readonly RenderFeaturePreparedRef[];
   readonly indexData: readonly RenderFeaturePreparedRef[];
@@ -270,15 +277,12 @@ export function validateRenderFeatureGraphicsPass(
   state: RenderFeaturePreparedGraphicsState,
 ): Result<RenderFeatureValidatedGraphicsPass, RenderError> {
   if (!state.capabilityAvailable) return invalid(featureIdentity, 'prepare');
-  if (
-    state.pipeline === undefined ||
-    state.bindings.length === 0 ||
-    state.vertexData.length === 0
-  ) {
+  const pipelines = state.pipelines ?? (state.pipeline === undefined ? [] : [state.pipeline]);
+  if (pipelines.length === 0 || state.bindings.length === 0 || state.vertexData.length === 0) {
     return invalid(featureIdentity, 'prepare');
   }
   if (
-    !validRef(state.pipeline, 'pipeline', state.generation) ||
+    pipelines.some((reference) => !validRef(reference, 'pipeline', state.generation)) ||
     state.bindings.some((reference) => !validRef(reference, 'bindings', state.generation)) ||
     state.vertexData.some((reference) => !validRef(reference, 'vertex-data', state.generation)) ||
     state.indexData.some((reference) => !validRef(reference, 'index-data', state.generation))
@@ -298,7 +302,7 @@ export function validateRenderFeatureGraphicsPass(
   for (const draw of descriptor.draws) {
     if (
       !validRef(draw.pipeline, 'pipeline', state.generation) ||
-      draw.pipeline !== state.pipeline ||
+      !hasPreparedRef(pipelines, draw.pipeline) ||
       draw.bindings.length === 0 ||
       draw.bindings.some(
         (reference) =>

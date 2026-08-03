@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type ExistingExternalAssetPackage, reimportReuseMeta } from '../reimport-reuse-meta.js';
-import { deriveImageSourceKey } from '../source-key.js';
+import { deriveImageSourceKey, deriveImageSourceKeys } from '../source-key.js';
 import { subAssetKey } from '../sub-asset-key.js';
 
 const GUID = '01928000-7c00-7000-8000-000000000042';
@@ -37,6 +37,17 @@ describe('image producer sourceKey', () => {
 
   it('rejects an empty role instead of manufacturing an index key', () => {
     expect(deriveImageSourceKey('')).toBeUndefined();
+  });
+
+  it('requires unique semantic roles for multi-output images', () => {
+    expect(deriveImageSourceKeys(['texture', 'equirect'])).toEqual({
+      ok: true,
+      keys: ['image:texture', 'image:equirect'],
+    });
+    expect(deriveImageSourceKeys(['texture', 'texture'])).toMatchObject({
+      ok: false,
+      code: 'duplicate-source-key',
+    });
   });
 
   it('keeps legacy indexFallback separate from producer sourceKey', () => {

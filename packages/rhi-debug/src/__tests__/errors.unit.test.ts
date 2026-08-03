@@ -1,4 +1,4 @@
-// Unit — DebugError construction + 4-field surface for 14-member DebugErrorCode.
+// Unit — DebugError construction + 4-field surface for 15-member DebugErrorCode.
 //
 // Tests at least 7 of the 14 error codes (per m1-4 description), verifying
 // .code / .expected / .hint / .detail exist and carry the right types.
@@ -159,7 +159,7 @@ describe('DebugError — construction surface', () => {
   });
 });
 
-describe('DebugErrorCode completeness — all 14 members', () => {
+describe('DebugErrorCode completeness — all 15 members', () => {
   const allCodes: DebugErrorCode[] = [
     'recorder-not-attached',
     'recorder-already-armed',
@@ -172,13 +172,14 @@ describe('DebugErrorCode completeness — all 14 members', () => {
     'rt-readback-failed',
     'png-encode-failed',
     'snapshot-readback-failed',
+    'snapshot-timeout',
     'seed-initial-data-failed',
     'rpc-target-not-wired',
     'replay-dispose-busy',
   ];
 
-  it('has exactly 14 members', () => {
-    expect(allCodes).toHaveLength(14);
+  it('has exactly 15 members', () => {
+    expect(allCodes).toHaveLength(15);
   });
 
   it('every member constructs a DebugError with the right code', () => {
@@ -194,6 +195,6 @@ describe('DebugErrorCode completeness — all 14 members', () => {
   });
 
   it('no duplicate codes', () => {
-    expect(new Set(allCodes).size).toBe(14);
+    expect(new Set(allCodes).size).toBe(15);
   });
 });

@@ -33,7 +33,9 @@
   ],
   "scripts": {
     "build": "tsup",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "vitest bench --run",
+    "bench:json": "FORGEAX_BENCH=fast vitest bench --run --outputJson bench-result.json"
   },
   "dependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
@@ -53,8 +55,13 @@
         "reason": "runtime contract package; no frame loop or canvas"
       },
       "bench": {
-        "enabled": false,
-        "reason": "runtime contract package; no hot-path behavior"
+        "enabled": true,
+        "reportPath": "bench-result.json",
+        "suite": "@forgeax/engine-vfx",
+        "baseline": {
+          "source": "inline",
+          "threshold": 12000000
+        }
       },
       "gate": {
         "enabled": false,

@@ -35,6 +35,10 @@ describe('catalog source v2', () => {
     ['legacy relativeUrl', { ...packageRow, packageUrl: undefined, relativeUrl: '/asset.bin' }],
     ['legacy compression', { ...packageRow, compression: 'zstd' }],
     ['raw source package', { ...packageRow, packageUrl: '/assets/model.glb' }],
+    [
+      'raw particle effect source',
+      { ...packageRow, packageUrl: '/assets/effects/boss.particle-effect.json' },
+    ],
   ])('rejects %s as a structured catalog failure', (_label, row) => {
     const result = parseCatalog([row]);
 

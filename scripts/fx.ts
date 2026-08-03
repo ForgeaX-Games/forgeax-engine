@@ -5,7 +5,7 @@
 //   bun fx <command> [args...]
 //
 // Commands:
-//   setup                 First-time bootstrap: init submodules + install deps
+//   setup                 First-time bootstrap: init submodules + install deps + build
 //   update [--dry-run]    Pull root, update submodules, fast-forward the harness
 //   clean  [--deep|-x]    Restore a fully-clean git status (keeps .forgeax-harness)
 //   help                  Show this text
@@ -348,7 +348,7 @@ function finish(results: StepResult[], hintScopes = false): never {
 function setup(args: string[]): never {
   const dryRun = args.includes('--dry-run') || args.includes('-n');
   const results: StepResult[] = [];
-  console.log('[fx] setup: initialising submodules + installing dependencies');
+  console.log('[fx] setup: initialising submodules + installing dependencies + building');
 
   results.push(
     runGitStep(
@@ -383,6 +383,32 @@ function setup(args: string[]): never {
         result: status === 0 ? 'ok' : 'failed',
         detail: status === 0 ? 'dependencies installed' : `pnpm install exited ${status}`,
       });
+    }
+  }
+  const installSucceeded = results.at(-1)?.result === 'ok' || results.at(-1)?.result === 'planned';
+  if (installSucceeded) {
+    if (dryRun) {
+      console.log('[dry-run] pnpm build');
+      results.push({ scope: 'root', name: '.', result: 'planned', detail: 'pnpm build' });
+    } else {
+      console.log('[fx] pnpm build');
+      const r = spawnSync('pnpm', ['build'], { cwd: ROOT, stdio: 'inherit' });
+      if (r.error) {
+        results.push({
+          scope: 'root',
+          name: '.',
+          result: 'failed',
+          detail: `cannot run pnpm build: ${r.error.message}`,
+        });
+      } else {
+        const status = r.status ?? 1;
+        results.push({
+          scope: 'root',
+          name: '.',
+          result: status === 0 ? 'ok' : 'failed',
+          detail: status === 0 ? 'build completed' : `pnpm build exited ${status}`,
+        });
+      }
     }
   }
   finish(results, true);
@@ -600,8 +626,9 @@ Usage:
 
 Commands:
   setup                 First-time bootstrap: git submodule update --init
-                        --recursive, then pnpm install (postinstall materialises
-                        ${HARNESS_DIR}). Idempotent — safe to re-run.
+                        --recursive, then pnpm install and pnpm build
+                        (postinstall materialises ${HARNESS_DIR}). Idempotent —
+                        safe to re-run.
   update [flags]        Pull root (ff-only), update submodules to their pins, and
                         fast-forward the ${HARNESS_DIR} floating clone.
                         --dry-run/-n   preview without changing anything

@@ -76,7 +76,10 @@ export const AnimationPlayer = defineComponent('AnimationPlayer', {
   nodeWeights: { type: 'array<f32>' },
   nodeTimes: { type: 'array<f32>' },
   nodeSpeeds: { type: 'array<f32>' },
-  targetRoot: { type: 'entity', default: null },
+  // A null entity is the intentional "use the animated entity" sentinel;
+  // expose that optional authoring shape instead of making consumers infer it
+  // from a nullable runtime default.
+  targetRoot: { type: 'entity', default: null, shape: 'optional' },
   paused: { type: 'bool', default: false },
   looping: { type: 'bool', default: true },
 });

@@ -2,10 +2,10 @@
 //
 // Build-time codebase guard assertions using child_process.execSync and
 // fs.readFileSync. These act as canaries: any future change that adds a
-// flag-drift point or a 13th DebugErrorCode member turns this test red.
+// flag-drift point or an unexpected DebugErrorCode member turns this test red.
 //
 // AC-07: full-repo grep zero-hit for --runId / --ws-url (flag drift).
-// AC-09: DebugErrorCode union member count = 12 (closed, OOS-6).
+// AC-09: DebugErrorCode union member count = 15 (closed, OOS-6).
 // AC-08 partial: import.meta.hot usage in create-app.ts is inside the
 //   rhiDebugFlag === '1' guard block.
 //
@@ -39,7 +39,7 @@ describe('AC-07: flag drift grep gate', () => {
 });
 
 describe('AC-09: DebugErrorCode member count gate', () => {
-  it('DebugErrorCode union has exactly 14 members', () => {
+  it('DebugErrorCode union has exactly 15 members', () => {
     const errorsPath = path.resolve(__dirname, '..', '..', 'src', 'errors.ts');
     const content = readFileSync(errorsPath, 'utf-8');
     const lines = content.split('\n');
@@ -58,7 +58,7 @@ describe('AC-09: DebugErrorCode member count gate', () => {
         break;
       }
     }
-    expect(memberCount).toBe(14);
+    expect(memberCount).toBe(15);
   });
 });
 

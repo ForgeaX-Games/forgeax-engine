@@ -2213,6 +2213,44 @@ export function extractFrames(
   };
 }
 
+/**
+ * A MeshAsset participates in frustum culling only when its producer supplied
+ * the complete finite local-space bounds promised by the asset contract.
+ * Missing, malformed, and inverted-infinity empty bounds remain conservative
+ * (always visible) so a bad asset cannot turn into a false-negative render;
+ * they are not cull candidates and therefore do not inflate frustumStats.
+ */
+function hasFiniteOrderedLocalAabb(aabb: Float32Array | undefined): aabb is Float32Array {
+  if (aabb === undefined || aabb.length !== 6) return false;
+  const minX = aabb[0];
+  const minY = aabb[1];
+  const minZ = aabb[2];
+  const maxX = aabb[3];
+  const maxY = aabb[4];
+  const maxZ = aabb[5];
+  if (
+    minX === undefined ||
+    minY === undefined ||
+    minZ === undefined ||
+    maxX === undefined ||
+    maxY === undefined ||
+    maxZ === undefined
+  ) {
+    return false;
+  }
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(minZ) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY) ||
+    !Number.isFinite(maxZ)
+  ) {
+    return false;
+  }
+  return minX <= maxX && minY <= maxY && minZ <= maxZ;
+}
+
 export function extractFrame(
   world: World,
   assets?: AssetRegistry | null,
@@ -2912,6 +2950,27 @@ export function extractFrame(
     ],
   });
   const graph = worldInternal._getGraph();
+  // `queryRun` deliberately exposes only column views, not the matching
+  // archetype.  Instance snapshots need that archetype's version for the
+  // record-stage GPU-buffer cache key, but ordinary renderables do not.  The
+  // old path scanned every graph archetype for every matched query callback,
+  // even when the callback had no Instances/SpriteInstances column.  Keep the
+  // lookup lazy: the common mesh-rendering path does no graph walk, and an
+  // instance-bearing frame builds one first-entity -> version index instead of
+  // repeating a full scan per matched archetype.
+  let archVersionByFirstEntity: Map<number, number> | undefined;
+  const resolveArchVersion = (firstEntity: number): number => {
+    if (archVersionByFirstEntity === undefined) {
+      archVersionByFirstEntity = new Map<number, number>();
+      for (const arch of graph.archetypes) {
+        if (arch === undefined || arch.size === 0) continue;
+        const selfCol = arch.columns.get(Entity.id)?.get('self')?.view;
+        const first = selfCol?.[0];
+        if (first !== undefined) archVersionByFirstEntity.set(first, arch.version);
+      }
+    }
+    return archVersionByFirstEntity.get(firstEntity) ?? 0;
+  };
   queryRun(meshRendererQuery, world, (bundle) => {
     if (bundle.Entity.self.length === 0) return;
     const mr = bundle.MeshRenderer;
@@ -3007,17 +3066,11 @@ export function extractFrame(
     // m2-6: per-entity Skin.joints[] is read via `world.get(entity, Skin)`
     // inside the row loop (D-6); the column-bundled view is no longer needed.
 
-    // archVersion lookup: locate this archetype by its first entity's
-    // packed handle (all rows in this callback share one archetype).
-    const firstEntity = entitySelf[0] ?? 0;
     let archVersion = 0;
-    for (const arch of graph.archetypes) {
-      if (!arch || arch.size === 0) continue;
-      const selfCol = arch.columns.get(Entity.id)?.get('self')?.view as Uint32Array | undefined;
-      if (selfCol && selfCol[0] === firstEntity) {
-        archVersion = arch.version;
-        break;
-      }
+    if (hasInstances || hasSpriteInstances) {
+      // All rows in this callback share one archetype.  Only these two
+      // instance-bearing paths consume the version in their cache key.
+      archVersion = resolveArchVersion(entitySelf[0] ?? 0);
     }
 
     // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
@@ -3880,8 +3933,9 @@ export function extractFrame(
 
         // feat-20260528-frustum-culling M3 / w10: frustum culling check.
         // Skip the entity if a valid AABB exists AND ALL cameras' frusta
-        // reject the world-space AABB. Entities with no AABB or an
-        // inverted-infinity AABB are always visible. Culling is unconditional
+        // reject the world-space AABB. Missing or malformed AABBs are
+        // conservative always-visible fallbacks; valid culling bounds are
+        // producer-owned finite local-space AABBs. Culling is unconditional
         // engine behavior; there is no per-entity opt-out.
         {
           const assetHandleRaw = Math.round(fAssetHandle?.get(i) ?? 0);
@@ -3894,43 +3948,38 @@ export function extractFrame(
             const meshRes = resolveAssetHandle(world, taggedMesh);
             if (meshRes.ok) {
               const localAabb = (meshRes.value as MeshAsset).aabb;
-              if (localAabb !== undefined) {
-                const minX = localAabb[0] as number;
-                const maxX = localAabb[3] as number;
-                // Inverted-infinity empty box means always visible; skip culling.
-                if (minX <= maxX) {
-                  // feat-20260601 D-3: cull AABB uses the resolved world mat4
-                  // directly (no compose) -- same source the record stage feeds
-                  // the mesh SSBO, so cull stays same-source with render (AC-05).
-                  const worldAabb = box3.create();
-                  box3.transformBox3(
-                    worldAabb,
-                    localAabb,
-                    transformSnap.world as unknown as Parameters<typeof box3.transformBox3>[2],
-                  );
+              if (hasFiniteOrderedLocalAabb(localAabb)) {
+                // feat-20260601 D-3: cull AABB uses the resolved world mat4
+                // directly (no compose) -- same source the record stage feeds
+                // the mesh SSBO, so cull stays same-source with render (AC-05).
+                const worldAabb = box3.create();
+                box3.transformBox3(
+                  worldAabb,
+                  localAabb,
+                  transformSnap.world as unknown as Parameters<typeof box3.transformBox3>[2],
+                );
 
-                  // Test against all cameras. Entity is visible if any camera
-                  // frustum intersects the world-space AABB (or planes are empty
-                  // from degenerate projection).
-                  frustumTotal += 1;
-                  let visible = frustumPlanes.length === 0;
-                  for (let ci = 0; ci < frustumPlanes.length; ci++) {
-                    const planes = frustumPlanes[ci] as Float32Array;
-                    if (planes.length === 0) {
-                      visible = true;
-                      break;
-                    }
-                    if (
-                      frustum.intersectsBox(planes as frustum.Frustum, worldAabb as box3.Box3Like)
-                    ) {
-                      visible = true;
-                      break;
-                    }
+                // Test against all cameras. Entity is visible if any camera
+                // frustum intersects the world-space AABB (or planes are empty
+                // from degenerate projection).
+                frustumTotal += 1;
+                let visible = frustumPlanes.length === 0;
+                for (let ci = 0; ci < frustumPlanes.length; ci++) {
+                  const planes = frustumPlanes[ci] as Float32Array;
+                  if (planes.length === 0) {
+                    visible = true;
+                    break;
                   }
-                  if (!visible) {
-                    frustumCulled += 1;
-                    continue;
+                  if (
+                    frustum.intersectsBox(planes as frustum.Frustum, worldAabb as box3.Box3Like)
+                  ) {
+                    visible = true;
+                    break;
                   }
+                }
+                if (!visible) {
+                  frustumCulled += 1;
+                  continue;
                 }
               }
             }

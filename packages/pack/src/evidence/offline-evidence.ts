@@ -4,11 +4,16 @@ import type {
   AssetEvidenceError,
   AssetEvidenceInputs,
   AssetEvidenceLocator,
+  CookProduct,
   CookReceipt,
   PackageVerificationEvidence,
   SourceDeclarationEvidence,
 } from '@forgeax/engine-types';
-import { projectAssetEvidence, type Result } from '@forgeax/engine-types';
+import {
+  projectAssetEvidence,
+  projectCookProductEvidence,
+  type Result,
+} from '@forgeax/engine-types';
 
 /** Pack artifact descriptor with verification supplied by an offline verifier. */
 export interface OfflineArtifactInput extends ArtifactDescriptor {
@@ -29,6 +34,7 @@ export interface OfflineAssetEvidenceInput {
   readonly locator?: AssetEvidenceLocator;
   readonly receipt?: CookReceipt;
   readonly package?: OfflinePackageInput;
+  readonly product?: CookProduct;
 }
 
 function packageEvidence(input: OfflinePackageInput): NonNullable<AssetEvidenceInputs['package']> {
@@ -51,6 +57,9 @@ function packageEvidence(input: OfflinePackageInput): NonNullable<AssetEvidenceI
 export function buildOfflineAssetEvidence(
   input: OfflineAssetEvidenceInput,
 ): Promise<Result<AssetEvidence, AssetEvidenceError>> {
+  if (input.product !== undefined) {
+    return Promise.resolve(projectCookProductEvidence(input.product, input.locator));
+  }
   const evidenceInput: AssetEvidenceInputs = {
     guid: input.guid,
     ...(input.source === undefined ? {} : { source: input.source }),

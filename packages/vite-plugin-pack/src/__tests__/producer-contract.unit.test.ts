@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,15 @@ afterEach(async () => {
 });
 
 describe('producer-owned catalog contract', () => {
+  it('does not expose a parallel MaterialCookResult completion contract', async () => {
+    const source = await readFile(
+      new URL('../material/cook-finalizer.ts', import.meta.url),
+      'utf8',
+    );
+    expect(source).toContain('CookProduct');
+    expect(source).not.toContain('export interface MaterialCookResult');
+  });
+
   it('publishes package, provenance, revision, relations, diagnostics, and topology key', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-producer-'));
     roots.push(root);

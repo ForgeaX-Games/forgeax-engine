@@ -46,6 +46,160 @@ export interface DrawInfo {
   readonly colorAttachmentResolveTargetHandleId: string | undefined;
 }
 
+type BindGroupDefinition = {
+  readonly entries: readonly {
+    readonly binding: number;
+    readonly resourceKind: 'sampler' | 'buffer' | 'textureView' | 'externalTexture';
+  }[];
+  readonly resourceHandleIds: readonly string[];
+};
+
+/**
+ * Scan a tape once and project every draw event to its inspect shape.
+ *
+ * `extractDrawInfo` historically repeated this scan for every draw. That is
+ * acceptable for one interactive inspect, but makes the whole-frame summary
+ * quadratic on real editor frames (thousands of draws). Keep the scan state
+ * here as the SSOT and let both the single-draw and whole-frame consumers use
+ * it.
+ */
+export function extractDrawInfos(events: readonly RhiCallEvent[]): readonly DrawInfo[] {
+  let frameIdx = 0;
+  const bindGroups = new Map<number, InspectBindingEntry[]>();
+  const bindGroupDefs = new Map<string, BindGroupDefinition>();
+  let lastColorAttachmentHandleId: string | undefined;
+  let lastColorAttachmentResolveTargetHandleId: string | undefined;
+  const lastSeenPerPass = new Map<
+    string,
+    { pipelineKind: 'render' | 'compute'; pipelineHandleId: string }
+  >();
+  let currentPassHandleId: string | undefined;
+  const infos: DrawInfo[] = [];
+
+  for (const event of events) {
+    if (event.kind === 'frameMark') {
+      frameIdx = event.frameIdx;
+    }
+
+    if (event.kind === 'beginRenderPass') {
+      currentPassHandleId = event.passHandleId;
+      lastColorAttachmentHandleId = event.colorAttachmentViewHandleIds[0] ?? undefined;
+      lastColorAttachmentResolveTargetHandleId =
+        event.colorAttachmentResolveTargetHandleIds?.[0] ?? undefined;
+    } else if (event.kind === 'beginComputePass') {
+      currentPassHandleId = event.passHandleId;
+      lastColorAttachmentHandleId = undefined;
+      lastColorAttachmentResolveTargetHandleId = undefined;
+    } else if (event.kind === 'endRenderPass' || event.kind === 'endComputePass') {
+      currentPassHandleId = undefined;
+    }
+
+    if (event.kind === 'setPipeline' && currentPassHandleId !== undefined) {
+      lastSeenPerPass.set(currentPassHandleId, {
+        pipelineKind: 'render',
+        pipelineHandleId: event.pipelineHandleId,
+      });
+    } else if (event.kind === 'setComputePipeline' && currentPassHandleId !== undefined) {
+      lastSeenPerPass.set(currentPassHandleId, {
+        pipelineKind: 'compute',
+        pipelineHandleId: event.pipelineHandleId,
+      });
+    }
+
+    if (event.kind === 'createBindGroup') {
+      bindGroupDefs.set(event.handleId, {
+        entries: event.entries,
+        resourceHandleIds: event.resourceHandleIds,
+      });
+    }
+
+    if (event.kind === 'setBindGroup') {
+      const def = bindGroupDefs.get(event.bindGroupHandleId);
+      if (def !== undefined) {
+        bindGroups.set(
+          event.index,
+          def.entries.map((entry, idx) => ({
+            groupIndex: event.index,
+            entryIndex: entry.binding,
+            handleId: def.resourceHandleIds[idx] ?? event.bindGroupHandleId,
+            kind: mapResourceKindToInspectKind(entry.resourceKind),
+          })),
+        );
+      } else {
+        bindGroups.set(event.index, [
+          {
+            groupIndex: event.index,
+            entryIndex: 0,
+            handleId: event.bindGroupHandleId,
+            kind: 'buffer',
+          },
+        ]);
+      }
+    }
+
+    if (!DRAW_KINDS.has(event.kind)) continue;
+
+    const pipelineInfo =
+      currentPassHandleId !== undefined ? lastSeenPerPass.get(currentPassHandleId) : undefined;
+    const pipelineKind =
+      pipelineInfo?.pipelineKind ?? (event.kind === 'dispatchWorkgroups' ? 'compute' : 'render');
+    const pipelineHandleId = pipelineInfo?.pipelineHandleId ?? 'unknown';
+    let drawCall: InspectDrawCall;
+    if (event.kind === 'draw') {
+      drawCall = {
+        pipelineKind,
+        pipelineHandleId,
+        vertexCount: event.vertexCount,
+        instanceCount: event.instanceCount,
+        firstVertex: event.firstVertex,
+        firstInstance: event.firstInstance,
+      };
+    } else if (event.kind === 'drawIndexed') {
+      drawCall = {
+        pipelineKind,
+        pipelineHandleId,
+        indexCount: event.indexCount,
+        instanceCount: event.instanceCount,
+        firstIndex: event.firstIndex,
+        baseVertex: event.baseVertex,
+        firstInstance: event.firstInstance,
+      };
+    } else if (event.kind === 'drawIndirect' || event.kind === 'drawIndexedIndirect') {
+      drawCall = {
+        pipelineKind,
+        pipelineHandleId,
+        indirectBufferHandleId: event.indirectBufferHandleId,
+        indirectOffset: event.indirectOffset,
+      };
+    } else if (event.kind === 'dispatchWorkgroups') {
+      drawCall = {
+        pipelineKind,
+        pipelineHandleId,
+        dispatchX: event.x,
+        dispatchY: event.y,
+        dispatchZ: event.z,
+      };
+    } else {
+      // DRAW_KINDS is closed; keep a defensive shape if the set and event
+      // union ever drift during an incremental change.
+      drawCall = { pipelineKind, pipelineHandleId };
+    }
+
+    const bindings: InspectBindingEntry[] = [];
+    for (const entries of bindGroups.values()) bindings.push(...entries);
+    infos.push({
+      frameIdx,
+      passIdx: -1,
+      bindings,
+      drawCall,
+      colorAttachmentHandleId: lastColorAttachmentHandleId,
+      colorAttachmentResolveTargetHandleId: lastColorAttachmentResolveTargetHandleId,
+    });
+  }
+
+  return infos;
+}
+
 // ============================================================================
 // mapResourceKindToInspectKind
 // ============================================================================
@@ -331,196 +485,23 @@ export function makePipelineState(
  * and the current render pass setup to produce the InspectReport fields.
  */
 export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: number): DrawInfo {
+  const info = extractDrawInfos(events)[targetDrawIdx];
+  if (info !== undefined) return info;
+
   let frameIdx = 0;
-  let currentGlobalDrawIdx = 0;
-  let foundDraw = false;
-
-  // Track bind group state per index (most recent setBindGroup)
-  const bindGroups = new Map<number, InspectBindingEntry[]>();
-
-  // I-8 fix (round 1 implement-review): index createBindGroup events by
-  // handleId so setBindGroup can resolve to the real per-entry kind +
-  // resourceHandleId list (covers cubemap, sampler, multi-buffer mixes;
-  // AC-29 requires Sponza skylight cubemap to surface as a texture/
-  // textureView entry, not a collapsed dummy 'buffer').
-  const bindGroupDefs = new Map<
-    string,
-    {
-      readonly entries: readonly {
-        readonly binding: number;
-        readonly resourceKind: 'sampler' | 'buffer' | 'textureView' | 'externalTexture';
-      }[];
-      readonly resourceHandleIds: readonly string[];
-    }
-  >();
-
-  // Track the last color attachment from beginRenderPass
-  let lastColorAttachmentHandleId: string | undefined;
-  let lastColorAttachmentResolveTargetHandleId: string | undefined;
-  // Track whether we saw a setPipeline event (for draw call kind)
-  const lastSeenPerPass: Map<
-    string,
-    { pipelineKind: 'render' | 'compute'; pipelineHandleId: string }
-  > = new Map();
-  let currentPassHandleId: string | undefined;
-
-  let drawBindings: InspectBindingEntry[] = [];
-  let drawCall: InspectDrawCall | null = null;
-  let drawPassHandleId: string | undefined;
-
   for (const event of events) {
-    if (event.kind === 'frameMark') {
-      frameIdx = event.frameIdx;
-    }
-
-    // Track pass boundaries
-    if (event.kind === 'beginRenderPass') {
-      currentPassHandleId = event.passHandleId;
-      lastColorAttachmentHandleId = event.colorAttachmentViewHandleIds[0] ?? undefined;
-      lastColorAttachmentResolveTargetHandleId =
-        event.colorAttachmentResolveTargetHandleIds?.[0] ?? undefined;
-    } else if (event.kind === 'endRenderPass') {
-      currentPassHandleId = undefined;
-    }
-
-    if (event.kind === 'setPipeline') {
-      if (currentPassHandleId !== undefined) {
-        lastSeenPerPass.set(currentPassHandleId, {
-          pipelineKind: 'render',
-          pipelineHandleId: event.pipelineHandleId,
-        });
-      }
-    } else if (event.kind === 'setComputePipeline') {
-      if (currentPassHandleId !== undefined) {
-        lastSeenPerPass.set(currentPassHandleId, {
-          pipelineKind: 'compute',
-          pipelineHandleId: event.pipelineHandleId,
-        });
-      }
-    }
-
-    // I-8: stash createBindGroup definitions so setBindGroup can resolve
-    // back to the per-entry shape.
-    if (event.kind === 'createBindGroup') {
-      bindGroupDefs.set(event.handleId, {
-        entries: event.entries,
-        resourceHandleIds: event.resourceHandleIds,
-      });
-    }
-
-    if (event.kind === 'setBindGroup') {
-      // I-8: resolve setBindGroup -> createBindGroup definition. Each
-      // tracked entry uses its real resourceKind (cubemap/sampler/buffer)
-      // and the resourceHandleId from the createBindGroup event. If no
-      // matching definition is found (e.g. tape truncation), fall back
-      // to a single placeholder entry pointing at the bindGroup itself
-      // so the contract `bindings[].handleId` stays non-empty.
-      const def = bindGroupDefs.get(event.bindGroupHandleId);
-      if (def !== undefined) {
-        const resolved: InspectBindingEntry[] = def.entries.map((e, idx) => ({
-          groupIndex: event.index,
-          entryIndex: e.binding,
-          handleId: def.resourceHandleIds[idx] ?? event.bindGroupHandleId,
-          kind: mapResourceKindToInspectKind(e.resourceKind),
-        }));
-        bindGroups.set(event.index, resolved);
-      } else {
-        bindGroups.set(event.index, [
-          {
-            groupIndex: event.index,
-            entryIndex: 0,
-            handleId: event.bindGroupHandleId,
-            kind: 'buffer',
-          },
-        ]);
-      }
-    }
-
-    // Check for draw calls
-    if (DRAW_KINDS.has(event.kind)) {
-      if (currentGlobalDrawIdx === targetDrawIdx) {
-        foundDraw = true;
-        drawPassHandleId = currentPassHandleId;
-
-        // Collect all current bind group entries
-        const entries: InspectBindingEntry[] = [];
-        for (const bgEntry of bindGroups.values()) {
-          entries.push(...bgEntry);
-        }
-        drawBindings = entries;
-
-        // Build draw call
-        const pipelineInfo =
-          drawPassHandleId !== undefined ? lastSeenPerPass.get(drawPassHandleId) : undefined;
-
-        if (event.kind === 'draw') {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            vertexCount: event.vertexCount,
-            instanceCount: event.instanceCount,
-            firstVertex: event.firstVertex,
-            firstInstance: event.firstInstance,
-          };
-        } else if (event.kind === 'drawIndexed') {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            indexCount: event.indexCount,
-            instanceCount: event.instanceCount,
-            firstIndex: event.firstIndex,
-            baseVertex: event.baseVertex,
-            firstInstance: event.firstInstance,
-          };
-        } else if (event.kind === 'drawIndirect' || event.kind === 'drawIndexedIndirect') {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            indirectBufferHandleId: event.indirectBufferHandleId,
-            indirectOffset: event.indirectOffset,
-          };
-        } else if (event.kind === 'dispatchWorkgroups') {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'compute',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            dispatchX: event.x,
-            dispatchY: event.y,
-            dispatchZ: event.z,
-          };
-        } else {
-          // DRAW_KINDS is closed — this branch is unreachable, defensive fallback.
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-          };
-        }
-        break;
-      }
-      currentGlobalDrawIdx++;
-    }
+    if (event.kind === 'frameMark') frameIdx = event.frameIdx;
   }
-
-  if (!foundDraw || drawCall === null) {
-    return {
-      frameIdx,
-      passIdx: -1,
-      bindings: [],
-      drawCall: {
-        pipelineKind: 'render',
-        pipelineHandleId: 'unknown',
-      },
-      colorAttachmentHandleId: undefined,
-      colorAttachmentResolveTargetHandleId: undefined,
-    };
-  }
-
   return {
     frameIdx,
-    passIdx: -1, // Will be computed by findPassIdx
-    bindings: drawBindings,
-    drawCall,
-    colorAttachmentHandleId: lastColorAttachmentHandleId,
-    colorAttachmentResolveTargetHandleId: lastColorAttachmentResolveTargetHandleId,
+    passIdx: -1,
+    bindings: [],
+    drawCall: {
+      pipelineKind: 'render',
+      pipelineHandleId: 'unknown',
+    },
+    colorAttachmentHandleId: undefined,
+    colorAttachmentResolveTargetHandleId: undefined,
   };
 }
 

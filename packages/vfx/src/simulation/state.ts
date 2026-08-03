@@ -1,5 +1,6 @@
 import type { ParticleRuntimeEmitter } from '../runtime-program.js';
 import type {
+  ParticleCpuOutputContext,
   ParticleCpuParticleContext,
   ParticleCpuVector,
   ParticleSimulationEmitterState,
@@ -10,7 +11,7 @@ const DEFAULT_COLOR = [1, 1, 1, 1] as const;
 export function createParticleEmitterState(
   emitter: ParticleRuntimeEmitter,
 ): ParticleSimulationEmitterState {
-  return {
+  const state: ParticleSimulationEmitterState = {
     emitterId: emitter.id,
     capacity: emitter.capacity,
     active: new Uint8Array(emitter.capacity),
@@ -26,7 +27,15 @@ export function createParticleEmitterState(
     elapsed: 0,
     overflowCount: 0,
     drawIndex: 0,
+    spawnedCount: 0,
+    droppedCount: 0,
+    spawnedSlots: new Uint32Array(emitter.capacity),
+    liveSlots: new Uint32Array(emitter.capacity),
+    outputSlots: new Uint32Array(emitter.capacity),
+    particle: createParticleContext(),
+    output: createOutputContext(),
   };
+  return state;
 }
 
 export function cloneParticleEmitterState(
@@ -48,7 +57,37 @@ export function cloneParticleEmitterState(
     elapsed: source.elapsed,
     overflowCount: source.overflowCount,
     drawIndex: source.drawIndex,
+    spawnedCount: source.spawnedCount,
+    droppedCount: source.droppedCount,
+    spawnedSlots: source.spawnedSlots.slice(),
+    liveSlots: source.liveSlots.slice(),
+    outputSlots: source.outputSlots.slice(),
+    particle: createParticleContext(),
+    output: createOutputContext(),
   };
+}
+
+export function copyParticleEmitterState(
+  target: ParticleSimulationEmitterState,
+  source: ParticleSimulationEmitterState,
+): void {
+  const count = source.liveCount;
+  target.active.set(source.active.subarray(0, count), 0);
+  target.active[count] = 0;
+  target.birthOrders.set(source.birthOrders.subarray(0, count), 0);
+  target.ages.set(source.ages.subarray(0, count), 0);
+  target.lifetimes.set(source.lifetimes.subarray(0, count), 0);
+  target.positions.set(source.positions.subarray(0, count * 3), 0);
+  target.velocities.set(source.velocities.subarray(0, count * 3), 0);
+  target.sizes.set(source.sizes.subarray(0, count), 0);
+  target.colors.set(source.colors.subarray(0, count * 4), 0);
+  target.liveCount = count;
+  target.emissionRemainder = source.emissionRemainder;
+  target.elapsed = source.elapsed;
+  target.overflowCount = source.overflowCount;
+  target.drawIndex = source.drawIndex;
+  target.spawnedCount = source.spawnedCount;
+  target.droppedCount = source.droppedCount;
 }
 
 export function clearParticleEmitterState(state: ParticleSimulationEmitterState): void {
@@ -65,6 +104,13 @@ export function clearParticleEmitterState(state: ParticleSimulationEmitterState)
   state.elapsed = 0;
   state.overflowCount = 0;
   state.drawIndex = 0;
+  state.spawnedCount = 0;
+  state.droppedCount = 0;
+  state.particle.position.fill(0);
+  state.particle.velocity.fill(0);
+  state.particle.color.fill(0);
+  state.output.position.fill(0);
+  state.output.color.fill(0);
 }
 
 export function particleContext(
@@ -73,16 +119,15 @@ export function particleContext(
 ): ParticleCpuParticleContext {
   const positionStart = slot * 3;
   const colorStart = slot * 4;
-  return {
-    slot,
-    birthOrder: state.birthOrders[slot] ?? 0,
-    age: state.ages[slot] ?? 0,
-    lifetime: state.lifetimes[slot] ?? 0,
-    position: state.positions.slice(positionStart, positionStart + 3) as ParticleCpuVector,
-    velocity: state.velocities.slice(positionStart, positionStart + 3) as ParticleCpuVector,
-    size: state.sizes[slot] ?? 0,
-    color: state.colors.slice(colorStart, colorStart + 4) as ParticleCpuVector,
-  };
+  state.particle.slot = slot;
+  state.particle.birthOrder = state.birthOrders[slot] ?? 0;
+  state.particle.age = state.ages[slot] ?? 0;
+  state.particle.lifetime = state.lifetimes[slot] ?? 0;
+  state.particle.position.set(state.positions.subarray(positionStart, positionStart + 3));
+  state.particle.velocity.set(state.velocities.subarray(positionStart, positionStart + 3));
+  state.particle.size = state.sizes[slot] ?? 0;
+  state.particle.color.set(state.colors.subarray(colorStart, colorStart + 4));
+  return state.particle;
 }
 
 export function writeParticleContext(
@@ -117,6 +162,30 @@ export function initializeParticleSlot(
   state.active[slot] = 1;
 }
 
+export type ParticleAgeAdvanceResult =
+  | { readonly ok: true; readonly value: undefined }
+  | { readonly ok: false; readonly error: 'numeric particle state is invalid' };
+
+/** Advance age and mark expired slots before compaction and output. */
+export function advanceParticleAgesAndReap(
+  state: ParticleSimulationEmitterState,
+  slots: ArrayLike<number>,
+  delta: number,
+  slotCount = slots.length,
+): ParticleAgeAdvanceResult {
+  for (let index = 0; index < slotCount; index += 1) {
+    const slot = slots[index] ?? 0;
+    const age = (state.ages[slot] ?? 0) + delta;
+    const lifetime = state.lifetimes[slot] ?? Number.POSITIVE_INFINITY;
+    if (!Number.isFinite(age) || lifetime < 0 || Number.isNaN(lifetime)) {
+      return { ok: false, error: 'numeric particle state is invalid' };
+    }
+    state.ages[slot] = age;
+    state.active[slot] = age >= lifetime ? 0 : 1;
+  }
+  return { ok: true, value: undefined };
+}
+
 export function compactDeadParticleSlots(state: ParticleSimulationEmitterState): void {
   let writeSlot = 0;
   for (let readSlot = 0; readSlot < state.liveCount; readSlot += 1) {
@@ -125,8 +194,29 @@ export function compactDeadParticleSlots(state: ParticleSimulationEmitterState):
     state.active[writeSlot] = 1;
     writeSlot += 1;
   }
-  state.active.fill(0, writeSlot);
+  state.active[writeSlot] = 0;
   state.liveCount = writeSlot;
+}
+
+function createParticleContext(): ParticleCpuParticleContext {
+  return {
+    slot: 0,
+    birthOrder: 0,
+    age: 0,
+    lifetime: 0,
+    position: new Float32Array(3) as ParticleCpuVector,
+    velocity: new Float32Array(3) as ParticleCpuVector,
+    size: 0,
+    color: new Float32Array(4) as ParticleCpuVector,
+  };
+}
+
+function createOutputContext(): ParticleCpuOutputContext {
+  return {
+    position: new Float32Array(3) as ParticleCpuVector,
+    size: 0,
+    color: new Float32Array(4) as ParticleCpuVector,
+  };
 }
 
 function copySlot(state: ParticleSimulationEmitterState, source: number, target: number): void {

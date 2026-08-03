@@ -6,6 +6,116 @@
 
 export type AssetSubjectType = 'asset' | 'package' | 'resource';
 
+/** The producer-owned subject behind a catalog row. */
+export type CatalogSubject = 'internal-asset' | 'imported-output';
+
+/** Whether the runtime projection is validated directly or cooked. */
+export type CookExecution = 'direct' | 'cooked';
+
+/** Derived lifecycle states exposed by the catalog. */
+export type CatalogLifecycle = 'missing' | 'cooking' | 'current' | 'stale' | 'failed';
+
+export type CatalogOperationName =
+  | 'preview'
+  | 'save'
+  | 'rebuild'
+  | 'sourceOverride'
+  | 'instanceOverride'
+  | 'promote';
+
+export interface CatalogOperationDescriptor {
+  readonly operation: CatalogOperationName;
+  readonly enabled: boolean;
+  readonly reason?: string;
+}
+
+export type CatalogOperations = Readonly<Record<CatalogOperationName, CatalogOperationDescriptor>>;
+
+export interface CatalogProjectionInput {
+  readonly subject: CatalogSubject;
+  readonly execution: CookExecution;
+  readonly lifecycle: CatalogLifecycle;
+}
+
+/** The explicit three-axis projection consumed by AI-facing catalog clients. */
+export interface CatalogProjection extends CatalogProjectionInput {
+  readonly operations: CatalogOperations;
+  readonly lastKnownGood?: {
+    readonly packageUrl: string;
+    readonly receiptUrl?: string;
+  };
+}
+
+/**
+ * Derive operation descriptors from catalog facts only.
+ *
+ * `kind`, paths, and diagnostic messages are intentionally absent from this
+ * function: a consumer receives a complete operation matrix and can branch
+ * on `enabled` without reimplementing producer policy.
+ */
+export function catalogOperationsFor(input: CatalogProjectionInput): CatalogOperations {
+  const imported = input.subject === 'imported-output';
+  const current = input.lifecycle === 'current';
+  const ready = current && (input.execution === 'direct' || input.execution === 'cooked');
+  const canRebuild = input.execution === 'cooked';
+  const canPreview = input.execution === 'cooked' && input.lifecycle !== 'missing';
+  const operation = (name: CatalogOperationName, enabled: boolean, reason?: string) => ({
+    operation: name,
+    enabled,
+    ...(reason === undefined ? {} : { reason }),
+  });
+
+  return {
+    preview: operation('preview', canPreview, canPreview ? undefined : 'no projection to preview'),
+    save: operation(
+      'save',
+      !imported && input.execution === 'direct' && ready,
+      imported ? 'imported output is read-only' : 'direct projection is not current',
+    ),
+    rebuild: operation(
+      'rebuild',
+      canRebuild,
+      canRebuild ? undefined : 'direct assets do not require a cook',
+    ),
+    sourceOverride: operation(
+      'sourceOverride',
+      imported && canRebuild,
+      imported
+        ? canRebuild
+          ? undefined
+          : 'cooked projection is not available'
+        : 'only imported output has a source override',
+    ),
+    instanceOverride: operation(
+      'instanceOverride',
+      imported && current,
+      imported
+        ? current
+          ? undefined
+          : 'projection is not current'
+        : 'only imported output has an instance override',
+    ),
+    promote: operation(
+      'promote',
+      imported && current,
+      imported
+        ? current
+          ? undefined
+          : 'projection is not current'
+        : 'internal assets are already authored',
+    ),
+  };
+}
+
+/** Reject impossible axis combinations before a catalog row is published. */
+export function isCatalogProjectionValid(input: CatalogProjection): boolean {
+  if (input.execution === 'direct' && input.lifecycle !== 'current') return false;
+  if (input.subject === 'imported-output' && input.execution !== 'cooked') return false;
+  return Object.entries(input.operations).every(
+    ([name, descriptor]) => name === descriptor.operation,
+  );
+}
+
 /** Structured reason for an authoring capability that is not available. */
 export type AssetAuthoringUnavailableCode =
   | 'unsupported-asset-kind'

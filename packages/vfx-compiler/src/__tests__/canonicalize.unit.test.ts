@@ -31,11 +31,13 @@ function input(overrides: Partial<ParticleProgramInput> = {}): ParticleProgramIn
     source,
     backendPlans: { spark: { kind: 'cpu', backends: ['cpu'] } },
     operatorPrograms: {
-      'spawn:spawn-rate:1': { cpu: { opcode: 'spawn-rate', rate: 4 } },
-      'initialize:set-life:1': { cpu: { opcode: 'set-life', seconds: 1 } },
-      'update:gravity:1': { cpu: { opcode: 'gravity', y: -9.8 } },
-      'update:drag:1': { cpu: { opcode: 'drag', factor: 0.2 } },
-      'output:billboard:1': { cpu: { opcode: 'billboard', size: 0.25 } },
+      spark: {
+        'spawn:spawn-rate:1': { cpu: { opcode: 'spawn-rate', rate: 4 } },
+        'initialize:set-life:1': { cpu: { opcode: 'set-life', seconds: 1 } },
+        'update:gravity:1': { cpu: { opcode: 'gravity', y: -9.8 } },
+        'update:drag:1': { cpu: { opcode: 'drag', factor: 0.2 } },
+        'output:billboard:1': { cpu: { opcode: 'billboard', size: 0.25 } },
+      },
     },
     ...overrides,
   };
@@ -66,8 +68,8 @@ describe('canonicalizeParticleProgram', () => {
   });
 
   it('does not encode operator registry insertion order', () => {
-    const programs = input().operatorPrograms;
-    const permuted = Object.fromEntries(Object.entries(programs).reverse());
+    const programs = input().operatorPrograms.spark ?? {};
+    const permuted = { spark: Object.fromEntries(Object.entries(programs).reverse()) };
 
     const first = canonicalizeParticleProgram(input());
     const second = canonicalizeParticleProgram(input({ operatorPrograms: permuted }));

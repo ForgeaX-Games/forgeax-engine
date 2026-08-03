@@ -203,6 +203,27 @@ test('t21: retains DDC cold-path insurance and reports AC-08 threshold status', 
   assert.equal(report.thresholdStatus, 'pass');
 });
 
+test('m2: accepts immutable DDC snapshots and reports temporary cache leaks', () => {
+  const report = run({
+    cachePages: [
+      {
+        total_count: 3,
+        actions_caches: [
+          { id: 1, key: 'ddc/snapshots/0/entries/aaaa', size_in_bytes: 7 },
+          { id: 2, key: 'ddc/snapshots/0/staging/attempt', size_in_bytes: 3 },
+          { id: 3, key: 'ddc/snapshots/0/lease/lock', size_in_bytes: 2 },
+        ],
+      },
+    ],
+    restoreSaveTimings: {},
+  });
+  assert.equal(report.ddcSnapshotStatus, 'fail');
+  assert.deepEqual(
+    report.ddcTemporaryEntries.map((entry) => entry.key),
+    ['ddc/snapshots/0/staging/attempt', 'ddc/snapshots/0/lease/lock'],
+  );
+});
+
 test('live key shape: runner-prefixed tsup dist entries are classified as low value', () => {
   const report = run({
     cachePages: [

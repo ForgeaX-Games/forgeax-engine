@@ -109,4 +109,18 @@ describe('ParticleEffectSource invalid matrix', () => {
     const { output: _output, ...withoutOutput } = validEmitter;
     expectInvalid({ ...validSource, emitters: [withoutOutput] }, 'effect.emitters[0].output');
   });
+
+  it('rejects derived runtime fields duplicated into authored source', () => {
+    expectInvalid(
+      { ...validSource, runtimeProgram: { format: 'forgeax-vfx-program-1' } },
+      'effect.runtimeProgram',
+    );
+    expectInvalid(
+      {
+        ...validSource,
+        emitters: [{ ...validSource.emitters[0], backendPlan: { backends: ['cpu'] } }],
+      },
+      'effect.emitters[0].backendPlan',
+    );
+  });
 });

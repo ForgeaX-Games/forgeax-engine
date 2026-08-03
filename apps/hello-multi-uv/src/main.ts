@@ -20,6 +20,8 @@
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
+import { createMaterialLoader, type MaterialReady } from '@forgeax/engine-assets-runtime';
+import type { CookedMaterialRecord } from '@forgeax/engine-pack';
 import {
   ANTIALIAS_MSAA,
   addFullscreenPass,
@@ -34,9 +36,15 @@ import {
 } from '@forgeax/engine-render';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { Transform } from '@forgeax/engine-scene';
-import type { RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
+import type {
+  MaterialAsset,
+  MaterialPassList,
+  RenderPipelineAsset,
+  TextureAsset,
+} from '@forgeax/engine-types';
 import customPipelineInversionShader from './custom-pipeline-inversion.wgsl';
 import './multi-uv-demo.wgsl';
+import inheritancePackUrl from './multi-uv-inheritance.pack.json?url';
 import depthFalsifierShader from './post-depth-falsifier.wgsl';
 import depthOverlayShader from './post-depth-overlay.wgsl';
 import depthOverlayMsaaShader from './post-depth-overlay-msaa.wgsl';
@@ -57,7 +65,15 @@ declare global {
           afterTextureHandles: readonly [number, number];
           baseColorSlotChanged: boolean;
           detailSlotChanged: boolean;
+          inheritanceBacked: boolean;
           afterComponentMaterialHandle: number | null;
+          sourceRootGuid: string | null;
+          sourceDerivedGuid: string | null;
+          sourceRootArtifactDigest: string | null;
+          sourceArtifactDigest: string | null;
+          sourceRootCookInputDigest: string | null;
+          sourceCookInputDigest: string | null;
+          falsifierMarker: string | null;
           resizeHistory: string[];
         };
         applyLiveMaterialRebind: () => { ok: boolean; code?: string };
@@ -138,6 +154,39 @@ function makeCustomPipeline(postShader: string, readsDepth = false): RenderPipel
     },
     execute(ctx: RenderPipelineContext): void {
       ctx.frameState.perFrameGraph?.execute(ctx);
+    },
+  };
+}
+
+function materialFromCookedRecord(
+  record: CookedMaterialRecord,
+  textureHandles: Readonly<{ baseColor: number; detail: number }>,
+  variant: 'true' | 'false' = 'true',
+): MaterialAsset {
+  if (record.resolved.passes.length === 0)
+    throw new Error('[hello-multi-uv] cooked material has no passes');
+  const [firstPass, ...restPasses] = record.resolved.passes;
+  if (firstPass === undefined)
+    throw new Error('[hello-multi-uv] cooked material has no first pass');
+  const withVariant = (pass: (typeof record.resolved.passes)[number]) => ({
+    ...pass,
+    program: {
+      ...pass.program,
+      moduleSlots: {
+        ...pass.program.moduleSlots,
+        M3_MULTI_UV_VARIANT: variant,
+      },
+    },
+  });
+  const passes: MaterialPassList = [withVariant(firstPass), ...restPasses.map(withVariant)];
+  return {
+    kind: 'material',
+    passes,
+    parameters: record.resolved.parameters,
+    values: {
+      ...record.resolved.values,
+      baseColorTexture: textureHandles.baseColor,
+      detailTexture: textureHandles.detail,
     },
   };
 }
@@ -251,10 +300,63 @@ if (!app.ok) {
   const world = app.value.world;
   const assets = app.value.renderer.assets;
   const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
+  const switchedVariant: 'true' | 'false' = startupVariant === 'true' ? 'false' : 'true';
   const liveMaterialMode = params.get('live-material');
-  const liveMaterialEnabled = liveMaterialMode === 'two-slot-swap-resize';
-  const falsifyLiveMaterial = params.has('falsify-live-material');
+  const inheritanceLiveMaterial = liveMaterialMode === 'inheritance-two-slot-swap-resize';
+  const liveVariantSwitch = inheritanceLiveMaterial && params.has('live-variant-switch');
+  const liveMaterialEnabled =
+    liveMaterialMode === 'two-slot-swap-resize' || inheritanceLiveMaterial;
+  const falsifyLiveMaterial =
+    params.has('falsify-live-material') || params.has('falsify-live-inheritance');
   const falsifyVariantSelection = params.has('falsify');
+  let inheritedMaterialPair:
+    | {
+        root: MaterialReady;
+        derived: MaterialReady;
+      }
+    | undefined;
+  if (inheritanceLiveMaterial) {
+    const response = await fetch(inheritancePackUrl);
+    if (!response.ok) throw new Error(`multi-uv inheritance pack fetch failed: ${response.status}`);
+    const pack = (await response.json()) as {
+      assets?: readonly { guid?: unknown; payload?: { cooked?: CookedMaterialRecord } }[];
+    };
+    const cookedByGuid = new Map(
+      (pack.assets ?? [])
+        .filter(
+          (entry): entry is { guid: string; payload?: { cooked?: CookedMaterialRecord } } =>
+            typeof entry.guid === 'string',
+        )
+        .map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
+    );
+    const loader = createMaterialLoader({
+      loadRecord: async (guid: string) => cookedByGuid.get(guid.toLowerCase()),
+      loadReference: async (guid: string) =>
+        cookedByGuid.has(guid.toLowerCase()) || guid === DEMO_MATERIAL_SHADER_PATH,
+    });
+    const [root, derived] = await Promise.all([
+      loader.load({
+        guid: '71935b00-7d8c-4c4e-8f12-345678abcd02',
+        specializationKey: DEMO_MATERIAL_SHADER_PATH,
+      }),
+      loader.load({
+        guid: '71935b00-7d8c-4c4e-8f12-345678abcd03',
+        specializationKey: DEMO_MATERIAL_SHADER_PATH,
+      }),
+    ]);
+    if (root.status !== 'Ready' || derived.status !== 'Ready') {
+      throw new Error('[hello-multi-uv] inheritance cooked records are not runtime-ready');
+    }
+    if (
+      root.artifact.digest !== derived.artifact.digest ||
+      root.record.receipt.inputDigest !== derived.record.receipt.inputDigest ||
+      root.record.resolved.passes[0]?.program.module !== DEMO_MATERIAL_SHADER_PATH ||
+      derived.record.resolved.passes[0]?.program.module !== DEMO_MATERIAL_SHADER_PATH
+    ) {
+      throw new Error('[hello-multi-uv] inheritance cooked records diverged');
+    }
+    inheritedMaterialPair = { root, derived };
+  }
   const variantControl = document.createElement('label');
   variantControl.id = 'variant-control';
   variantControl.style.cssText =
@@ -470,6 +572,36 @@ if (!app.ok) {
     baseColor: liveBaseColorTextureHandle,
     detail: falsifyLiveMaterial ? detailTextureHandle : liveDetailTextureHandle,
   });
+  const inheritedDerivedMaterial = inheritedMaterialPair
+    ? materialFromCookedRecord(
+        inheritedMaterialPair.derived.record,
+        {
+          baseColor: baseColorTextureHandle,
+          detail: detailTextureHandle,
+        },
+        startupVariant,
+      )
+    : undefined;
+  const inheritedSwitchedMaterial = inheritedMaterialPair
+    ? materialFromCookedRecord(
+        inheritedMaterialPair.derived.record,
+        {
+          baseColor: baseColorTextureHandle,
+          detail: detailTextureHandle,
+        },
+        switchedVariant,
+      )
+    : undefined;
+  const inheritedReplacementMaterial = inheritedMaterialPair
+    ? materialFromCookedRecord(
+        inheritedMaterialPair.derived.record,
+        {
+          baseColor: falsifyLiveMaterial ? baseColorTextureHandle : liveBaseColorTextureHandle,
+          detail: falsifyLiveMaterial ? detailTextureHandle : liveDetailTextureHandle,
+        },
+        liveVariantSwitch ? switchedVariant : startupVariant,
+      )
+    : undefined;
 
   // catalog acquires the GUID -> payload mapping (for loadByGuid fast-path);
   // allocSharedRef mints the ECS column handles needed by MeshFilter.assetHandle
@@ -482,6 +614,22 @@ if (!app.ok) {
   const defaultMatHandle = world.allocSharedRef('MaterialAsset', defaultMaterial);
   const falseMatHandle = world.allocSharedRef('MaterialAsset', falseMaterial);
   const liveMatHandle = world.allocSharedRef('MaterialAsset', liveMaterial);
+  const inheritedDerivedMaterialHandle = inheritedDerivedMaterial
+    ? world.allocSharedRef('MaterialAsset', inheritedDerivedMaterial)
+    : null;
+  const inheritedReplacementMaterialHandle = inheritedReplacementMaterial
+    ? world.allocSharedRef('MaterialAsset', inheritedReplacementMaterial)
+    : null;
+  const inheritedSwitchedMaterialHandle = inheritedSwitchedMaterial
+    ? world.allocSharedRef('MaterialAsset', inheritedSwitchedMaterial)
+    : null;
+  const initialMaterialHandle = inheritanceLiveMaterial
+    ? inheritedDerivedMaterialHandle
+    : startupVariant === 'true'
+      ? defaultMatHandle
+      : falseMatHandle;
+  if (initialMaterialHandle === null)
+    throw new Error('[hello-multi-uv] inherited material handle is missing');
 
   const planeEntity = world
     .spawn(
@@ -494,13 +642,28 @@ if (!app.ok) {
         },
       },
       { component: MeshFilter, data: { assetHandle: meshHandle } },
-      { component: MeshRenderer, data: { materials: [defaultMatHandle] } },
+      { component: MeshRenderer, data: { materials: [initialMaterialHandle] } },
     )
     .unwrap();
 
-  let activeMaterialHandle = startupVariant === 'true' ? defaultMatHandle : falseMatHandle;
+  let activeMaterialHandle = initialMaterialHandle;
   const selectVariant = (variant: 'true' | 'false') => {
-    const nextMaterialHandle = variant === 'true' ? defaultMatHandle : falseMatHandle;
+    if (inheritanceLiveMaterial && !liveVariantSwitch) {
+      variantSelect.value = variant;
+      variantStatus.textContent = `M3_MULTI_UV_VARIANT=${variant}`;
+      return;
+    }
+    const nextMaterialHandle = inheritanceLiveMaterial
+      ? variant === startupVariant
+        ? inheritedDerivedMaterialHandle
+        : inheritedSwitchedMaterialHandle
+      : variant === 'true'
+        ? defaultMatHandle
+        : falseMatHandle;
+    if (nextMaterialHandle === null) {
+      console.error('[multi-uv] variant selection has no inherited material handle');
+      return;
+    }
     const result = world.set(planeEntity, MeshRenderer, {
       materials: [nextMaterialHandle],
     });
@@ -523,30 +686,57 @@ if (!app.ok) {
       enabled: liveMaterialEnabled,
       applied: false,
       beforeMaterialHandle: activeMaterialHandle,
-      afterMaterialHandle: liveMaterialEnabled ? liveMatHandle : null,
+      afterMaterialHandle: liveMaterialEnabled
+        ? inheritanceLiveMaterial
+          ? inheritedReplacementMaterialHandle
+          : liveMatHandle
+        : null,
       beforeTextureHandles: [baseColorTextureHandle, detailTextureHandle],
       afterTextureHandles: [
-        liveBaseColorTextureHandle,
-        liveMaterial
+        inheritanceLiveMaterial && falsifyLiveMaterial
+          ? baseColorTextureHandle
+          : liveBaseColorTextureHandle,
+        inheritanceLiveMaterial
           ? falsifyLiveMaterial
             ? detailTextureHandle
             : liveDetailTextureHandle
-          : detailTextureHandle,
+          : liveMaterial
+            ? falsifyLiveMaterial
+              ? detailTextureHandle
+              : liveDetailTextureHandle
+            : detailTextureHandle,
       ],
-      baseColorSlotChanged: liveBaseColorTextureHandle !== baseColorTextureHandle,
+      baseColorSlotChanged: inheritanceLiveMaterial
+        ? !falsifyLiveMaterial
+        : liveBaseColorTextureHandle !== baseColorTextureHandle,
       detailSlotChanged: !falsifyLiveMaterial,
+      inheritanceBacked: inheritanceLiveMaterial,
       afterComponentMaterialHandle: null,
+      sourceRootGuid: inheritedMaterialPair?.root.record.guid ?? null,
+      sourceDerivedGuid: inheritedMaterialPair?.derived.record.guid ?? null,
+      sourceRootArtifactDigest: inheritedMaterialPair?.root.artifact.digest ?? null,
+      sourceArtifactDigest: inheritedMaterialPair?.derived.artifact.digest ?? null,
+      sourceRootCookInputDigest: inheritedMaterialPair?.root.record.receipt.inputDigest ?? null,
+      sourceCookInputDigest: inheritedMaterialPair?.derived.record.receipt.inputDigest ?? null,
+      falsifierMarker:
+        inheritanceLiveMaterial && falsifyLiveMaterial
+          ? 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
+          : null,
       resizeHistory: [],
     },
     applyLiveMaterialRebind: () => {
       const evidence = globalThis.__forgeaxMultiUvEvidence;
       if (evidence === undefined || !evidence.liveMaterial.enabled)
         return { ok: false, code: 'disabled' };
-      const result = world.set(planeEntity, MeshRenderer, { materials: [liveMatHandle] });
+      const nextMaterialHandle = inheritanceLiveMaterial
+        ? inheritedReplacementMaterialHandle
+        : liveMatHandle;
+      if (nextMaterialHandle === null) return { ok: false, code: 'missing-inherited-material' };
+      const result = world.set(planeEntity, MeshRenderer, { materials: [nextMaterialHandle] });
       if (!result.ok) return { ok: false, code: result.error.code };
-      activeMaterialHandle = liveMatHandle;
+      activeMaterialHandle = nextMaterialHandle;
       evidence.liveMaterial.applied = true;
-      evidence.liveMaterial.afterComponentMaterialHandle = liveMatHandle;
+      evidence.liveMaterial.afterComponentMaterialHandle = nextMaterialHandle;
       return { ok: true };
     },
   };

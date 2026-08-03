@@ -125,8 +125,8 @@ export interface PipelineBuilderContext {
    * tonemap field (M9 keeps the LDR shape; HDR variants are OOS-M9).
    */
   readonly colorFormat: GPUTextureFormat;
-  /** Depth attachment format (`depth24plus-stencil8` engine SSOT). */
-  readonly depthFormat: GPUTextureFormat;
+  /** Depth attachment format, or `undefined` for a color-only pass. */
+  readonly depthFormat: GPUTextureFormat | undefined;
   /**
    * Vertex buffer layout descriptors. Procedural geometry uses the 12-floats
    * stride (position + normal + uv + tangent); user shaders share this

@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DebugError } from '../errors';
 import {
   extractDrawInfo,
+  extractDrawInfos,
   findPassIdx,
   inspectDrawJson,
   mapResourceKindToInspectKind,
@@ -243,6 +244,47 @@ describe('extractDrawInfo', () => {
     const info1 = extractDrawInfo(events, 1);
     expect(info1.drawCall.indirectBufferHandleId).toBe('buf:indirect-b');
     expect(info1.drawCall.indirectOffset).toBe(32);
+  });
+});
+
+describe('extractDrawInfos', () => {
+  it('projects all draw events in one ordered scan', () => {
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 3 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['view:1'],
+      },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipe:1' },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 5469426,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+
+    const infos = extractDrawInfos(events);
+    expect(infos).toHaveLength(2);
+    expect(infos[0]?.frameIdx).toBe(3);
+    expect(infos[0]?.colorAttachmentHandleId).toBe('view:1');
+    expect(infos[1]?.drawCall).toMatchObject({ indexCount: 5469426, pipelineHandleId: 'pipe:1' });
+    expect(extractDrawInfo(events, 1)).toEqual(infos[1]);
   });
 });
 
@@ -512,8 +554,8 @@ describe('inspectDrawJson error transparency', () => {
     // would be preserved. Since inspectDrawJson does NOT call createReplay
     // (it receives an already-built Replay per D-1), the error transparency
     // manifests via drawIdx out-of-range. But the test exists to validate
-    // that the error's .code field is from the locked 14-member DebugErrorCode
-    // union — no new codes are introduced.
+    // that the error's .code field is from the locked 15-member DebugErrorCode
+    // union — this path must not introduce an unrelated code.
     const events = makeSingleDrawEvents();
     const replay = makeStubReplay({ events, handleMap: new Map<string, unknown>() });
     const result = await inspectDrawJson(
@@ -526,7 +568,7 @@ describe('inspectDrawJson error transparency', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const err = result.error;
-      // Verify the error has a known code from the 14-member union
+      // Verify the error has a known code from the 15-member union
       expect(typeof err.code).toBe('string');
       // Verify we can switch on it (closed union)
       switch (err.code) {
@@ -543,6 +585,7 @@ describe('inspectDrawJson error transparency', () => {
         case 'rpc-target-not-wired':
         case 'replay-dispose-busy':
         case 'snapshot-readback-failed':
+        case 'snapshot-timeout':
         case 'seed-initial-data-failed':
           break;
         default: {

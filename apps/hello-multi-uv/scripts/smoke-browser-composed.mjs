@@ -24,7 +24,9 @@ const useMsaa = process.env.FORGEAX_M3_MSAA === '1';
 const depthPost = process.env.FORGEAX_M3_DEPTH_POST === '1';
 const depthLiveSwitch = process.env.FORGEAX_M3_DEPTH_LIVE_SWITCH === '1';
 const depthReverseLiveSwitch = process.env.FORGEAX_M3_DEPTH_REVERSE_LIVE_SWITCH === '1';
-const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1';
+const inheritanceLiveMaterialScenario = process.env.FORGEAX_M3_INHERITANCE_LIVE_MATERIAL === '1';
+const liveVariantSwitch = inheritanceLiveMaterialScenario && process.env.FORGEAX_M3_LIVE_VARIANT_SWITCH === '1';
+const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1' || inheritanceLiveMaterialScenario;
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
   throw new Error(`unsupported start variant: ${startVariant}`);
@@ -310,10 +312,17 @@ async function runLiveMaterialScenario(baseUrl, page) {
       : '640x360';
 
   const runLeg = async (falsified, label) => {
-    const falsifierQuery = falsified ? '&falsify-live-material' : '';
+    const falsifierQuery = falsified
+      ? inheritanceLiveMaterialScenario
+        ? '&falsify-live-inheritance'
+        : '&falsify-live-material'
+      : '';
+    const liveMaterialQuery = inheritanceLiveMaterialScenario
+      ? 'inheritance-two-slot-swap-resize'
+      : 'two-slot-swap-resize';
     await page.setViewportSize({ width: 800, height: 600 });
     await page.goto(
-      `${baseUrl}/?pipeline=custom&variant=${startVariant}&post=passthrough&live-material=two-slot-swap-resize${falsifierQuery}${querySuffix}`,
+      `${baseUrl}/?pipeline=custom&variant=${startVariant}&post=passthrough&live-material=${liveMaterialQuery}${falsifierQuery}${querySuffix}${liveVariantSwitch ? '&live-variant-switch' : ''}`,
       { waitUntil: 'networkidle', timeout: 30_000 },
     );
     await page.waitForFunction(
@@ -327,6 +336,9 @@ async function runLiveMaterialScenario(baseUrl, page) {
       { timeout: 15_000 },
     );
     await waitForNonBlackCanvas(page, `${label} baseline`);
+    if (liveVariantSwitch) {
+      await select(page, '#variant-select', switchedVariant, '#variant-status');
+    }
     await select(page, '#post-select', 'inversion', '#post-status');
     const resizeHistory = [];
     await resizeCanvas(page, 640, 360, resizeHistory);
@@ -400,7 +412,42 @@ async function runLiveMaterialScenario(baseUrl, page) {
   if (falsifiedLive?.baseColorSlotChanged === true && falsifiedLive.detailSlotChanged === true) {
     throw new Error(`live-material falsifier still changed both slots: ${JSON.stringify(falsifiedLive)}`);
   }
-  if (falsifier.delta === null || falsifier.delta.changed < 100) throw new Error(`live-material falsifier was not observable: ${JSON.stringify(falsifier.delta)}`);
+  if (inheritanceLiveMaterialScenario) {
+    if (falsifier.delta === null || falsifier.delta.changed !== 0) {
+      throw new Error(`inheritance live-material falsifier changed pixels: ${JSON.stringify(falsifier.delta)}`);
+    }
+  } else if (falsifier.delta === null || falsifier.delta.changed < 100) {
+    throw new Error(`live-material falsifier was not observable: ${JSON.stringify(falsifier.delta)}`);
+  }
+  if (inheritanceLiveMaterialScenario) {
+    if (normalLive?.inheritanceBacked !== true || falsifiedLive?.inheritanceBacked !== true) {
+      throw new Error(`inheritance live material path was not marked inheritance-backed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
+    }
+    if (
+      normalLive.sourceRootGuid === null ||
+      normalLive.sourceDerivedGuid === null ||
+      normalLive.sourceRootGuid === normalLive.sourceDerivedGuid ||
+      normalLive.sourceRootArtifactDigest !== normalLive.sourceArtifactDigest ||
+      normalLive.sourceRootCookInputDigest !== normalLive.sourceCookInputDigest
+    ) {
+      throw new Error(`inheritance live material source evidence is incomplete: ${JSON.stringify(normalLive)}`);
+    }
+    if (
+      normalLive.beforeTextureHandles[0] === normalLive.afterTextureHandles[0] ||
+      normalLive.beforeTextureHandles[1] === normalLive.afterTextureHandles[1] ||
+      falsifiedLive.beforeTextureHandles[0] !== falsifiedLive.afterTextureHandles[0] ||
+      falsifiedLive.beforeTextureHandles[1] !== falsifiedLive.afterTextureHandles[1] ||
+      falsifiedLive.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
+    ) {
+      throw new Error(`inheritance live material texture causality failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
+    }
+  }
+  if (liveVariantSwitch) {
+    const expectedAfterVariant = `M3_MULTI_UV_VARIANT=${switchedVariant}`;
+    if (normal.after.state.variant !== expectedAfterVariant || falsifier.after.state.variant !== expectedAfterVariant) {
+      throw new Error(`inheritance live-material variant switch failed: ${JSON.stringify({ normal: normal.after.state, falsifier: falsifier.after.state })}`);
+    }
+  }
   for (const [label, leg] of [['normal', normal], ['falsifier', falsifier]]) {
     if (leg.afterEvidence?.resizeHistory.join('>') !== expectedHistory) {
       throw new Error(`${label} resize history wrong: ${leg.afterEvidence?.resizeHistory.join('>')}`);
@@ -409,7 +456,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
       throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
     }
   }
-  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} startVariant=${startVariant} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
+  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
 async function runDepthPostScenario(baseUrl, page) {

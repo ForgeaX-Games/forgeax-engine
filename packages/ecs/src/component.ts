@@ -109,6 +109,27 @@ export type SchemaVocabKeyword =
 export type SchemaFieldType = ScalarFieldType | SchemaVocabKeyword;
 
 /**
+ * Producer-owned semantic shape tags for authoring/schema consumers.
+ *
+ * The ECS storage vocabulary remains the source of truth for bytes and
+ * runtime values. These tags capture the semantic shape that storage alone
+ * cannot express (for example an optional entity reference or a nested
+ * unique payload). The tag is deliberately closed so downstream consumers
+ * can exhaustively handle the representative field-shape vocabulary without
+ * creating a second component registry.
+ */
+export type FieldShapeKind =
+  | 'scalar'
+  | 'boolean'
+  | 'enum'
+  | 'vector'
+  | 'quaternion'
+  | 'optional'
+  | 'nested'
+  | 'array'
+  | 'asset-ref';
+
+/**
  * Normalize any field-type keyword to its TYPE_METADATA key.
  *
  * The 11 legacy scalars round-trip their own key. The 6 vocab families normalize
@@ -1038,11 +1059,14 @@ export interface ArrayMeta {
  * Input field-descriptor object (D-A3). The second `defineComponent` argument
  * may declare each field either as a bare type keyword (legacy flat form,
  * still accepted through M2; migrated repo-wide in M3) or as a descriptor
- * object aggregating `type` + `default` + field-level `meta`.
+ * object aggregating `type` + `default` + semantic `shape` + field-level
+ * `meta`.
  *
  * - `type` — the schema field-type keyword (a parametrized string such as
  *   `'array<f32,3>'` / `'unique<MaterialAsset>'` is used verbatim, D-A2).
  * - `default` — layer-2 default value; aggregated into `component.defaults`.
+ * - `shape` — producer-owned semantic shape tag for schema consumers; it does
+ *   not change ECS storage or runtime value semantics.
  * - `meta` — field-level open namespace; aggregated into `component.meta`. The
  *   infra gives no key special meaning (open map, OOS-1).
  * - `transient` — when `true`, scene collect skips this field (D-5). Same word,
@@ -1066,6 +1090,8 @@ export interface ArrayMeta {
 export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
   readonly type: T;
   readonly default?: FieldValueType<T>;
+  /** Semantic authoring shape; storage still follows `type`. */
+  readonly shape?: FieldShapeKind;
   readonly meta?: Readonly<Record<string, unknown>>;
   readonly transient?: boolean;
   readonly labels?: Readonly<Record<string, number>>;
@@ -1074,9 +1100,10 @@ export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
 /**
  * Per-field reflection produced at registration time and read off
  * `component.fields[fieldName]` (D-A3). Carries the pre-parsed facts: the
- * field `type`, its `default` (if any), — for `array<...>` fields only — the
- * pre-parsed `arrayMeta` (parse happens once at registration, AC-03c), and the
- * field-level `transient` flag (D-5) when declared.
+ * field `type`, its `default` (if any), semantic `shape` (if declared), — for
+ * `array<...>` fields only — the pre-parsed `arrayMeta` (parse happens once at
+ * registration, AC-03c), and the field-level `transient` flag (D-5) when
+ * declared.
  *
  * `transient` mirrors the component-level `Component.transient` (same word,
  * same meaning): scene collect skips a `transient` field just as it skips a
@@ -1088,6 +1115,8 @@ export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
 export interface FieldReflection {
   readonly type: SchemaFieldType;
   readonly default?: unknown;
+  /** Producer-declared semantic shape, when storage type alone is insufficient. */
+  readonly shape?: FieldShapeKind;
   readonly arrayMeta?: ArrayMeta;
   readonly transient?: boolean;
   /**
@@ -1345,6 +1374,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     const row: {
       type: string;
       default?: unknown;
+      shape?: FieldShapeKind;
       arrayMeta?: ArrayMeta;
       transient?: boolean;
       labels?: Readonly<Record<string, number>>;
@@ -1357,6 +1387,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
         row.default = desc.default;
         collectedDefaults[fieldName] = desc.default;
       }
+      if (desc.shape !== undefined) row.shape = desc.shape;
       if (desc.meta !== undefined) {
         Object.assign(collectedMeta, desc.meta);
       }

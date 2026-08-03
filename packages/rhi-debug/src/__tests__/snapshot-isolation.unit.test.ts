@@ -35,7 +35,10 @@ interface SnapshotMockEnv {
   submitSpy: ReturnType<typeof vi.fn>;
 }
 
-function buildSnapshotMock(): { inst: any; env: SnapshotMockEnv } {
+function buildSnapshotMock(
+  stuckQueue = false,
+  stuckReadback = false,
+): { inst: any; env: SnapshotMockEnv } {
   const copyBufferToBufferSpy = vi.fn();
   const submitSpy = vi.fn(() => rOk(undefined));
 
@@ -44,7 +47,9 @@ function buildSnapshotMock(): { inst: any; env: SnapshotMockEnv } {
   // RHI Buffer contract readback.ts depends on.
   function makeBuffer(): any {
     return {
-      mapAsync: vi.fn(() => Promise.resolve(rOk(makeMapped()))),
+      mapAsync: vi.fn(() =>
+        stuckReadback ? new Promise(() => {}) : Promise.resolve(rOk(makeMapped())),
+      ),
     };
   }
   function makeMapped(): any {
@@ -65,7 +70,9 @@ function buildSnapshotMock(): { inst: any; env: SnapshotMockEnv } {
     writeBuffer: vi.fn(() => rOk(undefined)),
     writeTexture: vi.fn(() => rOk(undefined)),
     submit: submitSpy,
-    onSubmittedWorkDone: vi.fn(() => Promise.resolve(undefined)),
+    onSubmittedWorkDone: vi.fn(() =>
+      stuckQueue ? new Promise<void>(() => {}) : Promise.resolve(undefined),
+    ),
   };
 
   const device: any = {
@@ -91,12 +98,15 @@ function buildSnapshotMock(): { inst: any; env: SnapshotMockEnv } {
   return { inst, env: { copyBufferToBufferSpy, submitSpy } };
 }
 
-async function bootstrapSnapshot(): Promise<{
+async function bootstrapSnapshot(
+  stuckQueue = false,
+  stuckReadback = false,
+): Promise<{
   debugInst: DebugRhiInstance;
   device: any;
   env: SnapshotMockEnv;
 }> {
-  const { inst, env } = buildSnapshotMock();
+  const { inst, env } = buildSnapshotMock(stuckQueue, stuckReadback);
   const debugInst = wrap(inst);
   const adapterRes = await debugInst.requestAdapter();
   if (!adapterRes.ok) throw new Error('adapter');
@@ -110,6 +120,73 @@ async function bootstrapSnapshot(): Promise<{
 // ================================================================
 
 describe('snapshot isolation (w18)', () => {
+  it('does not fold live render calls into the snapshot seed phase', async () => {
+    const { debugInst, device } = await bootstrapSnapshot();
+    device.createBuffer({ size: 8, usage: 0x20 });
+
+    expect(debugInst.arm(1).ok).toBe(true);
+    const snapshot = debugInst.snapshotAllLiveResources();
+    await Promise.resolve();
+
+    // snapshotAllLiveResources() yields while the GPU readback is pending.
+    // A real viewport can render here; those calls belong to neither the
+    // frame-header seed nor the requested capture frame.
+    device.createCommandEncoder();
+
+    const result = await snapshot;
+    expect(result.ok).toBe(true);
+    const kinds = debugInst.getEvents().map((event) => event.kind);
+    expect(kinds).toContain('initialData');
+    expect(kinds).not.toContain('createCommandEncoder');
+  });
+
+  it('returns snapshot-timeout and invalidates the async snapshot on a stuck queue', async () => {
+    const { debugInst } = await bootstrapSnapshot(true);
+    expect(debugInst.arm(1).ok).toBe(true);
+
+    const result = await debugInst.snapshotAllLiveResources(5);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('snapshot-timeout');
+      expect(result.error.detail).toMatchObject({
+        timeoutMs: 5,
+        stage: 'queue-drain',
+        totalResources: 0,
+        completedResources: 0,
+        skippedResources: 0,
+        currentHandleId: null,
+        currentKind: null,
+        currentSizeBytes: null,
+      });
+    }
+    expect(debugInst.getState()).toBe('error');
+    debugInst.disposeError();
+    expect(debugInst.getState()).toBe('idle');
+    expect(debugInst.arm(1).ok).toBe(true);
+  });
+
+  it('reports the current resource when a GPU readback stalls', async () => {
+    const { debugInst, device } = await bootstrapSnapshot(false, true);
+    device.createBuffer({ size: 8, usage: 0x20 });
+    expect(debugInst.arm(1).ok).toBe(true);
+
+    const result = await debugInst.snapshotAllLiveResources(5);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.detail).toMatchObject({
+        timeoutMs: 5,
+        stage: 'resource-readback',
+        totalResources: 1,
+        completedResources: 0,
+        skippedResources: 0,
+        currentKind: 'buffer',
+        currentSizeBytes: 8,
+      });
+      expect(result.error.detail && 'currentHandleId' in result.error.detail).toBe(true);
+    }
+    expect(debugInst.getState()).toBe('error');
+  });
+
   it('snapshotAllLiveResources records initialData but never leaks copy/submit', async () => {
     const { debugInst, device } = await bootstrapSnapshot();
 
@@ -132,6 +209,19 @@ describe('snapshot isolation (w18)', () => {
     expect(kinds).not.toContain('copyBufferToBuffer');
     expect(kinds).not.toContain('copyTextureToBuffer');
     expect(kinds).not.toContain('submit');
+  });
+
+  it('batches load-time buffer readbacks into one GPU submission', async () => {
+    const { debugInst, device, env } = await bootstrapSnapshot();
+    device.createBuffer({ size: 8, usage: 0x20 });
+    device.createBuffer({ size: 8, usage: 0x20 });
+
+    expect(debugInst.arm(1).ok).toBe(true);
+    const snap = await debugInst.snapshotAllLiveResources();
+
+    expect(snap.ok).toBe(true);
+    expect(env.submitSpy).toHaveBeenCalledTimes(1);
+    expect(debugInst.getEvents().filter((event) => event.kind === 'initialData')).toHaveLength(2);
   });
 
   it('blobPool reuse: snapshot bytes are stored under a dataHash key (AC-12)', async () => {

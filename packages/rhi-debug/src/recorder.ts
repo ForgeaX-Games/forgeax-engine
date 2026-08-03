@@ -48,8 +48,8 @@ import type {
 } from '@forgeax/engine-rhi';
 import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { DebugError } from './errors';
-import { readbackBufferBytes, readbackTexturePixels } from './readback';
-import { assembleReport, finalizeToMemory } from './recorder-core';
+import { readbackBufferBytes, readbackBufferBytesBatch, readbackTexturePixels } from './readback';
+import { assembleReport, finalizeToMemory, SNAPSHOT_TIMEOUT_MS } from './recorder-core';
 import { bytesPerTexel, computeTextureLayout } from './texel-layout';
 import type {
   HandleId,
@@ -247,6 +247,17 @@ function extentLayerCount(size: number | GPUExtent3DStrict | undefined): number 
 // Internal recorder state
 // ============================================================================
 
+type SnapshotProgress = {
+  readonly startedAt: number;
+  readonly stage: 'queue-drain' | 'resource-readback';
+  readonly totalResources: number;
+  readonly completedResources: number;
+  readonly skippedResources: number;
+  readonly currentHandleId: string | null;
+  readonly currentKind: 'buffer' | 'texture' | null;
+  readonly currentSizeBytes: number | null;
+};
+
 interface RecorderInternal {
   state: RecorderState;
   requestedFrames: number;
@@ -266,6 +277,10 @@ interface RecorderInternal {
   bootstrapCreates: Map<HandleId, RhiCallEvent>;
   /** Handles whose initialData event was emitted by the current capture. */
   snapshotSeededHandles: Set<HandleId>;
+  /** Generation token invalidating async snapshot work after timeout/error. */
+  snapshotGeneration: number;
+  /** Last observable progress of the current/most recent resource snapshot. */
+  snapshotProgress: SnapshotProgress | undefined;
   /**
    * @internal
    * Descriptor registry of currently-live resources. Written by createBuffer /
@@ -309,25 +324,50 @@ interface RecorderInternal {
   capturedDevice: RhiDevice | undefined;
 }
 
+function snapshotTimeoutDetail(
+  progress: SnapshotProgress | undefined,
+  timeoutMs: number,
+): import('./errors').SnapshotTimeoutDetail {
+  const current = progress ?? {
+    startedAt: Date.now(),
+    stage: 'queue-drain' as const,
+    totalResources: 0,
+    completedResources: 0,
+    skippedResources: 0,
+    currentHandleId: null,
+    currentKind: null,
+    currentSizeBytes: null,
+  };
+  return {
+    timeoutMs,
+    stage: current.stage,
+    totalResources: current.totalResources,
+    completedResources: current.completedResources,
+    skippedResources: current.skippedResources,
+    currentHandleId: current.currentHandleId,
+    currentKind: current.currentKind,
+    currentSizeBytes: current.currentSizeBytes,
+    elapsedMs: Math.max(0, Date.now() - current.startedAt),
+  };
+}
+
 /**
  * @internal
- * True while the recorder is in a state that appends events to the tape:
- * Armed / Recording / Snapshotting. This is the SSOT recording predicate —
+ * True while the recorder is in a state that appends normal RHI events to the
+ * tape: Armed / Recording. Snapshotting is deliberately excluded: the async
+ * frame-header seed phase must not fold live viewport frames into the capture.
+ * This is the SSOT recording predicate —
  * `pushEvent` gates on it, and the proxy fast-path (writeBuffer / writeTexture /
  * createCommandEncoder) short-circuits when it is false so an idle recorder
  * (FORGEAX_ENGINE_RHI_DEBUG=1 but no capture in flight) pays no per-call
  * event-object allocation, no storeBlob hash+copy, and no proxy-encoder wrapping.
  *
  * Deliberately ignores `_skipRecord`: that flag suppresses recorder-internal
- * RHI calls (snapshot readback staging) DURING an active capture, which is a
- * recording state. `shouldRecord` folds it in for the pushEvent gate.
+ * RHI calls (such as snapshot readback staging) during either capture phase.
+ * `shouldRecord` folds it in for the normal pushEvent gate.
  */
 function isRecordingActive(s: RecorderInternal): boolean {
-  return (
-    s.state === RecorderState.Armed ||
-    s.state === RecorderState.Recording ||
-    s.state === RecorderState.Snapshotting
-  );
+  return s.state === RecorderState.Armed || s.state === RecorderState.Recording;
 }
 
 /**
@@ -344,6 +384,18 @@ function shouldRecord(s: RecorderInternal): boolean {
 
 function pushEvent(s: RecorderInternal, event: RhiCallEvent): void {
   if (!shouldRecord(s)) return;
+  s.events.push(event);
+}
+
+/**
+ * Append a frame-header seed without reopening the normal RHI event gate.
+ * Snapshotting is not a render-recording state, but its async readback still
+ * needs to emit initialData events for the resources that seed replay.
+ */
+function pushSnapshotEvent(s: RecorderInternal, event: RhiCallEvent): void {
+  if (s._skipRecord || (!isRecordingActive(s) && s.state !== RecorderState.Snapshotting)) {
+    return;
+  }
   s.events.push(event);
 }
 
@@ -870,7 +922,7 @@ export interface DebugRhiInstance extends RhiInstance {
    * success. Returns the first snapshot failure as a Result so the caller can
    * fail fast rather than record a partial seed set.
    */
-  snapshotAllLiveResources(): Promise<Result<void, DebugError>>;
+  snapshotAllLiveResources(timeoutMs?: number): Promise<Result<void, DebugError>>;
   /**
    * @internal
    * Append an event from a standalone wrapper (e.g. `wrapCreateShaderModule`)
@@ -967,6 +1019,8 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     textureViewHandleMap: new WeakMap(),
     bootstrapCreates: new Map(),
     snapshotSeededHandles: new Set(),
+    snapshotGeneration: 0,
+    snapshotProgress: undefined,
     descriptorTable: new Map(),
     _skipRecord: false,
     frameIdx: 0,
@@ -1006,11 +1060,13 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     }
 
     s.state = RecorderState.Armed;
+    s.snapshotGeneration += 1;
     s.requestedFrames = frames;
     s.recordedFrames = 0;
     s.events = [];
     s.blobPool = new Map();
     s.snapshotSeededHandles.clear();
+    s.snapshotProgress = undefined;
     s.frameIdx = 0;
     s.bootstrap = true;
     s.valid = true;
@@ -1267,8 +1323,13 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
   }
 
   function transitionToError(): void {
-    if (s.state === RecorderState.Recording || s.state === RecorderState.Armed) {
+    if (
+      s.state === RecorderState.Recording ||
+      s.state === RecorderState.Armed ||
+      s.state === RecorderState.Snapshotting
+    ) {
       s.state = RecorderState.Error;
+      s.snapshotGeneration += 1;
       s.valid = false;
       if (s.onFrameEndUnsubscribe) {
         s.onFrameEndUnsubscribe();
@@ -1280,9 +1341,11 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
   function disposeError(): void {
     if (s.state === RecorderState.Error) {
       s.state = RecorderState.Idle;
+      s.snapshotGeneration += 1;
       s.events = [];
       s.blobPool = new Map();
       s.valid = true;
+      s.snapshotProgress = undefined;
     }
   }
 
@@ -1307,6 +1370,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
    */
   async function snapshotResource(
     handleId: HandleId,
+    snapshotGeneration?: number,
   ): Promise<Result<{ handleId: HandleId; dataHash: string }, DebugError>> {
     type SnapshotResult = Result<{ handleId: HandleId; dataHash: string }, DebugError>;
     const fail = (
@@ -1346,6 +1410,17 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     // the _skipRecord guard below; using the real device sidesteps the proxy
     // entirely for the readback staging buffer.
     const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    const snapshotIsActive = () =>
+      snapshotGeneration === undefined ||
+      (s.state === RecorderState.Snapshotting && s.snapshotGeneration === snapshotGeneration);
+    const cancelled = () =>
+      makeErr(
+        new DebugError({
+          code: 'recorder-not-attached',
+          expected: 'snapshot remains active until all live resources are read back',
+          hint: 'snapshot was cancelled after a timeout or recorder error; discard this capture and retry',
+        }),
+      ) as unknown as SnapshotResult;
 
     let bytes: ArrayBuffer;
     const prevSkip = s._skipRecord;
@@ -1355,6 +1430,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         const size = typeof entry.size === 'number' ? entry.size : 0;
         const res = await readbackBufferBytes(realDevice, entry.resource, size);
         if (!res.ok) return fail(snapshotStageOf(res.error), res.error.expected, res.error.hint);
+        if (!snapshotIsActive()) return cancelled();
         bytes = res.value;
       } else {
         const { width, height } = extentToWidthHeight(entry.size);
@@ -1381,6 +1457,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           // side walks the same layout to writeTexture each slice back.
           const blob = new Uint8Array(layout.totalBytes);
           for (const slice of layout.slices) {
+            if (!snapshotIsActive()) return cancelled();
             const sub = await readbackTexturePixels(
               realDevice,
               entry.resource,
@@ -1392,6 +1469,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
                 baseArrayLayer: slice.layer,
               },
             );
+            if (!snapshotIsActive()) return cancelled();
             blob.set(sub.subarray(0, slice.byteLength), slice.byteOffset);
           }
           bytes = blob.buffer.slice(
@@ -1410,6 +1488,8 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       s._skipRecord = prevSkip;
     }
 
+    if (!snapshotIsActive()) return cancelled();
+
     // storeBlob: djb2 hash-dedup into the unified blobPool (D-1, no separate
     // init-data pool). Reuses the same tag space as writeBuffer/writeTexture.
     let dataHash: string;
@@ -1423,7 +1503,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       );
     }
 
-    pushEvent(s, { kind: 'initialData', handleId, dataHash });
+    pushSnapshotEvent(s, { kind: 'initialData', handleId, dataHash });
     s.snapshotSeededHandles.add(handleId);
     return makeOk({ handleId, dataHash }) as unknown as SnapshotResult;
   }
@@ -1437,7 +1517,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
    * Recording; any single snapshot failure aborts with its Result so the
    * caller fails fast (architecture §5) rather than recording a partial seed.
    */
-  async function snapshotAllLiveResources(): Promise<Result<void, DebugError>> {
+  async function snapshotAllLiveResources(
+    timeoutMs = SNAPSHOT_TIMEOUT_MS,
+  ): Promise<Result<void, DebugError>> {
     if (s.state !== RecorderState.Armed && s.state !== RecorderState.Snapshotting) {
       return makeErr(
         new DebugError({
@@ -1447,13 +1529,61 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         }),
       ) as unknown as Result<void, DebugError>;
     }
+    const snapshotGeneration = s.snapshotGeneration;
     s.state = RecorderState.Snapshotting;
+
+    const timeoutError = () =>
+      new DebugError({
+        code: 'snapshot-timeout',
+        expected: `frame-header resource snapshot completes within ${String(timeoutMs)} ms`,
+        hint: 'GPU readback did not complete; the recorder entered error state. Call disposeError() before retrying.',
+        detail: snapshotTimeoutDetail(s.snapshotProgress, timeoutMs),
+      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutResult = new Promise<Result<void, DebugError>>((resolve) => {
+      timer = setTimeout(() => {
+        transitionToError();
+        resolve(makeErr(timeoutError()) as unknown as Result<void, DebugError>);
+      }, timeoutMs);
+    });
+
+    try {
+      const result = await Promise.race([
+        runSnapshotAllLiveResources(snapshotGeneration),
+        timeoutResult,
+      ]);
+      if (!result.ok && s.state === RecorderState.Snapshotting) transitionToError();
+      return result;
+    } catch (error) {
+      transitionToError();
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  async function runSnapshotAllLiveResources(
+    snapshotGeneration: number,
+  ): Promise<Result<void, DebugError>> {
+    s.snapshotProgress = {
+      startedAt: Date.now(),
+      stage: 'queue-drain',
+      totalResources: s.descriptorTable.size,
+      completedResources: 0,
+      skippedResources: 0,
+      currentHandleId: null,
+      currentKind: null,
+      currentSizeBytes: null,
+    };
 
     // C-3 conservative timing: drain queued work so snapshots read frame-outside
     // / historical content, never a half-written in-frame value (A-2).
     const device = s.capturedDevice;
-    if (device !== undefined) {
-      const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    const realDevice =
+      device === undefined
+        ? undefined
+        : ((device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device);
+    if (realDevice !== undefined) {
       const prevSkip = s._skipRecord;
       s._skipRecord = true;
       try {
@@ -1461,9 +1591,119 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       } finally {
         s._skipRecord = prevSkip;
       }
+      if (s.snapshotProgress !== undefined) {
+        s.snapshotProgress = { ...s.snapshotProgress, stage: 'resource-readback' };
+      }
+      if (s.state !== RecorderState.Snapshotting || s.snapshotGeneration !== snapshotGeneration) {
+        return makeErr(
+          new DebugError({
+            code: 'recorder-not-attached',
+            expected: 'snapshot remains active while queued GPU work drains',
+            hint: 'snapshot was cancelled after a timeout or recorder error; discard this capture and retry',
+          }),
+        ) as unknown as Result<void, DebugError>;
+      }
     }
 
-    for (const [handleId, entry] of s.descriptorTable.entries()) {
+    const liveEntries = [...s.descriptorTable.entries()];
+    const batchedBufferIds = new Set<HandleId>();
+    const bufferEntries = liveEntries.filter(([handleId, entry]) => {
+      if (entry.kind !== 'buffer') return false;
+      if (isMappableBuffer(entry.usage)) {
+        if (s.snapshotProgress !== undefined) {
+          s.snapshotProgress = {
+            ...s.snapshotProgress,
+            skippedResources: s.snapshotProgress.skippedResources + 1,
+          };
+        }
+        return false;
+      }
+      if (realDevice === undefined) return false;
+      batchedBufferIds.add(handleId);
+      return true;
+    });
+
+    if (realDevice !== undefined && bufferEntries.length > 0) {
+      const firstBuffer = bufferEntries[0];
+      if (firstBuffer !== undefined && s.snapshotProgress !== undefined) {
+        s.snapshotProgress = {
+          ...s.snapshotProgress,
+          stage: 'resource-readback',
+          currentHandleId: firstBuffer[0],
+          currentKind: 'buffer',
+          currentSizeBytes: typeof firstBuffer[1].size === 'number' ? firstBuffer[1].size : null,
+        };
+      }
+      const batch = await readbackBufferBytesBatch(
+        realDevice,
+        bufferEntries.map(([handleId, entry]) => ({
+          handleId,
+          buffer: entry.resource,
+          size: typeof entry.size === 'number' ? entry.size : 0,
+        })),
+        {
+          onResourceStart: (handleId) => {
+            const entry = s.descriptorTable.get(handleId);
+            if (s.snapshotProgress !== undefined && entry !== undefined) {
+              s.snapshotProgress = {
+                ...s.snapshotProgress,
+                currentHandleId: handleId,
+                currentKind: 'buffer',
+                currentSizeBytes: typeof entry.size === 'number' ? entry.size : null,
+              };
+            }
+          },
+          onResourceComplete: () => {
+            if (s.snapshotProgress !== undefined) {
+              s.snapshotProgress = {
+                ...s.snapshotProgress,
+                completedResources: s.snapshotProgress.completedResources + 1,
+                currentHandleId: null,
+                currentKind: null,
+                currentSizeBytes: null,
+              };
+            }
+          },
+        },
+      );
+      if (!batch.ok) return batch as unknown as Result<void, DebugError>;
+      if (s.state !== RecorderState.Snapshotting || s.snapshotGeneration !== snapshotGeneration) {
+        return makeErr(
+          new DebugError({
+            code: 'recorder-not-attached',
+            expected: 'snapshot remains active while batched buffers are seeded',
+            hint: 'snapshot was cancelled after a timeout or recorder error; discard this capture and retry',
+          }),
+        ) as unknown as Result<void, DebugError>;
+      }
+      for (const [handleId] of bufferEntries) {
+        const bytes = batch.value.get(handleId);
+        if (bytes === undefined) {
+          return makeErr(
+            new DebugError({
+              code: 'snapshot-readback-failed',
+              expected: `batched buffer '${handleId}' has readback bytes`,
+              hint: 'the batched GPU readback returned no bytes for a live buffer',
+              detail: { handleId, stage: 'store' },
+            }),
+          ) as unknown as Result<void, DebugError>;
+        }
+        const dataHash = storeBlob(s, bytes);
+        pushSnapshotEvent(s, { kind: 'initialData', handleId, dataHash });
+        s.snapshotSeededHandles.add(handleId);
+      }
+    }
+
+    if (s.snapshotProgress !== undefined) {
+      s.snapshotProgress = {
+        ...s.snapshotProgress,
+        currentHandleId: null,
+        currentKind: null,
+        currentSizeBytes: null,
+      };
+    }
+
+    for (const [handleId, entry] of liveEntries) {
       // Skip mappable (MAP_READ/WRITE) staging buffers: promoteBufferUsage never
       // gives them COPY_SRC, so readbackBufferBytes' copyBufferToBuffer throws
       // "usage doesn't include CopySrc" (e.g. shadow-probe-staging on shadow/IBL
@@ -1471,6 +1711,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       if (entry.kind === 'buffer' && isMappableBuffer(entry.usage)) {
         continue;
       }
+      if (entry.kind === 'buffer' && batchedBufferIds.has(handleId)) continue;
       // Skip textures the readback/seed path cannot round-trip faithfully today:
       // depth/stencil (render-pass output, writeTexture rejects them) and any
       // non-4-byte-per-texel or multi-layer color format (rgba16float, IBL
@@ -1482,12 +1723,62 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         (isDepthOrStencilFormat(entry.format) ||
           !isSnapshottableColorTexture(entry.format, entry.size, entry.sampleCount))
       ) {
+        if (s.snapshotProgress !== undefined) {
+          s.snapshotProgress = {
+            ...s.snapshotProgress,
+            skippedResources: s.snapshotProgress.skippedResources + 1,
+          };
+        }
         continue;
       }
-      const res = await snapshotResource(handleId);
+      // The renderer may destroy a transient texture while an earlier
+      // resource readback is awaiting GPU completion. `liveEntries` is the
+      // snapshot's starting view, so re-check the authoritative descriptor
+      // table before reading this entry. A resource gone by this point cannot
+      // be used by the frame recorded after the snapshot; treating it as a
+      // skipped transient keeps capture retryable instead of failing the
+      // entire Play capture with a stale-handle error.
+      if (!s.descriptorTable.has(handleId)) {
+        if (s.snapshotProgress !== undefined) {
+          s.snapshotProgress = {
+            ...s.snapshotProgress,
+            skippedResources: s.snapshotProgress.skippedResources + 1,
+          };
+        }
+        continue;
+      }
+      if (s.snapshotProgress !== undefined) {
+        s.snapshotProgress = {
+          ...s.snapshotProgress,
+          stage: 'resource-readback',
+          currentHandleId: handleId,
+          currentKind: entry.kind,
+          currentSizeBytes:
+            entry.kind === 'buffer' && typeof entry.size === 'number' ? entry.size : null,
+        };
+      }
+      const res = await snapshotResource(handleId, snapshotGeneration);
       if (!res.ok) return res as unknown as Result<void, DebugError>;
+      if (s.snapshotProgress !== undefined) {
+        s.snapshotProgress = {
+          ...s.snapshotProgress,
+          completedResources: s.snapshotProgress.completedResources + 1,
+          currentHandleId: null,
+          currentKind: null,
+          currentSizeBytes: null,
+        };
+      }
     }
 
+    if (s.state !== RecorderState.Snapshotting || s.snapshotGeneration !== snapshotGeneration) {
+      return makeErr(
+        new DebugError({
+          code: 'recorder-not-attached',
+          expected: 'snapshot remains active until the full live-resource table is seeded',
+          hint: 'snapshot was cancelled after a timeout or recorder error; discard this capture and retry',
+        }),
+      ) as unknown as Result<void, DebugError>;
+    }
     s.state = RecorderState.Recording;
     return makeOk(undefined) as unknown as Result<void, DebugError>;
   }
@@ -2495,6 +2786,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       s.bootstrapCreates = new Map();
       s.descriptorTable = new Map();
       s.snapshotSeededHandles = new Set();
+      s.snapshotProgress = undefined;
       s.frameIdx = 0;
       s.bootstrap = true;
       s.recordedCaps = undefined;

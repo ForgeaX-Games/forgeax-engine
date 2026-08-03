@@ -182,7 +182,9 @@ export const SceneInstance = defineComponent(
   {
     source: { type: 'shared<SceneAsset>' },
     mapping: { type: 'array<entity>' },
-    state: { type: 'unique<SceneInstanceState>' },
+    // The unique slot is the ECS storage seam for the instance's structured
+    // runtime payload; keep the nested semantic visible to schema consumers.
+    state: { type: 'unique<SceneInstanceState>', shape: 'nested' },
   },
   { transient: true },
 );

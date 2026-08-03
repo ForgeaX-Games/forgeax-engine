@@ -53,6 +53,20 @@ describe('GameProjectSchema — acceptance', () => {
     expect(result.success).toBe(true);
   });
 
+  it('keeps forge.json as the engine-project manifest, not a Catalog asset', () => {
+    const result = GameProjectSchema.safeParse({
+      id: 'manifest-only',
+      name: 'Manifest Only',
+      schemaVersion: '1.0.0',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty('guid');
+      expect(result.data).not.toHaveProperty('sourceKey');
+      expect(result.data).not.toHaveProperty('assets');
+    }
+  });
+
   it('accepts forge.json with entry field present', () => {
     const result = GameProjectSchema.safeParse({
       id: 'with-entry',

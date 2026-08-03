@@ -46,24 +46,11 @@ export { BUILTIN_BASE };
 export const BUILTIN_FLOATS_PER_VERTEX = 12;
 
 // ─── Builtin geometry data (12F: position + normal + uv + tangent) ──────────
-// bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu (Stage 1,
-// carries PR #598 feat-20260703-builtin-mesh-aabb-opt-out): only
-// `BUILTIN_QUAD` aligns with user-imported `MeshAsset` (carries
-// `meshFromInterleaved` + `aabbFromPositions()` natural aabb) and funnels
-// through the same `render-system-extract.ts` frustum-cull three-gate branch.
-// The other 5 builtins (`BUILTIN_CUBE` / `BUILTIN_TRIANGLE` / `BUILTIN_SPHERE`
-// / `BUILTIN_CYLINDER` / `BUILTIN_NINESLICE_QUAD`) keep the pre-feat baseline:
-// the aabb-strip helper below erases their aabb so dispatch short-circuits
-// through the `aabb === undefined` gate (always visible). Stage 2 (explicit
-// opt-out migration for the 5 non-QUAD builtins) is deferred to a sibling
-// loop (entry evidence: shadow-opt-out AC-17 dawn regression). The Stage 1
-// HANDLE_QUAD migration path is `MeshRenderer { frustumCulled: 0 }` (see
-// runtime README §Frustum Culling).
-function withoutAabb(mesh: TypesMeshAsset): TypesMeshAsset {
-  if (mesh.aabb === undefined) return mesh;
-  const { aabb: _aabb, ...rest } = mesh;
-  return rest;
-}
+// bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu: every
+// builtin geometry payload keeps the local-space AABB produced by its geometry
+// factory. Builtins are ordinary MeshAssets at the render boundary, so removing
+// their bounds silently turns them into always-visible renderables and defeats
+// the same frustum-culling path used by imported meshes.
 
 // BUILTIN_CUBE is synthesized from `createBoxGeometry(1, 1, 1)` so the cube
 // inherits Three.js-aligned per-face UV unwrap and per-vertex tangent vec4.
@@ -75,7 +62,7 @@ if (!builtinCubeRes.ok) {
     `[builtin-asset-registry] createBoxGeometry(1,1,1) failed: ${builtinCubeRes.error.code}`,
   );
 }
-export const BUILTIN_CUBE: TypesMeshAsset = Object.freeze(withoutAabb(builtinCubeRes.value));
+export const BUILTIN_CUBE: TypesMeshAsset = Object.freeze(builtinCubeRes.value);
 
 // BUILTIN_TRIANGLE: 3 vertices in the XY plane facing +Z, with a [0..1]² UV
 // triangle so a textured triangle samples the texture (apex = top-centre,
@@ -83,14 +70,12 @@ export const BUILTIN_CUBE: TypesMeshAsset = Object.freeze(withoutAabb(builtinCub
 // 8-floats interleaved input (pos + normal + uv) to the runtime 12-floats
 // stride (adds tangent vec4 per `geometry/tangent.ts` path A).
 export const BUILTIN_TRIANGLE: TypesMeshAsset = Object.freeze(
-  withoutAabb(
-    meshFromInterleaved(
-      new Float32Array([
-        // pos.xyz                normal.xyz       uv.xy
-        0, 0.7, 0, 0, 0, 1, 0.5, 1, -0.7, -0.6, 0, 0, 0, 1, 0, 0, 0.7, -0.6, 0, 0, 0, 1, 1, 0,
-      ]),
-      new Uint16Array([0, 1, 2]),
-    ),
+  meshFromInterleaved(
+    new Float32Array([
+      // pos.xyz                normal.xyz       uv.xy
+      0, 0.7, 0, 0, 0, 1, 0.5, 1, -0.7, -0.6, 0, 0, 0, 1, 0, 0, 0.7, -0.6, 0, 0, 0, 1, 1, 0,
+    ]),
+    new Uint16Array([0, 1, 2]),
   ),
 );
 
@@ -101,10 +86,8 @@ export const BUILTIN_TRIANGLE: TypesMeshAsset = Object.freeze(
 // discriminator, AI users reason about UV / pivot semantics by reading
 // `packages/runtime/src/geometry/plane.ts` (charter P4 consistent
 // abstraction; feat-20260520 M-1 / w06).
-// bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu Stage 1:
-// this payload keeps its aabb (no aabb-strip helper wrap) so HANDLE_QUAD
-// funnels through the same frustum-cull branch as user-imported `MeshAsset`;
-// migration path = `MeshRenderer { frustumCulled: 0 }`.
+// bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu: this
+// payload follows the same local-AABB contract as every other builtin.
 const builtinQuadRes = createPlaneGeometry(1, 1);
 if (!builtinQuadRes.ok) {
   throw new Error(
@@ -125,7 +108,7 @@ if (!builtinSphereRes.ok) {
     `[builtin-asset-registry] createSphereGeometry(1,16,12) failed: ${builtinSphereRes.error.code}`,
   );
 }
-export const BUILTIN_SPHERE: TypesMeshAsset = Object.freeze(withoutAabb(builtinSphereRes.value));
+export const BUILTIN_SPHERE: TypesMeshAsset = Object.freeze(builtinSphereRes.value);
 
 // BUILTIN_CYLINDER: procedural cylinder synthesised from createCylinderGeometry(0.5, 0.5, 1, 16, 1).
 // Radius-top=radius-bottom=0.5, height=1, 16 radial segments, 1 height segment — a
@@ -141,9 +124,7 @@ if (!builtinCylinderRes.ok) {
     `[builtin-asset-registry] createCylinderGeometry(0.5,0.5,1,16,1) failed: ${builtinCylinderRes.error.code}`,
   );
 }
-export const BUILTIN_CYLINDER: TypesMeshAsset = Object.freeze(
-  withoutAabb(builtinCylinderRes.value),
-);
+export const BUILTIN_CYLINDER: TypesMeshAsset = Object.freeze(builtinCylinderRes.value);
 
 // BUILTIN_NINESLICE_QUAD: 4×4 grid plane synthesised from
 // createPlaneGeometry(1, 1, 3, 3) — 16 vertices, 9 sub-quads × 6 indices = 54.
@@ -158,9 +139,7 @@ if (!builtinNineSliceQuadRes.ok) {
     `[builtin-asset-registry] createPlaneGeometry(1,1,3,3) failed: ${builtinNineSliceQuadRes.error.code}`,
   );
 }
-export const BUILTIN_NINESLICE_QUAD: TypesMeshAsset = Object.freeze(
-  withoutAabb(builtinNineSliceQuadRes.value),
-);
+export const BUILTIN_NINESLICE_QUAD: TypesMeshAsset = Object.freeze(builtinNineSliceQuadRes.value);
 
 // Slot u32 -> frozen payload. Slot ids 1..5 are the fixed builtin handle
 // values (HANDLE_CUBE=1 .. HANDLE_NINESLICE_QUAD=5) defined in asset-registry.

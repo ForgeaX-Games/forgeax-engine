@@ -1,5 +1,24 @@
 # @forgeax/engine-pack
 
+## Authoring and recovery index
+
+The machine contract is [`asset-authority.schema.json`](../../asset-authority.schema.json). The audit gate is [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs); it reports subject, execution, author authority, runtime source, lifecycle, owner, producer, and sourceKey evidence for every named category.
+
+The staged route is explicit: `author-validation` -> `external-declaration` ->
+`import` -> `native-cook` -> `ddc-validation` -> `runtime-parse` ->
+`editor-capability`. Each stage keeps its own evidence; a cache hit does not
+replace author authority, and an Editor capability does not become a runtime
+source.
+
+| Need | Entry | Safe action |
+|:--|:--|:--|
+| Inspect one asset | `forgeax-engine-remote-asset lookup --guid ... --project ... --catalog ... --json` | Read structured evidence and diagnostics |
+| Verify a result | `forgeax-engine-remote-asset verify --guid ... --project ... --catalog ... --json` | Repair the producer or package, then retry |
+| Rebuild a cooked result | Pack/import runner and the declared producer | Cold cook after discarding invalid DDC |
+| Preview old output | Catalog evidence with explicit last-known-good state | Preview only; never publish it as current |
+
+Pack or external source plus Meta owns author facts. DDC and Catalog are derived projections; they are not author databases or write authorities.
+
 > [!IMPORTANT]
 > The pack contract has one material authoring shape: a `MaterialAsset` payload. The cook stage resolves inheritance, values, texture coordinates, module references, artifact bytes, and a receipt into one record. Runtime consumers use the GUID and catalog locator; they do not author a second shader resource.
 

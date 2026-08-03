@@ -103,6 +103,7 @@ describe('transactional simulation failure isolation', () => {
 
     expect(failedResult.ok).toBe(false);
     expect(snapshotParticleOwner(failed).bytes).toEqual(before.bytes);
+    expect(failed.scratchEmitterStates[0]?.positions).not.toBe(failed.emitterStates[0]?.positions);
     expect(snapshotParticleOwner(valid).bytes).toEqual(snapshotParticleOwner(clean).bytes);
     if (!failedResult.ok) {
       expect(failedResult.error.detail.player).toBe(10);

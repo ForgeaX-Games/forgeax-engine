@@ -1,5 +1,13 @@
 # `@forgeax/engine-render`
 
+## Particle feature boundary
+
+Particle rendering is provided by
+[`@forgeax/engine-vfx-render`](../vfx-render/README.md). This package owns the
+generic RenderFeature host, prepared graphics resolver, pipeline readiness
+contract, and structured renderer errors; it does not own VFX simulation or
+particle asset authoring.
+
 > [!IMPORTANT]
 > Render consumes the effective MaterialAsset snapshot produced by extract. Each texture slot carries its own coordinate set and transform into the built-in PBR binding layout; render records do not reinterpret authoring fields or manufacture shader artifacts. The effective `passes` are already validated.
 
@@ -33,6 +41,8 @@ Register one producer-owned feature at the renderer assembly boundary. The
 same `FrameData` type flows through `extract`, `prepare`, and `contribute`;
 the host supplies ordering, capability projection, graph composition, and
 lifecycle isolation.
+Both paths execute inside the active RenderGraph and the frame's single
+execute/submit boundary.
 
 ```ts
 import { ok } from '@forgeax/engine-types';
@@ -79,24 +89,20 @@ if (ready.ok) renderer.draw([world], { owner: 0 });
 | Material pass | One shader-facing pass in a `MaterialAsset` | Material asset |
 | Prepared graphics | Opaque pipeline, binding, vertex/index, and attachment references prepared by the host | Render host |
 
-Feature contexts expose only the current frame, opaque resource/target
-handles, `Readonly<RhiCaps>`, and a structured error sink. Wave 1 stops at the
-graph seam: `RenderFeaturePassContext` exposes the named pass and frame
-identity, but intentionally does not expose raw GPU graphics state, pipeline
-binding, vertex/index state, or a command encoder. This keeps a producer from
-recording a WebGPU-invalid draw that cannot be backed by a feature-owned
-pipeline and bindings. Do not cast the context to a raw device, complete
-pipeline context, submit handle, or encoder; request a later prepared-graphics
-seam instead.
-Contribution declares named passes; their `execute` callbacks run in the
-active RenderGraph and remain inside the frame's single execute/submit
-boundary. The copyable recipe above is therefore a graph-only Wave 1 feature;
-`addResource('color', ...)` is a graph declaration, not a prepared graphics
-attachment or a promise that a producer can draw to it in Wave 1;
-it proves ordering, resource lifetime, and ownership without claiming a GPU
-draw capability that this seam does not implement. See
+Feature contexts never expose raw GPU graphics state, a complete pipeline
+context, submit authority, or a command encoder. They expose an immutable
+`Readonly<RhiCaps>` capability snapshot for capability-gated preparation. The
+graph-only `addPass`
+surface still exposes only named pass and frame identity; use the prepared
+graphics surface below when a feature needs pipelines, bindings, vertex/index
+data, attachments, and draw records. Both paths execute inside the active
+RenderGraph and the frame's single execute/submit boundary. The active RenderGraph
+owns that frame boundary. Do not cast either context to a raw device or encoder. See
 [`features/graph-contribution.ts`](src/features/graph-contribution.ts) for the
 staging shape.
+
+The copyable recipe above is therefore a graph-only Wave 1 feature; it stops at
+the graph seam and does not provide a production particle draw path.
 
 ### Prepared graphics recipe
 
@@ -141,6 +147,9 @@ render package accepts generic prepared graphics declarations.
 `RenderError` is a closed union. Switch on `error.code`, then read
 `error.expected`, `error.hint`, and the code-specific `error.detail`.
 
+Feature capability checks are based on `Readonly<RhiCaps>`, and recovery actions
+consume the structured `error.detail` context.
+
 | Diagnostic state or code | Recovery action |
 |:--|:--|
 | `active` | Continue the next frame |
@@ -168,10 +177,10 @@ asset contract is [`@forgeax/engine-vfx`](../vfx/README.md), while graph
 ownership is [`@forgeax/engine-render-graph`](../render-graph/README.md).
 
 > [!WARNING]
-> Wave 2 deliberately stops at the prepared public seam. A visible particle
-> draw path, particle simulation, VFX production branch, new asset manifest,
-> RPC/CLI transport, and private `/internal` application import are out of
-> scope. The hello-triangle visual check remains the falsification baseline.
+> Wave 2 delivered this generic prepared public seam. A downstream Wave 3 VFX
+> integration owns visible particle draws; render must not gain a
+> particle-kind switch or VFX production dependency. See the
+> [VFX Wave 3 handoff](../../docs/vfx-particle-runtime-design.md).
 
 Dynamic consumers use the same boundary explicitly:
 

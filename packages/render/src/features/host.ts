@@ -275,8 +275,10 @@ function graphicsValidator(
   return (descriptor, resources) => {
     const attachments = [
       ...descriptor.attachments.colors
-        .filter((attachment) =>
-          resources.some((resource) => resource.name === `${identity}::${attachment.resource}`),
+        .filter(
+          (attachment) =>
+            attachment.resource === 'swapchain' ||
+            resources.some((resource) => resource.name === `${identity}::${attachment.resource}`),
         )
         .map((attachment) => ({ resource: attachment.resource, format: attachment.format })),
       ...(descriptor.attachments.depthStencil === undefined

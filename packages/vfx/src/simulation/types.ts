@@ -4,6 +4,12 @@ import type { VfxError } from '../errors.js';
 import type { ParticleOutputBatch, ParticleRenderBatch } from '../render-batch.js';
 import type { ParticleRuntimeProgram } from '../runtime-program.js';
 import type { ParticleOperatorStage } from '../source.js';
+import type {
+  ParticleSimulationSpace,
+  ParticleSpacePose,
+  ParticleSpaceResolver,
+  ParticleSpaceResolverError,
+} from './space-resolver.js';
 
 export type ParticleCpuExecutorStage = ParticleOperatorStage;
 
@@ -25,8 +31,8 @@ export type ParticleCpuVector = Float32Array & {
 };
 
 export interface ParticleCpuParticleContext {
-  readonly slot: number;
-  readonly birthOrder: number;
+  slot: number;
+  birthOrder: number;
   age: number;
   lifetime: number;
   readonly position: ParticleCpuVector;
@@ -114,6 +120,13 @@ export interface ParticleSimulationEmitterState {
   elapsed: number;
   overflowCount: number;
   drawIndex: number;
+  spawnedCount: number;
+  droppedCount: number;
+  readonly spawnedSlots: Uint32Array;
+  readonly liveSlots: Uint32Array;
+  readonly outputSlots: Uint32Array;
+  readonly particle: ParticleCpuParticleContext;
+  readonly output: ParticleCpuOutputContext;
 }
 
 export interface ParticleSimulationOwnerOptions {
@@ -127,11 +140,16 @@ export interface ParticleSimulationOwner {
   readonly player: number;
   readonly program: ParticleRuntimeProgram;
   readonly registry: import('./cpu-executor-registry.js').ParticleCpuExecutorRegistry;
-  readonly emitterStates: ParticleSimulationEmitterState[];
+  readonly random: ParticleCpuRandomStream;
+  emitterStates: ParticleSimulationEmitterState[];
+  scratchEmitterStates: ParticleSimulationEmitterState[];
   seed: number;
   tick: number;
   drawIndex: number;
   nextBirthOrder: number;
+  cpuUpdateMs: number;
+  /** VFX-owned storage bytes allocated during the most recent simulation tick. */
+  allocatedBytes: number;
   lastFailure?: ParticleCpuExecutorError;
 }
 
@@ -142,6 +160,10 @@ export interface ParticleSimulationTickInput {
   readonly seed?: number;
   readonly timeScale?: number;
   readonly reset?: boolean;
+  readonly space?: {
+    readonly mode: ParticleSimulationSpace;
+    readonly pose?: ParticleSpacePose;
+  };
 }
 
 export interface ParticleSimulationEmitterSnapshot {
@@ -190,6 +212,20 @@ export interface ParticleSimulationEmitterObservation {
   readonly liveCount: number;
   readonly capacity: number;
   readonly overflowCount: number;
+  readonly spawned: number;
+  readonly dropped: number;
+}
+
+export type ParticleSimulationSelectedBackend = 'cpu' | 'gpu' | 'none';
+
+export interface ParticleSimulationTelemetry {
+  readonly tick: number;
+  readonly alive: number;
+  readonly spawned: number;
+  readonly dropped: number;
+  readonly selectedBackend: ParticleSimulationSelectedBackend;
+  readonly cpuUpdateMs: number;
+  readonly allocatedBytes: number;
 }
 
 /** Normalized player row supplied by the single FixedUpdate system. */
@@ -212,6 +248,25 @@ export interface ParticleSimulationObservation {
   readonly emitters: readonly ParticleSimulationEmitterObservation[];
   readonly batches: ParticleRenderBatch;
   readonly diagnostics: readonly VfxError[];
+  readonly telemetry: ParticleSimulationTelemetry;
+  /** Output-order scene facts for downstream extraction; batch shape stays frozen. */
+  readonly batchSpaces?: readonly ParticleSimulationBatchSpace[];
+  /** Resolver failures are separate from VFX executor errors and remain retryable. */
+  readonly spaceDiagnostics?: readonly ParticleSpaceResolverError[];
+}
+
+export interface ParticleSimulationBatchSpace {
+  readonly emitterId: string;
+  readonly space: ParticleSimulationSpace;
+  readonly source: ParticleSpacePose['source'];
+  readonly parent?: number;
+  readonly joint?: number;
+}
+
+export interface ParticleSimulationOptions {
+  readonly assets: ParticleSimulationAssets;
+  readonly cpuExecutors: import('./cpu-executor-registry.js').ParticleCpuExecutorRegistry;
+  readonly spaceResolver?: ParticleSpaceResolver;
 }
 
 export type ParticleSimulationResourceError = VfxError;

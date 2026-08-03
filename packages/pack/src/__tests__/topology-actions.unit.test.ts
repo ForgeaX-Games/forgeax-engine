@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { validateProducerOutputs } from '../producer-contract.js';
 import { diffTopology } from '../topology.js';
 
 describe('topology actions', () => {
+  it('rejects sourceIndex-only override declarations', () => {
+    const result = validateProducerOutputs([
+      { guid: 'old-a', sourceIndex: 0, kind: 'mesh' },
+      { guid: 'old-b', sourceIndex: 1, kind: 'mesh' },
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('source-index-ambiguous');
+  });
+
   it('reports add, remove, and reorder as source-key sets', () => {
     const previous = [
       { guid: 'old-hero', sourceKey: 'node/hero', sourceIndex: 0, kind: 'mesh' },

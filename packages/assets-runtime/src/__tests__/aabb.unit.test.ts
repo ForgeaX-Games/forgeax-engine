@@ -68,6 +68,15 @@ describe('withMeshAabb', () => {
     expect(Array.from(out.aabb as Float32Array)).toEqual(EMPTY_BOX);
   });
 
+  it('preserves a packed AABB when the binary path omits position attributes', () => {
+    const mesh = {
+      ...meshWith(undefined),
+      aabb: Float32Array.of(-2, 0, -1, 3, 4, 5),
+    };
+    const out = withMeshAabb(mesh);
+    expect(Array.from(out.aabb as Float32Array)).toEqual([-2, 0, -1, 3, 4, 5]);
+  });
+
   it('mutates the mesh in place when it is extensible (returns same reference)', () => {
     const mesh = meshWith(Float32Array.of(0, 0, 0, 1, 1, 1));
     const out = withMeshAabb(mesh);

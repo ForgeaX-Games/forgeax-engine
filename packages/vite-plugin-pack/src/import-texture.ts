@@ -18,8 +18,11 @@
 // imageImporter HDR arm (decode -> f16 -> rgba16float). This logic is
 // preserved byte-for-byte from the prior in-line import block.
 
+import { createHash } from 'node:crypto';
+import { readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import type { CompressionMode } from '@forgeax/engine-image/ktx2-encode';
 import { resolveEncodeMode } from '@forgeax/engine-image/ktx2-encode';
@@ -31,7 +34,39 @@ import type {
   PackIndexEntry,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { read as ddcRead, write as ddcWrite, keyFor } from './ddc-cache.js';
+import {
+  read as ddcRead,
+  write as ddcWrite,
+  implementationFingerprint,
+  semanticDdcKey,
+} from './ddc-cache.js';
+
+const require = createRequire(import.meta.url);
+
+function packageImplementationFiles(packageName: string): string[] {
+  try {
+    const packageJson = require.resolve(`${packageName}/package.json`);
+    const root = dirname(packageJson);
+    const files = (directory: string): string[] =>
+      readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        const path = resolve(directory, entry.name);
+        if (entry.isDirectory()) return files(path);
+        return statSync(path).isFile() && (path.endsWith('.mjs') || path.endsWith('.json'))
+          ? [path]
+          : [];
+      });
+    return [packageJson, ...files(resolve(root, 'dist'))];
+  } catch {
+    return [packageName];
+  }
+}
+
+const IMAGE_IMPLEMENTATION_FINGERPRINT = implementationFingerprint(
+  packageImplementationFiles('@forgeax/engine-image'),
+);
+const CODEC_IMPLEMENTATION_FINGERPRINT = implementationFingerprint(
+  packageImplementationFiles('@forgeax/engine-codec'),
+);
 
 /**
  * Read the sidecar compressionMode token, defaulting to `'auto'` (M5 / w38 flip,
@@ -176,8 +211,21 @@ export async function importTextureEntry(
   // a hit still flows through emitFile + getFileName unchanged (hashed names +
   // pack-index stay byte-identical to a cold build). Fail-open: a missing /
   // unwritable cache simply decodes.
-  const ddcKey = keyFor(sourceBytes, importSettings);
-  const cached = ddcRead(opts.cwd, ddcKey);
+  const ddcKey = semanticDdcKey({
+    schemaVersion: 'texture-v2',
+    importerVersion: IMAGE_IMPLEMENTATION_FINGERPRINT,
+    codecVersion: CODEC_IMPLEMENTATION_FINGERPRINT,
+    sourceDependencies: [
+      {
+        path: 'source',
+        digest: createHash('sha256').update(sourceBytes).digest('hex'),
+      },
+    ],
+    settings: importSettings,
+    declaredGuids: [entry.guid],
+    cookProfile: entry.kind,
+  });
+  const cached = await ddcRead(opts.cwd, ddcKey);
   if (cached !== null) {
     return { bytes: cached.bytes, metadata: cached.metadata };
   }
@@ -269,6 +317,6 @@ export async function importTextureEntry(
   };
   // Populate the build DDC so the next build with identical (source, settings)
   // hits and skips this decode (D-1). Fail-open inside ddcWrite.
-  ddcWrite(opts.cwd, ddcKey, { bytes, metadata });
+  await ddcWrite(opts.cwd, ddcKey, { bytes, metadata });
   return { bytes, metadata };
 }

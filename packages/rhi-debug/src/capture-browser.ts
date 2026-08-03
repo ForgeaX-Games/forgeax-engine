@@ -16,7 +16,8 @@
 //
 // Related: requirements AC-10; plan-strategy D-7/D-8; OOS-8 (v1 single-frame).
 
-import { finalizeToMemory, waitForRecorderIdle } from './recorder-core';
+import { DebugError, type SnapshotTimeoutDetail } from './errors';
+import { finalizeToMemory, SNAPSHOT_TIMEOUT_MS, waitForRecorderIdle } from './recorder-core';
 import type { PassOffset } from './tape-format';
 
 /**
@@ -28,13 +29,51 @@ import type { PassOffset } from './tape-format';
  */
 export interface CaptureBrowserRecorder {
   arm(frames: number): { ok: true } | { ok: false; error: unknown };
-  snapshotAllLiveResources(): Promise<{ ok: true } | { ok: false; error: unknown }>;
+  disposeError?(): void;
+  snapshotAllLiveResources(
+    timeoutMs?: number,
+  ): Promise<{ ok: true } | { ok: false; error: unknown }>;
+  transitionToError?(): void;
   getState(): string;
   getEvents(): readonly unknown[];
   // biome-ignore lint/suspicious/noExplicitAny: structural view avoids importing recorder.ts (Node-builtin deps); finalizeToMemory accepts the same shape
   getTape(): any;
   /** @internal */
   _getValid(): boolean;
+}
+
+export interface CaptureFramesOptions {
+  /** Maximum time allowed for the frame-header GPU resource snapshot. */
+  readonly snapshotTimeoutMs?: number;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new DebugError({
+          code: 'snapshot-timeout',
+          expected: `frame-header resource snapshot completes within ${String(timeoutMs)} ms`,
+          hint: 'GPU readback did not complete; the recorder entered error state. Call disposeError() before retrying.',
+          detail: {
+            timeoutMs,
+            stage: 'queue-drain',
+            totalResources: 0,
+            completedResources: 0,
+            skippedResources: 0,
+            currentHandleId: null,
+            currentKind: null,
+            currentSizeBytes: null,
+            elapsedMs: timeoutMs,
+          } satisfies SnapshotTimeoutDetail,
+        }),
+      );
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 /** In-memory tape produced by `captureFramesToMemory`. */
@@ -72,7 +111,13 @@ export async function captureFramesToMemory(
   // captureFrames(frames, _label?)); captureAndUpload forwards the caller's
   // label to uploadTape, which is where it lands on the dev-server run dir.
   _label?: string,
+  options: CaptureFramesOptions = {},
 ): Promise<CaptureBrowserTape> {
+  // A timed-out snapshot intentionally leaves the recorder in Error so stale
+  // readbacks cannot append to a later tape. The browser retry path owns the
+  // recovery boundary: clear that terminal state before re-arming, while
+  // leaving an active capture untouched.
+  if (debugInst.getState() === 'error') debugInst.disposeError?.();
   const armResult = debugInst.arm(frames);
   if (!armResult.ok) {
     throw armResult.error;
@@ -83,9 +128,18 @@ export async function captureFramesToMemory(
   // phase). Without this the replayed buffers are all-zero -> vertices collapse
   // to the origin -> black RT. Mirrors adapter.ts captureFrames; runs before the
   // rAF loop records the first frame's commands.
-  const snapResult = await debugInst.snapshotAllLiveResources();
-  if (!snapResult.ok) {
-    throw snapResult.error;
+  const snapshotTimeoutMs = options.snapshotTimeoutMs ?? SNAPSHOT_TIMEOUT_MS;
+  try {
+    const snapResult = await withTimeout(
+      debugInst.snapshotAllLiveResources(snapshotTimeoutMs),
+      snapshotTimeoutMs,
+    );
+    if (!snapResult.ok) {
+      throw snapResult.error;
+    }
+  } catch (error) {
+    debugInst.transitionToError?.();
+    throw error;
   }
 
   await waitForRecorderIdle(debugInst, 30_000);

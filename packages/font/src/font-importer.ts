@@ -44,6 +44,16 @@ import type {
 import type { BakeAtlas, MsdfGenerator } from './cli-font.js';
 import { encodePng, realGeneratorFactory } from './cli-font.js';
 
+/** Stable semantic identities for the three writable font outputs. */
+export function sourceKeyForFontOutput(kind: string): string | undefined {
+  const normalizedKind = kind.trim();
+  return normalizedKind.length === 0 ? undefined : `font:${normalizedKind}`;
+}
+
+export function fontOutputSourceKeys(): readonly string[] {
+  return ['texture', 'sampler', 'font'].map((kind) => sourceKeyForFontOutput(kind) as string);
+}
+
 /** Map the @zappar atlas glyphs into the FontAsset glyph-metrics record. */
 function atlasGlyphsToMetrics(atlas: BakeAtlas): Record<number, GlyphMetric> {
   const glyphs: Record<number, GlyphMetric> = {};

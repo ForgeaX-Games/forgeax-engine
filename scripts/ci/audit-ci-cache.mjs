@@ -29,6 +29,9 @@ function flattenPages(pages) {
 function isLowValue(entry) {
   return /(?:^|-)tsup-dist-/.test(entry.key);
 }
+function isDdcTemporaryKey(key) {
+  return /(?:^|\/)(?:staging|lease|attempt|head)(?:\/|$)/.test(key);
+}
 function repository() {
   const explicit = argument('--repository') ?? process.env.GITHUB_REPOSITORY;
   if (explicit) return explicit;
@@ -115,6 +118,7 @@ const reports = entries.map((entry) => ({
   lowValue: isLowValue(entry),
 }));
 const lowValueCaches = reports.filter((entry) => entry.lowValue);
+const ddcTemporaryEntries = reports.filter((entry) => isDdcTemporaryKey(entry.key));
 const activeBytesBefore = reports.reduce((sum, entry) => sum + entry.bytes, 0);
 const activeBytesAfter = reports
   .filter((entry) => !entry.lowValue)
@@ -135,6 +139,8 @@ const report = {
   thresholdStatus: activeBytesAfter <= activeCacheLimit ? 'pass' : 'fail',
   entries: reports,
   lowValueCaches,
+  ddcSnapshotStatus: ddcTemporaryEntries.length === 0 ? 'pass' : 'fail',
+  ddcTemporaryEntries,
   deletionApplied: process.argv.includes('--confirm-delete') && !input,
   preservedFamilies: ['ddc'],
 };

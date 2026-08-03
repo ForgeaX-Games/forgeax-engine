@@ -13,12 +13,18 @@ import type {
 
 export { PARTICLE_PROGRAM_ARTIFACT_KEY, PARTICLE_PROGRAM_FORMAT } from '@forgeax/engine-vfx';
 
+/** Compiled operator programs scoped by emitter, then operator identity. */
+export type ParticleEmitterOperatorPrograms = Readonly<
+  Record<
+    string,
+    Readonly<Record<string, Readonly<Partial<Record<ParticleBackend, ParticleOperatorProgram>>>>>
+  >
+>;
+
 export interface ParticleProgramInput {
   readonly source: ParticleEffectSource;
   readonly backendPlans: Readonly<Record<string, ParticleBackendPlan>>;
-  readonly operatorPrograms: Readonly<
-    Record<string, Readonly<Partial<Record<ParticleBackend, ParticleOperatorProgram>>>>
-  >;
+  readonly operatorPrograms: ParticleEmitterOperatorPrograms;
 }
 
 export type CanonicalParticleProgram = ParticleRuntimeProgram;
@@ -65,7 +71,7 @@ function digestOf(bytes: Uint8Array): string {
 function canonicalProgramsForEmitter(
   emitter: ParticleEffectSource['emitters'][number],
   backendPlan: ParticleBackendPlan,
-  operatorPrograms: ParticleProgramInput['operatorPrograms'],
+  operatorPrograms: ParticleEmitterOperatorPrograms,
 ): CanonicalParticleEmitter['programs'] {
   const programs: Partial<
     Record<ParticleBackend, readonly { readonly operator: string; readonly program: unknown }[]>
@@ -73,10 +79,11 @@ function canonicalProgramsForEmitter(
   const stages = ['spawn', 'initialize', 'update', 'output'] as const;
   for (const backend of backendPlan.backends) {
     const backendPrograms: { operator: string; program: unknown }[] = [];
+    const emitterPrograms = operatorPrograms[emitter.id] ?? {};
     for (const stage of stages) {
       for (const operator of emitter.operators[stage]) {
         const key = keyOf(stage, operator.kind, operator.version);
-        backendPrograms.push({ operator: key, program: operatorPrograms[key]?.[backend] });
+        backendPrograms.push({ operator: key, program: emitterPrograms[key]?.[backend] });
       }
     }
     programs[backend] = backendPrograms;
@@ -87,7 +94,7 @@ function canonicalProgramsForEmitter(
 function canonicalEmitter(
   emitter: ParticleEffectSource['emitters'][number],
   backendPlan: ParticleBackendPlan,
-  operatorPrograms: ParticleProgramInput['operatorPrograms'],
+  operatorPrograms: ParticleEmitterOperatorPrograms,
 ): CanonicalParticleEmitter {
   const programs = canonicalProgramsForEmitter(emitter, backendPlan, operatorPrograms);
 

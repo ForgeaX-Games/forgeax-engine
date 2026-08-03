@@ -4216,6 +4216,14 @@ export type {
   AssetSubjectType,
   CatalogDiagnostic,
   CatalogDiagnosticSeverity,
+  CatalogLifecycle,
+  CatalogOperationDescriptor,
+  CatalogOperationName,
+  CatalogOperations,
+  CatalogProjection,
+  CatalogProjectionInput,
+  CatalogSubject,
+  CookExecution,
   ExistingOutput,
   ImportedOutputDeclaration,
   KindChange,
@@ -4230,7 +4238,11 @@ export type {
   TopologyDiff,
   TopologyPreserved,
 } from './asset-producer';
-export { authoringCapabilityForAssetKind } from './asset-producer';
+export {
+  authoringCapabilityForAssetKind,
+  catalogOperationsFor,
+  isCatalogProjectionValid,
+} from './asset-producer';
 /**
  * One row in the pack-index catalog (`pack-index.json` for build path,
  * `/__pack/index` JSON response for dev path).
@@ -4258,6 +4270,7 @@ export type {
   CatalogRevisionPoint,
   CatalogRevisionWindow,
 } from './catalog';
+export type { CatalogEntryV2 } from './catalog.js';
 
 // === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===
 //

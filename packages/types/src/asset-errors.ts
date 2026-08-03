@@ -97,3 +97,101 @@ export const ASSET_EVIDENCE_ERROR_HINTS: Readonly<Record<AssetEvidenceErrorCode,
   'asset-evidence-digest-mismatch':
     'recook the source or restore the package bytes, then rerun artifact verification',
 };
+
+/** Ordered author-to-runtime stages used by structured recovery errors. */
+export type AssetErrorStage =
+  | 'author-validation'
+  | 'external-declaration'
+  | 'import'
+  | 'native-cook'
+  | 'ddc-validation'
+  | 'runtime-parse'
+  | 'editor-capability';
+
+/** AI-readable next action; it does not grant a cache or runtime write authority. */
+export interface AssetStageRecovery {
+  readonly action: string;
+  readonly command?: string;
+  readonly retryable: boolean;
+}
+
+export type AssetStageErrorDetail =
+  | { readonly authoringPath: string; readonly rule: string }
+  | { readonly sourceKey: string; readonly sourceIndex?: number }
+  | { readonly sourcePath: string; readonly importer?: string }
+  | { readonly guid: string; readonly producer: string }
+  | { readonly guid: string; readonly observedDigest: string; readonly expectedDigest: string }
+  | { readonly guid: string; readonly packageUrl: string }
+  | { readonly capability: string; readonly assetKind: string };
+
+export interface AssetStageErrorBase<S extends AssetErrorStage, C extends string> {
+  readonly stage: S;
+  readonly code: C;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: AssetStageErrorDetail;
+  readonly recovery: AssetStageRecovery;
+}
+
+type AssetStageErrorWithDetail<
+  S extends AssetErrorStage,
+  C extends string,
+  D extends AssetStageErrorDetail,
+> = Omit<AssetStageErrorBase<S, C>, 'detail'> & { readonly detail: D };
+
+export type AuthorValidationError = AssetStageErrorWithDetail<
+  'author-validation',
+  'author-validation-failed',
+  Extract<AssetStageErrorDetail, { readonly authoringPath: string }>
+>;
+export type ExternalDeclarationError = AssetStageErrorWithDetail<
+  'external-declaration',
+  'external-declaration-invalid',
+  Extract<AssetStageErrorDetail, { readonly sourceKey: string }>
+>;
+export type ImportStageError = AssetStageErrorWithDetail<
+  'import',
+  'import-failed',
+  Extract<AssetStageErrorDetail, { readonly sourcePath: string }>
+>;
+export type NativeCookError = AssetStageErrorWithDetail<
+  'native-cook',
+  'native-cook-failed',
+  Extract<AssetStageErrorDetail, { readonly guid: string; readonly producer: string }>
+>;
+export type DdcValidationError = AssetStageErrorWithDetail<
+  'ddc-validation',
+  'ddc-validation-failed',
+  Extract<AssetStageErrorDetail, { readonly observedDigest: string }>
+>;
+export type RuntimeParseError = AssetStageErrorWithDetail<
+  'runtime-parse',
+  'runtime-parse-failed',
+  Extract<AssetStageErrorDetail, { readonly packageUrl: string }>
+>;
+export type EditorCapabilityError = AssetStageErrorWithDetail<
+  'editor-capability',
+  'editor-capability-unavailable',
+  Extract<AssetStageErrorDetail, { readonly capability: string }>
+>;
+
+export type AssetStageError =
+  | AuthorValidationError
+  | ExternalDeclarationError
+  | ImportStageError
+  | NativeCookError
+  | DdcValidationError
+  | RuntimeParseError
+  | EditorCapabilityError;
+
+export type AssetStageErrorCode = AssetStageError['code'];
+
+export const ASSET_STAGE_ERROR_HINTS: Readonly<Record<AssetStageErrorCode, string>> = {
+  'author-validation-failed': 'read the authoring rule and apply the suggested recovery',
+  'external-declaration-invalid': 'repair the sourceKey declaration and retry recovery',
+  'import-failed': 'fix the importer input or registration, then retry recovery',
+  'native-cook-failed': 'fix the native producer and rerun recovery',
+  'ddc-validation-failed': 'repair the cooked artifact and rerun recovery',
+  'runtime-parse-failed': 'repair the package payload and rerun recovery',
+  'editor-capability-unavailable': 'register the capability and retry recovery',
+};

@@ -1,4 +1,4 @@
-// Type-level — DebugErrorCode 14-member closed union exhaustive switch + detail narrowing.
+// Type-level — DebugErrorCode 15-member closed union exhaustive switch + detail narrowing.
 //
 // AC-23: switch (err.code) without default branch must compile (TS2367 guards completeness).
 // AC-24: err.detail discriminated union narrowing in consumer path.
@@ -18,9 +18,9 @@ import type {
   TapeFormatVersionDetail,
 } from '../errors';
 
-describe('DebugErrorCode — 14-member closed union', () => {
+describe('DebugErrorCode — 15-member closed union', () => {
   it('exhaustive switch compiles without default branch (AC-23)', () => {
-    // AC-23: switch on all 14 members without `default` compiles.
+    // AC-23: switch on all 15 members without `default` compiles.
     // TS compiler proves completeness; no runtime function needed.
     type ExhaustiveSwitchResult = {
       'recorder-not-attached': string;
@@ -34,11 +34,12 @@ describe('DebugErrorCode — 14-member closed union', () => {
       'rt-readback-failed': string;
       'png-encode-failed': string;
       'snapshot-readback-failed': string;
+      'snapshot-timeout': string;
       'seed-initial-data-failed': string;
       'rpc-target-not-wired': string;
       'replay-dispose-busy': string;
     };
-    // Verify all 14 keys exist in the mapped type
+    // Verify all 15 keys exist in the mapped type
     expectTypeOf<keyof ExhaustiveSwitchResult>().toMatchTypeOf<DebugErrorCode>();
   });
 
@@ -51,7 +52,7 @@ describe('DebugErrorCode — 14-member closed union', () => {
   });
 
   it('rejects unknown code at consumption (type-level guard)', () => {
-    // Verify DebugErrorCode is exactly 14 members (structural check:
+    // Verify DebugErrorCode is exactly 15 members (structural check:
     // if a new member is added, ExhaustiveSwitchResult must also gain a key)
     type AllCodes = DebugErrorCode;
     expectTypeOf<'recorder-not-attached' | 'recorder-already-armed'>().toMatchTypeOf<AllCodes>();

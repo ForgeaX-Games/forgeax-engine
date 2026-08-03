@@ -22,3 +22,31 @@ test('catalog gate rejects retired material authoring vocabulary in planned docs
     assert.ok(gate.includes(token), `catalog gate must reject ${token}`);
   }
 });
+
+test('catalog gate owns the canonical audit vocabulary and staged recovery actions', () => {
+  for (const token of [
+    'subject',
+    'execution',
+    'lifecycle',
+    'lastKnownGood',
+    'sourceKey',
+    'author authority',
+    'runtime source',
+    'author-validation',
+    'external-declaration',
+    'import',
+    'native-cook',
+    'ddc-validation',
+    'runtime-parse',
+    'editor-capability',
+    'inspect',
+    'rebuild',
+    'cold cook',
+    'preview-LKG',
+    'override',
+    'promote',
+    'stop-publish',
+  ]) {
+    assert.ok(gate.includes(token), `catalog gate must own ${token}`);
+  }
+});

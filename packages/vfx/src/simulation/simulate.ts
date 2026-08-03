@@ -1,9 +1,10 @@
 import { type VfxError, vfxError } from '../errors.js';
 import type { ParticleRuntimeEmitter } from '../runtime-program.js';
 import {
+  advanceParticleAgesAndReap,
   clearParticleEmitterState,
-  cloneParticleEmitterState,
   compactDeadParticleSlots,
+  copyParticleEmitterState,
   createParticleEmitterState,
   initializeParticleSlot,
   particleContext,
@@ -12,9 +13,7 @@ import {
 import type {
   ParticleCpuExecutorContext,
   ParticleCpuExecutorResult,
-  ParticleCpuOutputContext,
   ParticleCpuRandomStream,
-  ParticleCpuVector,
   ParticleSimulationEmitterSnapshot,
   ParticleSimulationEmitterState,
   ParticleSimulationError,
@@ -24,13 +23,22 @@ import type {
   ParticleSimulationTickInput,
 } from './types.js';
 
+const SUCCESS_RESULT: ParticleCpuExecutorResult<void, ParticleSimulationError> = {
+  ok: true,
+  value: undefined,
+};
+
 class OwnerRandomStream implements ParticleCpuRandomStream {
   drawIndex: number;
+  private seed: number;
 
-  constructor(
-    private readonly seed: number,
-    drawIndex: number,
-  ) {
+  constructor(seed: number, drawIndex: number) {
+    this.seed = seed;
+    this.drawIndex = drawIndex;
+  }
+
+  reset(seed: number, drawIndex: number): void {
+    this.seed = seed;
     this.drawIndex = drawIndex;
   }
 
@@ -53,30 +61,47 @@ class OwnerRandomStream implements ParticleCpuRandomStream {
 export function createParticleSimulationOwner(
   options: ParticleSimulationOwnerOptions,
 ): ParticleSimulationOwner {
-  return {
+  const owner: ParticleSimulationOwner = {
     player: options.player,
     program: options.program,
     registry: options.registry,
+    random: new OwnerRandomStream(options.seed >>> 0, 0),
     emitterStates: options.program.emitters.map(createParticleEmitterState),
+    scratchEmitterStates: options.program.emitters.map(createParticleEmitterState),
     seed: options.seed >>> 0,
     tick: 0,
     drawIndex: 0,
     nextBirthOrder: 0,
+    cpuUpdateMs: 0,
+    allocatedBytes: 0,
   };
+  return owner;
 }
 
 export function resetParticleSimulationOwner(owner: ParticleSimulationOwner): void {
   for (const state of owner.emitterStates) clearParticleEmitterState(state);
+  for (const state of owner.scratchEmitterStates) clearParticleEmitterState(state);
   owner.tick = 0;
   owner.drawIndex = 0;
   owner.nextBirthOrder = 0;
+  owner.cpuUpdateMs = 0;
+  owner.allocatedBytes = 0;
   delete owner.lastFailure;
+}
+
+/** Attribute explicit VFX-owned storage allocation to the current tick. */
+export function recordParticleSimulationAllocation(
+  owner: ParticleSimulationOwner,
+  bytes: number,
+): void {
+  if (bytes > 0 && Number.isFinite(bytes)) owner.allocatedBytes += Math.trunc(bytes);
 }
 
 export function simulateParticleOwner(
   owner: ParticleSimulationOwner,
   input: ParticleSimulationTickInput,
 ): ParticleCpuExecutorResult<void, ParticleSimulationError> {
+  owner.allocatedBytes = 0;
   const timeScale = input.timeScale ?? 1;
   if (!Number.isFinite(timeScale) || timeScale < 0) {
     return failure(owner.player, 'timeScale', timeScale);
@@ -87,9 +112,10 @@ export function simulateParticleOwner(
 
   const seedChanged = input.seed !== undefined && input.seed >>> 0 !== owner.seed;
   const reset = input.reset === true || seedChanged;
-  if (input.fixedDelta === 0) return { ok: true, value: undefined };
+  if (input.fixedDelta === 0) return SUCCESS_RESULT;
   if (reset) {
     for (const state of owner.emitterStates) clearParticleEmitterState(state);
+    for (const state of owner.scratchEmitterStates) clearParticleEmitterState(state);
     owner.seed = (input.seed ?? owner.seed) >>> 0;
     owner.drawIndex = 0;
     owner.nextBirthOrder = 0;
@@ -99,15 +125,30 @@ export function simulateParticleOwner(
     return { ok: true, value: undefined };
   }
 
-  const working = owner.emitterStates.map(cloneParticleEmitterState);
-  const random = new OwnerRandomStream(owner.seed, owner.drawIndex);
+  const working = owner.scratchEmitterStates;
+  for (let index = 0; index < owner.emitterStates.length; index += 1) {
+    const committed = owner.emitterStates[index];
+    const scratch = working[index];
+    if (committed === undefined || scratch === undefined) continue;
+    copyParticleEmitterState(scratch, committed);
+  }
+  const random = owner.random as OwnerRandomStream;
+  random.reset(owner.seed, owner.drawIndex);
+  const startedAt = globalThis.performance?.now() ?? 0;
   const delta = input.fixedDelta * timeScale;
   let nextBirthOrder = owner.nextBirthOrder;
 
-  for (const emitter of owner.program.emitters) {
-    const state = working.find((candidate) => candidate.emitterId === emitter.id);
-    if (state === undefined) {
-      return failExecution(owner, emitter.id, 'spawn', 'program', 'emitter state is missing');
+  for (let emitterIndex = 0; emitterIndex < owner.program.emitters.length; emitterIndex += 1) {
+    const emitter = owner.program.emitters[emitterIndex];
+    const state = working[emitterIndex];
+    if (emitter === undefined || state === undefined) {
+      return failExecution(
+        owner,
+        emitter?.id ?? '',
+        'spawn',
+        'program',
+        'emitter state is missing',
+      );
     }
     const complete = owner.registry.checkProgram(owner.program, emitter.id, owner.player);
     if (!complete.ok) return failExecutionWithError(owner, complete.error);
@@ -120,22 +161,24 @@ export function simulateParticleOwner(
       random,
       nextBirthOrder,
     );
-    if (!result.ok) return result;
-    nextBirthOrder = result.value.nextBirthOrder;
+    if (typeof result !== 'number') return { ok: false, error: result };
+    nextBirthOrder = result;
   }
 
   for (let index = 0; index < working.length; index += 1) {
     const next = working[index];
     const current = owner.emitterStates[index];
     if (next === undefined || current === undefined) continue;
-    commitEmitterState(current, next);
-    current.drawIndex = random.drawIndex;
+    owner.emitterStates[index] = next;
+    owner.scratchEmitterStates[index] = current;
+    next.drawIndex = random.drawIndex;
   }
   owner.drawIndex = random.drawIndex;
   owner.nextBirthOrder = nextBirthOrder;
   owner.tick = input.tick;
+  owner.cpuUpdateMs = Math.max(0, (globalThis.performance?.now() ?? startedAt) - startedAt);
   delete owner.lastFailure;
-  return { ok: true, value: undefined };
+  return SUCCESS_RESULT;
 }
 
 export function snapshotParticleOwner(owner: ParticleSimulationOwner): ParticleSimulationSnapshot {
@@ -166,7 +209,7 @@ function simulateEmitter(
   tick: number,
   random: OwnerRandomStream,
   nextBirthOrder: number,
-): ParticleCpuExecutorResult<{ readonly nextBirthOrder: number }, ParticleSimulationError> {
+): number | ParticleSimulationError {
   const previousElapsed = state.elapsed;
   const nextElapsed = previousElapsed + delta;
   const scheduled = emitter.schedule.rate * delta + state.emissionRemainder;
@@ -182,53 +225,79 @@ function simulateEmitter(
   const available = state.capacity - state.liveCount;
   const accepted = Math.min(available, spawnAttempts);
   state.overflowCount += spawnAttempts - accepted;
-  const spawnedSlots: number[] = [];
+  state.spawnedCount = accepted;
+  state.droppedCount = spawnAttempts - accepted;
+  const spawnedSlots = state.spawnedSlots;
+  let spawnedCount = 0;
 
   for (let index = 0; index < accepted; index += 1) {
     const slot = state.liveCount;
     initializeParticleSlot(state, slot, nextBirthOrder + index);
     state.liveCount += 1;
-    spawnedSlots.push(slot);
+    spawnedSlots[spawnedCount] = slot;
+    spawnedCount += 1;
   }
   const birthOrder = nextBirthOrder + accepted;
 
-  const spawnResult = runStage(owner, emitter, state, 'spawn', spawnedSlots, delta, tick, random);
-  if (!spawnResult.ok) return spawnResult;
+  const spawnResult = runStage(
+    owner,
+    emitter,
+    state,
+    'spawn',
+    spawnedSlots,
+    spawnedCount,
+    delta,
+    tick,
+    random,
+  );
+  if (spawnResult !== undefined) return spawnResult;
   const initializeResult = runStage(
     owner,
     emitter,
     state,
     'initialize',
     spawnedSlots,
+    spawnedCount,
     delta,
     tick,
     random,
   );
-  if (!initializeResult.ok) return initializeResult;
+  if (initializeResult !== undefined) return initializeResult;
 
-  const liveSlots = Array.from({ length: state.liveCount }, (_, index) => index);
-  const updateResult = runStage(owner, emitter, state, 'update', liveSlots, delta, tick, random);
-  if (!updateResult.ok) return updateResult;
-  for (const slot of liveSlots) {
-    const age = (state.ages[slot] ?? 0) + delta;
-    const lifetime = state.lifetimes[slot] ?? Number.POSITIVE_INFINITY;
-    if (!Number.isFinite(age) || lifetime < 0 || Number.isNaN(lifetime)) {
-      return failExecution(
-        owner,
-        emitter.id,
-        'update',
-        'lifetime',
-        'numeric particle state is invalid',
-      );
-    }
-    state.ages[slot] = age;
-    state.active[slot] = age >= lifetime ? 0 : 1;
+  const liveSlots = state.liveSlots;
+  for (let index = 0; index < state.liveCount; index += 1) liveSlots[index] = index;
+  const updateResult = runStage(
+    owner,
+    emitter,
+    state,
+    'update',
+    liveSlots,
+    state.liveCount,
+    delta,
+    tick,
+    random,
+  );
+  if (updateResult !== undefined) return updateResult;
+  const ageResult = advanceParticleAgesAndReap(state, liveSlots, delta, state.liveCount);
+  if (!ageResult.ok) {
+    return failureError(failExecution(owner, emitter.id, 'update', 'lifetime', ageResult.error));
   }
   compactDeadParticleSlots(state);
-  const outputSlots = Array.from({ length: state.liveCount }, (_, index) => index);
-  const outputResult = runStage(owner, emitter, state, 'output', outputSlots, delta, tick, random);
-  if (!outputResult.ok) return outputResult;
-  return { ok: true, value: { nextBirthOrder: birthOrder } };
+  const outputSlots = state.outputSlots;
+  for (let index = 0; index < state.liveCount; index += 1) outputSlots[index] = index;
+  const outputResult = runStage(
+    owner,
+    emitter,
+    state,
+    'output',
+    outputSlots,
+    state.liveCount,
+    delta,
+    tick,
+    random,
+  );
+  if (outputResult !== undefined) return outputResult;
+  return birthOrder;
 }
 
 function runStage(
@@ -236,23 +305,25 @@ function runStage(
   emitter: ParticleRuntimeEmitter,
   state: ParticleSimulationEmitterState,
   stage: 'spawn' | 'initialize' | 'update' | 'output',
-  slots: readonly number[],
+  slots: Uint32Array,
+  slotCount: number,
   delta: number,
   tick: number,
   random: OwnerRandomStream,
-): ParticleCpuExecutorResult<void, ParticleSimulationError> {
-  const programs =
-    emitter.programs.cpu?.filter((program) => program.operator.startsWith(`${stage}:`)) ?? [];
-  for (const slot of slots) {
+): ParticleSimulationError | undefined {
+  const programs = emitter.programs.cpu;
+  if (programs === undefined) return undefined;
+  for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+    const slot = slots[slotIndex] ?? 0;
     for (const stageProgram of programs) {
+      if (!stageProgram.operator.startsWith(`${stage}:`)) continue;
       const resolved = owner.registry.resolveProgram(stageProgram, owner.player, emitter.id);
-      if (!resolved.ok) return failExecutionWithError(owner, resolved.error);
+      if (!resolved.ok) return failureError(failExecutionWithError(owner, resolved.error));
       const particle = particleContext(state, slot);
-      const output: ParticleCpuOutputContext = {
-        position: particle.position.slice() as ParticleCpuVector,
-        size: particle.size,
-        color: particle.color.slice() as ParticleCpuVector,
-      };
+      const output = state.output;
+      output.position.set(particle.position);
+      output.size = particle.size;
+      output.color.set(particle.color);
       const context = {
         stage,
         operator: stageProgram.operator,
@@ -267,15 +338,19 @@ function runStage(
       } as ParticleCpuExecutorContext;
       const executed = resolved.value.execute(context);
       if (!executed.ok) {
-        return failExecution(owner, emitter.id, stage, stageProgram.operator, executed.error);
+        return failureError(
+          failExecution(owner, emitter.id, stage, stageProgram.operator, executed.error),
+        );
       }
-      if (stage === 'output') particle.position.set(output.position);
-      particle.size = output.size;
-      particle.color.set(output.color);
+      if (stage === 'output') {
+        particle.position.set(output.position);
+        particle.size = output.size;
+        particle.color.set(output.color);
+      }
       writeParticleContext(state, particle);
     }
   }
-  return { ok: true, value: undefined };
+  return undefined;
 }
 
 function snapshotEmitter(state: ParticleSimulationEmitterState): ParticleSimulationEmitterSnapshot {
@@ -294,24 +369,6 @@ function snapshotEmitter(state: ParticleSimulationEmitterState): ParticleSimulat
     overflowCount: state.overflowCount,
     emissionRemainder: state.emissionRemainder,
   };
-}
-
-function commitEmitterState(
-  target: ParticleSimulationEmitterState,
-  source: ParticleSimulationEmitterState,
-): void {
-  target.active.set(source.active);
-  target.birthOrders.set(source.birthOrders);
-  target.ages.set(source.ages);
-  target.lifetimes.set(source.lifetimes);
-  target.positions.set(source.positions);
-  target.velocities.set(source.velocities);
-  target.sizes.set(source.sizes);
-  target.colors.set(source.colors);
-  target.liveCount = source.liveCount;
-  target.emissionRemainder = source.emissionRemainder;
-  target.elapsed = source.elapsed;
-  target.overflowCount = source.overflowCount;
 }
 
 function bytesOf(emitters: readonly ParticleSimulationEmitterSnapshot[]): Uint8Array {
@@ -398,4 +455,11 @@ function failExecutionWithError(
       },
     },
   };
+}
+
+function failureError(
+  result: ParticleCpuExecutorResult<never, ParticleSimulationError>,
+): ParticleSimulationError {
+  if (!result.ok) return result.error;
+  throw new Error('simulation failure helper returned success');
 }

@@ -3,6 +3,7 @@ import type {
   ArtifactVerificationStatus,
   AssetEvidence,
   CookFreshness,
+  CookProduct,
   CookStatus,
   RuntimeEvidenceStatus,
 } from '../asset.js';
@@ -29,5 +30,13 @@ describe('asset evidence contract', () => {
     expectTypeOf<AssetEvidence['artifacts']>().toMatchTypeOf<
       Readonly<Record<string, { readonly verification: ArtifactVerificationStatus }>>
     >();
+  });
+
+  it('keeps one shared CookProduct shape for payload, refs, artifacts, and receipt', () => {
+    expectTypeOf<CookProduct>().toHaveProperty('payload');
+    expectTypeOf<CookProduct>().toHaveProperty('refs');
+    expectTypeOf<CookProduct>().toHaveProperty('artifacts');
+    expectTypeOf<CookProduct>().toHaveProperty('receipt');
+    expectTypeOf<CookProduct['digest']>().toEqualTypeOf<string>();
   });
 });

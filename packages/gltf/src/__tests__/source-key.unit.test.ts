@@ -32,10 +32,18 @@ describe('glTF producer sourceKey', () => {
     if (!result.ok) expect(result.error.code).toBe('duplicate-source-key');
   });
 
-  it('does not synthesize a missing key from sourceIndex', () => {
+  it('uses the semantic kind for one anonymous output, never sourceIndex', () => {
     const result = deriveGltfSourceKeys([{ kind: 'mesh', sourceIndex: 7 }]);
+    expect(result).toEqual({ ok: true, keys: ['mesh'], conflicts: [] });
+  });
+
+  it('rejects two anonymous outputs of one kind as ambiguous', () => {
+    const result = deriveGltfSourceKeys([
+      { kind: 'mesh', sourceIndex: 7 },
+      { kind: 'mesh', sourceIndex: 9 },
+    ]);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('missing-source-key');
+    if (!result.ok) expect(result.error.code).toBe('ambiguous-source-key');
   });
 
   it('preserves keyed identity when output order changes', () => {
@@ -66,6 +74,29 @@ describe('glTF producer sourceKey', () => {
     expect(result.subAssets).toMatchObject([
       { guid: '01928000-7c00-7000-8000-000000000002', sourceIndex: 0, sourceKey: 'mesh:Body' },
       { guid: '01928000-7c00-7000-8000-000000000001', sourceIndex: 1, sourceKey: 'mesh:Hero' },
+    ]);
+  });
+
+  it('reuses an anonymous semantic kind key when its sourceIndex changes', () => {
+    const existing: GltfMetaJson = {
+      ...META_BASE,
+      subAssets: [
+        {
+          guid: '01928000-7c00-7000-8000-000000000003',
+          sourceIndex: 0,
+          kind: 'scene',
+          sourceKey: 'scene',
+        },
+      ],
+    };
+    const result = reimportReuseMeta([{ kind: 'scene', sourceIndex: 9 }], existing);
+    expect(result.subAssets).toEqual([
+      {
+        guid: '01928000-7c00-7000-8000-000000000003',
+        sourceIndex: 9,
+        kind: 'scene',
+        sourceKey: 'scene',
+      },
     ]);
   });
 });

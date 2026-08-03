@@ -7,7 +7,13 @@
 
 /// <reference types="@webgpu/types" />
 
-import type { Buffer, MappedBuffer, RhiDevice, RhiQueue } from '@forgeax/engine-rhi';
+import type {
+  Buffer,
+  MappedBuffer,
+  RhiCommandEncoder,
+  RhiDevice,
+  RhiQueue,
+} from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
@@ -360,6 +366,163 @@ export async function readbackBufferBytes(
   device.destroyBuffer(readbackBuffer);
 
   return ok(bytes.buffer as ArrayBuffer);
+}
+
+/** A load-time buffer that can be read back as part of one GPU submission. */
+export interface BufferReadbackBatchRequest {
+  readonly handleId: string;
+  readonly buffer: unknown;
+  readonly size: number;
+}
+
+export interface BufferReadbackBatchCallbacks {
+  readonly onResourceStart?: (handleId: string) => void;
+  readonly onResourceComplete?: (handleId: string) => void;
+}
+
+/**
+ * Read back multiple buffers with one command submission and one queue drain.
+ *
+ * Prism City exposed the cost of the old one-buffer helper: every resource
+ * submitted and awaited independently, so thousands of small buffers spent
+ * most of capture time in synchronization rather than byte transfer. The
+ * batch keeps each staging buffer isolated but submits all copies together;
+ * mapping remains per-resource so a timeout can still identify the current
+ * handle and the caller can preserve the original initialData event order.
+ */
+export async function readbackBufferBytesBatch(
+  device: RhiDevice,
+  requests: readonly BufferReadbackBatchRequest[],
+  callbacks: BufferReadbackBatchCallbacks = {},
+): Promise<Result<ReadonlyMap<string, ArrayBuffer>, DebugError>> {
+  if (requests.length === 0) return ok(new Map());
+  const firstRequest = requests[0];
+  if (firstRequest === undefined) return ok(new Map());
+
+  const fail = (handleId: string, stage: 'copy' | 'map', hint: string) =>
+    err(
+      new DebugError({
+        code: 'snapshot-readback-failed',
+        expected: 'buffer GPU byte readback to succeed',
+        hint,
+        detail: { handleId, stage },
+      }),
+    );
+  const staging: Array<{ readonly request: BufferReadbackBatchRequest; readonly buffer: Buffer }> =
+    [];
+  const mapped = new Map<Buffer, MappedBuffer>();
+  const cleaned = new Set<Buffer>();
+  const cleanup = () => {
+    for (const mappedBuffer of mapped.values()) mappedBuffer.unmap();
+    for (const item of staging) {
+      if (!cleaned.has(item.buffer)) {
+        device.destroyBuffer(item.buffer);
+        cleaned.add(item.buffer);
+      }
+    }
+  };
+
+  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
+  const COPY_DST_MAP_READ = 9;
+  let encoder: RhiCommandEncoder;
+  try {
+    const encoderResult = device.createCommandEncoder({});
+    if (!encoderResult.ok)
+      return fail(
+        firstRequest.handleId,
+        'copy',
+        `command encoder creation failed: ${encoderResult.error.code}`,
+      );
+    encoder = encoderResult.value;
+    for (const request of requests) {
+      const stagingResult = device.createBuffer({ size: request.size, usage: COPY_DST_MAP_READ });
+      if (!stagingResult.ok) {
+        cleanup();
+        return fail(
+          request.handleId,
+          'copy',
+          `staging buffer creation failed: ${stagingResult.error.code}`,
+        );
+      }
+      const stagingBuffer = stagingResult.value;
+      staging.push({ request, buffer: stagingBuffer });
+      try {
+        encoder.copyBufferToBuffer(request.buffer as Buffer, 0, stagingBuffer, 0, request.size);
+      } catch (error) {
+        cleanup();
+        return fail(request.handleId, 'copy', `copyBufferToBuffer failed: ${String(error)}`);
+      }
+    }
+    const finishResult = encoder.finish();
+    if (!finishResult.ok) {
+      cleanup();
+      return fail(
+        firstRequest.handleId,
+        'copy',
+        `encoder.finish failed: ${finishResult.error.code}`,
+      );
+    }
+    device.queue.submit([finishResult.value as unknown as never] as unknown as readonly never[]);
+    await device.queue.onSubmittedWorkDone();
+
+    // Start every mapAsync together. The GPU work has already been submitted
+    // and drained; awaiting each map before starting the next one recreates a
+    // per-resource synchronization wall even after batching the copies.
+    const mapResults = await Promise.all(
+      staging.map(async (item) => {
+        callbacks.onResourceStart?.(item.request.handleId);
+        try {
+          return { item, result: await item.buffer.mapAsync(0x1) };
+        } catch (error) {
+          return { item, error };
+        }
+      }),
+    );
+    const result = new Map<string, ArrayBuffer>();
+    for (const mappedResult of mapResults) {
+      if ('error' in mappedResult) {
+        cleanup();
+        return fail(
+          mappedResult.item.request.handleId,
+          'map',
+          `mapAsync(READ) failed: ${String(mappedResult.error)}`,
+        );
+      }
+      if (!mappedResult.result.ok) {
+        cleanup();
+        return fail(
+          mappedResult.item.request.handleId,
+          'map',
+          `mapAsync(READ) failed: ${mappedResult.result.error.code}`,
+        );
+      }
+      const mappedBuffer = mappedResult.result.value;
+      const item = mappedResult.item;
+      mapped.set(item.buffer, mappedBuffer);
+      const rangeResult = mappedBuffer.getMappedRange();
+      if (!rangeResult.ok) {
+        cleanup();
+        return fail(
+          item.request.handleId,
+          'map',
+          `getMappedRange failed: ${rangeResult.error.code}`,
+        );
+      }
+      result.set(
+        item.request.handleId,
+        new Uint8Array(rangeResult.value).slice().buffer as ArrayBuffer,
+      );
+      mappedBuffer.unmap();
+      mapped.delete(item.buffer);
+      device.destroyBuffer(item.buffer);
+      cleaned.add(item.buffer);
+      callbacks.onResourceComplete?.(item.request.handleId);
+    }
+    return ok(result);
+  } catch (error) {
+    cleanup();
+    return fail(firstRequest.handleId, 'map', `buffer batch readback failed: ${String(error)}`);
+  }
 }
 
 // ============================================================================

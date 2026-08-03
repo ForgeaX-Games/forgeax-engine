@@ -32,7 +32,7 @@ export default defineConfig({
         // game-default/assets/ holds the entry SceneAsset (scene.pack.json,
         // GUID-discoverable via forge.json.defaultScene) + material packs;
         // submodule holds binary demo assets.
-        resolve(templatesDir, 'game-default'),
+        resolve(templatesDir, 'game-default/assets'),
         submoduleSkyMetaPath,
         submoduleSfxDir,
         submoduleBgmMetaPath,

@@ -71,6 +71,31 @@ export interface DrawSourceResult {
 }
 
 /**
+ * Stable frame-loop phase vocabulary for opt-in performance diagnostics.
+ *
+ * The observer is deliberately engine-neutral: it receives boundaries only;
+ * a host decides how to record them (for example, User Timing in a browser).
+ * When omitted, the frame loop keeps its normal path and does not emit events.
+ */
+export type FramePhase =
+  | 'frame-total'
+  | 'world-update-primary'
+  | 'draw-source'
+  | 'world-update-injected'
+  | 'renderer-draw';
+
+export interface FramePhaseEvent {
+  readonly frameSeq: number;
+  readonly phase: FramePhase;
+  readonly boundary: 'begin' | 'end';
+  readonly worldCount?: number;
+}
+
+export interface FramePhaseObserver {
+  readonly onEvent: (event: FramePhaseEvent) => void;
+}
+
+/**
  * Optional per-frame draw-source injection seam
  * (feat-20260709-editor-world-partition-editorworld-super-composite / M2 / D-3).
  *
@@ -118,6 +143,10 @@ export interface AppAssembleArgs {
    * (legacy behaviour). See {@link DrawSource}.
    */
   readonly drawSource?: DrawSource;
+  /** Opt-in engine-owned frame phase observer for host diagnostics. */
+  readonly framePhaseObserver?: FramePhaseObserver;
+  /** Opt-in renderer Extract / Prepare / Record diagnostics. */
+  readonly renderPhaseObserver?: import('@forgeax/engine-render').RenderPhaseObserver;
 }
 
 /**
@@ -216,6 +245,10 @@ export interface CreateAppOptions {
    * single world (legacy behaviour unchanged). See {@link DrawSource}.
    */
   readonly drawSource?: DrawSource;
+  /** Opt-in engine-owned frame phase observer for host diagnostics. */
+  readonly framePhaseObserver?: FramePhaseObserver;
+  /** Opt-in renderer Extract / Prepare / Record diagnostics. */
+  readonly renderPhaseObserver?: import('@forgeax/engine-render').RenderPhaseObserver;
 }
 
 /**

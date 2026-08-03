@@ -111,6 +111,21 @@ describe('particle-effect importer public asset-cook contract', () => {
     expect(product.sourceDependencies).toEqual(['effects/spark.json']);
     expect(result.value.pack.assets[0]?.artifacts).toHaveProperty('particle-effect/program.json');
     expect(result.value.pack).not.toHaveProperty('bins');
+    expect(result.value.cookProducts[0]).toMatchObject({
+      guid: EFFECT_GUID,
+      payload: expect.objectContaining({ kind: 'particle-effect' }),
+      refs: [MATERIAL_GUID],
+      artifacts: {
+        'particle-effect/program.json': expect.objectContaining({
+          mediaType: 'application/json',
+        }),
+      },
+      receipt: expect.objectContaining({
+        guid: EFFECT_GUID,
+        origin: 'sourceMeta',
+        status: 'succeeded',
+      }),
+    });
   });
 
   it('uses the declared GUID and asset-local artifact key without package-global facts', async () => {

@@ -1,5 +1,8 @@
+import type { AssetStageErrorBase } from './asset-errors.js';
 import type { PackIndexEntry } from './catalog.js';
 import type { Asset, AssetCodec, AssetRef, ImageError, TextureAsset } from './index.js';
+
+export type ImportStageContractError = AssetStageErrorBase<'import', 'import-failed'>;
 
 // === Import contract SSOT (feat-20260603-asset-import-loader-injection M2 / w12) ===
 //
@@ -240,7 +243,10 @@ export interface ImportSubAsset {
  *     import time.
  *   - `decodeImage(bytes, mimeType, importSettings)` — decode raw image
  *     bytes (PNG / JPEG) into a `TextureAsset` POD plus a `bytes` copy
- *     suitable for `<guid>.bin` emission. The seam keeps gltfImporter
+ *     suitable for `<guid>.bin` emission. When the host applies an offline
+ *     delivery codec, it also returns the artifact media type and codec so
+ *     gltfImporter can preserve those facts in the Pack v2 envelope. The seam
+ *     keeps gltfImporter
  *     out of `@forgeax/engine-image` (D-1: zero static `from
  *     '@forgeax/engine-image'` edge in `packages/gltf/src`). The
  *     concrete implementation (parseImage + format derivation) lives
@@ -267,7 +273,12 @@ export interface ImportContext {
   ): Promise<
     | {
         readonly ok: true;
-        readonly value: { readonly texture: TextureAsset; readonly bytes: Uint8Array };
+        readonly value: {
+          readonly texture: TextureAsset;
+          readonly bytes: Uint8Array;
+          readonly mediaType?: string;
+          readonly assetCodec?: AssetCodec;
+        };
       }
     | { readonly ok: false; readonly error: ImageError }
   >;

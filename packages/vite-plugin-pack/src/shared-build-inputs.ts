@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import type { PackIndexEntry } from '@forgeax/engine-types';
@@ -52,23 +52,45 @@ export function projectSharedPackCatalog(
 }
 
 export function loadSharedPackInput(manifestPath: string): {
-  readonly catalog: readonly PackIndexEntry[];
+  readonly catalog: readonly PackIndexEntry[] | undefined;
   readonly payloadRoot: string | undefined;
 } {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    readonly schemaVersion?: number;
+    readonly producer?: string;
+    readonly inventory?: readonly string[];
     readonly payload?: { readonly assetCatalog?: string; readonly assetPayloadRoot?: string };
   };
   const assetCatalog = manifest.payload?.assetCatalog;
   const assetPayloadRoot = manifest.payload?.assetPayloadRoot;
-  if (assetCatalog === undefined) {
-    throw new Error(`shared pack manifest lacks asset catalog: ${manifestPath}`);
-  }
   const artifactRoot = dirname(manifestPath);
   const repositoryRoot = dirname(artifactRoot);
+  if (manifest.schemaVersion === 2) {
+    if (manifest.producer !== 'repo-build-inputs') {
+      throw new Error(`shared build manifest has unexpected producer: ${manifestPath}`);
+    }
+    if (!Array.isArray(manifest.inventory)) {
+      throw new Error(`shared build manifest lacks inventory: ${manifestPath}`);
+    }
+    for (const path of manifest.inventory) {
+      if (!existsSync(resolve(repositoryRoot, path))) {
+        throw new Error(`shared build manifest inventory is missing ${path}: ${manifestPath}`);
+      }
+    }
+    if (assetCatalog !== undefined && !manifest.inventory.includes(assetCatalog)) {
+      throw new Error(`shared build manifest omits declared asset catalog: ${manifestPath}`);
+    }
+    if (assetPayloadRoot !== undefined && !existsSync(resolve(repositoryRoot, assetPayloadRoot))) {
+      throw new Error(`shared build manifest payload root is missing: ${manifestPath}`);
+    }
+  }
   return {
-    catalog: JSON.parse(
-      readFileSync(resolve(repositoryRoot, assetCatalog), 'utf8'),
-    ) as PackIndexEntry[],
+    catalog:
+      assetCatalog === undefined
+        ? undefined
+        : (JSON.parse(
+            readFileSync(resolve(repositoryRoot, assetCatalog), 'utf8'),
+          ) as PackIndexEntry[]),
     payloadRoot:
       assetPayloadRoot === undefined ? undefined : resolve(repositoryRoot, assetPayloadRoot),
   };

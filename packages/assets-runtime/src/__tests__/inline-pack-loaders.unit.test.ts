@@ -1,9 +1,9 @@
 // @forgeax/engine-assets-runtime -- inline pack-payload loader coverage
 // (fix issue #709). Each loader is a pure (payload, refs, ctx) -> Asset|undefined
-// function; exercise the accept + reject arms of all six, plus the
+// function; exercise the accept + reject arms of all eight, plus the
 // wireDefaultLoaders / createDefaultLoaderRegistry seed-table helpers.
 
-import type { LoadContext } from '@forgeax/engine-types';
+import type { LoadContext, MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { LoaderRegistry } from '../loader-registry';
 import {
@@ -12,6 +12,7 @@ import {
   INLINE_PACK_LOADERS,
   materialLoader,
   meshLoader,
+  samplerLoader,
   sceneLoader,
   skeletonLoader,
   skinLoader,
@@ -41,6 +42,30 @@ describe('meshLoader', () => {
     };
 
     expect(out.attributes.uv1).toEqual(new Float32Array([0.25, 0.75]));
+  });
+
+  it('preserves the packed AABB from the v2 mesh binary', () => {
+    const tail = new TextEncoder().encode(JSON.stringify({ aabb: [1, 2, 3, 4, 5, 6] }));
+    const bytes = new Uint8Array(28 + 12 * Float32Array.BYTES_PER_ELEMENT + tail.length);
+    const header = new DataView(bytes.buffer);
+    header.setUint32(0, 2, true); // mesh binary v2
+    header.setUint32(4, 1, true); // one UV set
+    header.setUint32(8, 12, true); // base 12F layout
+    header.setUint32(12, 12, true); // one vertex
+    header.setUint32(16, 0, true); // non-indexed
+    header.setUint32(20, 0, true);
+    header.setUint32(24, tail.length, true);
+    bytes.set(tail, 28 + 12 * Float32Array.BYTES_PER_ELEMENT);
+
+    const loadPack = meshLoader.loadPack;
+    expect(loadPack).toBeDefined();
+    if (!loadPack) throw new Error('meshLoader.loadPack must be registered');
+
+    const out = loadPack({ payload: {}, artifacts: { body: { bytes } } } as never, emptyCtx) as {
+      aabb?: Float32Array;
+    };
+
+    expect(out.aabb).toEqual(new Float32Array([1, 2, 3, 4, 5, 6]));
   });
 
   it('normalises Array vertices/indices into typed arrays with a default submesh', () => {
@@ -183,6 +208,40 @@ describe('materialLoader', () => {
     expect(out.values.roughness).toBe(5); // non-texture int untouched
   });
 
+  it('resolves nested MaterialTextureValue texture ref-indices to GUIDs', () => {
+    const ctx = {
+      getMaterialShaderTextureFieldNames: () => new Set(['baseColorTexture']),
+    } as unknown as LoadContext;
+    const out = materialLoader.load(
+      {
+        passes: [{ name: 'm', program: { module: 'forgeax::pbr' } }],
+        values: { baseColorTexture: { texture: 0 } },
+      },
+      ['tex-guid'],
+      ctx,
+    ) as { values: Record<string, unknown> };
+    expect(out.values.baseColorTexture).toEqual({ texture: 'tex-guid' });
+  });
+
+  it('resolves nested texture values when the shader schema is present but empty', () => {
+    const out = materialLoader.load(
+      {
+        passes: [{ program: { module: 'forgeax::pbr-skin' } }],
+        values: { baseColor: [1, 1, 1, 1], metallic: 0, baseColorTexture: { texture: 0 } },
+      },
+      ['tex-guid'],
+      {
+        ...emptyCtx,
+        getMaterialShaderTextureFieldNames: () => new Set(),
+      },
+    ) as MaterialAsset;
+
+    expect(out.values).toBeDefined();
+    if (!out.values) throw new Error('material loader must preserve material values');
+    expect(out.values.baseColorTexture).toEqual({ texture: 'tex-guid' });
+    expect(out.values.metallic).toBe(0);
+  });
+
   it('returns undefined for a passes-less, parent-less material', () => {
     expect(materialLoader.load({}, undefined, emptyCtx)).toBeUndefined();
   });
@@ -286,14 +345,26 @@ describe('animationClipLoader', () => {
 });
 
 describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
+  it('loads a serialised sampler descriptor', () => {
+    expect(
+      samplerLoader.load({ addressModeU: 'repeat', magFilter: 'linear' }, undefined, emptyCtx),
+    ).toEqual({
+      kind: 'sampler',
+      addressModeU: 'repeat',
+      magFilter: 'linear',
+    });
+    expect(samplerLoader.load({ addressModeU: 'invalid' }, undefined, emptyCtx)).toBeUndefined();
+  });
+
   it('keeps animation graph loader in assets-runtime', () => {
     expect(animationGraphLoader.kind).toBe('animation-graph');
   });
-  it('wires the engine default kinds and leaves sampler/shader unregistered', () => {
+  it('wires the engine default kinds and leaves shader unregistered', () => {
     const reg = wireDefaultLoaders(new LoaderRegistry());
     for (const kind of [
       'mesh',
       'scene',
+      'sampler',
       'material',
       'skeleton',
       'skin',
@@ -305,7 +376,6 @@ describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
     ]) {
       expect(reg.get(kind)).toBeDefined();
     }
-    expect(reg.get('sampler')).toBeUndefined();
     expect(reg.get('shader')).toBeUndefined();
   });
 
@@ -318,6 +388,6 @@ describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
   it('createDefaultLoaderRegistry returns a fresh pre-wired registry', () => {
     const reg = createDefaultLoaderRegistry();
     expect(reg.get('mesh')).toBeDefined();
-    expect(INLINE_PACK_LOADERS.length).toBe(7); // +1 animationGraphLoader (feat-20260713 M4/w30)
+    expect(INLINE_PACK_LOADERS.length).toBe(8); // +1 sampler +1 animationGraphLoader
   });
 });

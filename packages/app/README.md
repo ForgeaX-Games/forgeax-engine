@@ -52,6 +52,25 @@ if (!started.ok) console.error(started.error.code, started.error.hint);
 // Later: unlisten(); app.stop();
 ```
 
+## Opt-in frame phase diagnostics
+
+Performance tooling may pass a `FramePhaseObserver` through the canvas or assemble options. The
+engine emits boundaries for `frame-total`, `world-update-primary`, `draw-source`,
+`world-update-injected`, and `renderer-draw`, with a monotonically increasing `frameSeq` for each
+frame. The observer is default-off, receives no engine timing policy, and is isolated so an observer
+failure cannot alter the frame loop. A browser host may translate these events into User Timing or
+another diagnostic format; production callers should omit the option.
+
+```ts
+const result = await createApp(canvas, {
+  framePhaseObserver: {
+    onEvent: (event) => performance.mark(
+      `forgeax.frame.${event.frameSeq}.${event.phase}.${event.boundary}`,
+    ),
+  },
+});
+```
+
 ## Time policy
 
 Canvas-form callers configure the World time policy when they create the App.

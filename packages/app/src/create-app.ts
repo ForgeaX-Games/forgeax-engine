@@ -200,6 +200,9 @@ async function createAppFromCanvas(
       rawDeviceForContextConfigure: opts.rawDeviceForContextConfigure,
     });
   }
+  if (opts?.renderPhaseObserver !== undefined) {
+    Object.assign(rendererOpts, { renderPhaseObserver: opts.renderPhaseObserver });
+  }
 
   // m3-1: FORGEAX_ENGINE_RHI_DEBUG=1 RHI-debug recorder wiring.
   // When FORGEAX_ENGINE_RHI_DEBUG=1, wrap the RHI instance and createShaderModule
@@ -610,6 +613,9 @@ async function createAppFromCanvas(
   if (opts?.drawSource !== undefined) {
     Object.assign(buildArgs, { drawSource: opts.drawSource });
   }
+  if (opts?.framePhaseObserver !== undefined) {
+    Object.assign(buildArgs, { framePhaseObserver: opts.framePhaseObserver });
+  }
   if (_debugInst !== undefined) {
     Object.assign(buildArgs, { debugRhi: _debugInst });
   }
@@ -885,6 +891,9 @@ async function createAppFromAssemble(
   if (args.drawSource !== undefined) {
     Object.assign(buildArgs, { drawSource: args.drawSource });
   }
+  if (args.framePhaseObserver !== undefined) {
+    Object.assign(buildArgs, { framePhaseObserver: args.framePhaseObserver });
+  }
   return buildApp(buildArgs);
 }
 
@@ -934,6 +943,7 @@ interface BuildAppArgs {
         resourceOwner: number;
       }
     | undefined;
+  readonly framePhaseObserver?: import('./types').FramePhaseObserver;
 }
 
 /**
@@ -958,6 +968,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     debugAdapter,
     debugDraw,
     remoteHandle,
+    framePhaseObserver,
   } = args;
 
   // M2 plugin-system-unify (D-1 / D-4): audio resource injection,
@@ -1018,6 +1029,9 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   // => the loop keeps the legacy single-world draw path.
   if (args.drawSource !== undefined) {
     Object.assign(loopOpts, { drawSource: args.drawSource });
+  }
+  if (framePhaseObserver !== undefined) {
+    Object.assign(loopOpts, { framePhaseObserver });
   }
   const loop = createFrameLoop(loopOpts);
 

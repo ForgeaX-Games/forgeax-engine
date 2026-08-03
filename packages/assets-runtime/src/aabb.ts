@@ -57,10 +57,47 @@ function emptyBox(): Float32Array {
   return Float32Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity);
 }
 
+function hasPositionData(position: unknown): boolean {
+  if (position instanceof Float32Array) return position.length >= 3;
+  return (
+    position instanceof ArrayBuffer && position.byteLength >= 3 * Float32Array.BYTES_PER_ELEMENT
+  );
+}
+
+function isFiniteAabb(aabb: unknown): aabb is Float32Array {
+  if (!(aabb instanceof Float32Array) || aabb.length !== 6) return false;
+  for (const value of aabb) {
+    if (!Number.isFinite(value)) return false;
+  }
+  const minX = aabb[0];
+  const minY = aabb[1];
+  const minZ = aabb[2];
+  const maxX = aabb[3];
+  const maxY = aabb[4];
+  const maxZ = aabb[5];
+  return (
+    minX !== undefined &&
+    minY !== undefined &&
+    minZ !== undefined &&
+    maxX !== undefined &&
+    maxY !== undefined &&
+    maxZ !== undefined &&
+    minX <= maxX &&
+    minY <= maxY &&
+    minZ <= maxZ
+  );
+}
+
 // Assigns the computed AABB to the mesh in place when the object is
 // extensible; falls back to a shallow copy when frozen / sealed (e.g.
 // BUILTIN_CUBE / BUILTIN_TRIANGLE / BUILTIN_QUAD reused via registerWithGuid).
 export function withMeshAabb(asset: TypesMeshAsset): TypesMeshAsset {
+  // Packed mesh binaries intentionally omit `attributes.position`; their
+  // producer-computed AABB is the only available culling fact. Preserve it
+  // instead of replacing it with the empty-box result from computeAABB().
+  if (!hasPositionData(asset.attributes.position) && isFiniteAabb(asset.aabb)) {
+    return asset;
+  }
   const aabb = computeAABB(asset);
   if (Object.isExtensible(asset)) {
     (asset as { aabb: Float32Array }).aabb = aabb;

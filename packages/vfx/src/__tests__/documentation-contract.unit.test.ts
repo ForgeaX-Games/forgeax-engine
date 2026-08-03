@@ -56,7 +56,9 @@ describe('VFX documentation contract', () => {
     expect(compilerReadme).toContain('must never be imported by a player bundle');
     expect(compilerReadme).toContain('runtime dependency graphs');
     expect(typesReadme).toContain('ParticleEffectAsset');
-    expect(handoff).toContain('Wave 1 Gate');
+    expect(handoff).toContain('Wave 3 — one product-convergence loop');
+    expect(handoff).toContain('Production particle renderer');
+    expect(handoff).toContain('Stock effect vocabulary');
     expect(assetsSkill).toContain('loadByGuid');
 
     for (const target of [

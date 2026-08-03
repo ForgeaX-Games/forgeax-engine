@@ -40,7 +40,9 @@
   "allOf": [
     {
       "if": {
+        "required": ["packageId"],
         "properties": {
+          "packageId": {},
           "schemaVersion": { "const": "2.0.0" }
         }
       },
@@ -49,7 +51,16 @@
         "properties": {
           "assets": {
             "type": "array",
-            "items": { "$ref": "#/$defs/assetV2" }
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/assetV2" },
+                {
+                  "type": "object",
+                  "properties": { "execution": {} },
+                  "required": ["execution"]
+                }
+              ]
+            }
           }
         }
       }
@@ -89,6 +100,11 @@
           "minimum": 0,
           "description": "Producer-declared output position; not an identity key when sourceKey is present."
         },
+        "execution": {
+          "type": "string",
+          "enum": ["direct", "cooked"],
+          "description": "Explicit authoring execution mode; never inferred from package path."
+        },
         "payload": {
           "type": "object",
           "description": "Serialized asset payload. Free-form object."
@@ -116,7 +132,7 @@
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[A-Za-z0-9][A-Za-z0-9._-]*$": {
+        "^[A-Za-z0-9][A-Za-z0-9._/-]*$": {
           "$ref": "#/$defs/artifactDescriptor"
         }
       }

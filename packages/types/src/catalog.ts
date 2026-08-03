@@ -2,10 +2,39 @@ import type {
   AssetAuthoringCapability,
   AssetRelation,
   CatalogDiagnostic,
+  CatalogLifecycle,
+  CatalogProjection,
+  CatalogSubject,
+  CookExecution,
   ProviderProvenance,
   ResourceRevision,
   TopologyDiff,
 } from './asset-producer';
+
+export type {
+  CatalogLifecycle,
+  CatalogProjection,
+  CatalogSubject,
+  CookExecution,
+} from './asset-producer';
+
+/**
+ * Strict contract row for the Catalog projection.
+ *
+ * This is evidence for an AI consumer, not authoring authority: a Catalog row
+ * projects producer facts and runtime navigation while preserving lifecycle,
+ * execution, and sourceKey distinctions.
+ */
+export interface CatalogEntryV2 {
+  readonly guid: string;
+  readonly packageUrl: string;
+  readonly kind: string;
+  readonly sourcePath: string;
+  readonly subject: CatalogSubject;
+  readonly execution: CookExecution;
+  readonly lifecycle: CatalogLifecycle;
+  readonly projection: CatalogProjection;
+}
 
 /** One producer revision point in a catalog continuity window. */
 export interface CatalogRevisionPoint {
@@ -35,7 +64,7 @@ export interface CatalogEntry {
   readonly provenance?: ProviderProvenance;
   /** Producer-owned resource/package revision used for conflict checks. */
   readonly revision?: ResourceRevision;
-  /** Stable producer key for imported-output topology matching. */
+  /** Stable producer key for imported-output topology matching; never infer it from sourceIndex. */
   readonly sourceKey?: string;
   /** Producer-declared output position; never used as identity when sourceKey exists. */
   readonly sourceIndex?: number;
@@ -47,6 +76,11 @@ export interface CatalogEntry {
   /** Optional navigation to the producer-owned cook receipt. */
   readonly cookReceiptUrl?: string;
   readonly refs?: readonly string[];
+  /** Explicit producer-owned runtime projection axes. */
+  readonly subject?: CatalogSubject;
+  readonly execution?: CookExecution;
+  readonly lifecycle?: CatalogLifecycle;
+  readonly projection?: CatalogProjection;
 }
 
 /**

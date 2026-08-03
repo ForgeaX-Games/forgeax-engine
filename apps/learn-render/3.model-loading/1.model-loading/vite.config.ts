@@ -21,7 +21,10 @@ export default defineConfig({
     pluginPack({
       refresh: reloadAssetHost(),
       roots: [
-        resolve(monorepoRoot, 'forgeax-engine-assets/khronos-gltf-samples/Sponza'),
+        resolve(
+          monorepoRoot,
+          'forgeax-engine-assets/khronos-gltf-samples/Sponza/Sponza.gltf.meta.json',
+        ),
         resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures'),
       ],
       importers: [imageImporter, gltfImporter],

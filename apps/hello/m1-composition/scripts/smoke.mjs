@@ -253,6 +253,31 @@ async function main() {
   );
   assertResult(secondaryWorld.spawn({ component: Marker, data: { value: 2 }}), 'secondary marker spawn');
 
+  const scheduleData = world.scheduleData();
+  const updateSchedule = scheduleData.find((schedule) => schedule.name === 'Update');
+  assert.ok(updateSchedule);
+  assert.deepEqual(updateSchedule.systems.map((system) => system.name), [
+    'm1-update-before-fixed',
+    'm1-input-reader',
+    'm1-input-reader-same-frame',
+    'm1-deferred-spawn',
+    'm1-update-after-fixed',
+  ]);
+  assert.equal(
+    updateSchedule.dependencies.some(
+      ([source, target]) => source === 'm1-update-before-fixed' && target === 'm1-input-reader',
+    ),
+    true,
+  );
+  assert.equal(
+    updateSchedule.dependencies.some(
+      ([source, target]) => source === 'FixedUpdate' && target === 'm1-update-after-fixed',
+    ),
+    true,
+  );
+  assert.deepEqual(updateSchedule.systems[0]?.queries, []);
+  console.log('[m1-composition] schedule data snapshot: PASS');
+
   const pendingFrames = [];
   const priorRaf = globalThis.requestAnimationFrame;
   const priorCaf = globalThis.cancelAnimationFrame;

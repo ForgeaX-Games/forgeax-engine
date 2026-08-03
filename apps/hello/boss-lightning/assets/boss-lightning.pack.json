@@ -1,0 +1,94 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019e9c00-0000-7000-8000-000000000000",
+      "kind": "particle-effect",
+      "execution": "cooked",
+      "payload": {
+        "schemaVersion": 1,
+        "emitters": [
+          {
+            "id": "mouth-charge",
+            "capacity": 96,
+            "space": "local",
+            "schedule": { "rate": 18, "bursts": [{ "time": 0, "count": 12 }] },
+            "bounds": { "min": [-0.75, -0.75, -0.75], "max": [0.75, 0.75, 0.75] },
+            "backendPolicy": { "kind": "required", "backend": "cpu" },
+            "operators": {
+              "spawn": [
+                { "kind": "shape", "version": 1, "params": { "shape": "sphere", "radius": 0.45 } }
+              ],
+              "initialize": [
+                { "kind": "lifetime", "version": 1, "params": { "seconds": 1.8 } },
+                { "kind": "initial-velocity", "version": 1, "params": { "velocity": [0, 0.5, 0] } }
+              ],
+              "update": [
+                { "kind": "gravity", "version": 1, "params": { "acceleration": [0, 0.4, 0] } },
+                { "kind": "drag", "version": 1, "params": { "coefficient": 0.12 } },
+                {
+                  "kind": "size-over-life",
+                  "version": 1,
+                  "params": { "curve": { "points": [{ "time": 0, "value": 0.24 }, { "time": 1, "value": 0.04 }] } }
+                },
+                {
+                  "kind": "color-over-life",
+                  "version": 1,
+                  "params": { "gradient": { "stops": [{ "time": 0, "color": [0.2, 0.75, 1, 1] }, { "time": 1, "color": [0.05, 0.3, 1, 0] }] } }
+                }
+              ],
+              "output": [{ "kind": "billboard", "version": 1, "params": {} }]
+            },
+            "curves": {
+              "size": { "points": [{ "time": 0, "value": 0.24 }, { "time": 1, "value": 0.04 }] }
+            },
+            "gradients": {
+              "charge": { "stops": [{ "time": 0, "color": [0.2, 0.75, 1, 1] }, { "time": 1, "color": [0.05, 0.3, 1, 0] }] }
+            },
+            "output": { "kind": "billboard", "material": "019e9c00-0000-7000-8000-000000000001" }
+          },
+          {
+            "id": "impact-mesh",
+            "capacity": 48,
+            "space": "world",
+            "schedule": { "rate": 8, "bursts": [{ "time": 0.2, "count": 8 }] },
+            "bounds": { "min": [-1, -1, -1], "max": [1, 1, 1] },
+            "backendPolicy": { "kind": "required", "backend": "cpu" },
+            "operators": {
+              "spawn": [
+                { "kind": "shape", "version": 1, "params": { "shape": "sphere", "radius": 0.7 } }
+              ],
+              "initialize": [
+                { "kind": "lifetime", "version": 1, "params": { "seconds": 1.1 } },
+                { "kind": "initial-velocity", "version": 1, "params": { "velocity": [0, 1.2, 0] } }
+              ],
+              "update": [
+                { "kind": "gravity", "version": 1, "params": { "acceleration": [0, -2, 0] } },
+                { "kind": "drag", "version": 1, "params": { "coefficient": 0.2 } },
+                {
+                  "kind": "size-over-life",
+                  "version": 1,
+                  "params": { "curve": { "points": [{ "time": 0, "value": 0.3 }, { "time": 1, "value": 0.02 }] } }
+                },
+                {
+                  "kind": "color-over-life",
+                  "version": 1,
+                  "params": { "gradient": { "stops": [{ "time": 0, "color": [1, 0.7, 0.2, 1] }, { "time": 1, "color": [0.3, 0.05, 0, 0] }] } }
+                }
+              ],
+              "output": [{ "kind": "mesh", "version": 1, "params": {} }]
+            },
+            "output": {
+              "kind": "mesh",
+              "material": "019e9c00-0000-7000-8000-000000000002",
+              "mesh": "cbe42beb-8975-5096-b3a1-3dda4cb4c077"
+            }
+          }
+        ]
+      },
+      "refs": [],
+      "artifacts": {}
+    }
+  ]
+}

@@ -207,13 +207,13 @@ export function dispatchPixelDiffBench(_pkgName, pkgRoot, decl, opts = {}) {
   };
 }
 
-export function dispatchBench(_pkgName, pkgRoot, decl, opts = {}) {
+export function dispatchBench(pkgName, pkgRoot, decl, opts = {}) {
   // feat-20260512 M3 T-015: extension branch — pixelDiff sub-field
   // routes to the pixel-parity report consumer instead of the legacy
   // vitest bench median path. Both branches return the same shape so
   // the runner aggregator (main()) needs no further branching.
   if (decl && typeof decl === 'object' && 'pixelDiff' in decl && decl.pixelDiff) {
-    return dispatchPixelDiffBench(_pkgName, pkgRoot, decl, opts);
+    return dispatchPixelDiffBench(pkgName, pkgRoot, decl, opts);
   }
   const reportPath = decl.reportPath ?? 'bench-result.json';
   const suite = decl.suite ?? null;
@@ -223,15 +223,22 @@ export function dispatchBench(_pkgName, pkgRoot, decl, opts = {}) {
   // bench prereq autodetect (feat-20260510-ci-merge-gate-hardening K-6 + AC-09);
   // retry exactly once. Function-local counter (not module state) so concurrent
   // dispatchers never share retry budget. spawn shape mirrors plan-tasks w12
-  // description: `pnpm -F @forgeax/engine-math bench:json` with shell:false (research
+  // description: `pnpm -F <package> bench:json` with shell:false (research
   // R-6: CI environment consistency requires direct argv invocation rather
-  // than shell interpolation).
+  // than shell interpolation). `packageNameFromMember()` supplies the
+  // unscoped package name (`engine-vfx`, `engine-runtime`, ...), while the
+  // unit tests also exercise the short legacy form (`math`).
   let spawnDetails = null;
   if (!existsSync(artefact)) {
     let retried = 0;
     if (retried === 0) {
       retried = 1;
-      const r = spawnFn('pnpm', ['-F', '@forgeax/engine-math', 'bench:json'], {
+      const packageFilter = pkgName.startsWith('@')
+        ? pkgName
+        : pkgName.startsWith('engine-')
+          ? `@forgeax/${pkgName}`
+          : `@forgeax/engine-${pkgName}`;
+      const r = spawnFn('pnpm', ['-F', packageFilter, 'bench:json'], {
         cwd: pkgRoot,
         encoding: 'utf8',
         env: process.env,

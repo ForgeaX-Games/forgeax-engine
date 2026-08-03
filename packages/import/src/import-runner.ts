@@ -22,10 +22,13 @@
 // for them so the caller can account for the sidecar without writing a DDC.
 
 import type {
+  AssetCodec,
   AssetRelation,
   CatalogDiagnostic,
+  CookProduct,
   ImageError,
   ImportContext,
+  ImportDiagnostic,
   ImportError as ImportErrorType,
   ImportedArtifactBody,
   ImportProduct,
@@ -34,6 +37,7 @@ import type {
   TextureAsset,
 } from '@forgeax/engine-types';
 import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
+import { finalizeImportProducts } from './import-product.js';
 import type { ImporterRegistry } from './importer-registry.js';
 
 /** Reserved `meta.importer` key consumed by vite-plugin-shader, not the import runner. */
@@ -112,7 +116,12 @@ export type RunImportResult =
 export type RunImportProductResult =
   | {
       readonly ok: true;
-      readonly value: { readonly skipped: 'shader' } | { readonly product: ImportProduct };
+      readonly value:
+        | { readonly skipped: 'shader' }
+        | {
+            readonly product: ImportProduct;
+            readonly cookProducts: readonly CookProduct[];
+          };
     }
   | { readonly ok: false; readonly error: ImportErrorType };
 
@@ -125,6 +134,7 @@ export type RunImportOk =
   | { readonly skipped: 'shader' }
   | {
       readonly product: ImportProduct;
+      readonly cookProducts: readonly CookProduct[];
       readonly pack: DdcPack;
     };
 
@@ -218,7 +228,12 @@ export interface ImportRunnerFs {
   ): Promise<
     | {
         readonly ok: true;
-        readonly value: { readonly texture: TextureAsset; readonly bytes: Uint8Array };
+        readonly value: {
+          readonly texture: TextureAsset;
+          readonly bytes: Uint8Array;
+          readonly mediaType?: string;
+          readonly assetCodec?: AssetCodec;
+        };
       }
     | { readonly ok: false; readonly error: ImageError }
   >;
@@ -256,6 +271,67 @@ function errResult(error: ImportErrorType): {
   return { ok: false, error };
 }
 
+function sourceKeyActual(value: unknown): string {
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (value === undefined) return 'missing';
+  return typeof value;
+}
+
+/**
+ * Validate producer identity before source work or DDC product finalization.
+ * Multi-output declarations cannot recover identity from sourceIndex, array
+ * order, or a path, so every row must carry one unique semantic sourceKey.
+ * Single-output declarations may omit the key for legacy source compatibility;
+ * producers that expose a semantic output should still declare it so Catalog
+ * evidence remains stable when the output later gains siblings.
+ */
+function validateOutputSourceKeys(meta: RunImportMeta): ImportErrorType | undefined {
+  if (meta.subAssets.length <= 1) return undefined;
+
+  const diagnostics: ImportDiagnostic[] = [];
+  const seen = new Map<string, number>();
+  for (const [index, declaration] of meta.subAssets.entries()) {
+    const sourcePath = `${meta.source}#subAssets[${index}]`;
+    const sourceRange = { start: 0, end: 0, line: 1, column: 1 };
+    const sourceKey = declaration.sourceKey;
+    if (typeof sourceKey !== 'string' || sourceKey.trim().length === 0) {
+      diagnostics.push({
+        code: 'source-key-required',
+        severity: 'error',
+        sourcePath,
+        sourceRange,
+        rule: 'import-output-source-key',
+        expected: 'a non-empty producer-owned sourceKey',
+        actual: sourceKeyActual(sourceKey),
+        hint: 'publish a stable semantic sourceKey; sourceIndex is only a locator',
+      });
+      continue;
+    }
+    const prior = seen.get(sourceKey);
+    if (prior !== undefined) {
+      diagnostics.push({
+        code: 'duplicate-source-key',
+        severity: 'error',
+        sourcePath,
+        sourceRange,
+        rule: 'import-output-source-key-unique',
+        expected: 'sourceKey to be unique within one imported package',
+        actual: `${JSON.stringify(sourceKey)} duplicates subAssets[${prior}]`,
+        hint: 'rename the duplicate semantic output before writing Meta',
+      });
+      continue;
+    }
+    seen.set(sourceKey, index);
+  }
+  if (diagnostics.length === 0) return undefined;
+  return new ImportError({
+    code: 'source-validation-failed',
+    expected: 'every writable imported output to declare a unique non-empty sourceKey',
+    hint: IMPORT_ERROR_HINTS['source-validation-failed'],
+    detail: { diagnostics },
+  });
+}
+
 /**
  * Run the importer for one parsed meta sidecar and produce its DDC.
  *
@@ -283,6 +359,9 @@ export async function runImport(
   if (meta.importer === SHADER_RESERVED_IMPORTER_KEY) {
     return { ok: true, value: { skipped: 'shader' } };
   }
+
+  const sourceKeyError = validateOutputSourceKeys(meta);
+  if (sourceKeyError !== undefined) return errResult(sourceKeyError);
 
   const importer = registry.get(meta.importer);
   if (importer === undefined) {
@@ -347,7 +426,12 @@ export async function runImport(
       ): Promise<
         | {
             readonly ok: true;
-            readonly value: { readonly texture: TextureAsset; readonly bytes: Uint8Array };
+            readonly value: {
+              readonly texture: TextureAsset;
+              readonly bytes: Uint8Array;
+              readonly mediaType?: string;
+              readonly assetCodec?: AssetCodec;
+            };
           }
         | { readonly ok: false; readonly error: ImageError }
       > => {
@@ -505,10 +589,12 @@ export async function runImport(
     ...product,
     sourceDependencies: [...dependencies],
   };
+  const inputFingerprint = `source:${[...dependencies].sort().join('|')}`;
+  const cookProducts = await finalizeImportProducts(productWithDependencies, inputFingerprint);
   if (meta.buildPack === false) {
     return {
       ok: true,
-      value: { product: productWithDependencies },
+      value: { product: productWithDependencies, cookProducts },
     };
   }
 
@@ -549,6 +635,7 @@ export async function runImport(
       product: {
         ...productWithDependencies,
       },
+      cookProducts,
       pack,
     },
   };

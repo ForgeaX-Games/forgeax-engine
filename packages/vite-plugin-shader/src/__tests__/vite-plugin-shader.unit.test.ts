@@ -1013,8 +1013,8 @@ import { toRollupLog } from '../wrap.js';
       // engine identifier needed now that shadow_caster is a material shader).
       expect(
         manifest.materialShaders.length,
-        'materialShaders[] must contain exactly 7 engine material-shader entries',
-      ).toBe(7);
+        'materialShaders[] must contain exactly 9 engine material-shader entries',
+      ).toBe(9);
 
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
@@ -1025,6 +1025,8 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::pbr-skin',
         'forgeax::sprite',
         'forgeax::sprite-lit',
+        'forgeax::vfx-render.particles.billboard',
+        'forgeax::vfx-render.particles.mesh',
       ]);
 
       // Each entry must have a paramSchema array; shadow-caster legitimately empty
@@ -1108,7 +1110,7 @@ import { toRollupLog } from '../wrap.js';
       // The entries[] array should still contain all compiled shaders (utility + material)
       expect(manifest.entries.length).toBeGreaterThanOrEqual(4);
 
-      // Verify the exact identifiers in materialShaders[] (7 engine entries)
+      // Verify the exact identifiers in materialShaders[] (7 engine entries + 2 particle entries)
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
         'forgeax::default-shadow-caster',
@@ -1118,6 +1120,8 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::pbr-skin',
         'forgeax::sprite',
         'forgeax::sprite-lit',
+        'forgeax::vfx-render.particles.billboard',
+        'forgeax::vfx-render.particles.mesh',
       ]);
     });
 

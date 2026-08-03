@@ -15,6 +15,7 @@
 // import surface.
 
 export {
+  type CookProduct,
   IMPORT_ERROR_HINTS,
   type ImportContext,
   ImportError,
@@ -27,6 +28,7 @@ export {
 } from '@forgeax/engine-types';
 export {
   createMaterialImportProduct,
+  finalizeImportProducts,
   type MaterialImportProduct,
   type MaterialImportProductError,
   type MaterialImportProductInput,

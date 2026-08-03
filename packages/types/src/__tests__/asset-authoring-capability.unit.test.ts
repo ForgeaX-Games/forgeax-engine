@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { authoringCapabilityForAssetKind } from '../index';
+import {
+  authoringCapabilityForAssetKind,
+  catalogOperationsFor,
+  isCatalogProjectionValid,
+} from '../index';
 
 describe('producer-owned asset authoring capability', () => {
   it('publishes placement and binding shape for built-in kinds', () => {
@@ -31,5 +35,24 @@ describe('producer-owned asset authoring capability', () => {
       operation: 'unavailable',
       reason: { code: 'unsupported-asset-kind', hint: expect.any(String) },
     });
+  });
+
+  it('projects capabilities without deriving them from kind or path', () => {
+    const operations = catalogOperationsFor({
+      subject: 'imported-output',
+      execution: 'cooked',
+      lifecycle: 'stale',
+    });
+
+    expect(operations.sourceOverride).toEqual({ operation: 'sourceOverride', enabled: true });
+    expect(operations.save).toMatchObject({ operation: 'save', enabled: false });
+    expect(
+      isCatalogProjectionValid({
+        subject: 'imported-output',
+        execution: 'cooked',
+        lifecycle: 'stale',
+        operations,
+      }),
+    ).toBe(true);
   });
 });

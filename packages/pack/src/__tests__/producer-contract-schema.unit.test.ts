@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateProducerContract } from '../producer-contract.js';
+import { validateProducerContract, validateProducerOutputs } from '../producer-contract.js';
 import { validateMeta, validatePack } from '../schema-compiled.js';
 
 const GUID = '01890000-0000-7000-8000-aaaaaaaaaaaa';
@@ -53,6 +53,7 @@ describe('producer contract schema and semantic validation', () => {
         {
           guid: GUID,
           kind: 'host/blob',
+          execution: 'direct',
           sourceKey: 'blob/main',
           sourceIndex: 0,
           payload: {},
@@ -62,5 +63,30 @@ describe('producer contract schema and semantic validation', () => {
     };
     expect(validatePack(pack)).toBe(true);
     expect(validateProducerContract(pack.assets[0]).ok).toBe(true);
+  });
+
+  it('rejects an authoring Pack asset without explicit execution', () => {
+    const pack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      packageId: 'pkg/authoring',
+      assets: [{ guid: GUID, kind: 'host/blob', payload: {}, refs: [], artifacts: {} }],
+    };
+    expect(validatePack(pack)).toBe(false);
+  });
+
+  it('rejects duplicate and sourceIndex-only imported output declarations', () => {
+    const outputs = [
+      { guid: GUID, sourceIndex: 0, sourceKey: 'blob/main', kind: 'host/blob' },
+      { guid: `${GUID.slice(0, -1)}b`, sourceIndex: 1, sourceKey: 'blob/main', kind: 'host/blob' },
+    ];
+    const duplicate = validateProducerOutputs(outputs);
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) expect(duplicate.error.code).toBe('duplicate-source-key');
+    const sourceIndexOnly = validateProducerOutputs(
+      outputs.map(({ sourceKey: _sourceKey, ...output }) => output),
+    );
+    expect(sourceIndexOnly.ok).toBe(false);
+    if (!sourceIndexOnly.ok) expect(sourceIndexOnly.error.code).toBe('source-index-ambiguous');
   });
 });

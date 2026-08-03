@@ -16,8 +16,7 @@
 
 import {
   buildResources,
-  extractDrawInfo,
-  findPassIdx,
+  extractDrawInfos,
   makePipelineState,
   scanPassStates,
 } from './inspect-core';
@@ -130,20 +129,33 @@ export interface FrameModel {
 
 const META_KINDS = new Set(['frameMark', 'submit', 'finish', 'createCommandEncoder']);
 
-function eventKindAt(
-  events: readonly RhiCallEvent[],
-  globalDrawIdx: number,
-): PassDrawItem['eventKind'] {
-  let idx = 0;
+/**
+ * Project draw kinds once so tree construction stays linear in tape size.
+ *
+ * A previous implementation called `eventKindAt` once per tree item and
+ * rescanned the complete event list from the beginning. A real editor frame
+ * has tens of thousands of draws, so that turned the otherwise pure summary
+ * into an accidental quadratic pass over the tape.
+ */
+function collectDrawKinds(events: readonly RhiCallEvent[]): PassDrawItem['eventKind'][] {
+  const drawKinds: PassDrawItem['eventKind'][] = [];
   for (const event of events) {
     if (DRAW_KINDS.has(event.kind)) {
-      if (idx === globalDrawIdx) {
-        return event.kind as PassDrawItem['eventKind'];
-      }
-      idx++;
+      drawKinds.push(event.kind as PassDrawItem['eventKind']);
     }
   }
-  return 'draw'; // unreachable for valid globalDrawIdx; defensive fallback
+  return drawKinds;
+}
+
+/** Map each global draw index to its containing pass in one linear pass. */
+function collectPassIdxByDraw(offsets: readonly PassOffset[]): number[] {
+  const passIdxByDraw: number[] = [];
+  for (const offset of offsets) {
+    for (let drawIdx = offset.startDrawIdx; drawIdx <= offset.endDrawIdx; drawIdx++) {
+      passIdxByDraw[drawIdx] = offset.passIdx;
+    }
+  }
+  return passIdxByDraw;
 }
 
 /** Count total draw/dispatch events. */
@@ -222,6 +234,8 @@ export function buildFrameModel(tape: Tape): FrameModel {
 
   // Step 1: pass offsets
   const offsets = computePassOffsets(events);
+  const drawKinds = collectDrawKinds(events);
+  const passIdxByDraw = collectPassIdxByDraw(offsets);
 
   // Step 2: tree from offsets
   const tree: PassNode[] = offsets.map((offset: PassOffset) => {
@@ -229,7 +243,7 @@ export function buildFrameModel(tape: Tape): FrameModel {
     for (let di = offset.startDrawIdx; di <= offset.endDrawIdx; di++) {
       draws.push({
         drawIdx: di,
-        eventKind: eventKindAt(events, di),
+        eventKind: drawKinds[di] ?? 'draw',
       });
     }
     return {
@@ -242,6 +256,7 @@ export function buildFrameModel(tape: Tape): FrameModel {
   // Step 3: pre-scan resources + pass states
   const resources = buildResources(events);
   const passStates = scanPassStates(events);
+  const drawInfos = extractDrawInfos(events);
 
   // Step 4: per-draw entries
   const totalDraws = countDrawEvents(events);
@@ -249,8 +264,9 @@ export function buildFrameModel(tape: Tape): FrameModel {
   let hasCompute = false;
 
   for (let i = 0; i < totalDraws; i++) {
-    const info = extractDrawInfo(events, i);
-    const passIdx = findPassIdx(events, i);
+    const info = drawInfos[i];
+    if (info === undefined) continue;
+    const passIdx = passIdxByDraw[i] ?? -1;
 
     const passState = passStates[passIdx];
     const pipelineState = makePipelineState(

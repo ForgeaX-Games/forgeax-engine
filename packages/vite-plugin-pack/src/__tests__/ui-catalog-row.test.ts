@@ -39,6 +39,22 @@ describe('UI catalog rows', () => {
     expect(catalog[0]?.packageUrl).toMatch(/\.pack\.json$/);
   });
 
+  it('does not turn source importer bookkeeping into a second Catalog authority', () => {
+    const row = createUiCatalogRow({
+      guid: 'prepared-ui-guid',
+      sourcePath: 'menu.ui.html',
+      packageUrl: '/assets/prepared-ui.pack.json',
+    });
+    expect(row).toEqual({
+      guid: 'prepared-ui-guid',
+      kind: 'ui',
+      sourcePath: 'menu.ui.html',
+      packageUrl: '/assets/prepared-ui.pack.json',
+    });
+    expect(row).not.toHaveProperty('assetType');
+    expect(row).not.toHaveProperty('importer');
+  });
+
   it('rewrites UI companion tokens before the shared Pack v2 finalizer consumes the product', () => {
     const result = finalizeUiArtifact(
       {

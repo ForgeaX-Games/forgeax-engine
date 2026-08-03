@@ -1,11 +1,13 @@
 import { RenderGraph, type ResourceDescriptor } from '@forgeax/engine-render-graph';
 import { describe, expect, it } from 'vitest';
+import type { RenderFeatureGraphContribution } from '../features/graph-contribution';
 import {
   composeRenderFeatureGraph,
   createRenderFeatureContributionStaging,
 } from '../features/graph-contribution';
 import type {
   RenderFeatureGraphicsPassDescriptor,
+  RenderFeaturePreparedGraphicsState,
   RenderFeaturePreparedRef,
 } from '../features/prepared-graphics';
 
@@ -27,6 +29,52 @@ const pass: RenderFeatureGraphicsPassDescriptor = {
 };
 
 describe('render feature graphics staging', () => {
+  it('projects the latest resolved graphics snapshot after a topology-stable update', () => {
+    const graphicsState: RenderFeaturePreparedGraphicsState = {
+      capabilityAvailable: true,
+      generation: 1,
+      attachments: [],
+      pipeline: pass.draws[0]?.pipeline,
+      bindings: pass.draws[0]?.bindings ?? [],
+      vertexData: pass.draws[0]?.vertexData.map((vertex) => vertex.resource) ?? [],
+      indexData: [],
+    };
+    const contribution = (generation: number): RenderFeatureGraphContribution => ({
+      featureIdentity: 'synthetic.graphics',
+      order: 0,
+      resources: [],
+      passes: [
+        {
+          featureIdentity: 'synthetic.graphics',
+          order: 0,
+          name: 'synthetic.graphics::forward',
+          descriptor: { reads: [], writes: [] },
+          dependsOn: [],
+          graphics: pass,
+          graphicsState,
+          resolvedGraphics: {
+            generation,
+            resolve: () => undefined,
+          },
+        },
+      ],
+      topologySignature: 'synthetic.graphics::forward',
+    });
+    const observed: number[] = [];
+    const graph = new RenderGraph();
+    const composed = composeRenderFeatureGraph(graph, [contribution(1)], (ctx, current) => {
+      void ctx;
+      observed.push(current.resolvedGraphics?.generation ?? -1);
+    });
+    expect(composed.ok).toBe(true);
+    if (!composed.ok) return;
+    expect(graph.compile({ backendKind: 'null', caps: {} as never }).ok).toBe(true);
+    graph.execute(undefined);
+    expect(composed.value.update([contribution(2)]).topologyChanged).toBe(false);
+    graph.execute(undefined);
+    expect(observed).toEqual([1, 2]);
+  });
+
   it('projects an accepted graphics pass into the active graph contribution', () => {
     const staging = createRenderFeatureContributionStaging('synthetic.graphics', 0);
     expect(staging.addResource('color', target).ok).toBe(true);
@@ -48,6 +96,23 @@ describe('render feature graphics staging', () => {
       expect(composed.value.passNames).toEqual(['synthetic.graphics::forward']);
       expect(composed.value.graph).toBe(graph);
     }
+  });
+
+  it('keeps the reserved swapchain attachment unqualified', () => {
+    const staging = createRenderFeatureContributionStaging('synthetic.graphics', 0);
+    const swapchainPass: RenderFeatureGraphicsPassDescriptor = {
+      ...pass,
+      attachments: {
+        colors: [
+          { resource: 'swapchain', format: 'rgba8unorm-srgb', loadOp: 'load', storeOp: 'store' },
+        ],
+      },
+    };
+    expect(staging.addGraphicsPass('overlay', swapchainPass).ok).toBe(true);
+    const contribution = staging.commit();
+    expect(contribution.ok).toBe(true);
+    if (!contribution.ok) return;
+    expect(contribution.value.passes[0]?.descriptor.writes).toEqual(['swapchain']);
   });
 
   it('keeps ordinary addPass graph-only and contributes no work for an empty draw list', () => {

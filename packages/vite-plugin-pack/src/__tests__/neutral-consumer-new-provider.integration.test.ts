@@ -2,7 +2,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
-import type { CatalogEntry } from '@forgeax/engine-types';
+import type { CatalogEntry, CookProduct } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildCatalogResult } from '../build-catalog.js';
 import { calculateCatalogDelta } from '../catalog-watch.js';
@@ -125,6 +125,30 @@ async function assertNoNewConcreteKindSwitches(): Promise<void> {
 }
 
 describe('neutral consumer with a registered host provider', () => {
+  it('consumes the same completed product fields for a new provider', () => {
+    const product: CookProduct = {
+      guid: MAIN_GUID,
+      payload: { kind: HOST_KIND },
+      refs: [DETAIL_GUID],
+      artifacts: {},
+      digest: 'sha256:host',
+      receipt: {
+        guid: MAIN_GUID,
+        origin: 'authoredPack',
+        status: 'succeeded',
+        inputFingerprint: 'host-input',
+        outputDigest: 'sha256:host',
+      },
+    };
+    expect(product).toMatchObject({
+      guid: MAIN_GUID,
+      payload: { kind: HOST_KIND },
+      refs: [DETAIL_GUID],
+      artifacts: {},
+      receipt: { guid: MAIN_GUID, outputDigest: 'sha256:host' },
+    });
+  });
+
   it('reads open provider facts through CatalogSource without a concrete-kind branch', async () => {
     const entries = await buildHostCatalog();
     const source = createCatalogSource({ entries });

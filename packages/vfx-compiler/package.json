@@ -27,11 +27,14 @@
   },
   "dependencies": {
     "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*"
   },
   "devDependencies": {
-    "@forgeax/engine-assets-runtime": "workspace:*"
+    "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*"
   },
   "forgeax": {
     "metrics": {

@@ -63,7 +63,7 @@ Pure helpers (`bakeFont` / `encodePng` / `atlasToSidecar`) are exported so consu
 
 ## Sidecar dispatch + load (build-time -> runtime)
 
-The baked `<font>.meta.json` carries top-level `assetType: 'font'`. The `@forgeax/engine-vite-plugin-pack` build-catalog dispatches the `'font'` arm, folding the atlas texture row (with `distanceRange` / atlas-size metadata) + glyph rows into `pack-index.json` (AC-03). At runtime:
+The baked `<font>.meta.json` carries `meta.importer: 'font'` as its top-level `importer` field. The `@forgeax/engine-vite-plugin-pack` build-catalog dispatches the `importer` key to the `'font'` arm, folding the atlas texture row (with `distanceRange` / atlas-size metadata) + glyph rows into `pack-index.json` (AC-03). At runtime:
 
 ```ts
 const font = (await engine.assets.loadByGuid<FontAsset>(fontGuid)).unwrap();

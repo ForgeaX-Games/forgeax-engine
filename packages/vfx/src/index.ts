@@ -23,9 +23,11 @@ export type {
 } from './errors.js';
 
 export { vfxError } from './errors.js';
+/** Load a cooked particle effect by GUID through the host AssetRegistry. */
 export { loadParticleEffect } from './load-particle-effect.js';
 export { particleEffectPackLoader } from './loader.js';
 export type { ParticleEffectPlayerData } from './player.js';
+/** ECS author intent: effect handle, playback, seed, and time scale. */
 export { ParticleEffectPlayer } from './player.js';
 export type {
   ParticleBillboardAttributes,
@@ -64,11 +66,26 @@ export {
 } from './simulation/plugin.js';
 export { PARTICLE_SIMULATION_RESOURCE_KEY, ParticleSimulation } from './simulation/resource.js';
 export type {
+  ParticleSimulationSpace,
+  ParticleSpacePose,
+  ParticleSpaceResolvePhase,
+  ParticleSpaceResolver,
+  ParticleSpaceResolverError,
+  ParticleSpaceResolverErrorCode,
+  ParticleSpaceResolverErrorDetail,
+  ParticleSpaceResolverInput,
+  ParticleSpaceResolverResult,
+} from './simulation/space-resolver.js';
+export { createParticleSpaceError, transformParticlePoint } from './simulation/space-resolver.js';
+export type {
   ParticleSimulationAssets,
+  ParticleSimulationBatchSpace,
   ParticleSimulationEmitterObservation,
   ParticleSimulationEmitterStatus,
   ParticleSimulationObservation,
   ParticleSimulationPlayerInput,
+  ParticleSimulationSelectedBackend,
+  ParticleSimulationTelemetry,
 } from './simulation/types.js';
 export type {
   ParticleBackend,
@@ -93,3 +110,16 @@ export {
   parseParticleEffectSource,
   serializeParticleEffectSource,
 } from './source.js';
+export {
+  createStockParticleCpuExecutorDefinitions,
+  createStockParticleCpuExecutorRegistry,
+  STOCK_PARTICLE_OPERATOR_MANIFEST,
+  stockParticleOperatorKey,
+} from './stock/cpu-executors.js';
+export type {
+  StockParticleOperatorKey,
+  StockParticleOperatorKind,
+  StockParticleOperatorManifestEntry,
+  StockParticleOperatorStage,
+  StockParticleParameterResult,
+} from './stock/operator-manifest.js';

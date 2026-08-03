@@ -87,6 +87,9 @@
       "path": "./packages/codec"
     },
     {
+      "path": "./packages/ddc"
+    },
+    {
       "path": "./packages/audio"
     },
     {
@@ -121,6 +124,9 @@
     },
     {
       "path": "./packages/vfx-compiler"
+    },
+    {
+      "path": "./packages/vfx-render"
     },
     {
       "path": "./packages/npc"

@@ -287,6 +287,25 @@ function validateEmitter(
   seenIds: ReadonlySet<string>,
 ): Result<ParticleEmitterSource, ParticleSourceError> {
   if (!isRecord(value)) return invalid(path, 'a ParticleEmitterSource object');
+  const authoredKeys = new Set([
+    'id',
+    'capacity',
+    'space',
+    'schedule',
+    'bounds',
+    'backendPolicy',
+    'operators',
+    'curves',
+    'gradients',
+    'output',
+  ]);
+  const derivedKey = Object.keys(value).find((key) => !authoredKeys.has(key));
+  if (derivedKey !== undefined) {
+    return invalid(
+      `${path}.${derivedKey}`,
+      'an authored source field, not a derived runtime field',
+    );
+  }
   if (!isString(value.id)) return invalid(`${path}.id`, 'a non-empty stable string');
   if (seenIds.has(value.id)) return invalid(`${path}.id`, 'a unique emitter id', value.id);
   const emitterId = value.id;
@@ -413,6 +432,11 @@ export function normalizeParticleEffectSource(
 ): Result<ParticleEffectSource, ParticleSourceError> {
   if (!isRecord(value) || value.schemaVersion !== 1) {
     return invalid('effect.schemaVersion', 'the supported schema version 1');
+  }
+  const topLevelKeys = new Set(['schemaVersion', 'emitters']);
+  const derivedKey = Object.keys(value).find((key) => !topLevelKeys.has(key));
+  if (derivedKey !== undefined) {
+    return invalid(`effect.${derivedKey}`, 'an authored source field, not a derived runtime field');
   }
   if (!Array.isArray(value.emitters) || value.emitters.length === 0) {
     return invalid('effect.emitters', 'at least one emitter');

@@ -9,7 +9,12 @@
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { ImportErrorDetail, PackErrorCode, PackErrorDetail } from '../index';
-import { ASSET_EVIDENCE_ERROR_HINTS, ImportError, PACK_ERROR_HINTS } from '../index';
+import {
+  ASSET_EVIDENCE_ERROR_HINTS,
+  ASSET_STAGE_ERROR_HINTS,
+  ImportError,
+  PACK_ERROR_HINTS,
+} from '../index';
 
 type DetailFor<Code extends string> = Extract<PackErrorDetail, { readonly code: Code }>;
 
@@ -130,5 +135,22 @@ describe('PackErrorDetail new variants narrowable (w1)', () => {
     expectTypeOf<D['code']>().toEqualTypeOf<'pack-malformed-path-ref'>();
     expectTypeOf<D['rawSource']>().toEqualTypeOf<string>();
     expectTypeOf<D['expectedFormat']>().toEqualTypeOf<string>();
+  });
+});
+
+describe('asset authoring stage error hints', () => {
+  it('publishes one recovery hint for each stage code', () => {
+    expect(Object.keys(ASSET_STAGE_ERROR_HINTS)).toEqual([
+      'author-validation-failed',
+      'external-declaration-invalid',
+      'import-failed',
+      'native-cook-failed',
+      'ddc-validation-failed',
+      'runtime-parse-failed',
+      'editor-capability-unavailable',
+    ]);
+    for (const hint of Object.values(ASSET_STAGE_ERROR_HINTS)) {
+      expect(hint).toContain('recovery');
+    }
   });
 });

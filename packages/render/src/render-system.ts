@@ -50,7 +50,6 @@ import {
 import {
   type RenderFeatureHost,
   type RenderFeaturePreparedGraphicsResolverInput,
-  type RenderFeaturePreparedResourceBatch,
   runRenderFeatureFrame,
   settlePreparedGraphicsCompletion,
 } from './features/host';
@@ -81,7 +80,13 @@ import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type { RenderPipelineContext } from './render-pipeline-context';
 import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render-system-extract';
 import { extractFrames } from './render-system-extract';
-import { type DrawOwnerOptions, resolveDrawOwners } from './renderer';
+import {
+  type DrawOwnerOptions,
+  type RenderPhase,
+  type RenderPhaseObserver,
+  type RenderPhaseSkipReason,
+  resolveDrawOwners,
+} from './renderer';
 import type { MaterialRenderProjection } from './renderer/material/assembly';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 import {
@@ -488,7 +493,18 @@ export interface RenderSystemRuntime {
     // tonemap + skybox callers. Ignored when `isHdr=true` or
     // `passKind='shadow-caster'`.
     colorFormatOverride?: GPUTextureFormat,
+    // Shader-declared UV count used by material pipeline cache aliases.
+    shaderUvSetCount?: number,
+    // `null` explicitly requests a color-only prepared-graphics pipeline;
+    // omitted keeps the normal forward material depth attachment.
+    depthFormatOverride?: GPUTextureFormat | null,
+    // Prepared graphics may select one of the host-owned canonical vertex
+    // layouts. Ordinary material callers leave this undefined.
+    vertexLayout?: string,
   ) => RenderPipeline | null;
+  readonly getMaterialShaderBindingContract?: (
+    materialShaderId: string,
+  ) => 'group-0' | 'render-material';
   /**
    * feat-20260527 M2 / w7: schema lookup for material param overlay.
    * Returns the paramSchema for a registered material shader, or
@@ -600,6 +616,8 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   /** Optional feature host supplied by the renderer assembly layer. */
   readonly featureHost?: RenderFeatureHost | undefined;
+  /** Optional host diagnostics for the existing Extract / Prepare / Record path. */
+  readonly renderPhaseObserver?: RenderPhaseObserver | undefined;
   // M6 / w41 (feat-20260510-rhi-resource-creation): the canvas context is the
   // forgeax `RhiCanvasContext` brand; render-system-record.ts uses
   // `getCurrentTexture()` -> `device.createTextureView(...)` (K-4 two-step
@@ -1573,6 +1591,51 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // tiles until the first frame with a castShadow spot (AC-03).
     spotShadowSnapshots: [],
   };
+  let renderFrameSeq = 0;
+  function notifyRenderPhase(
+    frameSeq: number,
+    phase: RenderPhase,
+    boundary: 'begin' | 'end',
+    worldCount: number,
+  ): void {
+    const observer = internals.renderPhaseObserver;
+    if (observer === undefined) return;
+    try {
+      observer.onEvent({ frameSeq, phase, boundary, worldCount });
+    } catch {
+      // Diagnostics must never change the renderer's production behavior.
+    }
+  }
+
+  function skipRenderPhase(
+    frameSeq: number,
+    phase: RenderPhase,
+    skipReason: RenderPhaseSkipReason,
+    worldCount: number,
+  ): void {
+    const observer = internals.renderPhaseObserver;
+    if (observer === undefined) return;
+    try {
+      observer.onEvent({ frameSeq, phase, boundary: 'skip', skipReason, worldCount });
+    } catch {
+      // Diagnostics must never change the renderer's production behavior.
+    }
+  }
+
+  function runRenderPhase<T>(
+    frameSeq: number,
+    phase: RenderPhase,
+    action: () => T,
+    worldCount: number,
+  ): T {
+    if (internals.renderPhaseObserver === undefined) return action();
+    notifyRenderPhase(frameSeq, phase, 'begin', worldCount);
+    try {
+      return action();
+    } finally {
+      notifyRenderPhase(frameSeq, phase, 'end', worldCount);
+    }
+  }
   // feat-20260601 M1 / w7: pipeline registry (id -> impl) + the handle the memoized
   // perFrameGraph was last built for. Both live in the createRenderSystem closure
   // (plan-strategy D-D: all real logic on the RenderSystem layer; the Renderer facade
@@ -1657,6 +1720,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   };
   let preparedViewBindGroup: import('@forgeax/engine-rhi').BindGroup | null = null;
   const preparedPipelineIds = new WeakMap<object, string>();
+  const preparedGroup0Pipelines = new WeakSet<object>();
+  const preparedColorOnlyPipelines = new WeakSet<object>();
   const lastFrustumStats: { culled: number; total: number } = { culled: 0, total: 0 };
   const preparedResolverFactory = (
     input: RenderFeaturePreparedGraphicsResolverInput,
@@ -1682,23 +1747,61 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           );
           if (pipeline !== null && pipeline !== undefined) {
             preparedPipelineIds.set(pipeline as object, descriptor.shader);
+            if (internals.getMaterialShaderBindingContract?.(descriptor.shader) === 'group-0') {
+              preparedGroup0Pipelines.add(pipeline as object);
+            }
           }
           return pipeline === null || pipeline === undefined
             ? err(new Error(`prepared pipeline '${descriptor.shader}' is not ready`))
             : ok(pipeline);
         }
+        const preparedPipeline = internals.getMaterialShaderPipeline?.(
+          descriptor.shader,
+          false,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          'forward',
+          undefined,
+          1,
+          undefined,
+          undefined,
+          descriptor.depthFormat === undefined
+            ? null
+            : (descriptor.depthFormat as GPUTextureFormat),
+          descriptor.vertexLayout,
+        );
         const pipeline =
-          internals.getMaterialShaderPipeline?.(descriptor.shader, false) ??
-          internals.getPipelineState()?.unlitPipeline ??
-          null;
+          preparedPipeline ??
+          (descriptor.depthFormat === undefined
+            ? null
+            : (internals.getPipelineState()?.unlitPipeline ?? null));
+        if (pipeline !== null && descriptor.depthFormat === undefined) {
+          preparedColorOnlyPipelines.add(pipeline as object);
+          if (internals.getMaterialShaderBindingContract?.(descriptor.shader) === 'group-0') {
+            preparedGroup0Pipelines.add(pipeline as object);
+          }
+        }
         return pipeline === null
           ? err(new Error(`prepared pipeline '${descriptor.shader}' is not ready`))
           : ok(pipeline);
       },
       resolveBindings: (descriptor, pipeline) => {
+        if (preparedGroup0Pipelines.has(pipeline as object)) {
+          const layout = (
+            pipeline as RenderPipeline & {
+              getBindGroupLayout?: (index: number) => BindGroupLayout;
+            }
+          ).getBindGroupLayout?.(0);
+          return layout === undefined
+            ? err(new Error('prepared group-0 pipeline bind group layout is unavailable'))
+            : internals.device.createBindGroup({ layout, entries: [] });
+        }
         if (
           preparedViewBindGroup !== null &&
-          pipeline === internals.getPipelineState()?.unlitPipeline
+          (pipeline === internals.getPipelineState()?.unlitPipeline ||
+            preparedColorOnlyPipelines.has(pipeline as object))
         ) {
           return ok(preparedViewBindGroup);
         }
@@ -1754,6 +1857,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   return {
     draw(worlds: readonly World[], opts: DrawOwnerOptions): void {
       try {
+        const frameSeq = ++renderFrameSeq;
+        const worldCount = worlds.length;
         // w6: resolve the (possibly legacy single-owner) draw options into the
         // two-index split. cameraOwner drives the surfaced cameras + frustum
         // cull; resourceOwner drives skylight/skybox/postProcess + per-world
@@ -1796,12 +1901,18 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // `resourceWorld` so the record-stage reads are self-describing (they
         // are resource-owner reads, not camera reads).
         const resourceWorld = worlds[resourceOwner] as World;
-        const frame = extractFrames(
-          worlds,
-          { cameraOwner, resourceOwner },
-          internals.assets,
-          internals.getPipelineState(),
-          internals.gpuStore,
+        const frame = runRenderPhase(
+          frameSeq,
+          'extract',
+          () =>
+            extractFrames(
+              worlds,
+              { cameraOwner, resourceOwner },
+              internals.assets,
+              internals.getPipelineState(),
+              internals.gpuStore,
+            ),
+          worldCount,
         );
         const {
           cameras,
@@ -1819,65 +1930,85 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         bindGroupCounts.createBindGroup = 0;
         bindGroupCounts.keys = [];
         const preparedPipelineState = internals.getPipelineState();
-        preparedViewBindGroup =
-          internals.featureHost === undefined ||
-          internals.featureHost.size === 0 ||
-          preparedPipelineState === null ||
-          frame.cameras.length === 0
-            ? null
-            : buildPerFrameBindGroups(
-                internals,
-                frameState,
-                preparedPipelineState,
-                true,
-                bindGroupCounts,
-              ).viewBindGroup;
+        const bindGroupSkipReason: RenderPhaseSkipReason | undefined =
+          internals.featureHost === undefined
+            ? 'feature-host-unavailable'
+            : internals.featureHost.size === 0
+              ? 'feature-host-empty'
+              : preparedPipelineState === null
+                ? 'pipeline-state-unavailable'
+                : frame.cameras.length === 0
+                  ? 'camera-unavailable'
+                  : undefined;
+        if (bindGroupSkipReason !== undefined || preparedPipelineState === null) {
+          skipRenderPhase(
+            frameSeq,
+            'bind-groups',
+            bindGroupSkipReason ?? 'pipeline-state-unavailable',
+            worldCount,
+          );
+          preparedViewBindGroup = null;
+        } else {
+          const pipelineState = preparedPipelineState;
+          preparedViewBindGroup = runRenderPhase(
+            frameSeq,
+            'bind-groups',
+            () =>
+              buildPerFrameBindGroups(internals, frameState, pipelineState, true, bindGroupCounts)
+                .viewBindGroup,
+            worldCount,
+          );
+        }
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
-        let preparedResourceBatches: readonly RenderFeaturePreparedResourceBatch[] = [];
-
-        if (internals.featureHost !== undefined) {
-          const featureFrame = runRenderFeatureFrame(internals.featureHost, {
-            worlds,
-            owner: resourceOwner,
-            frameNumber: frameState.frameNumber,
-            generation: 0,
-            caps: internals.device.caps,
-            createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
-              createRenderFeatureContributionStaging<RenderFeaturePassContext>(
-                identity,
-                order,
-                validateGraphics,
-                resolveGraphics,
-              ),
-            createPreparedGraphicsResolver: preparedResolverFactory,
-          });
-          preparedResourceBatches = featureFrame.preparedResourceBatches;
-          for (const featureError of featureFrame.errors) {
-            internals.errorRegistry.fire(featureError);
-          }
-          const featureGraphState = getRenderFeatureGraphState(internals);
-          const merged = mergeRenderFeatureContributions(featureFrame.contributions);
-          if (!merged.ok) {
-            reportRenderFeatureGraphError(internals, merged.error);
-            if (featureGraphState.composition !== undefined) {
-              retirePerFrameGraph(frameState);
-              featureGraphState.composition = undefined;
+        const preparedResourceBatches = runRenderPhase(
+          frameSeq,
+          'features',
+          () => {
+            if (internals.featureHost === undefined) return [];
+            const featureFrame = runRenderFeatureFrame(internals.featureHost, {
+              worlds,
+              owner: resourceOwner,
+              frameNumber: frameState.frameNumber,
+              generation: 0,
+              caps: internals.device.caps,
+              createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
+                createRenderFeatureContributionStaging<RenderFeaturePassContext>(
+                  identity,
+                  order,
+                  validateGraphics,
+                  resolveGraphics,
+                ),
+              createPreparedGraphicsResolver: preparedResolverFactory,
+            });
+            for (const featureError of featureFrame.errors) {
+              internals.errorRegistry.fire(featureError);
             }
-            featureGraphState.contributions = [];
-            featureGraphState.topologySignature = undefined;
-          } else {
-            const topologyChanged =
-              featureGraphState.topologySignature !== undefined &&
-              featureGraphState.topologySignature !== merged.value.topologySignature;
-            featureGraphState.contributions = featureFrame.contributions;
-            featureGraphState.topologySignature = merged.value.topologySignature;
-            if (topologyChanged) {
-              retirePerFrameGraph(frameState);
-              featureGraphState.composition = undefined;
+            const featureGraphState = getRenderFeatureGraphState(internals);
+            const merged = mergeRenderFeatureContributions(featureFrame.contributions);
+            if (!merged.ok) {
+              reportRenderFeatureGraphError(internals, merged.error);
+              if (featureGraphState.composition !== undefined) {
+                retirePerFrameGraph(frameState);
+                featureGraphState.composition = undefined;
+              }
+              featureGraphState.contributions = [];
+              featureGraphState.topologySignature = undefined;
+            } else {
+              const topologyChanged =
+                featureGraphState.topologySignature !== undefined &&
+                featureGraphState.topologySignature !== merged.value.topologySignature;
+              featureGraphState.contributions = featureFrame.contributions;
+              featureGraphState.topologySignature = merged.value.topologySignature;
+              if (topologyChanged) {
+                retirePerFrameGraph(frameState);
+                featureGraphState.composition = undefined;
+              }
             }
-          }
-        }
+            return featureFrame.preparedResourceBatches;
+          },
+          worldCount,
+        );
 
         // Unified transparent-sort: (layer ASC, sortValue ASC) for modes 0/1/2;
         // distance back-to-front for mode=3. The transparent-sort config is a
@@ -1885,11 +2016,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // world that owns skylight / skybox / singleton render state, w5 / D-3).
         // Only the Transparent segment is reordered; queue ordering between
         // segments (sortDispatchByQueue, stable) is preserved.
-        const orderedDispatch = sortTransparentDispatch(
-          dispatch,
-          resourceWorld,
-          cameras,
-          renderables,
+        const orderedDispatch = runRenderPhase(
+          frameSeq,
+          'sort',
+          () => sortTransparentDispatch(dispatch, resourceWorld, cameras, renderables),
+          worldCount,
         );
 
         // M3 / w26: single dispatch list replaces old three-bucket model.
@@ -1910,22 +2041,28 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // so the record stage can index worlds[renderable.worldId]. `resourceWorld`
         // stays the singleton-resource owner (skybox equirect / transparent-sort
         // config / video provider) — those ARE resource-owner reads.
-        const submitted = recordFrame(
-          internals,
-          resourceWorld,
-          cameras,
-          lights,
-          renderables,
-          orderedDispatch,
-          frameState,
-          dispatchCounts,
-          bindGroupCounts,
-          skylight,
-          skylightCount,
-          skybox,
-          skyboxCount,
-          postProcessParams,
-          worlds,
+        const submitted = runRenderPhase(
+          frameSeq,
+          'record',
+          () =>
+            recordFrame(
+              internals,
+              resourceWorld,
+              cameras,
+              lights,
+              renderables,
+              orderedDispatch,
+              frameState,
+              dispatchCounts,
+              bindGroupCounts,
+              skylight,
+              skylightCount,
+              skybox,
+              skyboxCount,
+              postProcessParams,
+              worlds,
+            ),
+          worldCount,
         );
         if (internals.featureHost !== undefined && preparedResourceBatches.length > 0) {
           const batches = preparedResourceBatches;

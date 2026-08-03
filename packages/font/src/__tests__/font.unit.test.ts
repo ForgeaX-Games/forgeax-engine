@@ -24,7 +24,7 @@ import {
   realGeneratorFactory,
   runCliFont,
 } from '../cli-font.js';
-import { fontImporter } from '../font-importer.js';
+import { fontImporter, fontOutputSourceKeys, sourceKeyForFontOutput } from '../font-importer.js';
 
 let tmpRoot: string;
 
@@ -176,6 +176,16 @@ async function findRealTtf(): Promise<string | undefined> {
     });
   });
 }
+
+describe('font producer sourceKey', () => {
+  it('assigns unique stable keys to atlas, sampler, and font outputs', () => {
+    const keys = fontOutputSourceKeys();
+    expect(keys).toEqual(['font:texture', 'font:sampler', 'font:font']);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(sourceKeyForFontOutput('texture')).toBe('font:texture');
+    expect(sourceKeyForFontOutput('')).toBeUndefined();
+  });
+});
 
 {
   // ─── from font-importer.test.ts ───

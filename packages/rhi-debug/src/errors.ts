@@ -1,11 +1,11 @@
 // @forgeax/engine-rhi-debug/src/errors — DebugError + closed DebugErrorCode union.
 //
 // Shape:
-// - DebugErrorCode = closed union 14 members, independent from RhiErrorCode (per Q&A q8).
+// - DebugErrorCode = closed union 15 members, independent from RhiErrorCode (per Q&A q8).
 // - DebugError class has readonly .code / .expected / .hint / .detail four-field surface,
 //   same shape as RhiError (AGENTS.md "Errors are structured").
 // - .detail is a discriminated union narrowed on .code via switch exhaustive.
-// - Requirements §7 error model complete list (14 members, closed union).
+// - Requirements §7 error model complete list (15 members, closed union).
 //
 // Related: requirements §7 / AC-23 / AC-24; plan-strategy §3.1 errors.ts module.
 
@@ -24,7 +24,7 @@ import type { RhiCapsRecorded } from './types';
 export type RhiCapsRecordedKey = keyof RhiCapsRecorded;
 
 /**
- * Closed DebugErrorCode union. 14 members, completely independent from
+ * Closed DebugErrorCode union. 15 members, completely independent from
  * RhiErrorCode (no overlap per Q&A q8). `switch` exhaustive checks need
  * no default fallback — tsc strict mode guards union completeness.
  *
@@ -41,6 +41,7 @@ export type RhiCapsRecordedKey = keyof RhiCapsRecorded;
  * | `'rt-readback-failed'` | copyTextureToBuffer / mapAsync chain failed. |
  * | `'png-encode-failed'` | PNG encoding **or** disk write of RT readback / tape / report data failed. The `.hint` field discriminates: `'failed to ...'` describes the specific I/O step (PNG encode vs `mkdirSync` vs `writeFileSync`). |
  * | `'snapshot-readback-failed'` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob failed). |
+ * | `'snapshot-timeout'` | frame-header resource snapshot exceeded its bounded timeout and was cancelled. |
  * | `'seed-initial-data-failed'` | replayInitialData seed failed (handleId missing/dataHash missing/writeBuffer failed). |
  * | `'rpc-target-not-wired'` | wireDefaultInspectors was called without a debugRhi injector. |
  * | `'replay-dispose-busy'` | dispose() called while in-flight inspect is still running. |
@@ -57,6 +58,7 @@ export type DebugErrorCode =
   | 'rt-readback-failed'
   | 'png-encode-failed'
   | 'snapshot-readback-failed'
+  | 'snapshot-timeout'
   | 'seed-initial-data-failed'
   | 'rpc-target-not-wired'
   | 'replay-dispose-busy';
@@ -153,6 +155,25 @@ export interface SnapshotReadbackFailedDetail {
 }
 
 /**
+ * Detail type exclusive to the 'snapshot-timeout' path.
+ *
+ * The recorder keeps this progress snapshot after entering Error so a host
+ * can distinguish queue-drain stalls from a slow resource readback without
+ * scraping log text.
+ */
+export interface SnapshotTimeoutDetail {
+  readonly timeoutMs: number;
+  readonly stage: 'queue-drain' | 'resource-readback';
+  readonly totalResources: number;
+  readonly completedResources: number;
+  readonly skippedResources: number;
+  readonly currentHandleId: string | null;
+  readonly currentKind: 'buffer' | 'texture' | null;
+  readonly currentSizeBytes: number | null;
+  readonly elapsedMs: number;
+}
+
+/**
  * Detail type exclusive to the 'seed-initial-data-failed' path.
  *
  * `handleId` is the resource replayInitialData attempted to seed.
@@ -179,6 +200,7 @@ export interface SeedInitialDataFailedDetail {
  *   - `HandleGraphBrokenDetail` -> 'tape-handle-graph-broken'
  *   - `DeterministicViolationDetail` -> 'replay-deterministic-violation'
  *   - `SnapshotReadbackFailedDetail` -> 'snapshot-readback-failed'
+ *   - `SnapshotTimeoutDetail` -> 'snapshot-timeout'
  *   - `SeedInitialDataFailedDetail` -> 'seed-initial-data-failed'
  *
  * The other 6 paths leave `.detail = undefined`.
@@ -191,6 +213,7 @@ export type DebugErrorDetail =
   | HandleGraphBrokenDetail
   | DeterministicViolationDetail
   | SnapshotReadbackFailedDetail
+  | SnapshotTimeoutDetail
   | SeedInitialDataFailedDetail;
 
 /**

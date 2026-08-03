@@ -1,6 +1,9 @@
 import type { GltfDocItemLike } from './sub-asset-key.js';
 
-export type GltfSourceKeyErrorCode = 'missing-source-key' | 'duplicate-source-key';
+export type GltfSourceKeyErrorCode =
+  | 'missing-source-key'
+  | 'duplicate-source-key'
+  | 'ambiguous-source-key';
 
 export interface GltfSourceKeyError {
   readonly code: GltfSourceKeyErrorCode;
@@ -17,8 +20,10 @@ export type GltfSourceKeyResult =
 export function sourceKeyForGltfOutput(
   item: Pick<GltfDocItemLike, 'kind' | 'name'>,
 ): string | undefined {
-  if (item.name === undefined || item.name.length === 0) return undefined;
-  return `${item.kind}:${item.name}`;
+  const kind = item.kind.trim();
+  if (kind.length === 0) return undefined;
+  const name = item.name?.trim();
+  return name === undefined || name.length === 0 ? kind : `${kind}:${name}`;
 }
 
 /** Require every output in a multi-output declaration to carry a unique key. */
@@ -33,8 +38,8 @@ export function deriveGltfSourceKeys(items: readonly GltfDocItemLike[]): GltfSou
       error: {
         code: 'missing-source-key',
         sourceIndices: missing,
-        expected: 'every glTF output needs a stable semantic name',
-        hint: 'name the output or return an explicit ambiguous result; do not use sourceIndex',
+        expected: 'every glTF output needs a stable semantic kind or name',
+        hint: 'publish a semantic kind/name key; do not use sourceIndex',
       },
     };
   }
@@ -48,10 +53,13 @@ export function deriveGltfSourceKeys(items: readonly GltfDocItemLike[]): GltfSou
       return {
         ok: false,
         error: {
-          code: 'duplicate-source-key',
+          code: key === items[index]?.kind ? 'ambiguous-source-key' : 'duplicate-source-key',
           sourceIndices: [prior, items[index]?.sourceIndex ?? 0],
           expected: 'sourceKey values must be unique within one glTF package',
-          hint: 'rename duplicate outputs before publishing topology facts',
+          hint:
+            key === items[index]?.kind
+              ? 'name each otherwise anonymous output; do not use sourceIndex'
+              : 'rename duplicate outputs before publishing topology facts',
         },
       };
     }

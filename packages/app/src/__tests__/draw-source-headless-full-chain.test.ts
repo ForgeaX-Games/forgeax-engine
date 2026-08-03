@@ -37,6 +37,7 @@ import {
   MeshFilter,
   MeshRenderer,
   type Renderer,
+  type RenderPhaseEvent,
 } from '@forgeax/engine-render';
 import type { RhiNullDevice } from '@forgeax/engine-rhi-null';
 import { rhi } from '@forgeax/engine-rhi-null';
@@ -176,9 +177,17 @@ afterEach(() => {
 describe('drawSource full chain on rhi-null headless (w10)', () => {
   it('drives update -> extract -> record for an injected world with no GPU', async () => {
     const canvas = makeStubCanvas();
-    renderer = await createRenderer(canvas, rhiOptions, {
-      shaderManifestUrl: buildManifestDataUrl(),
-    });
+    const renderPhaseEvents: RenderPhaseEvent[] = [];
+    renderer = await createRenderer(
+      canvas,
+      {
+        ...rhiOptions,
+        renderPhaseObserver: { onEvent: (event) => renderPhaseEvents.push(event) },
+      },
+      {
+        shaderManifestUrl: buildManifestDataUrl(),
+      },
+    );
     await renderer.ready;
 
     const rhiNullDevice = renderer.device as unknown as RhiNullDevice;
@@ -220,5 +229,21 @@ describe('drawSource full chain on rhi-null headless (w10)', () => {
     expect(rhiNullDevice.totalBindGroupCount).toBeGreaterThanOrEqual(1);
     expect(renderer.perFramePassNames.length).toBeGreaterThan(0);
     expect(renderer.perFramePassNames).toContain('main');
+    expect(new Set(renderPhaseEvents.map((event) => event.phase))).toEqual(
+      new Set(['extract', 'bind-groups', 'features', 'sort', 'record']),
+    );
+    for (const phase of ['extract', 'bind-groups', 'features', 'sort', 'record'] as const) {
+      const events = renderPhaseEvents.filter((event) => event.phase === phase);
+      expect(events.map((event) => event.boundary)).toEqual(
+        phase === 'bind-groups' ? ['skip'] : ['begin', 'end'],
+      );
+      if (phase === 'bind-groups') {
+        const [event] = events;
+        expect(event?.boundary).toBe('skip');
+        if (event?.boundary === 'skip') {
+          expect(event.skipReason).toBe('feature-host-empty');
+        }
+      }
+    }
   });
 });

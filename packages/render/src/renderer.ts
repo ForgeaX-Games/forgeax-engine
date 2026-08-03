@@ -135,10 +135,47 @@ export type RendererError =
  */
 export type RendererErrorListener = (error: RendererError) => void;
 
+/**
+ * Opt-in boundaries inside one `Renderer.draw` call. The observer is a
+ * diagnostics seam only: it receives wall-time boundaries and must never be
+ * required for rendering correctness. The stage names mirror the existing
+ * engine-owned Extract / Prepare / Record orchestration so a host can measure
+ * attribution without guessing from RHI command counts.
+ */
+export type RenderPhase = 'extract' | 'bind-groups' | 'features' | 'sort' | 'record';
+
+/** A phase can be intentionally absent when its inputs make the work unnecessary. */
+export type RenderPhaseSkipReason =
+  | 'feature-host-unavailable'
+  | 'feature-host-empty'
+  | 'pipeline-state-unavailable'
+  | 'camera-unavailable';
+
+export type RenderPhaseEvent =
+  | {
+      readonly frameSeq: number;
+      readonly phase: RenderPhase;
+      readonly boundary: 'begin' | 'end';
+      readonly worldCount?: number;
+    }
+  | {
+      readonly frameSeq: number;
+      readonly phase: RenderPhase;
+      readonly boundary: 'skip';
+      readonly skipReason: RenderPhaseSkipReason;
+      readonly worldCount?: number;
+    };
+
+export interface RenderPhaseObserver {
+  readonly onEvent: (event: RenderPhaseEvent) => void;
+}
+
 /** First-version options bag (intentionally empty; reserved for v0.1). */
 export interface RendererOptions {
   /** Producer-owned features installed by the renderer host. */
   readonly features?: readonly RenderFeature<unknown>[] | undefined;
+  /** Opt-in engine-owned Extract / Prepare / Record diagnostics. */
+  readonly renderPhaseObserver?: RenderPhaseObserver | undefined;
   // feat-20260608-create-app-param-surface-trim / M1 / AC-02: `clearColor`
   // was deleted as a one-cut breaking change (AGENTS.md Change stance +
   // requirements constraint #1: no deprecation window, no shim). Scene

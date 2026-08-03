@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
+import { type NativeCooker, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import {
   type AssetRef,
+  type AssetStageError,
+  type CookProduct,
   err,
   ok,
   type ParticleEffectAsset,
@@ -12,14 +15,18 @@ import {
   type ParticleOperatorKey,
   type VfxError,
 } from '@forgeax/engine-vfx';
-import { canonicalizeParticleProgram, type ParticleProgramArtifact } from './canonicalize.js';
+import {
+  canonicalizeParticleProgram,
+  type ParticleEmitterOperatorPrograms,
+  type ParticleProgramArtifact,
+} from './canonicalize.js';
 import type {
   ParticleBackendPlan,
   ParticleOperatorRegistry,
   ParticleOperatorRegistryError,
 } from './operator-registry.js';
 
-export interface ParticleCookProduct {
+interface ParticleCookDetails {
   readonly asset: ParticleEffectAsset;
   readonly refs: readonly AssetRef[];
   readonly backendPlans: readonly ParticleBackendPlan[];
@@ -28,6 +35,11 @@ export interface ParticleCookProduct {
 }
 
 export type ParticleCookError = VfxError | ParticleOperatorRegistryError;
+
+export interface ParticleEffectNativeCookInput {
+  readonly guid: string;
+  readonly source: unknown;
+}
 
 function operatorKey(stage: string, kind: string, version: number): string {
   return `${stage}:${kind}:${version}`;
@@ -121,12 +133,15 @@ function compileEmitter(
 export function cookParticleEffect(
   source: unknown,
   registry: ParticleOperatorRegistry,
-): Result<ParticleCookProduct, ParticleCookError> {
+): Result<ParticleCookDetails, ParticleCookError> {
   const parsed = normalizeParticleEffectSource(source);
   if (!parsed.ok) return parsed;
 
   const backendPlans: Record<string, ParticleBackendPlan> = {};
-  const operatorPrograms: Record<string, Partial<Record<'cpu' | 'gpu', unknown>>> = {};
+  const operatorPrograms: Record<
+    string,
+    Record<string, Partial<Record<'cpu' | 'gpu', unknown>>>
+  > = {};
   const refs: AssetRef[] = [];
   const emitters: { readonly id: string; readonly capacity: number }[] = [];
 
@@ -134,9 +149,7 @@ export function cookParticleEffect(
     const compiled = compileEmitter(emitter, registry);
     if (!compiled.ok) return compiled;
     backendPlans[emitter.id] = compiled.value.plan;
-    for (const [key, programs] of Object.entries(compiled.value.programs)) {
-      operatorPrograms[key] = programs;
-    }
+    operatorPrograms[emitter.id] = compiled.value.programs;
     emitters.push({ id: emitter.id, capacity: emitter.capacity });
     appendRef(refs, emitter.output.material);
     if (emitter.output.kind === 'mesh') appendRef(refs, emitter.output.mesh);
@@ -145,7 +158,7 @@ export function cookParticleEffect(
   const program = canonicalizeParticleProgram({
     source: parsed.value,
     backendPlans,
-    operatorPrograms,
+    operatorPrograms: operatorPrograms as ParticleEmitterOperatorPrograms,
   });
   const asset: ParticleEffectAsset = {
     kind: 'particle-effect',
@@ -161,4 +174,42 @@ export function cookParticleEffect(
     program,
     outputDigest: digestProduct(asset, refs, program),
   });
+}
+
+/** Native authored-Pack bridge producing the shared CookProduct contract. */
+export function createParticleEffectNativeCooker(
+  registry: ParticleOperatorRegistry,
+): NativeCooker<ParticleEffectAsset, ParticleEffectNativeCookInput> {
+  return {
+    key: 'particle-effect',
+    cook: ({ guid, source }) => {
+      const cooked = cookParticleEffect(source, registry);
+      if (!cooked.ok) throw new Error(cooked.error.hint);
+      const artifact = {
+        mediaType: cooked.value.program.mimeType,
+        bytes: cooked.value.program.bytes,
+      };
+      return {
+        guid,
+        payload: cooked.value.asset,
+        refs: cooked.value.refs.map((ref) => ref.guid),
+        artifacts: { [cooked.value.program.artifactKey]: artifact },
+        inputFingerprint: cooked.value.program.fingerprint,
+      };
+    },
+  };
+}
+
+/** Run the producer through the shared native-cooker registry boundary. */
+export async function cookParticleEffectProduct(
+  input: ParticleEffectNativeCookInput,
+  registry: ParticleOperatorRegistry,
+): Promise<Result<CookProduct<ParticleEffectAsset>, AssetStageError>> {
+  const native = new NativeCookerRegistry();
+  const cooker = createParticleEffectNativeCooker(registry);
+  native.register({
+    key: cooker.key,
+    cook: (value: unknown) => cooker.cook(value as ParticleEffectNativeCookInput),
+  });
+  return native.run<ParticleEffectAsset, ParticleEffectNativeCookInput>('particle-effect', input);
 }

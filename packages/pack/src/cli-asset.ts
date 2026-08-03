@@ -133,6 +133,15 @@ function helpBody(): string {
     '  forgeax-engine-remote-asset verify --guid <guid> --project <dir> --catalog <path> --json',
     '  forgeax-engine-remote-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
     '',
+    'AI recovery commands (host execution remains explicit):',
+    '  inspect [--guid <guid>]      read subject, execution, lifecycle, authority, and sourceKey evidence',
+    '  rebuild [--guid <guid>]     request the declared producer to rebuild',
+    '  cold-cook [--guid <guid>]   discard invalid DDC output and cook from author authority',
+    '  preview-LKG [--guid <guid>] read the explicit last-known-good projection',
+    '  override [--guid <guid>]    request an Editor-owned override through its gateway',
+    '  promote [--guid <guid>]     request an authored Pack from an imported result',
+    '  stop-publish [--guid <guid>] block publication while evidence is incomplete',
+    '',
   ].join('\n');
 }
 
@@ -151,6 +160,14 @@ export async function runCliAsset(rest: string[], ctx: AssetCtx): Promise<number
       return runVerify(subRest, ctx);
     case 'atlas':
       return runAtlas(subRest, ctx);
+    case 'inspect':
+    case 'rebuild':
+    case 'cold-cook':
+    case 'preview-LKG':
+    case 'override':
+    case 'promote':
+    case 'stop-publish':
+      return runRecoveryCommand(sub, subRest, ctx);
     default:
       return emitError(ctx, {
         code: 'unknown-subcommand',
@@ -158,6 +175,48 @@ export async function runCliAsset(rest: string[], ctx: AssetCtx): Promise<number
         hint: "run 'forgeax-engine-remote-asset --help' for usage",
         detail: { subcommand: sub },
       });
+  }
+}
+
+/** Emit a canonical host-operation request so recovery actions are executable
+ * from one CLI door even when the actual write/cook owner is the running host. */
+async function runRecoveryCommand(
+  operation:
+    | 'inspect'
+    | 'rebuild'
+    | 'cold-cook'
+    | 'preview-LKG'
+    | 'override'
+    | 'promote'
+    | 'stop-publish',
+  rest: string[],
+  ctx: AssetCtx,
+): Promise<number> {
+  try {
+    const parsed = parseArgs({
+      args: rest,
+      allowPositionals: false,
+      strict: true,
+      options: { guid: { type: 'string' } },
+    });
+    const guid = parsed.values.guid;
+    ctx.stdoutWrite(
+      JSON.stringify({
+        operation,
+        status: 'accepted',
+        execution: 'host-gateway',
+        ...(typeof guid === 'string' ? { guid } : {}),
+        hint: 'forward this operation descriptor to the running Editor/Studio gateway for its terminal result',
+      }),
+    );
+    return 0;
+  } catch (error) {
+    return emitError(ctx, {
+      code: 'cli-parse-error',
+      expected: `${operation} [--guid <guid>]`,
+      hint: "run 'forgeax-engine-remote-asset --help' for usage",
+      detail: { message: error instanceof Error ? error.message : String(error) },
+    });
   }
 }
 

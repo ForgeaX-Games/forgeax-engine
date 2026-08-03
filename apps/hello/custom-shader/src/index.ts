@@ -49,6 +49,7 @@ declare global {
       resolvedSamplingInput: Readonly<Record<string, readonly number[]>>;
       liveMutation: {
         enabled: boolean;
+        inheritanceBacked: boolean;
         applied: boolean;
         appliedFrame: number | null;
         beforeMaterialHandle: number;
@@ -58,6 +59,9 @@ declare global {
         baseColorSlotChanged: boolean;
         normalSlotChanged: boolean;
         afterComponentMaterialHandle: number | null;
+        sourceDerivedGuid: string;
+        sourceArtifactDigest: string;
+        sourceCookInputDigest: string;
       };
       resizeRebuild: {
         enabled: boolean;
@@ -160,7 +164,8 @@ const liveNormalSlotSwap = liveMode === 'normal-slot-swap' || liveMode === 'norm
 const liveResizeRebuild = liveMode === 'normal-slot-resize' || liveMode === 'normal-slot-swap-resize';
 const liveTwoSlotSwap = liveMode === 'two-slot-swap' || liveMode === 'two-slot-swap-resize';
 const liveTwoSlotResize = liveMode === 'two-slot-resize' || liveMode === 'two-slot-swap-resize';
-const liveMutationEnabled = liveNormalSlotSwap || liveTwoSlotSwap;
+const liveInheritanceRebind = liveMode === 'inheritance-rebind';
+const liveMutationEnabled = liveNormalSlotSwap || liveTwoSlotSwap || liveInheritanceRebind;
 const liveResizeEnabled = liveResizeRebuild || liveTwoSlotResize;
 
 bootstrap(canvas).catch((err: unknown) => {
@@ -396,20 +401,33 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     baseColor: liveSwapBaseColorTextureHandle,
     normal: liveSwapNormalTextureHandle,
   });
+  const inheritanceReplacementTextureHandles: readonly [number, number] =
+    falsify === 'live-inheritance-rebind'
+      ? [renderedTextureHandles.baseColor, renderedTextureHandles.normal]
+      : [liveSwapBaseColorTextureHandle, liveSwapNormalTextureHandle];
+  const inheritanceReplacementMaterial = rebindMaterialTextures(derivedMaterial, {
+    baseColor: inheritanceReplacementTextureHandles[0],
+    normal: inheritanceReplacementTextureHandles[1],
+  });
   const rootMaterialHandle = world.allocSharedRef('MaterialAsset', rootMaterial);
   const derivedMaterialHandle = world.allocSharedRef('MaterialAsset', derivedMaterial);
   const liveSwapMaterialHandle = world.allocSharedRef('MaterialAsset', liveSwapMaterial);
   const liveTwoSlotSwapMaterialHandle = world.allocSharedRef('MaterialAsset', liveTwoSlotSwapMaterial);
+  const inheritanceReplacementMaterialHandle = world.allocSharedRef('MaterialAsset', inheritanceReplacementMaterial);
   const liveReplacementMaterialHandle = liveTwoSlotSwap
     ? liveTwoSlotSwapMaterialHandle
-    : liveNormalSlotSwap
-      ? liveSwapMaterialHandle
-      : derivedMaterialHandle;
+      : liveNormalSlotSwap
+        ? liveSwapMaterialHandle
+        : liveInheritanceRebind
+          ? inheritanceReplacementMaterialHandle
+          : derivedMaterialHandle;
   const liveReplacementTextureHandles: readonly [number, number] = liveTwoSlotSwap
     ? [liveSwapBaseColorTextureHandle, liveSwapNormalTextureHandle]
-    : liveNormalSlotSwap
-      ? [renderedTextureHandles.baseColor, liveSwapNormalTextureHandle]
-      : [renderedTextureHandles.baseColor, renderedTextureHandles.normal];
+      : liveNormalSlotSwap
+        ? [renderedTextureHandles.baseColor, liveSwapNormalTextureHandle]
+        : liveInheritanceRebind
+          ? inheritanceReplacementTextureHandles
+          : [renderedTextureHandles.baseColor, renderedTextureHandles.normal];
   const derivedValues = derivedMaterial.values as Record<string, MaterialValue | null>;
   globalThis.__forgeaxMaterialEvidence = {
     ready: true,
@@ -430,6 +448,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     resolvedSamplingInput,
     liveMutation: {
       enabled: liveMutationEnabled,
+      inheritanceBacked: liveInheritanceRebind,
       applied: false,
       appliedFrame: null,
       beforeMaterialHandle: derivedMaterialHandle,
@@ -439,6 +458,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorSlotChanged: renderedTextureHandles.baseColor !== liveReplacementTextureHandles[0],
       normalSlotChanged: renderedTextureHandles.normal !== liveReplacementTextureHandles[1],
       afterComponentMaterialHandle: null,
+      sourceDerivedGuid: derivedReady.record.guid,
+      sourceArtifactDigest: derivedReady.artifact.digest,
+      sourceCookInputDigest: derivedReady.record.receipt.inputDigest,
     },
     resizeRebuild: {
       enabled: liveResizeEnabled,

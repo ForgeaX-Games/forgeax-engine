@@ -24,6 +24,7 @@ function ref<Kind extends PreparedKind>(
 }
 
 const pipeline = ref('pipeline');
+const secondPipeline = ref('pipeline');
 const bindings = ref('bindings');
 const vertices = ref('vertex-data');
 const indices = ref('index-data');
@@ -99,6 +100,17 @@ describe('prepared graphics validation before RHI mutation', () => {
       ok: true,
       value: { acceptedDrawCount: 1 },
     });
+  });
+
+  it('accepts draws that use any prepared pipeline in the current pass', () => {
+    const secondDraw = { ...vertexDraw, pipeline: secondPipeline };
+    expect(
+      validateRenderFeatureGraphicsPass(
+        'validation.feature',
+        { ...vertexPass, draws: [vertexDraw, secondDraw] },
+        { ...state, pipelines: [pipeline, secondPipeline] },
+      ),
+    ).toEqual({ ok: true, value: { acceptedDrawCount: 2 } });
   });
 
   it('rejects each missing state category before the first RHI mutation', () => {

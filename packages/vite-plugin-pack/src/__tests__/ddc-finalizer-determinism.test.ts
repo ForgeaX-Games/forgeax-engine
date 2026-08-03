@@ -34,8 +34,8 @@ describe('DDC and finalizer determinism', () => {
       cookProfile: 'dev',
     });
     const cwd = `/tmp/forgeax-ddc-test-${key}`;
-    writeLogical(cwd, key, logicalPackage);
-    const cached = readLogical(cwd, key);
+    await writeLogical(cwd, key, logicalPackage);
+    const cached = await readLogical(cwd, key);
     expect(cached).not.toBeNull();
     if (cached === null) return;
 
@@ -58,5 +58,28 @@ describe('DDC and finalizer determinism', () => {
     expect(hit.semantic).toBe(cold.semantic);
     expect(canonicalizeLogicalPackage(cached)).toBe(canonicalizeLogicalPackage(logicalPackage));
     expect(writes.length).toBeGreaterThan(0);
+  });
+
+  it('keeps semantic output stable when only publication paths change', async () => {
+    const writes: string[] = [];
+    const sink = {
+      write(path: string, _bytes: Uint8Array) {
+        writes.push(path);
+      },
+    };
+    const first = await finalizePackage(logicalPackage, sink, {
+      base: '/preview/',
+      packagePath: 'assets/first.pack.json',
+      artifactPath: (guid, name) => `assets/first/${guid}/${name}.bin`,
+    });
+    const second = await finalizePackage(logicalPackage, sink, {
+      base: '/release/',
+      packagePath: 'assets/second.pack.json',
+      artifactPath: (guid, name) => `assets/second/${guid}/${name}.bin`,
+    });
+
+    expect(second.semantic).toBe(first.semantic);
+    expect(writes).toContain('assets/first.pack.json');
+    expect(writes).toContain('assets/second.pack.json');
   });
 });

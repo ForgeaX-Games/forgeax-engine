@@ -12,6 +12,43 @@ import { type FbxRawSkinDoc, parseSkin } from './parse-skin.js';
 import { parseTextures } from './parse-texture.js';
 import { toAssetPack } from './to-asset-pack.js';
 
+export interface FbxSourceKeyOutput {
+  readonly kind: string;
+  readonly name?: string;
+}
+
+export type FbxSourceKeyResult =
+  | { readonly ok: true; readonly keys: readonly string[] }
+  | {
+      readonly ok: false;
+      readonly code: 'missing-source-key' | 'duplicate-source-key' | 'ambiguous-source-key';
+    };
+
+/** Derive FBX output identity from producer semantics, never from sourceIndex. */
+export function sourceKeyForFbxOutput(output: FbxSourceKeyOutput): string | undefined {
+  const kind = output.kind.trim();
+  if (kind.length === 0) return undefined;
+  const name = output.name?.trim();
+  return name === undefined || name.length === 0 ? `fbx:${kind}` : `fbx:${kind}:${name}`;
+}
+
+export function deriveFbxSourceKeys(outputs: readonly FbxSourceKeyOutput[]): FbxSourceKeyResult {
+  const keys = outputs.map(sourceKeyForFbxOutput);
+  if (keys.some((key) => key === undefined)) return { ok: false, code: 'missing-source-key' };
+  const seen = new Set<string>();
+  for (const [index, key] of keys.entries()) {
+    if (key === undefined) continue;
+    if (seen.has(key)) {
+      return {
+        ok: false,
+        code: outputs[index]?.name === undefined ? 'ambiguous-source-key' : 'duplicate-source-key',
+      };
+    }
+    seen.add(key);
+  }
+  return { ok: true, keys: keys as string[] };
+}
+
 export const fbxImporter: Importer = {
   key: 'fbx',
 

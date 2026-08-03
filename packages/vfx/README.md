@@ -1,5 +1,18 @@
 # @forgeax/engine-vfx
 
+## Authoring and recovery index
+
+Particle author facts live in the authored Pack. The VFX compiler and shared producer finalizer derive runtime payload, refs, artifacts, digest, and receipt; DDC is disposable cache evidence, not a second author entry.
+
+| Need | Owner | Recovery |
+|:--|:--|:--|
+| Inspect | Catalog entry and producer receipt | Read structured lifecycle and diagnostic fields |
+| Rebuild | `@forgeax/engine-vfx-compiler` | Cold cook the authored Pack |
+| Preview LKG | Catalog evidence marked `lastKnownGood` | Preview only; do not publish as current |
+| Stop publish | Missing, stale, or failed cooked output | Block release instead of using source fallback |
+
+The complete category and producer audit is [`asset-authority.schema.json`](../../asset-authority.schema.json). VFX does not add a transport, GUID registry, or runtime cache path.
+
 > [!IMPORTANT]
 > `@forgeax/engine-vfx` is the runtime-safe VFX contract and CPU-only particle
 > simulation owner. It owns source validation, Pack v2 loading, ECS author
@@ -22,7 +35,7 @@ flowchart LR
     pack --> load["loadParticleEffect"]
     load --> player["ParticleEffectPlayer"]
     load --> batch["ParticleRenderBatch"]
-    batch --> rendering["Wave 2 Rendering loop"]
+    batch --> rendering["@forgeax/engine-vfx-render"]
 ```
 
 A runtime consumer only needs a host-owned `AssetRegistry`, a cooked GUID, and
@@ -75,9 +88,9 @@ source, registers operators, cooks the canonical payload and asset-local
 program artifact, and emits the generic Importer product. It never belongs in a
 player bundle.
 
-## Wave 2 CPU particle simulation
+## CPU particle simulation
 
-The text contract is sufficient without reading the diagram. Wave 2 adds one
+The text contract is sufficient without reading the diagram. The runtime adds one
 opt-in, CPU-only `ParticleSimulation` resource to the existing path:
 
 ```ts
@@ -85,7 +98,7 @@ import { World } from '@forgeax/engine-ecs';
 import { runPlugins, type Plugin } from '@forgeax/engine-plugin';
 import {
   PARTICLE_SIMULATION_RESOURCE_KEY,
-  ParticleCpuExecutorRegistry,
+  createStockParticleCpuExecutorRegistry,
   ParticleEffectPlayer,
   type ParticleSimulation,
   particleSimulationPlugin,
@@ -108,7 +121,7 @@ if (!spawned.ok) return;
 const userPlugins = [
   particleSimulationPlugin({
     assets,
-    cpuExecutors: new ParticleCpuExecutorRegistry(),
+    cpuExecutors: createStockParticleCpuExecutorRegistry(),
   }),
 ];
 const installed = await runPlugins(world, defaultSet, userPlugins);
@@ -120,6 +133,11 @@ const simulation = world.getResource<ParticleSimulation>(PARTICLE_SIMULATION_RES
 const observation = simulation.read(spawned.value);
 const replay = simulation.replay(spawned.value);
 ```
+
+> [!WARNING]
+`createStockParticleCpuExecutorRegistry()` is the public paired registry for
+the built-in CPU operators. Use `ParticleCpuExecutorRegistry` directly only
+when a host owns a custom operator set and has paired compiler definitions.
 
 `runPlugins(world, defaultSet, userPlugins)` is the existing three-argument
 plugin contract. `defaultSet` is supplied by the host; the VFX plugin belongs
@@ -136,7 +154,7 @@ The public ownership chain is deliberately short:
 | Live lifecycle | `ParticleSimulation` | `playing=false` pauses; seed change or `replay` resets at the next fixed boundary; despawn releases transient state. |
 | Backend | CPU executor registry | CPU plans run; GPU-only plans report `unavailable`, and explicit GPU disable plans report `disabled`. |
 | Batch ownership | VFX simulation | Publish validated `ParticleRenderBatch` data and World shared handle references; do not publish malformed buckets. |
-| Rendering boundary | Rendering lane | Consume the public batch only; VFX production does not import Renderer, RHI, Device, RenderGraph, or RenderFeature. |
+| Rendering boundary | Wave 3 downstream renderer | Consume the public batch only; this headless package does not import Renderer, RHI, Device, RenderGraph, or RenderFeature. |
 
 The observation state is not inferred from an empty batch. `empty` means a valid
 player currently has no live output. `disabled` means the cooked policy elected
@@ -219,35 +237,53 @@ host `AssetRegistry`. The VFX loader validates the
 See [`packages/pack/README.md`](../pack/README.md) for the Pack v2 envelope,
 catalog locator, cook receipt, artifact descriptors, and evidence flow.
 
-## Wave 1 contract and Wave 2 boundary
+## Runtime boundary and production renderer
 
-> [!WARNING]
-> Wave 1 freezes the data contracts consumed by the Wave 2 CPU simulation and
-> parallel Rendering lane.
-
-Delivered:
+The runtime-safe package owns:
 
 - source validation and deterministic cooked asset vocabulary;
 - Pack v2 GUID load and structured readiness failures;
 - ECS author intent through `ParticleEffectPlayer`;
 - producer-owned empty, billboard, and mesh batch shapes;
-- public declarations and AI-indexable recovery documentation.
+- public declarations and AI-indexable recovery documentation;
+- stock CPU operator definitions and deterministic telemetry.
 
-Still outside this package and this Wave 2 lane:
+The following remain outside this package:
 
 - GPU buffers, compute passes, device execution, draw calls, or RenderGraph;
 - renderer assembly, editor, preview UI, gameplay, or VFX transport;
-- production `RenderFeature` integration.
+- production `RenderFeature` integration, which belongs to
+  [`@forgeax/engine-vfx-render`](../vfx-render/README.md).
 
-The Wave 2 Simulation loop owns transient live state, FixedUpdate scheduling,
+The completed Simulation loop owns transient live state, FixedUpdate scheduling,
 seeded replay, lifecycle reconciliation, readiness retry, diagnostics, and
 validated `ParticleRenderBatch` production. It stays headless and CPU-only.
 
-The **Wave 2 Rendering loop** owns the neutral test-only adapter for public
-`RenderFeature<ParticleRenderBatch>` callback and registration compatibility.
-It is the first milestone inside that loop, not a shared pre-wave Gate or a
-separate loop. This package does not implement or import RenderFeature in
-production.
+The downstream renderer consumes validated observations and applies explicit
+local/world scene-space resolution. It owns GPU resource preparation, draw
+descriptors, readiness diagnostics, and bounded retry; it does not move
+simulation or author intent into rendering.
+
+## Concrete GUID-to-pixels handoff
+
+Boss Lightning is the smallest complete recipe. Its sidecar declares the
+effect GUID `019e9c00-0000-7000-8000-000000000000`; the cooked effect references
+material GUIDs `019e9c00-0000-7000-8000-000000000001` and
+`019e9c00-0000-7000-8000-000000000002`. The build host registers
+`particleEffectImporter(createStockParticleOperatorRegistry())`, which cooks
+the source into a Pack v2 payload and asset-local program artifact. The player
+host then configures `/pack-index.json`, registers
+`particleEffectPackLoader`, and calls `loadParticleEffect(assets,
+'019e9c00-0000-7000-8000-000000000000')`. Only after that Result is ready does
+it allocate the shared effect handle and add `ParticleEffectPlayer`.
+
+The downstream `particleRenderFeature` consumes the resulting observation. For
+a local emitter, pass `particleSceneSpaceResolver({ world, resolveJoint })`
+from the scene owner so a real `ChildOf` joint supplies the world pose. If a
+material, mesh, or prepared resource is still warming, read
+`feature.diagnostics().error.detail.assetGuid` and `.hint`, keep readiness in
+`preparing`, and retry on the next valid frame. Do not substitute a placeholder
+asset or convert a recoverable warm-up error into a fatal simulation error.
 
 <details>
 <summary>Deep links</summary>

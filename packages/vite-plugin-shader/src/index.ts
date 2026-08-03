@@ -21,7 +21,8 @@
 //   injects the `import.meta.hot.accept(` literal (whitespace-sensitive,
 //   research Finding 3).
 
-import { readFile } from 'node:fs/promises';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import {
@@ -88,6 +89,7 @@ export async function buildEngineShaderManifest(): Promise<{
   }>;
 }> {
   const eng = await loadEngineShaderEntries();
+  const particle = await loadPackageMaterialShaderEntries('@forgeax/engine-vfx-render');
   const entries: Array<{
     hash: string;
     wgsl: string;
@@ -132,6 +134,7 @@ export async function buildEngineShaderManifest(): Promise<{
     eng.bloomBright,
     eng.bloomBlur,
     eng.bloomComposite,
+    ...particle,
   ]) {
     const axes = scanVariantAxes(file.source);
     const variantDefines = axes.length === 0 ? [undefined] : cartesianDefines(axes);
@@ -246,6 +249,7 @@ fn fullscreen_triangle(vertex_index : u32) -> FullscreenOutput {
   out.uv = vec2<f32>(u, v);
   return out;
 }
+
 `;
     // Strip hdrp-ssao's pragma lines (define_import_path + multi-token #import).
     const ssaoSource = eng.hdrpSsao.source
@@ -264,6 +268,51 @@ fn fullscreen_triangle(vertex_index : u32) -> FullscreenOutput {
     });
   }
   return { schemaVersion: '1.0.0', entries, materialShaders };
+}
+
+async function loadPackageMaterialShaderEntries(packageName: string): Promise<EngineShaderFile[]> {
+  const require = createRequire(import.meta.url);
+  let packageRoot: string;
+  try {
+    packageRoot = dirname(require.resolve(`${packageName}/package.json`));
+  } catch {
+    // Standalone smoke helpers run from a workspace app, while this plugin is
+    // resolved through the plugin package. pnpm does not place every sibling
+    // workspace package in the plugin's own node_modules, so package exports
+    // alone cannot discover a sibling material package. Walk to the repository
+    // root and use the workspace package itself; installed consumers still use
+    // the package-export branch above.
+    const prefix = '@forgeax/engine-';
+    if (!packageName.startsWith(prefix)) return [];
+    const workspaceName = packageName.slice(prefix.length);
+    let current = process.cwd();
+    while (true) {
+      const candidate = resolve(current, 'packages', workspaceName);
+      if (existsSync(resolve(candidate, 'package.json'))) {
+        packageRoot = candidate;
+        break;
+      }
+      const parent = dirname(current);
+      if (parent === current) return [];
+      current = parent;
+    }
+  }
+  const shaderRoot = resolve(packageRoot, 'src', 'shaders');
+  let names: string[];
+  try {
+    names = await readdir(shaderRoot);
+  } catch {
+    return [];
+  }
+  const entries: EngineShaderFile[] = [];
+  for (const name of names.filter((value) => value.endsWith('.wgsl')).sort()) {
+    const id = resolve(shaderRoot, name);
+    const source = await readFile(id, 'utf8');
+    const identifier = extractDefineImportPath(source);
+    if (identifier === undefined) continue;
+    entries.push({ id, source, reservedIdentifier: identifier });
+  }
+  return entries;
 }
 
 /**
@@ -738,7 +787,7 @@ function resolveImportToFile(importerFile: string, name: string): string {
 }
 
 const IMPORT_DIRECTIVE_RE = /^\s*(?:\/\/\s*)?#import\s+([A-Za-z0-9_:-]+)/;
-const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/;
+const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_.:-]+)/;
 const PRAGMA_VARIANT_AXIS_RE = /^#pragma\s+variant_axis\s+(\w+)/gm;
 
 /**
@@ -1894,6 +1943,9 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       }
       if (!wantEngineEntries) return;
       if (sharedManifest !== undefined) return;
+      const packageMaterialShaders = await loadPackageMaterialShaderEntries(
+        '@forgeax/engine-vfx-render',
+      );
       // feat-20260523-shader-template-instance-split M5 / T09: pbr.wgsl is
       // retired; default-standard-pbr.wgsl is the engine PBR entry. The
       // runtime createRenderer.ts identifies the entry by `f_schlick`
@@ -1947,6 +1999,9 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       await compileEngineEntry(this, state, eng.bloomBright, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.bloomBlur, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.bloomComposite, eng.imports, isServeMode);
+      for (const file of packageMaterialShaders) {
+        await compileEngineEntry(this, state, file, eng.imports, isServeMode);
+      }
       // feat-20260531-skybox-env-background M3 / w14: skybox fullscreen
       // cubemap shader compiled at buildStart alongside tonemap/fxaa.
       await compileEngineEntry(this, state, eng.skybox, eng.imports, isServeMode);
@@ -2249,6 +2304,23 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         fileName: SHADER_MANIFEST_PATH,
         source: JSON.stringify(manifestPayload, null, 2),
       });
+      const factsDir = process.env.FORGEAX_BUILD_METRICS_DIR;
+      if (factsDir !== undefined) {
+        try {
+          mkdirSync(factsDir, { recursive: true });
+          writeFileSync(
+            resolve(factsDir, `shader-${process.pid}.json`),
+            `${JSON.stringify({
+              appShaderCompileCount: [...state.entries.keys()].filter(
+                (key) => !key.startsWith('shared:'),
+              ).length,
+            })}\n`,
+          );
+        } catch {
+          // Build facts are diagnostic only; never turn a successful build into
+          // a failure because the optional metrics directory is unwritable.
+        }
+      }
     },
 
     // hook 4: handleHotUpdate — cross-file propagation (T-16, plan-strategy

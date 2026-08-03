@@ -43,7 +43,7 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 |:--|:--|:--|
 | `wrap` | `(instance: RhiInstance): DebugRhiInstance` | Proxy-wrap an RhiInstance. `DebugRhiInstance extends RhiInstance` with added `arm(frames)`, `onFrameEnd()`, `finalize()`, `getTape()`, `getState()`, `getEvents()`, `getBlobPool()`, `transitionToError()`, `disposeError()`, `snapshotResource(handleId)`, `snapshotAllLiveResources()`. |
 | `snapshotResource` | `(handleId: HandleId): Promise<Result<{handleId, dataHash}, DebugError>>` | Snapshot a resource's GPU bytes into the tape as an `initialData` event. Reads the resource descriptor from the internal registry, copies bytes via copyToBuffer/mapAsync, stores them in the blobPool with djb2 hash-dedup, and pushes an `RhiCallEventInitialData` into the event stream. Returns `snapshot-readback-failed` on any readback/storeBlob failure. Async because the GPU readback chain (copyToBuffer -> submit -> onSubmittedWorkDone -> mapAsync) is inherently asynchronous. |
-| `snapshotAllLiveResources` | `(): Promise<Result<void, DebugError>>` | Frame-header snapshot entry point: awaits all submitted GPU work (`onSubmittedWorkDone`), then iterates the live descriptor registry full-table, calling `snapshotResource` on every entry. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed (architecture section 5). This is the function AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
+| `snapshotAllLiveResources` | `(timeoutMs = 30000): Promise<Result<void, DebugError>>` | Frame-header snapshot entry point: awaits all submitted GPU work (`onSubmittedWorkDone`), then iterates the live descriptor registry full-table, calling `snapshotResource` on every entry. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed (architecture section 5). A stalled GPU readback returns `snapshot-timeout`, invalidates the async snapshot generation, and enters `error`. This is the function AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
 | `wrapCreateShaderModule` | `(originalFn: CreateShaderModuleFn, debugInst: DebugRhiInstance): CreateShaderModuleFn` | Standalone wrapper for `createShaderModule` (which is not on `RhiDevice` in rhi-webgpu). Records `createShaderModule` events in the tape. |
 | `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
 | `replay.commitThroughDraw` | `(drawIdx: number): Promise<Result<{committed: boolean}, DebugError>>` | **Per-draw cumulative RT.** Replays up to & including global draw #`drawIdx`, then synthesizes `endRenderPass` + `finish` + `submit` on the enclosing pass so its color attachment holds the **draws-0..N cumulative** pixels (selecting draw N shows the frame as it stood right after N, not the final composite). After `{committed:true}`, `readbackDrawRt(drawIdx)` / `inspectDrawJson(..., ['rt'])` read those pixels. `{committed:false}` = the draw is in a depth-only render pass or a compute pass (no color RT — render a "no-rt" state). Monotonic-forward like `stepTo`: `reset()` before re-targeting an earlier draw. Out-of-range/non-monotonic → `replay-step-out-of-range`. Use this (not `stepTo(end)`) whenever inspecting a *specific* draw; use `stepTo(events.length-1)` only for the whole composited frame. |
@@ -126,7 +126,7 @@ if (inspectRes.ok) {
   console.log('bindings:', inspectRes.value.bindings);
   console.log('drawCall:', inspectRes.value.drawCall);
 } else {
-  // DebugErrorCode is a 14-member closed union -- exhaustive switch.
+  // DebugErrorCode is a 15-member closed union -- exhaustive switch.
   const err = inspectRes.error;
   switch (err.code) {
     case 'replay-step-out-of-range':
@@ -189,7 +189,7 @@ Mounted by `@forgeax/engine-vite-plugin-rhi-debug` (`vitePluginRhiDebug()`, defa
 
 On success: writes `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json` (via the D-3 single-writer `assembleReport`, byte-identical to the Node finalize tail) and returns `200 { tapePath, reportPath, runId }`.
 
-On a malformed body / wrong method: returns a `{ error, hint }` JSON envelope (`400` for bad body, `405` for non-POST) and **writes nothing** (Fail Fast / AC-06). HTTP-layer errors never enter `DebugError` (OOS-6 / D-9) -- the 14-member union is unchanged.
+On a malformed body / wrong method: returns a `{ error, hint }` JSON envelope (`400` for bad body, `405` for non-POST) and **writes nothing** (Fail Fast / AC-06). HTTP-layer errors never enter `DebugError` (OOS-6 / D-9) -- the 15-member union is unchanged.
 
 ### Dev-server endpoint: POST `/__forgeax-debug/trigger` (L2a)
 
@@ -288,7 +288,7 @@ error -> idle           (via disposeError())
 
 ## Error codes
 
-`DebugErrorCode` is a 14-member closed union, completely independent from `RhiErrorCode`.
+`DebugErrorCode` is a 15-member closed union, completely independent from `RhiErrorCode`.
 
 | code | hint template |
 |:--|:--|
@@ -305,6 +305,7 @@ error -> idle           (via disposeError())
 | `rpc-target-not-wired` | `debugAdapter` not available in eval scope — ensure `createApp` is used (auto-wires `debugAdapter` alongside `world`, `renderer`, `assets`) |
 | `replay-dispose-busy` | in-flight inspect at draw indices `{inFlightDrawIndices}`; `await` them first |
 | `snapshot-readback-failed` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob). `.detail = {handleId, stage: 'copy' | 'map' | 'store'}` |
+| `snapshot-timeout` | frame-header resource snapshot exceeded its timeout and was cancelled. `.detail = {timeoutMs}`; the recorder enters `error` and requires `disposeError()` before retry |
 | `seed-initial-data-failed` | replayInitialData seed failed (handleId missing / dataHash missing / writeBuffer failed). `.detail = {handleId, stage: 'lookup' | 'write'}` |
 
 Each error object carries structured `.code` / `.expected` / `.hint` / `.detail` (discriminated union narrowed on `.code`). AI users consume via `switch (err.code)` exhaustive -- TypeScript catches missing branches at compile time.
@@ -384,17 +385,17 @@ Starting in v2, the recorder snapshots live resource GPU bytes at capture-start 
 |:--|:--|:--|
 | `initialData` event schema | `types.ts` `RhiCallEventInitialData` | `{ kind:'initialData', handleId: HandleId, dataHash: string }` — joined into `RhiCallEvent` closed union as the 40th member. `handleId` points to a resource declared by a prior `create*` event in the bootstrap prefix. `dataHash` is a djb2 hash key into the tape's `blobPool`, which stores the actual GPU bytes. Bytes are read back via copyToBuffer/mapAsync and stored with hash-dedup (reuses existing blobPool, no separate pool). |
 | `snapshotResource` signature | `recorder.ts` `DebugRhiInstance` | `snapshotResource(handleId: HandleId): Promise<Result<{handleId, dataHash}, DebugError>>` — per-resource building block. Reads the resource descriptor from the internal registry, copies GPU bytes via copyToBuffer/mapAsync, stores them in blobPool via storeBlob, and pushes an `RhiCallEventInitialData` into the event stream. Returns `snapshot-readback-failed` with `.detail = {handleId, stage:'copy'\|'map'\|'store'}` on any failure. Async because the GPU readback chain is inherently asynchronous. |
-| `snapshotAllLiveResources` signature | `recorder.ts` `DebugRhiInstance` | `snapshotAllLiveResources(): Promise<Result<void, DebugError>>` — frame-header full-table snapshot entry point. Awaits all submitted GPU work via `onSubmittedWorkDone`, then iterates every live resource in the descriptor registry, calling `snapshotResource` on each (**buffers + single-layer 4-byte-per-texel color textures only** — see *Snapshot scope* below). Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed. **Wired into the real capture path**: `adapter.ts captureFrames` and `capture-browser.ts captureFramesToMemory` call it right after `arm()`, so every real-demo tape carries initialData (not just hand-written test tapes). |
+| `snapshotAllLiveResources` signature | `recorder.ts` `DebugRhiInstance` | `snapshotAllLiveResources(timeoutMs = 30000): Promise<Result<void, DebugError>>` — frame-header full-table snapshot entry point. Awaits all submitted GPU work via `onSubmittedWorkDone`, then iterates every live resource in the descriptor registry, calling `snapshotResource` on each (**buffers + single-layer 4-byte-per-texel color textures only** — see *Snapshot scope* below). Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed. If GPU work or readback exceeds the bound, it returns `snapshot-timeout`, invalidates the async generation, and enters `error`. **Wired into the real capture path**: `adapter.ts captureFrames` and `capture-browser.ts captureFramesToMemory` call it right after `arm()`, so every real-demo tape carries initialData (not just hand-written test tapes). |
 | seed insertion point | `replayer.ts` `replayInitialData` | `replayInitialData(event, tape, handleMap, queue): Result<void, DebugError>` — called during replay when the dispatch switch hits `case 'initialData'`. Looks up the recreated resource from `handleMap`, fetches its bytes from `tape.blobPool.get(event.dataHash)`, writes them via `queue.writeBuffer` (for buffers) or `queue.writeTexture` (for textures). Returns `seed-initial-data-failed` with `.detail = {handleId, stage:'lookup'\|'write'}` on failure. Failures bubble up through `stepToImpl` — not void-silent-return. |
 
 **Capture flow (recording side):**
 
 ```text
-arm() -> armed -> snapshotting state
+arm() -> armed -> snapshotting state (bounded by SNAPSHOT_TIMEOUT_MS)
   for each live resource in descriptor registry:
     await queue.onSubmittedWorkDone()  // conservative timing (C-3)
     snapshotResource(handleId)         // reads GPU bytes -> blobPool -> pushEvent(initialData)
-  -> recording state
+  -> recording state, or snapshot-timeout -> error -> disposeError()
   frame commands proceed normally
 ```
 

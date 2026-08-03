@@ -15,6 +15,7 @@ export {
   serializeMaterialCookReceipt,
   validateCookedMaterialRecord,
 } from './evidence/material-cook.js';
+export * from './evidence/offline-evidence.js';
 export { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 export { calculateTopologyDiff, diffTopology } from './topology.js';
 

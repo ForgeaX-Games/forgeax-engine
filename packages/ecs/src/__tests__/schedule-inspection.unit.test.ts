@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defineComponent } from '../component';
 import { FixedUpdate, FrameEnd, Update } from '../schedule-token';
 import { World } from '../world';
 
@@ -17,5 +18,66 @@ describe('schedule-scoped inspection', () => {
       { schedule: FixedUpdate, systems: [{ name: 'fixed-system', sets: [] }] },
       { schedule: FrameEnd, systems: [] },
     ]);
+  });
+
+  it('projects a JSON-safe schedule graph with declared access metadata', () => {
+    const Position = defineComponent('ScheduleDataPosition', { x: 'f32' });
+    const Marker = defineComponent('ScheduleDataMarker', { value: 'u32' });
+    const Optional = defineComponent('ScheduleDataOptional', { value: 'u32' });
+    const world = new World();
+    world.addSystem(Update, {
+      name: 'producer',
+      queries: [{ with: [Position] }],
+      resources: ['Clock'],
+      fn: () => {},
+    });
+    world.addSystem(Update, {
+      name: 'consumer',
+      after: ['producer'],
+      queries: [
+        {
+          with: [Position],
+          without: [Marker],
+          optional: [Optional],
+          changed: [Position],
+          added: [Marker],
+        },
+      ],
+      fn: () => {},
+    });
+
+    const data = world.scheduleData();
+    const update = data.find((schedule) => schedule.name === 'Update');
+
+    expect(update?.systems).toEqual([
+      {
+        name: 'producer',
+        sets: [],
+        before: [],
+        after: [],
+        queries: [
+          { with: ['ScheduleDataPosition'], without: [], optional: [], changed: [], added: [] },
+        ],
+        resources: ['Clock'],
+      },
+      {
+        name: 'consumer',
+        sets: [],
+        before: [],
+        after: ['producer'],
+        queries: [
+          {
+            with: ['ScheduleDataPosition'],
+            without: ['ScheduleDataMarker'],
+            optional: ['ScheduleDataOptional'],
+            changed: ['ScheduleDataPosition'],
+            added: ['ScheduleDataMarker'],
+          },
+        ],
+        resources: [],
+      },
+    ]);
+    expect(update?.dependencies).toContainEqual(['producer', 'consumer']);
+    expect(JSON.parse(JSON.stringify(data))).toEqual(data);
   });
 });

@@ -4,5 +4,5 @@ export {
   type MaterialCookCatalogEntry,
   type MaterialCookFinalizerOptions,
   type MaterialCookRequest,
-  type MaterialCookResult,
+  materialCookPublication,
 } from './cook-finalizer.js';

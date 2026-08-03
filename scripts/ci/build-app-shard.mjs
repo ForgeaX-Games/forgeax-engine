@@ -75,6 +75,54 @@ function copyShardArtifacts(root, outputDir, report) {
   }
 }
 
+function completeDdcEntry(path) {
+  return existsSync(join(path, 'receipt.json')) && existsSync(join(path, 'integrity.json'));
+}
+
+function mergeDdcSnapshots(options) {
+  const snapshotsDir = resolve(options.snapshotsDir ?? 'ddc-snapshots');
+  const outputDir = resolve(options.ddcOutputDir ?? 'ddc-merged');
+  mkdirSync(outputDir, { recursive: true });
+  let availableSnapshots = 0;
+  if (!options.cacheHit) {
+    for (let index = 0; index < options.shardCount; index += 1) {
+      const source = join(snapshotsDir, String(index));
+      if (!existsSync(source)) continue;
+      availableSnapshots += 1;
+      const entries = join(source, 'entries');
+      if (existsSync(entries)) {
+        for (const entry of readdirSync(entries).sort()) {
+          const entryPath = join(entries, entry);
+          if (!completeDdcEntry(entryPath)) {
+            fail('ddc-snapshot-entry-incomplete', { entry });
+          }
+          cpSync(entryPath, join(outputDir, 'entries', entry), {
+            recursive: true,
+            force: true,
+          });
+        }
+      }
+      for (const entry of readdirSync(source).sort()) {
+        if (entry === 'entries' || /^(?:staging|lease|attempt|head)$/.test(entry)) continue;
+        cpSync(join(source, entry), join(outputDir, entry), { recursive: true, force: true });
+      }
+    }
+  }
+  const status = {
+    outcome: options.cacheHit
+      ? 'skipped'
+      : availableSnapshots === options.shardCount
+        ? 'saved'
+        : 'partial',
+    availableSnapshots,
+    shardCount: options.shardCount,
+    nextRunWouldHit: options.cacheHit || availableSnapshots > 0,
+  };
+  writeFileSync(join(outputDir, 'ddc-warm-status.json'), JSON.stringify(status, null, 2));
+  process.stdout.write(`${JSON.stringify(status)}\n`);
+  process.exit(0);
+}
+
 function writeReport(root, outputDir, report) {
   const output = resolve(outputDir);
   const reportDir = join(output, 'report');
@@ -105,24 +153,7 @@ if (
 }
 
 if (options.mergeDdc) {
-  const mergeScript = join(process.cwd(), 'scripts', 'ci', 'merge-ddc-snapshots.mjs');
-  const result = spawnSync(
-    process.execPath,
-    [
-      mergeScript,
-      '--snapshots-dir',
-      options.snapshotsDir ?? 'ddc-snapshots',
-      '--out-dir',
-      options.ddcOutputDir ?? 'ddc-merged',
-      '--shard-count',
-      String(options.shardCount),
-      ...(options.cacheHit ? ['--cache-hit'] : []),
-    ],
-    { encoding: 'utf8' },
-  );
-  process.stdout.write(result.stdout ?? '');
-  process.stderr.write(result.stderr ?? '');
-  process.exit(result.status ?? 1);
+  mergeDdcSnapshots(options);
 }
 
 const root = resolve(options.root);

@@ -39,6 +39,29 @@ describe('engine-ui dual entry', () => {
     expect(typeof mountUi).toBe('function');
   });
 
+  it('keeps source authoring and prepared Pack loading as separate GUID authorities', () => {
+    const source = importUiSource({
+      guid: 'source-ui-guid',
+      html: '<div data-ui-part="root">source</div>',
+      css: '.root{}',
+    });
+    const prepared = createUiLoader().load({
+      guid: 'prepared-ui-guid',
+      kind: 'ui',
+      payload: { guid: 'prepared-ui-guid', html: '<div>prepared</div>', css: '.ui{}' },
+      refs: [],
+      artifacts: {},
+    });
+
+    expect(source.ok).toBe(true);
+    expect(prepared.ok).toBe(true);
+    if (source.ok && prepared.ok) {
+      expect(source.value.assets[0]?.guid).toBe('source-ui-guid');
+      expect(prepared.value.guid).toBe('prepared-ui-guid');
+      expect(source.value.assets[0]?.guid).not.toBe(prepared.value.guid);
+    }
+  });
+
   it('loads the Pack v2 UI envelope and keeps the payload projection stable', () => {
     const loaded = createUiLoader().load({
       guid: 'hud-guid',

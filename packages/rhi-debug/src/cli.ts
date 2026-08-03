@@ -32,6 +32,7 @@ import { DebugError } from './errors';
 import { buildFrameModel } from './frame-model';
 import { findEventIdxForDraw } from './inspect-core';
 import { inspectAt as inspectAtCore } from './inspector';
+import { analyzeMergeability } from './mergeability';
 import type { CreateShaderModuleFn } from './recorder';
 import { createReplay } from './replayer';
 import { deserializeTape } from './tape-format';
@@ -191,6 +192,30 @@ export function getSummaryHelp(): string {
     'Output:',
     '  JSON FrameModel with meta (totalDraws/totalPasses/hasCompute), tree, draws',
     '  (each with pipelineState), commands, and resources.',
+  ].join('\n');
+}
+
+/**
+ * Mergeability help text. This is intentionally a separate command from
+ * `summary`: summary describes the whole tape, while this command answers one
+ * bounded performance question without implying that batching is safe.
+ */
+export function getMergeabilityHelp(): string {
+  return [
+    'Usage: mergeability <tapePath>',
+    '',
+    'Report conservative, structurally mergeable adjacent drawIndexed runs',
+    'from an on-disk tape. This is pure analysis: it never rewrites the tape',
+    'and does not measure GPU time.',
+    '',
+    'Arguments:',
+    '  tapePath     Path to the .tape.bin file (its .report.json sits alongside).',
+    '',
+    'Example:',
+    '  forgeax-rhi-debug mergeability .forgeax-debug/<runId>/frame-0.tape.bin',
+    '',
+    'Output:',
+    '  JSON report with candidate runs, theoretical draw reduction, and excluded draws.',
   ].join('\n');
 }
 
@@ -639,6 +664,15 @@ export function runSummary(opts: { readonly tapePath: string }): SummaryResult {
   return { ok: true, value: JSON.stringify(wire, null, 2) };
 }
 
+/** Return the pure structural mergeability report for an on-disk tape. */
+export function runMergeability(opts: { readonly tapePath: string }): SummaryResult {
+  const tapeLoad = loadTapeFromDisk(opts.tapePath);
+  if (!tapeLoad.ok) {
+    return { ok: false, error: tapeLoad.error };
+  }
+  return { ok: true, value: JSON.stringify(analyzeMergeability(tapeLoad.tape), null, 2) };
+}
+
 // ============================================================================
 // Main CLI entry (parseArgs-style dispatch)
 // ============================================================================
@@ -652,7 +686,7 @@ export function runSummary(opts: { readonly tapePath: string }): SummaryResult {
  *   node cli.mjs inspect-offline <tapePath> 42 --fields=bindings,rt
  */
 const USAGE =
-  'Usage: rhi-debug-cli <capture-frame|inspect-at|inspect-offline|summary|trigger-browser> [args...]\n';
+  'Usage: rhi-debug-cli <capture-frame|inspect-at|inspect-offline|summary|mergeability|trigger-browser> [args...]\n';
 
 export async function main(argv: string[]): Promise<void> {
   const args = argv.slice(2); // skip node and script path
@@ -672,6 +706,8 @@ export async function main(argv: string[]): Promise<void> {
     await inspectOfflineDispatch(args.slice(1));
   } else if (subcommand === 'summary') {
     summaryDispatch(args.slice(1));
+  } else if (subcommand === 'mergeability') {
+    mergeabilityDispatch(args.slice(1));
   } else if (subcommand === 'trigger-browser') {
     await triggerBrowserDispatch(args.slice(1));
   } else {
@@ -679,6 +715,42 @@ export async function main(argv: string[]): Promise<void> {
     process.stderr.write(USAGE);
     process.exit(1);
   }
+}
+
+/** Parse mergeability arguments and dispatch the pure offline report. */
+function mergeabilityDispatch(args: string[]): void {
+  let tapePath: string | undefined;
+
+  for (const arg of args) {
+    if (arg === '--help' || arg === '-h') {
+      process.stdout.write(getMergeabilityHelp());
+      process.stdout.write('\n');
+      process.exit(0);
+    }
+    if (!arg.startsWith('--')) {
+      if (tapePath === undefined) {
+        tapePath = arg;
+        continue;
+      }
+      process.stderr.write(`Unknown extra argument: ${arg}\n`);
+      process.exit(1);
+    }
+    process.stderr.write(`Unknown argument: ${arg}\n`);
+    process.exit(1);
+  }
+
+  if (tapePath === undefined) {
+    process.stderr.write('Missing required argument: <tapePath>\n');
+    process.exit(1);
+  }
+
+  const result = runMergeability({ tapePath });
+  if (!result.ok) {
+    process.stderr.write(`Error: [${result.error.code}] ${result.error.hint}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(result.value);
+  process.stdout.write('\n');
 }
 
 /**

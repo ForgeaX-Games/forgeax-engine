@@ -191,8 +191,20 @@ function readLiveMaterialSnapshot(root) {
   const stableEvidence = (evidence) => ({
     enabled: evidence.enabled,
     applied: evidence.applied,
+    beforeMaterialHandle: evidence.beforeMaterialHandle,
+    afterMaterialHandle: evidence.afterMaterialHandle,
+    beforeTextureHandles: evidence.beforeTextureHandles,
+    afterTextureHandles: evidence.afterTextureHandles,
     baseColorSlotChanged: evidence.baseColorSlotChanged,
     detailSlotChanged: evidence.detailSlotChanged,
+    inheritanceBacked: evidence.inheritanceBacked,
+    sourceRootGuid: evidence.sourceRootGuid,
+    sourceDerivedGuid: evidence.sourceDerivedGuid,
+    sourceRootArtifactDigest: evidence.sourceRootArtifactDigest,
+    sourceArtifactDigest: evidence.sourceArtifactDigest,
+    sourceRootCookInputDigest: evidence.sourceRootCookInputDigest,
+    sourceCookInputDigest: evidence.sourceCookInputDigest,
+    falsifierMarker: evidence.falsifierMarker,
     afterComponentMaterialMatchesAfter:
       evidence.afterComponentMaterialHandle === evidence.afterMaterialHandle,
     resizeHistory: evidence.resizeHistory,
@@ -204,6 +216,21 @@ function readLiveMaterialSnapshot(root) {
     beforeEvidence: stableEvidence(leg.beforeEvidence),
     afterEvidence: stableEvidence(leg.afterEvidence),
     dawn: leg.rhi.dawnReadback,
+    rhiTopology: (() => {
+      const report = JSON.parse(readFileSync(leg.rhi.report, 'utf8'));
+      return {
+        msaaTextureResourceCount: report.events.filter(
+          (event) => event.kind === 'createTexture' && event.desc?.sampleCount === 4,
+        ).length,
+        resolveTargetCount: report.events.filter(
+          (event) =>
+            event.kind === 'beginRenderPass' &&
+            event.colorAttachmentResolveTargetHandleIds?.some(
+              (handleId) => handleId !== undefined && handleId !== null,
+            ),
+        ).length,
+      };
+    })(),
     draws: leg.rhi.draws,
     inspectedDraw: leg.rhi.inspect?.drawCall
       ? {
@@ -504,6 +531,109 @@ if (repeatabilityDiff(normalSlotLiveRuns[0], normalSlotLiveRuns[1]) !== undefine
 }
 console.log(
   `[m3-programmable] custom material normal-slot live mutation: PASS repeats=2 changedPixels=${normalSlotLiveRuns[0].browser.delta.changedPixels} meanRgbDelta=${normalSlotLiveRuns[0].browser.delta.meanRgbDelta.toFixed(4)} dawnChangedPixels=${normalSlotLiveRuns[0].dawn.delta.changedPixels}`,
+);
+
+const inheritanceLiveArtifactRoot = resolve(
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+    resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+  'custom-material-inheritance-live-rebind',
+);
+mkdirSync(inheritanceLiveArtifactRoot, { recursive: true });
+const inheritanceLiveRuns = [];
+for (const repeat of ['first', 'second']) {
+  const artifactDir = resolve(inheritanceLiveArtifactRoot, repeat);
+  const browser = runCustomMaterialBrowser(`custom material inheritance live rebind ${repeat}`, {
+    FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND: '1',
+    FORGEAX_MATERIAL_ARTIFACT_DIR: artifactDir,
+  });
+  const browserEvidence = browser.status === 0 ? readLastJsonLine(browser.output) : undefined;
+  const browserBeforePath = resolve(artifactDir, 'live-inheritance-before.png');
+  const browserAfterPath = resolve(artifactDir, 'live-inheritance-after.png');
+  const browserDelta =
+    browser.status === 0 && existsSync(browserBeforePath) && existsSync(browserAfterPath)
+      ? comparePngs(browserBeforePath, browserAfterPath)
+      : undefined;
+  const falsifier = runCustomMaterialBrowser(`custom material inheritance live rebind falsifier ${repeat}`, {
+    FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND: '1',
+    FORGEAX_FALSIFY_LIVE_INHERITANCE_REBIND: '1',
+    FORGEAX_MATERIAL_ARTIFACT_DIR: resolve(artifactDir, 'falsifier'),
+  });
+  const dawn = run(
+    `custom material inheritance live Dawn ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    { FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND: '1', FORGEAX_MATERIAL_ARTIFACT_DIR: artifactDir },
+  );
+  const dawnEvidence = dawn.status === 0 ? readLastJsonLine(dawn.output) : undefined;
+  const dawnFalsifier = run(
+    `custom material inheritance live Dawn falsifier ${repeat}`,
+    ['--filter', '@forgeax/hello-custom-shader', 'run', 'smoke:normal-slot-live-dawn'],
+    {
+      FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND: '1',
+      FORGEAX_FALSIFY_LIVE_INHERITANCE_REBIND: '1',
+      FORGEAX_MATERIAL_ARTIFACT_DIR: resolve(artifactDir, 'falsifier-dawn'),
+    },
+  );
+  if (
+    browser.status !== 0 ||
+    browserEvidence?.liveMutation?.inheritanceBacked !== true ||
+    browserEvidence?.liveMutation?.applied !== true ||
+    browserEvidence?.liveMutation?.sourceDerivedGuid !== browserEvidence?.derivedGuid ||
+    browserEvidence?.liveMutation?.sourceArtifactDigest !== browserEvidence?.derivedArtifactDigest ||
+    browserEvidence?.liveMutation?.sourceCookInputDigest !== browserEvidence?.derivedCookInputDigest ||
+    browserEvidence?.liveMutation?.beforeMaterialHandle === browserEvidence?.liveMutation?.afterMaterialHandle ||
+    browserEvidence?.liveMutation?.beforeTextureHandles?.[0] === browserEvidence?.liveMutation?.afterTextureHandles?.[0] ||
+    browserEvidence?.liveMutation?.beforeTextureHandles?.[1] === browserEvidence?.liveMutation?.afterTextureHandles?.[1] ||
+    browserDelta?.meanRgbDelta <= 0.01 ||
+    falsifier.status === 0 ||
+    !falsifier.output.includes('FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind') ||
+    dawn.status !== 0 ||
+    dawnEvidence?.material?.inheritanceBacked !== true ||
+    dawnEvidence?.material?.sourceArtifactDigest !== dawnEvidence?.derivedArtifactDigest ||
+    dawnEvidence?.material?.sourceCookInputDigest !== dawnEvidence?.derivedCookInputDigest ||
+    dawnEvidence?.material?.beforeTextureHandles?.[0] === dawnEvidence?.material?.afterTextureHandles?.[0] ||
+    dawnEvidence?.material?.beforeTextureHandles?.[1] === dawnEvidence?.material?.afterTextureHandles?.[1] ||
+    dawnEvidence?.delta?.meanRgbDelta <= 0.001 ||
+    dawnFalsifier.status === 0 ||
+    !dawnFalsifier.output.includes('FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind')
+  ) {
+    console.error(
+      `[m3-programmable] custom material inheritance live rebind ${repeat}: FAIL - ${JSON.stringify({ browserStatus: browser.status, browserEvidence, browserDelta, falsifierStatus: falsifier.status, dawnStatus: dawn.status, dawnEvidence, dawnFalsifierStatus: dawnFalsifier.status })}`,
+    );
+    process.exit(1);
+  }
+  const snapshot = {
+    browser: {
+      rootArtifactDigest: browserEvidence.rootArtifactDigest,
+      derivedArtifactDigest: browserEvidence.derivedArtifactDigest,
+      rootCookInputDigest: browserEvidence.rootCookInputDigest,
+      derivedCookInputDigest: browserEvidence.derivedCookInputDigest,
+      mutation: browserEvidence.liveMutation,
+      beforeSha256: sha256File(browserBeforePath),
+      afterSha256: sha256File(browserAfterPath),
+      delta: browserDelta,
+    },
+    dawn: {
+      rootArtifactDigest: dawnEvidence.rootArtifactDigest,
+      derivedArtifactDigest: dawnEvidence.derivedArtifactDigest,
+      rootCookInputDigest: dawnEvidence.rootCookInputDigest,
+      derivedCookInputDigest: dawnEvidence.derivedCookInputDigest,
+      material: dawnEvidence.material,
+      before: dawnEvidence.before,
+      after: dawnEvidence.after,
+      delta: dawnEvidence.delta,
+    },
+  };
+  writeFileSync(resolve(inheritanceLiveArtifactRoot, `repeat-${repeat}.json`), `${JSON.stringify(snapshot, null, 2)}\n`);
+  inheritanceLiveRuns.push(snapshot);
+}
+if (repeatabilityDiff(inheritanceLiveRuns[0], inheritanceLiveRuns[1]) !== undefined) {
+  console.error(
+    `[m3-programmable] custom material inheritance live rebind repeatability: FAIL - ${JSON.stringify({ first: inheritanceLiveRuns[0], second: inheritanceLiveRuns[1] })}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] custom material inheritance live rebind: PASS repeats=2 changedPixels=${inheritanceLiveRuns[0].browser.delta.changedPixels} meanRgbDelta=${inheritanceLiveRuns[0].browser.delta.meanRgbDelta.toFixed(4)} dawnChangedPixels=${inheritanceLiveRuns[0].dawn.delta.changedPixels}`,
 );
 
 const materialResizeArtifactRoot = resolve(
@@ -1008,6 +1138,189 @@ function runNoMsaaLiveMaterialRepeatability(startVariant) {
 }
 runNoMsaaLiveMaterialRepeatability('true');
 runNoMsaaLiveMaterialRepeatability('false');
+
+const composedInheritanceLiveArtifactRoot =
+  process.env.FORGEAX_M3_ARTIFACT_DIR ??
+  resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'inheritance-live-material-composed-repeatability');
+const composedInheritanceLiveRuns = [];
+for (const pass of ['first', 'second']) {
+  const result = run(
+    `browser composed inherited material rebind ${pass}`,
+    ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
+    {
+      FORGEAX_M3_INHERITANCE_LIVE_MATERIAL: '1',
+      FORGEAX_M3_MSAA: '1',
+      FORGEAX_M3_START_VARIANT: 'true',
+      FORGEAX_M3_RESIZE_CHURN: '1',
+      FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+      FORGEAX_M3_ARTIFACT_DIR: resolve(composedInheritanceLiveArtifactRoot, pass),
+    },
+  );
+  composedInheritanceLiveRuns.push({
+    pass,
+    result,
+    snapshot: readLiveMaterialSnapshot(resolve(composedInheritanceLiveArtifactRoot, pass)),
+  });
+}
+for (const runResult of composedInheritanceLiveRuns) {
+  if (
+    runResult.result.status !== 0 ||
+    !runResult.result.output.includes('[m3-live-material] PASS pipeline=custom post=inversion msaa=true startVariant=true') ||
+    !runResult.result.output.includes('normalSlots=true/true') ||
+    !runResult.result.output.includes('falsifierSlots=false/false') ||
+    !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
+  ) {
+    console.error(`[m3-programmable] composed inherited material rebind ${runResult.pass}: FAIL`);
+    process.exit(1);
+  }
+}
+const firstComposedInheritanceLive = composedInheritanceLiveRuns[0].snapshot;
+const secondComposedInheritanceLive = composedInheritanceLiveRuns[1].snapshot;
+if (repeatabilityDiff(firstComposedInheritanceLive, secondComposedInheritanceLive) !== undefined) {
+  console.error(
+    `[m3-programmable] composed inherited material rebind repeatability: FAIL - ${JSON.stringify({ first: firstComposedInheritanceLive, second: secondComposedInheritanceLive })}`,
+  );
+  process.exit(1);
+}
+for (const leg of ['normal', 'falsifier']) {
+  const value = firstComposedInheritanceLive[leg];
+  if (
+    value.before.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+    value.after.variant !== 'M3_MULTI_UV_VARIANT=true' ||
+    value.after.pipeline !== 'M3_PIPELINE=custom' ||
+    value.after.post !== 'M3_POST_EFFECT=inversion' ||
+    value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
+    value.draws === 0 ||
+    value.inspectedDraw === undefined ||
+    value.dawn.nonBlackPixelCount === 0
+  ) {
+    console.error(`[m3-programmable] composed inherited material RHI/Dawn evidence: FAIL - ${JSON.stringify({ leg, value })}`);
+    process.exit(1);
+  }
+}
+const normalInheritedEvidence = firstComposedInheritanceLive.normal.afterEvidence;
+const falsifierInheritedEvidence = firstComposedInheritanceLive.falsifier.afterEvidence;
+if (
+  normalInheritedEvidence.inheritanceBacked !== true ||
+  normalInheritedEvidence.sourceRootGuid === null ||
+  normalInheritedEvidence.sourceDerivedGuid === null ||
+  normalInheritedEvidence.sourceRootGuid === normalInheritedEvidence.sourceDerivedGuid ||
+  normalInheritedEvidence.sourceRootArtifactDigest !== normalInheritedEvidence.sourceArtifactDigest ||
+  normalInheritedEvidence.sourceRootCookInputDigest !== normalInheritedEvidence.sourceCookInputDigest ||
+  normalInheritedEvidence.beforeMaterialHandle === normalInheritedEvidence.afterMaterialHandle ||
+  normalInheritedEvidence.beforeTextureHandles[0] === normalInheritedEvidence.afterTextureHandles[0] ||
+  normalInheritedEvidence.beforeTextureHandles[1] === normalInheritedEvidence.afterTextureHandles[1] ||
+  normalInheritedEvidence.afterComponentMaterialMatchesAfter !== true ||
+  firstComposedInheritanceLive.normal.delta.changed < 1000 ||
+  falsifierInheritedEvidence.inheritanceBacked !== true ||
+  falsifierInheritedEvidence.beforeMaterialHandle === falsifierInheritedEvidence.afterMaterialHandle ||
+  falsifierInheritedEvidence.beforeTextureHandles[0] !== falsifierInheritedEvidence.afterTextureHandles[0] ||
+  falsifierInheritedEvidence.beforeTextureHandles[1] !== falsifierInheritedEvidence.afterTextureHandles[1] ||
+  falsifierInheritedEvidence.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind' ||
+  firstComposedInheritanceLive.falsifier.delta.changed !== 0
+) {
+  console.error(
+    `[m3-programmable] composed inherited material oracle: FAIL - ${JSON.stringify(firstComposedInheritanceLive)}`,
+  );
+  process.exit(1);
+}
+console.log(
+  `[m3-programmable] composed inherited material rebind repeatability: PASS normalChanged=${firstComposedInheritanceLive.normal.delta.changed} falsifierChanged=${firstComposedInheritanceLive.falsifier.delta.changed} dawnSha=${firstComposedInheritanceLive.normal.dawn.sha256}`,
+);
+
+function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
+  const switchedVariant = startVariant === 'true' ? 'false' : 'true';
+  const artifactRoot = resolve(
+    process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+    `inheritance-live-material-composed-no-msaa-start-${startVariant}-repeatability`,
+  );
+  const runs = [];
+  for (const pass of ['first', 'second']) {
+    const artifactDir = resolve(artifactRoot, pass);
+    runs.push({
+      pass,
+      result: run(
+        `browser composed inherited material no-MSAA startup-${startVariant} rebind ${pass}`,
+        ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
+        {
+          FORGEAX_M3_INHERITANCE_LIVE_MATERIAL: '1',
+          FORGEAX_M3_LIVE_VARIANT_SWITCH: '1',
+          FORGEAX_M3_MSAA: '0',
+          FORGEAX_M3_START_VARIANT: startVariant,
+          FORGEAX_M3_RESIZE_CHURN: '1',
+          FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+          FORGEAX_M3_ARTIFACT_DIR: artifactDir,
+        },
+      ),
+      snapshot: readLiveMaterialSnapshot(artifactDir),
+    });
+  }
+  for (const runResult of runs) {
+    if (
+      runResult.result.status !== 0 ||
+      !runResult.result.output.includes(`[m3-live-material] PASS pipeline=custom post=inversion msaa=false startVariant=${startVariant} variantSwitch=true`) ||
+      !runResult.result.output.includes('normalSlots=true/true') ||
+      !runResult.result.output.includes('falsifierSlots=false/false') ||
+      !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
+    ) {
+      console.error(`[m3-programmable] composed inherited material no-MSAA startup-${startVariant} ${runResult.pass}: FAIL`);
+      process.exit(1);
+    }
+  }
+  const first = runs[0].snapshot;
+  const second = runs[1].snapshot;
+  if (repeatabilityDiff(first, second) !== undefined) {
+    console.error(
+      `[m3-programmable] composed inherited material no-MSAA startup-${startVariant} repeatability: FAIL - ${JSON.stringify({ first, second })}`,
+    );
+    process.exit(1);
+  }
+  const expectedRenderedVariant = `M3_MULTI_UV_VARIANT=${switchedVariant}`;
+  for (const [leg, value] of Object.entries(first)) {
+    if (
+      value.before.variant !== expectedRenderedVariant ||
+      value.after.variant !== expectedRenderedVariant ||
+      value.after.pipeline !== 'M3_PIPELINE=custom' ||
+      value.after.post !== 'M3_POST_EFFECT=inversion' ||
+      value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
+      value.rhiTopology.msaaTextureResourceCount !== 0 ||
+      value.rhiTopology.resolveTargetCount !== 0 ||
+      value.draws !== 2 ||
+      value.inspectedDraw === undefined ||
+      value.dawn.nonBlackPixelCount === 0
+    ) {
+      console.error(`[m3-programmable] composed inherited material no-MSAA startup-${startVariant} ${leg} topology: FAIL - ${JSON.stringify(value)}`);
+      process.exit(1);
+    }
+  }
+  const normal = first.normal;
+  const falsifier = first.falsifier;
+  if (
+    normal.afterEvidence.inheritanceBacked !== true ||
+    normal.afterEvidence.baseColorSlotChanged !== true ||
+    normal.afterEvidence.detailSlotChanged !== true ||
+    normal.afterEvidence.afterComponentMaterialMatchesAfter !== true ||
+    normal.afterEvidence.sourceRootArtifactDigest !== normal.afterEvidence.sourceArtifactDigest ||
+    normal.afterEvidence.sourceRootCookInputDigest !== normal.afterEvidence.sourceCookInputDigest ||
+    normal.delta.changed < 1000 ||
+    falsifier.afterEvidence.inheritanceBacked !== true ||
+    falsifier.afterEvidence.baseColorSlotChanged !== false ||
+    falsifier.afterEvidence.detailSlotChanged !== false ||
+    falsifier.afterEvidence.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind' ||
+    falsifier.delta.changed !== 0
+  ) {
+    console.error(
+      `[m3-programmable] composed inherited material no-MSAA startup-${startVariant} oracle: FAIL - ${JSON.stringify(first)}`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `[m3-programmable] composed inherited material no-MSAA startup-${startVariant} repeatability: PASS normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} dawnSha=${normal.dawn.sha256}`,
+  );
+}
+
+runComposedInheritanceNoMsaaStartRepeatability('false');
+runComposedInheritanceNoMsaaStartRepeatability('true');
 
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',

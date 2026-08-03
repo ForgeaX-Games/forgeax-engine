@@ -42,6 +42,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DdcEntryStore, ddcOutputDigest } from '@forgeax/engine-ddc/entry-store';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { parseImage } from '@forgeax/engine-image/parse-image';
 import type { PackIndexEntry } from '@forgeax/engine-types';
@@ -109,6 +110,40 @@ function woodImageMeta(): string {
 const MAIN_JS = `// minimal entry; pack plugin emits assets independently
 console.log('import-emit-test entry');
 `;
+
+describe('DDC consumer closure', () => {
+  it('uses one immutable entry shape for a cold write and a warm read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-ddc-'));
+    try {
+      const store = new DdcEntryStore(root);
+      const entryBase = {
+        key: 'a'.repeat(64),
+        guid: WOOD_GUID,
+        payload: { kind: 'texture' },
+        refs: [],
+        artifacts: {
+          payload: { mediaType: 'application/octet-stream', bytes: new Uint8Array([1, 2, 3]) },
+        },
+        receipt: {
+          guid: WOOD_GUID,
+          key: 'a'.repeat(64),
+          producer: 'image-importer@4',
+          inputFingerprint: 'wood-source',
+          outputDigest: '',
+        },
+      };
+      const entry = {
+        ...entryBase,
+        receipt: { ...entryBase.receipt, outputDigest: ddcOutputDigest(entryBase) },
+      };
+      await expect(store.write(entry)).resolves.toMatchObject({ result: 'published' });
+      await expect(store.read(entry.key)).resolves.toEqual(entry);
+      await expect(store.read(entry.key)).resolves.toEqual(entry);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 let originalCwd: string;
 let tmpRoot: string;

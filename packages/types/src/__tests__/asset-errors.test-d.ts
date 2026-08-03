@@ -20,6 +20,16 @@
 //          plan-decisions §2.1 (L-1 hint literal lock-in).
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import type {
+  AssetStageError,
+  AuthorValidationError,
+  DdcValidationError,
+  EditorCapabilityError,
+  ExternalDeclarationError,
+  ImportStageError,
+  NativeCookError,
+  RuntimeParseError,
+} from '../asset-errors.js';
 import { ASSET_ERROR_HINTS, type AssetErrorCode } from '../index';
 
 describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-region-index-out-of-range + M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated)', () => {
@@ -178,5 +188,27 @@ describe('asset contract errors', () => {
       readonly hint: string;
       readonly detail: object;
     }>();
+  });
+});
+
+describe('asset authoring seven-stage errors', () => {
+  it('keeps every stage closed and structurally recoverable', () => {
+    type Stages = AssetStageError['stage'];
+    expectTypeOf<Stages>().toEqualTypeOf<
+      | 'author-validation'
+      | 'external-declaration'
+      | 'import'
+      | 'native-cook'
+      | 'ddc-validation'
+      | 'runtime-parse'
+      | 'editor-capability'
+    >();
+    expectTypeOf<AuthorValidationError['recovery']>().toHaveProperty('action');
+    expectTypeOf<ExternalDeclarationError['detail']>().toHaveProperty('sourceKey');
+    expectTypeOf<ImportStageError['code']>().toEqualTypeOf<'import-failed'>();
+    expectTypeOf<NativeCookError['code']>().toEqualTypeOf<'native-cook-failed'>();
+    expectTypeOf<DdcValidationError['code']>().toEqualTypeOf<'ddc-validation-failed'>();
+    expectTypeOf<RuntimeParseError['code']>().toEqualTypeOf<'runtime-parse-failed'>();
+    expectTypeOf<EditorCapabilityError['code']>().toEqualTypeOf<'editor-capability-unavailable'>();
   });
 });

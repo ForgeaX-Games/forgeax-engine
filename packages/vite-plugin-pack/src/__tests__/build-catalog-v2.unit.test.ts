@@ -6,8 +6,22 @@ describe('catalog builder v2', () => {
   it('projects every asset in one package to the same packageUrl', () => {
     const rows = projectPackageCatalog(
       [
-        { guid: 'a', kind: 'mesh', sourcePath: 'model.glb', name: 'body', refs: ['b'] },
-        { guid: 'b', kind: 'texture', sourcePath: 'model.glb', name: 'albedo', refs: [] },
+        {
+          guid: 'a',
+          kind: 'mesh',
+          sourcePath: 'model.glb',
+          name: 'body',
+          refs: ['b'],
+          authoring: authoringCapabilityForAssetKind('mesh'),
+        },
+        {
+          guid: 'b',
+          kind: 'texture',
+          sourcePath: 'model.glb',
+          name: 'albedo',
+          refs: [],
+          authoring: authoringCapabilityForAssetKind('texture'),
+        },
       ],
       '/preview/packages/model',
     );
@@ -21,6 +35,14 @@ describe('catalog builder v2', () => {
         refs: ['b'],
         packageUrl: '/preview/packages/model',
         authoring: authoringCapabilityForAssetKind('mesh'),
+        subject: 'internal-asset',
+        execution: 'direct',
+        lifecycle: 'current',
+        projection: expect.objectContaining({
+          subject: 'internal-asset',
+          execution: 'direct',
+          lifecycle: 'current',
+        }),
       },
       {
         guid: 'b',
@@ -30,6 +52,14 @@ describe('catalog builder v2', () => {
         refs: [],
         packageUrl: '/preview/packages/model',
         authoring: authoringCapabilityForAssetKind('texture'),
+        subject: 'internal-asset',
+        execution: 'direct',
+        lifecycle: 'current',
+        projection: expect.objectContaining({
+          subject: 'internal-asset',
+          execution: 'direct',
+          lifecycle: 'current',
+        }),
       },
     ]);
   });
@@ -45,7 +75,7 @@ describe('catalog builder v2', () => {
     expect(row).not.toHaveProperty('metadata');
     expect(row).not.toHaveProperty('compression');
     expect(row).not.toHaveProperty('artifacts');
-    expect(row?.authoring).toEqual(authoringCapabilityForAssetKind('host-kind'));
+    expect(row).not.toHaveProperty('authoring');
   });
 
   it('preserves a producer override for a new kind without consumer knowledge', () => {

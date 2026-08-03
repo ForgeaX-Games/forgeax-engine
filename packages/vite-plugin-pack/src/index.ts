@@ -1,6 +1,6 @@
 // @forgeax/engine-vite-plugin-pack — Vite plugin for the forgeax engine asset package system.
 //
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
@@ -12,26 +12,32 @@ import {
   runImport,
 } from '@forgeax/engine-import';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
+import { type NativeCooker, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
-import type { Importer, PackIndexEntry } from '@forgeax/engine-types';
+import { catalogOperationsFor, type Importer, type PackIndexEntry } from '@forgeax/engine-types';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
+import { projectAssetProduction } from './build/asset-production.js';
 import { buildCatalogProjection, type CatalogLegacyProjection } from './build-catalog.js';
 import { type AssetHostRefreshPolicy, CATALOG_DELTA_EVENT } from './catalog-client.js';
 import { calculateCatalogDelta } from './catalog-watch.js';
 import { compressArtifact } from './compress-artifact.js';
+import { readDdcMetrics, resolveDdcRoot } from './ddc-cache.js';
 import { createAssetChangedEvent, emitAssetChanged } from './dev/asset-change-events.js';
 import { createPackageRoutes } from './dev/package-routes.js';
 import { createUiDependencyIndex } from './dev/ui-dependency-index.js';
 import { buildGuidToMetaMap, buildUrlToAbsolute, watchDevRoots } from './dev/watcher.js';
 import {
-  logicalPackageFromImportProduct,
   productAssetByGuid,
   productAssetsByGuid,
   productBinaryArtifacts,
   projectUiBuildArtifacts,
 } from './import-products.js';
 import { importTextureEntry } from './import-texture.js';
-import { finalizePackage } from './package-finalizer.js';
+import {
+  finalizePackage,
+  type LogicalPackage,
+  type LogicalPackageAsset,
+} from './package-finalizer.js';
 import {
   loadSharedPackInput,
   projectPackIndexUrl,
@@ -40,6 +46,10 @@ import {
 } from './shared-build-inputs.js';
 import { dedupeFinalizedUiEntries, finalizeUiArtifact } from './ui-pack-finalizer.js';
 
+export {
+  type AssetProductionProjection,
+  projectAssetProduction,
+} from './build/asset-production.js';
 export { CATALOG_DELTA_EVENT, createCatalogClient, reloadAssetHost } from './catalog-client.js';
 export { ASSET_CHANGED_EVENT, type AssetChangedPayload } from './dev/events.js';
 export {
@@ -48,7 +58,6 @@ export {
   type MaterialCookCatalogEntry,
   type MaterialCookFinalizerOptions,
   type MaterialCookRequest,
-  type MaterialCookResult,
   writeMaterialCookResult,
 } from './material/index.js';
 
@@ -59,6 +68,54 @@ export {
 // `import { PackIndexEntry } from '@forgeax/engine-vite-plugin-pack'` paths
 // working without a same-PR API break.
 export type { PackIndexEntry };
+
+const COOKED_CURRENT_PROJECTION = {
+  subject: 'imported-output' as const,
+  execution: 'cooked' as const,
+  lifecycle: 'current' as const,
+  projection: {
+    subject: 'imported-output' as const,
+    execution: 'cooked' as const,
+    lifecycle: 'current' as const,
+    operations: catalogOperationsFor({
+      subject: 'imported-output',
+      execution: 'cooked',
+      lifecycle: 'current',
+    }),
+  },
+};
+
+const DIRECT_CURRENT_PROJECTION = {
+  subject: 'internal-asset' as const,
+  execution: 'direct' as const,
+  lifecycle: 'current' as const,
+  projection: {
+    subject: 'internal-asset' as const,
+    execution: 'direct' as const,
+    lifecycle: 'current' as const,
+    operations: catalogOperationsFor({
+      subject: 'internal-asset',
+      execution: 'direct',
+      lifecycle: 'current',
+    }),
+  },
+};
+
+const AUTHORED_COOKED_CURRENT_PROJECTION = {
+  subject: 'internal-asset' as const,
+  execution: 'cooked' as const,
+  lifecycle: 'current' as const,
+  projection: {
+    subject: 'internal-asset' as const,
+    execution: 'cooked' as const,
+    lifecycle: 'current' as const,
+    operations: catalogOperationsFor({
+      subject: 'internal-asset',
+      execution: 'cooked',
+      lifecycle: 'current',
+    }),
+  },
+};
 
 // Minimal structural interface for Vite Plugin (duck-typed; no vite import needed).
 //
@@ -148,6 +205,8 @@ export interface PluginPackOptions {
    * mounted (dev-only lazy import is disabled).
    */
   readonly importers?: readonly Importer[] | undefined;
+  /** Native authored-Pack producers. Cooked Pack rows fail fast without one. */
+  readonly cookers?: readonly NativeCooker[] | undefined;
   /** Host-owned reaction to a real watched-byte change; absent means no reload. */
   readonly refresh?: AssetHostRefreshPolicy | undefined;
 }
@@ -179,7 +238,7 @@ function mimeFromPath(path: string): 'image/jpeg' | 'image/png' | undefined {
 // GUIDs are globally unique (UUIDv5/v7 per sub-asset), so no collision with the
 // build arm's `dist/assets/<guid>-<hash>.bin` Rollup namespace.
 function ddcPath(cwd: string, guidLower: string): string {
-  return resolve(cwd, 'node_modules/.cache/forgeax-ddc', `${guidLower}.bin`);
+  return resolve(resolveDdcRoot(cwd), `${guidLower}.bin`);
 }
 
 /**
@@ -277,6 +336,80 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     new Map();
   const DEV_PACK_PREFIX = '/__forgeax-ddc/';
   const packageRoutes = createPackageRoutes();
+  const nativeCookerRegistry = new NativeCookerRegistry();
+  for (const cooker of opts.cookers ?? []) nativeCookerRegistry.register(cooker);
+
+  interface AuthoredPackAssetInput {
+    readonly guid: string;
+    readonly kind: string;
+    readonly name?: string;
+    readonly execution?: 'direct' | 'cooked';
+    readonly payload: Record<string, unknown>;
+    readonly refs?: readonly string[];
+  }
+
+  interface AuthoredPackInput {
+    readonly schemaVersion?: string;
+    readonly assets?: readonly AuthoredPackAssetInput[];
+  }
+
+  interface CookedAuthoredPack {
+    readonly logicalPackage: LogicalPackage;
+    readonly refsByGuid: ReadonlyMap<string, readonly string[]>;
+  }
+
+  async function readCookedAuthoredPack(
+    sourcePath: string,
+  ): Promise<CookedAuthoredPack | undefined> {
+    const parsed = JSON.parse(readFileSync(sourcePath, 'utf-8')) as AuthoredPackInput;
+    if (parsed.schemaVersion !== '2.0.0' || parsed.assets === undefined) return undefined;
+    const assets: LogicalPackageAsset[] = [];
+    const refsByGuid = new Map<string, readonly string[]>();
+    let hasCookedAsset = false;
+    for (const asset of parsed.assets) {
+      if (asset.execution !== 'cooked') {
+        assets.push({
+          guid: asset.guid,
+          kind: asset.kind,
+          ...(asset.name === undefined ? {} : { name: asset.name }),
+          payload: asset.payload,
+          refs: asset.refs ?? [],
+          artifacts: {},
+        });
+        continue;
+      }
+      hasCookedAsset = true;
+      const result = await nativeCookerRegistry.runDraft(asset.kind, {
+        guid: asset.guid,
+        source: asset.payload,
+      });
+      if (!result.ok) {
+        throw new Error(
+          `[forgeax-pack] native cook failed for ${asset.guid}: ${result.error.code} — ${result.error.hint}`,
+        );
+      }
+      const draft = result.value;
+      const refs = [...draft.refs];
+      refsByGuid.set(asset.guid.toLowerCase(), refs);
+      assets.push({
+        guid: draft.guid,
+        kind: asset.kind,
+        ...(asset.name === undefined ? {} : { name: asset.name }),
+        payload: draft.payload as Record<string, unknown>,
+        refs,
+        artifacts: draft.artifacts,
+      });
+    }
+    if (!hasCookedAsset) return undefined;
+    return {
+      logicalPackage: {
+        schemaVersion: '2.0.0',
+        kind: 'internal-text-package',
+        assets,
+      },
+      refsByGuid,
+    };
+  }
 
   // Rollup retains every `emitFile({ source: Uint8Array })` payload until the
   // bundle is rendered. Large cooked textures can therefore turn a correct
@@ -347,9 +480,12 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       ? catalogProjection.entries
       : catalogProjection;
   }
-  function publishAuthoredDevPacks(raw: readonly PackIndexEntry[]): PackIndexEntry[] {
+  async function publishAuthoredDevPacks(
+    raw: readonly PackIndexEntry[],
+  ): Promise<PackIndexEntry[]> {
     const published = new Map<string, string>();
     const bodies = new Map<string, string>();
+    const cookedRefs = new Map<string, ReadonlyMap<string, readonly string[]>>();
     for (const entry of raw) {
       if (
         !entry.packageUrl.endsWith('.pack.json') ||
@@ -359,26 +495,57 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         continue;
       }
       const sourcePath = resolve(process.cwd(), entry.sourcePath);
+      let body: string;
+      let pack: AuthoredPackInput;
       try {
-        const body = readFileSync(sourcePath, 'utf-8');
-        const pack = JSON.parse(body) as {
-          readonly schemaVersion?: string;
-          readonly assets?: readonly { readonly guid: string }[];
-        };
-        const firstGuid = pack.assets?.[0]?.guid?.toLowerCase();
-        if (pack.schemaVersion !== '2.0.0' || firstGuid === undefined) continue;
-        const packageUrl = `${DEV_PACK_PREFIX}${firstGuid}.pack.json`;
-        published.set(entry.packageUrl, packageUrl);
-        bodies.set(packageUrl, body);
+        body = readFileSync(sourcePath, 'utf-8');
+        pack = JSON.parse(body) as AuthoredPackInput;
       } catch {
         // buildCatalog reports malformed source packs; leave this row untouched
         // so the existing catalog error remains the visible diagnostic.
+        continue;
       }
+      const firstGuid = pack.assets?.[0]?.guid?.toLowerCase();
+      if (pack.schemaVersion !== '2.0.0' || firstGuid === undefined) continue;
+      const cooked = await readCookedAuthoredPack(sourcePath);
+      const packageUrl = `${DEV_PACK_PREFIX}${firstGuid}.pack.json`;
+      published.set(entry.packageUrl, packageUrl);
+      if (cooked === undefined) {
+        bodies.set(packageUrl, body);
+        continue;
+      }
+      const finalized = await finalizePackage(
+        cooked.logicalPackage,
+        {
+          write: (path, bytes) => {
+            const cleanPath = path.replace(/^\/+/, '');
+            if (cleanPath.endsWith('.pack.json')) {
+              metaPackBodies.set(`/${cleanPath}`, new TextDecoder().decode(bytes));
+            } else {
+              devArtifactBodies.set(`${DEV_PACK_PREFIX}${cleanPath}`, {
+                bytes,
+                mimeType: mimeFromPath(cleanPath) ?? 'application/octet-stream',
+              });
+            }
+          },
+        },
+        {
+          base: '/',
+          packagePath: packageUrl.replace(/^\/+/, ''),
+          artifactPath: (guid, key) => `${guid}/${key}.bin`,
+        },
+      );
+      published.set(entry.packageUrl, finalized.packageUrl);
+      cookedRefs.set(entry.packageUrl, cooked.refsByGuid);
     }
     for (const [packageUrl, body] of bodies) metaPackBodies.set(packageUrl, body);
     return raw.map((entry) => {
       const packageUrl = published.get(entry.packageUrl);
-      return packageUrl === undefined ? entry : { ...entry, packageUrl };
+      if (packageUrl === undefined) return entry;
+      const refs = cookedRefs.get(entry.packageUrl)?.get(entry.guid.toLowerCase());
+      return refs === undefined
+        ? { ...entry, packageUrl, ...DIRECT_CURRENT_PROJECTION }
+        : { ...entry, packageUrl, ...AUTHORED_COOKED_CURRENT_PROJECTION, refs };
     });
   }
 
@@ -497,6 +664,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // imported bytes live in the DDC (binAbs), keyed into urlToAbs below by the
       // `.bin` packageUrl.
       sourcePath: raw.sourcePath,
+      ...COOKED_CURRENT_PROJECTION,
     };
     importedRows.set(guidLower, importedRow);
     const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
@@ -603,7 +771,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             ),
           }
         : runResult.value.product;
-    const logicalPackage = logicalPackageFromImportProduct(transportProduct);
+    const logicalPackage = projectAssetProduction(transportProduct).logicalPackage;
     const finalizedRoute =
       routeSubGuid === undefined
         ? undefined
@@ -705,6 +873,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           packageUrl: packUrl ?? raw.packageUrl,
           kind: raw.kind,
           sourcePath: raw.sourcePath,
+          ...COOKED_CURRENT_PROJECTION,
           // Carry the raw catalog row's derived display name (buildCatalog ->
           // deriveAssetName: source basename for GLB sub-assets) into the
           // imported row. Rebuilding the row field-by-field dropped it, so a
@@ -742,6 +911,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                 packageUrl: packUrl,
                 kind: raw.kind,
                 sourcePath: raw.sourcePath,
+                ...COOKED_CURRENT_PROJECTION,
                 // Same as the binary arm: preserve the derived display name the
                 // field-by-field rebuild would otherwise drop.
                 ...(raw.name !== undefined ? { name: raw.name } : {}),
@@ -858,10 +1028,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
     },
     async decodeImage(bytes, mimeType, importSettings) {
-      // Lazy-import the Node-only parseImage so the build path stays
-      // browser-safe at module load time (parseImage is an `@forgeax/engine-image`
-      // sub-export gated by feat-20260524-browser-safe-subexports).
+      // Lazy-import the Node-only image decoder and Basis encoder so the build
+      // path stays browser-safe at module load time. The same callback serves
+      // glTF bufferView/data-URI/external images; keeping the encode here means
+      // embedded images and standalone image sidecars share one delivery seam.
       const { parseImage } = await import('@forgeax/engine-image/parse-image');
+      const { encodeTextureToKtx2, resolveEncodeMode } = await import(
+        '@forgeax/engine-image/ktx2-encode'
+      );
       const colorSpace =
         importSettings.colorSpace === 'srgb' || importSettings.colorSpace === 'linear'
           ? importSettings.colorSpace
@@ -888,19 +1062,55 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // unsupported) or sampled the texture without sRGB decoding, which
       // washed every albedo to a uniform mid-grey on Sponza (#332 follow-up).
       const format = colorSpace === 'srgb' ? ('rgba8unorm-srgb' as const) : ('rgba8unorm' as const);
+      const requestedCompression =
+        importSettings.compressionMode === 'auto' ||
+        importSettings.compressionMode === 'etc1s' ||
+        importSettings.compressionMode === 'uastc' ||
+        importSettings.compressionMode === 'none'
+          ? importSettings.compressionMode
+          : 'none';
+      const resolvedCompression = resolveEncodeMode(requestedCompression, {
+        colorSpace,
+        isHdr: false,
+      });
+      let cookedBytes = tex.bytes;
+      let mediaType: string = mimeType;
+      let assetCodec: { name: string; profile?: string; version?: string } = {
+        name: 'rgba8',
+        version: '1',
+      };
+      if (resolvedCompression !== 'none') {
+        const encoded = await encodeTextureToKtx2(
+          tex.bytes,
+          tex.width,
+          tex.height,
+          requestedCompression,
+          { colorSpace, isHdr: false },
+        );
+        if (!encoded.ok) {
+          throw new Error(
+            `gltf embedded texture compression failed (${encoded.error.code} / ${encoded.error.mode}): ${encoded.error.reason}`,
+          );
+        }
+        cookedBytes = encoded.value.ktx2;
+        mediaType = 'image/ktx2';
+        assetCodec = { name: 'basis', profile: encoded.value.mode };
+      }
       return {
         ok: true,
         value: {
           texture: {
             kind: 'texture' as const,
-            data: tex.bytes,
+            data: cookedBytes,
             width: tex.width,
             height: tex.height,
             format,
             colorSpace,
             mipmap,
           },
-          bytes: tex.bytes,
+          bytes: cookedBytes,
+          mediaType,
+          assetCodec,
         },
       };
     },
@@ -915,7 +1125,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       buildCatalogProjection(roots, opts.base, registeredImporterKeys),
       buildGuidToMetaMap(roots),
     ])
-      .then(([rawProjection, g2m]) => {
+      .then(async ([rawProjection, g2m]) => {
         // The dev catalog passes the discoverable bare-source texture rows
         // straight through, with the per-asset import overlay applied so any
         // already-imported `.bin` row survives the rebuild (monotonic import).
@@ -925,7 +1135,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // findTextureGuidByFilename.
         installCatalogProjection({
           ...rawProjection,
-          entries: publishAuthoredDevPacks(rawProjection.entries),
+          entries: await publishAuthoredDevPacks(rawProjection.entries),
         });
         guidToMeta = g2m;
         urlToAbs = buildUrlToAbsolute(catalog, {
@@ -968,7 +1178,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                 ]);
                 installCatalogProjection({
                   ...rawProjection2,
-                  entries: publishAuthoredDevPacks(rawProjection2.entries),
+                  entries: await publishAuthoredDevPacks(rawProjection2.entries),
                 });
                 guidToMeta = g2m2;
                 urlToAbs = buildUrlToAbsolute(catalog, {
@@ -1127,7 +1337,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           );
           installCatalogProjection({
             ...refreshedProjection,
-            entries: publishAuthoredDevPacks(refreshedProjection.entries),
+            entries: await publishAuthoredDevPacks(refreshedProjection.entries),
           });
           urlToAbs = buildUrlToAbsolute(catalog, {
             cwd: process.cwd(),
@@ -1357,7 +1567,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
     if (sharedManifest !== undefined) {
       const shared = loadSharedPackInput(sharedManifest);
-      if (process.env.FORGEAX_SHARED_APP_INPUTS_MODE !== 'catalog-only') {
+      if (
+        shared.catalog !== undefined &&
+        process.env.FORGEAX_SHARED_APP_INPUTS_MODE !== 'catalog-only'
+      ) {
         if (shared.payloadRoot === undefined) {
           throw new Error(`shared pack manifest lacks payload for full mode: ${sharedManifest}`);
         }
@@ -1373,12 +1586,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           });
         }
       }
-      this.emitFile({
-        type: 'asset',
-        fileName: 'pack-index.json',
-        source: JSON.stringify(projectSharedPackCatalog(shared.catalog, opts.base)),
-      });
-      return;
+      if (shared.catalog !== undefined) {
+        this.emitFile({
+          type: 'asset',
+          fileName: 'pack-index.json',
+          source: JSON.stringify(projectSharedPackCatalog(shared.catalog, opts.base)),
+        });
+        return;
+      }
+      // A shader-only shared producer deliberately has no asset capability.
+      // Fall through to the app's own roots so pack remains the sole owner of
+      // its catalog, URL projection, and deployment payload.
     }
     const { paths } = loadAssetConfig(cwd);
     const projection = await buildCatalogProjection(roots, opts.base, registeredImporterKeys);
@@ -1436,6 +1654,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // below as allGuidToMeta).
     const guidToMetaBuild = await buildGuidToMetaMap(roots);
     const authoredPackUrls = new Map<string, string>();
+    const authoredPackUrlsBySource = new Map<string, string>();
+    const authoredCookedRefs = new Map<string, ReadonlyMap<string, readonly string[]>>();
     for (const entry of entries) {
       if (
         !entry.packageUrl.endsWith('.pack.json') ||
@@ -1448,16 +1668,42 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const source = readFileSync(sourcePath, 'utf-8');
       const parsed = JSON.parse(source) as { readonly schemaVersion?: string };
       if (parsed.schemaVersion !== '2.0.0') continue;
+      const cooked = await readCookedAuthoredPack(sourcePath);
+      if (cooked !== undefined) {
+        const firstGuid = entry.guid.toLowerCase();
+        const finalized = await finalizePackage(
+          cooked.logicalPackage,
+          { write: () => {} },
+          {
+            base: basePrefix === '' ? '/' : basePrefix,
+            packagePath: `assets/${firstGuid}.pack.json`,
+            artifactPath: (guid, key) => `${guid}/${key}.bin`,
+          },
+        );
+        for (const artifact of finalized.artifacts) {
+          await stageBuildArtifact(`assets/${artifact.path}`, artifact.bytes);
+        }
+        const packRef = this.emitFile({
+          type: 'asset',
+          name: `${firstGuid}.pack.json`,
+          originalFileName: sourcePath,
+          source: JSON.stringify(finalized.pack),
+        });
+        const packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
+        authoredPackUrls.set(entry.packageUrl, packUrl);
+        authoredPackUrlsBySource.set(entry.sourcePath, packUrl);
+        authoredCookedRefs.set(entry.packageUrl, cooked.refsByGuid);
+        continue;
+      }
       const packRef = this.emitFile({
         type: 'asset',
         name: `${entry.guid.toLowerCase()}.pack.json`,
         originalFileName: sourcePath,
         source,
       });
-      authoredPackUrls.set(
-        entry.packageUrl,
-        projectPackIndexUrl(basePrefix, this.getFileName(packRef)),
-      );
+      const packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
+      authoredPackUrls.set(entry.packageUrl, packUrl);
+      authoredPackUrlsBySource.set(entry.sourcePath, packUrl);
     }
     const importedEntries: PackIndexEntry[] = [];
     for (const entry of entries) {
@@ -1477,7 +1723,21 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           console.warn(`[forgeax-pack] ${imported.skipped}`);
         }
         const packageUrl = authoredPackUrls.get(entry.packageUrl);
-        importedEntries.push(packageUrl === undefined ? entry : { ...entry, packageUrl });
+        const cookedRefs = authoredCookedRefs.get(entry.packageUrl)?.get(entry.guid.toLowerCase());
+        importedEntries.push(
+          packageUrl === undefined
+            ? entry
+            : {
+                ...entry,
+                packageUrl,
+                ...(entry.sourcePath.endsWith('.pack.json')
+                  ? authoredCookedRefs.has(entry.packageUrl)
+                    ? AUTHORED_COOKED_CURRENT_PROJECTION
+                    : DIRECT_CURRENT_PROJECTION
+                  : COOKED_CURRENT_PROJECTION),
+                ...(cookedRefs === undefined ? {} : { refs: cookedRefs }),
+              },
+        );
         continue;
       }
       // emitFile name '<guid-lowercase>' (D-2) + originalFileName for
@@ -1592,6 +1852,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         if (entry.sourcePath.endsWith('.pack.json')) {
           let packUrl = emittedPackUrls.get(entry.sourcePath);
           if (packUrl === undefined) {
+            packUrl = authoredPackUrlsBySource.get(entry.sourcePath);
+          }
+          if (packUrl === undefined) {
             const packPath = resolve(cwd, entry.sourcePath);
             const packRef = this.emitFile({
               type: 'asset',
@@ -1600,6 +1863,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               source: await readFile(packPath, 'utf-8'),
             });
             packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
+            emittedPackUrls.set(entry.sourcePath, packUrl);
+          } else {
             emittedPackUrls.set(entry.sourcePath, packUrl);
           }
           for (let index = 0; index < importedEntries.length; index += 1) {
@@ -1675,16 +1940,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           (runResult.error.detail as { reason?: string } | undefined)?.reason ??
           runResult.error.hint ??
           '';
-        // `importer-not-registered` is a legitimate skip: this build simply
-        // does not wire that importer (e.g. an .hdr sidecar in a build that
-        // registers only the image importer), so the catalog keeps the source
-        // sourcePath as the runtime fallback. Warn and continue.
         if (runResult.error.code === 'importer-not-registered') {
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[forgeax-pack] no importer registered for ${metaPath}; keeping source fallback (${reason})`,
+          throw new Error(
+            `[forgeax-pack] no importer registered for ${metaPath}; raw-source fallback is forbidden (${reason})`,
           );
-          continue;
         }
         // Any other failure means a WIRED importer failed to convert the source
         // (e.g. fbx-mesh-type-unsupported surfacing as import-internal-error). The
@@ -1698,9 +1957,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         );
       }
       if ('skipped' in runResult.value) {
-        // Skip shader sidecars in pre-import; the catalog keeps the original
-        // sourcePath as the runtime fallback.
-        continue;
+        throw new Error(
+          `[forgeax-pack] importer skipped ${metaPath}: ${runResult.value.skipped}; cooked runtime output is required`,
+        );
       }
 
       if (meta.importer === 'ui') {
@@ -1741,7 +2000,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           ),
         };
         const uiPackage = await finalizePackage(
-          logicalPackageFromImportProduct(uiProduct),
+          projectAssetProduction(uiProduct).logicalPackage,
           { write: () => {} },
           {
             base: basePrefix,
@@ -1781,7 +2040,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // original product alive through finalization would otherwise retain a
       // second large graph beside the artifact bytes.
       const importedProduct = runResult.value.product;
-      const logicalPackage = logicalPackageFromImportProduct(importedProduct);
+      const logicalPackage = projectAssetProduction(importedProduct).logicalPackage;
       const productByGuid = productAssetsByGuid(importedProduct);
       const packagePath = `assets/${subAssets[0]?.guid ?? 'pack'}.pack.json`;
       const finalized = await finalizePackage(
@@ -1821,6 +2080,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             importedEntries[idx] = {
               ...existing,
               packageUrl: packUrl,
+              ...COOKED_CURRENT_PROJECTION,
               ...(ddcAsset?.refs !== undefined
                 ? { refs: ddcAsset.refs.map((ref) => ref.guid) }
                 : {}),
@@ -1839,6 +2099,23 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   }
 
   async function writeBundle(options: { readonly dir?: string | undefined }): Promise<void> {
+    const factsDir = process.env.FORGEAX_BUILD_METRICS_DIR;
+    if (factsDir !== undefined) {
+      try {
+        mkdirSync(factsDir, { recursive: true });
+        const metrics = readDdcMetrics();
+        writeFileSync(
+          resolve(factsDir, `pack-${process.pid}.json`),
+          `${JSON.stringify({
+            assetCookHitCount: metrics.hitCount,
+            assetCookMissCount: metrics.missCount,
+            assetCookWriteFailureCount: metrics.writeFailureCount,
+          })}\n`,
+        );
+      } catch {
+        // Build facts are diagnostic only; cache failures remain fail-open.
+      }
+    }
     const stage = buildArtifactStage;
     if (stage === undefined) return;
     if (options.dir === undefined) {

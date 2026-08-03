@@ -1,0 +1,131 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019e9c00-0000-7000-8000-000000000001",
+      "kind": "material",
+      "payload": {
+        "passes": [
+          {
+            "name": "forward",
+            "program": { "module": "forgeax::default-standard-pbr" },
+            "renderState": {
+              "tags": { "LightMode": "Forward" },
+              "queue": 3000
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [0.08, 0.22, 1, 1],
+          "metallic": 0,
+          "roughness": 0.2,
+          "emissive": [0.08, 0.28, 1],
+          "emissiveIntensity": 8
+        }
+      },
+      "refs": [],
+      "artifacts": {}
+    },
+    {
+      "guid": "019e9c00-0000-7000-8000-000000000002",
+      "kind": "material",
+      "payload": {
+        "passes": [
+          {
+            "name": "forward",
+            "program": { "module": "forgeax::default-standard-pbr" },
+            "renderState": {
+              "tags": { "LightMode": "Forward" },
+              "queue": 3000
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [1, 0.18, 0.02, 1],
+          "metallic": 0,
+          "roughness": 0.25,
+          "emissive": [1, 0.08, 0.01],
+          "emissiveIntensity": 6
+        }
+      },
+      "refs": [],
+      "artifacts": {}
+    },
+    {
+      "guid": "019e9c00-0000-7000-8000-000000000003",
+      "kind": "material",
+      "payload": {
+        "passes": [
+          {
+            "name": "forward",
+            "program": { "module": "forgeax::default-standard-pbr" },
+            "renderState": {
+              "tags": { "LightMode": "Forward" },
+              "queue": 3000
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [0.055, 0.02, 0.12, 1],
+          "metallic": 0.7,
+          "roughness": 0.3,
+          "emissive": [0.015, 0.005, 0.06],
+          "emissiveIntensity": 1.8
+        }
+      },
+      "refs": [],
+      "artifacts": {}
+    },
+    {
+      "guid": "019e9c00-0000-7000-8000-000000000004",
+      "kind": "material",
+      "payload": {
+        "passes": [
+          {
+            "name": "forward",
+            "program": { "module": "forgeax::default-standard-pbr" },
+            "renderState": {
+              "tags": { "LightMode": "Forward" },
+              "queue": 3000
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [0.3, 0.04, 0.52, 1],
+          "metallic": 0.35,
+          "roughness": 0.22,
+          "emissive": [0.14, 0.01, 0.28],
+          "emissiveIntensity": 3.5
+        }
+      },
+      "refs": [],
+      "artifacts": {}
+    },
+    {
+      "guid": "019e9c00-0000-7000-8000-000000000005",
+      "kind": "material",
+      "payload": {
+        "passes": [
+          {
+            "name": "forward",
+            "program": { "module": "forgeax::default-standard-pbr" },
+            "renderState": {
+              "tags": { "LightMode": "Forward" },
+              "queue": 3000
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [1, 0.015, 0.005, 1],
+          "metallic": 0.1,
+          "roughness": 0.45,
+          "emissive": [1, 0.01, 0.002],
+          "emissiveIntensity": 5
+        }
+      },
+      "refs": [],
+      "artifacts": {}
+    }
+  ]
+}

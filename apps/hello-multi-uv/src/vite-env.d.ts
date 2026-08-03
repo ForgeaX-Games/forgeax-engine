@@ -1,5 +1,7 @@
 // apps/hello-multi-uv -- ambient declarations.
 //
+/// <reference types="vite/client" />
+
 // `@forgeax/engine-vite-plugin-shader` transforms `*.wgsl` modules into a
 // `{ hash, wgsl }` JS module where `wgsl` is the post-naga_oil composed
 // source. main.ts imports multi-uv-demo.wgsl as an AC-10 visual carrier.

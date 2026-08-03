@@ -28,7 +28,7 @@ import { ImporterRegistry } from '@forgeax/engine-import';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { ImportContext, ImportSubAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { audioImporter } from '../audio-importer.js';
+import { audioImporter, sourceKeyForAudioOutput } from '../audio-importer.js';
 import { syncListenerFromWorldMatrix } from '../audio-listener-sync-system';
 import {
   audioTickSystem,
@@ -117,6 +117,14 @@ import { WebAudioEngine } from '../web-audio-engine';
       expect(resolved).toBe(audioImporter);
       expect(resolved?.key).toBe('audio');
       expect(typeof resolved?.import).toBe('function');
+    });
+  });
+
+  describe('audio producer sourceKey', () => {
+    it('uses a stable semantic output key rather than source location', () => {
+      expect(sourceKeyForAudioOutput()).toBe('audio:audio');
+      expect(sourceKeyForAudioOutput('clip')).toBe('audio:clip');
+      expect(sourceKeyForAudioOutput('')).toBeUndefined();
     });
   });
 

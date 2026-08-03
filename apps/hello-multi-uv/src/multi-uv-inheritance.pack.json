@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "71935b00-7d8c-4c4e-8f12-345678abcd02",
+      "kind": "material",
+      "payload": {
+        "kind": "material",
+        "role": "root",
+        "cooked": {
+          "schemaVersion": "material-cook/1",
+          "guid": "71935b00-7d8c-4c4e-8f12-345678abcd02",
+          "resolved": {
+            "passes": [
+              {
+                "name": "Forward",
+                "program": {
+                  "module": "hello-multi-uv::multi-uv-demo",
+                  "vertexEntry": "vs_main",
+                  "fragmentEntry": "fs_main"
+                },
+                "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 }
+              }
+            ],
+            "parameters": [
+              { "name": "baseColor", "type": "color" },
+              { "name": "baseColorTexture", "type": "texture" },
+              { "name": "detailTexture", "type": "texture" }
+            ],
+            "values": { "baseColor": [0.7, 0.7, 0.7, 1] }
+          },
+          "refs": {
+            "parent": [],
+            "textures": [],
+            "samplers": [],
+            "modules": ["hello-multi-uv::multi-uv-demo"]
+          },
+          "artifact": {
+            "mediaType": "text/wgsl",
+            "path": "materials/71935b00-7d8c-4c4e-8f12-345678abcd02/shader.wgsl",
+            "digest": "sha256:multi-uv-material",
+            "bytes": [77, 85, 76, 84, 73]
+          },
+          "receipt": {
+            "sourceClosure": ["multi-uv-demo.wgsl"],
+            "profile": "webgpu/v1",
+            "compilerVersion": "forgeax-shader-manifest",
+            "inputDigest": "sha256:multi-uv-material-specialization",
+            "outputDigest": "sha256:multi-uv-material"
+          }
+        }
+      },
+      "refs": [],
+      "artifacts": {}
+    },
+    {
+      "guid": "71935b00-7d8c-4c4e-8f12-345678abcd03",
+      "kind": "material",
+      "payload": {
+        "kind": "material",
+        "role": "derived",
+        "parent": "71935b00-7d8c-4c4e-8f12-345678abcd02",
+        "values": { "baseColor": [0.2, 0.55, 0.95, 1] },
+        "cooked": {
+          "schemaVersion": "material-cook/1",
+          "guid": "71935b00-7d8c-4c4e-8f12-345678abcd03",
+          "resolved": {
+            "passes": [
+              {
+                "name": "Forward",
+                "program": {
+                  "module": "hello-multi-uv::multi-uv-demo",
+                  "vertexEntry": "vs_main",
+                  "fragmentEntry": "fs_main"
+                },
+                "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 }
+              }
+            ],
+            "parameters": [
+              { "name": "baseColor", "type": "color" },
+              { "name": "baseColorTexture", "type": "texture" },
+              { "name": "detailTexture", "type": "texture" }
+            ],
+            "values": { "baseColor": [0.7, 0.7, 0.7, 1] }
+          },
+          "refs": {
+            "parent": ["71935b00-7d8c-4c4e-8f12-345678abcd02"],
+            "textures": [],
+            "samplers": [],
+            "modules": ["hello-multi-uv::multi-uv-demo"]
+          },
+          "artifact": {
+            "mediaType": "text/wgsl",
+            "path": "materials/71935b00-7d8c-4c4e-8f12-345678abcd03/shader.wgsl",
+            "digest": "sha256:multi-uv-material",
+            "bytes": [77, 85, 76, 84, 73]
+          },
+          "receipt": {
+            "sourceClosure": ["multi-uv-demo.wgsl"],
+            "profile": "webgpu/v1",
+            "compilerVersion": "forgeax-shader-manifest",
+            "inputDigest": "sha256:multi-uv-material-specialization",
+            "outputDigest": "sha256:multi-uv-material"
+          }
+        }
+      },
+      "refs": ["71935b00-7d8c-4c4e-8f12-345678abcd02"],
+      "artifacts": {}
+    }
+  ]
+}

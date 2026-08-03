@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DebugError } from '../errors';
 import type { RhiCallEvent } from '../index';
-import { InspectorCache, inspectAt } from '../inspector';
+import { decodeRtPixelsForPng, InspectorCache, inspectAt } from '../inspector';
 import type { Replay } from '../replayer';
 
 // ============================================================================
@@ -33,6 +33,22 @@ function makeStubReplay(overrides?: Record<string, any>): any {
 }
 
 type AnyFn = (...args: any[]) => any;
+
+describe('decodeRtPixelsForPng', () => {
+  it('converts wide float RT pixels to the exact RGBA8 PNG shape', () => {
+    const raw = new Uint8Array(8);
+    const view = new DataView(raw.buffer);
+    view.setUint16(0, 0x3c00, true); // 1.0
+    view.setUint16(2, 0x3800, true); // 0.5
+    view.setUint16(4, 0x3400, true); // 0.25
+    view.setUint16(6, 0x3c00, true); // 1.0
+
+    const rgba = decodeRtPixelsForPng(raw, 'rgba16float', 1, 1);
+    expect(rgba).not.toBeNull();
+    expect(rgba && Array.from(rgba)).toEqual([255, 128, 64, 255]);
+    expect(rgba?.byteLength).toBe(4);
+  });
+});
 
 interface StubReplayWithMocks {
   stepTo: AnyFn;

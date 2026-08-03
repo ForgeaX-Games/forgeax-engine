@@ -13,6 +13,11 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "bevyExample": {
+      "name": "animation_graph",
+      "category": "Animation",
+      "status": "implemented"
+    },
     "smokeInvocation": "pnpm --filter @forgeax/hello-animation-graph smoke",
     "metrics": {
       "bundle-size": {

@@ -10,8 +10,8 @@ const meta: RunImportMeta = {
   importer: 'local-artifacts-fixture',
   source: 'fixture.source',
   subAssets: [
-    { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
-    { guid: TEXTURE_GUID, sourceIndex: 1, kind: 'texture' },
+    { guid: MESH_GUID, sourceIndex: 0, sourceKey: 'fixture:mesh', kind: 'mesh' },
+    { guid: TEXTURE_GUID, sourceIndex: 1, sourceKey: 'fixture:texture', kind: 'texture' },
   ],
 };
 

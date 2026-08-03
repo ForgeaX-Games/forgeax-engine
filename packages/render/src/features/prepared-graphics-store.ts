@@ -308,6 +308,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
       generation: this.generation,
       attachments,
       pipeline: items.find((item) => item.kind === 'pipeline')?.reference,
+      pipelines: items.filter((item) => item.kind === 'pipeline').map((item) => item.reference),
       bindings: items.filter((item) => item.kind === 'bindings').map((item) => item.reference),
       vertexData: items.filter((item) => item.kind === 'vertex-data').map((item) => item.reference),
       indexData: items.filter((item) => item.kind === 'index-data').map((item) => item.reference),

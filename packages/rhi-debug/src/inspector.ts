@@ -20,6 +20,7 @@ import { inspectDrawJson } from './inspect-core';
 import { readbackDrawRt } from './readback';
 import type { Replay } from './replayer';
 import { computePassOffsets } from './tape-format';
+import { decodeToRgba8 } from './texel-decode';
 import type { InspectFields, InspectReport, RhiCallEvent } from './types';
 
 // ============================================================================
@@ -27,6 +28,21 @@ import type { InspectFields, InspectReport, RhiCallEvent } from './types';
 // ============================================================================
 
 const LRU_MAX_SIZE = 2;
+
+/**
+ * Convert a native color-attachment readback into the RGBA8 shape required by
+ * pngjs. RT readback deliberately preserves the attachment format, so this
+ * boundary must handle float/wide-channel and BGRA targets instead of handing
+ * native bytes directly to a fixed four-byte PNG buffer.
+ */
+export function decodeRtPixelsForPng(
+  pixels: Uint8Array,
+  format: string,
+  width: number,
+  height: number,
+): Uint8ClampedArray<ArrayBuffer> | null {
+  return decodeToRgba8(pixels, format, width, height);
+}
 
 // ============================================================================
 // InspectorCache -- LRU cache keyed by tapePath (m6-2)
@@ -278,7 +294,17 @@ async function readbackAndEncodePng(
   if (!rtResult.ok) {
     return err(rtResult.error);
   }
-  const { width: texWidth, height: texHeight, pixels } = rtResult.value;
+  const { width: texWidth, height: texHeight, format, pixels } = rtResult.value;
+  const rgbaPixels = decodeRtPixelsForPng(pixels, format, texWidth, texHeight);
+  if (rgbaPixels === null) {
+    return err(
+      new DebugError({
+        code: 'png-encode-failed',
+        expected: 'the RT format to be decodable as RGBA8',
+        hint: `no CPU RGBA8 decoder is registered for RT format '${format}'`,
+      }),
+    );
+  }
 
   // Encode PNG (use lazy import of pngjs for tree-shake friendliness)
   const pngFilePath = path.join(inspectDir, `d${String(drawIdx).padStart(4, '0')}-rt0.png`);
@@ -295,8 +321,10 @@ async function readbackAndEncodePng(
     // which does not import this module.
     const { PNG } = (await import('pngjs')) as typeof import('pngjs');
     const png = new PNG({ width: texWidth, height: texHeight });
-    // pixels is tight-packed RGBA (readbackTexturePixels already strips alignment padding)
-    png.data.set(pixels);
+    // readbackDrawRt preserves the native attachment format. Decode float,
+    // wide-channel, packed, and BGRA attachments before handing pixels to
+    // pngjs, whose data buffer is always exactly width*height*4 bytes.
+    png.data.set(rgbaPixels);
     const pngBuffer = PNG.sync.write(png);
     await fs.promises.writeFile(pngFilePath, pngBuffer);
   } catch (e) {

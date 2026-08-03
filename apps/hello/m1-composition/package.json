@@ -13,6 +13,11 @@
     "smoke:gauntlet": "node scripts/smoke-live.mjs"
   },
   "forgeax": {
+    "bevyExample": {
+      "name": "schedule_data",
+      "category": "Dev tools",
+      "status": "implemented"
+    },
     "smokeInvocation": "pnpm --filter @forgeax/hello-m1-composition smoke",
     "gauntletScenario": {
       "id": "hello-m1-composition-live",
@@ -36,6 +41,7 @@
       "oracle": {
         "stdoutIncludes": [
           "[m1-composition] schedule order: update-before-fixed -> fixed -> fixed -> update-after-fixed",
+          "[m1-composition] schedule data snapshot: PASS",
           "[m1-composition] deferred mutation, state lifecycle, input, hierarchy, and math: PASS",
           "[m1-composition] multi-world drawSource and plugin registry: PASS",
           "[m1-composition] App error fan-out and same-process recovery: PASS",

@@ -4,6 +4,11 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/engine-vfx',
+    benchmark: {
+      include: ['src/**/__tests__/**/*.bench.ts'],
+      exclude: ['**/dist/**', '**/node_modules/**'],
+      reporters: ['default'],
+    },
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',

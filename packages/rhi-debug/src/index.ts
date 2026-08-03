@@ -8,6 +8,12 @@ export {
   type DeterministicViolationDetail,
   type RhiCapsRecordedKey,
 } from './errors';
+export {
+  analyzeMergeability,
+  type MergeabilityGroup,
+  type MergeabilityReport,
+  type MergeabilityRun,
+} from './mergeability';
 export { pixelDeltaAbsMean } from './pixel-diff';
 export {
   type ResolvedTextureDescriptor,

@@ -36,8 +36,10 @@
 // reaching the decoder seam).
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { DdcEntryStore, ddcOutputDigest } from '@forgeax/engine-ddc/entry-store';
+import { semanticDdcKey as semanticEntryKey } from '@forgeax/engine-ddc/key';
 import type { ImageMetadata } from '@forgeax/engine-types';
 import type { LogicalArtifactBody, LogicalPackage } from './package-finalizer.js';
 
@@ -45,6 +47,30 @@ import type { LogicalArtifactBody, LogicalPackage } from './package-finalizer.js
 export interface DdcEntry {
   readonly bytes: Uint8Array;
   readonly metadata: ImageMetadata;
+}
+
+export interface DdcMetrics {
+  readonly hitCount: number;
+  readonly missCount: number;
+  readonly writeFailureCount: number;
+}
+
+let ddcHitCount = 0;
+let ddcMissCount = 0;
+let ddcWriteFailureCount = 0;
+
+export function readDdcMetrics(): DdcMetrics {
+  return {
+    hitCount: ddcHitCount,
+    missCount: ddcMissCount,
+    writeFailureCount: ddcWriteFailureCount,
+  };
+}
+
+export function resetDdcMetrics(): void {
+  ddcHitCount = 0;
+  ddcMissCount = 0;
+  ddcWriteFailureCount = 0;
 }
 
 export interface SemanticDdcInput {
@@ -59,6 +85,59 @@ export interface SemanticDdcInput {
   readonly declaredGuids: readonly string[];
   readonly cookProfile: string;
   readonly publish?: unknown;
+}
+
+interface SerializedLogicalArtifact {
+  readonly mediaType: string;
+  readonly assetCodec?: unknown;
+  readonly bytes: string;
+}
+
+interface SerializedLogicalAsset {
+  readonly artifacts: Readonly<Record<string, SerializedLogicalArtifact>>;
+  readonly [key: string]: unknown;
+}
+
+interface SerializedLogicalPackage {
+  readonly schemaVersion: string;
+  readonly kind: string;
+  readonly assets: readonly SerializedLogicalAsset[];
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Resolve the one repository DDC root shared by all apps in a workspace.
+ *
+ * A caller outside a pnpm workspace still gets a local cache, but there is no
+ * second configuration knob: the nearest workspace file wins.
+ */
+export function resolveDdcRoot(cwd: string): string {
+  let current = resolve(cwd);
+  while (true) {
+    if (existsSync(join(current, 'pnpm-workspace.yaml'))) {
+      return join(current, 'node_modules/.cache/forgeax-ddc');
+    }
+    const parent = dirname(current);
+    if (parent === current) return join(resolve(cwd), 'node_modules/.cache/forgeax-ddc');
+    current = parent;
+  }
+}
+
+/** Hash actual implementation artifacts rather than a manually bumped token. */
+export function implementationFingerprint(paths: readonly string[]): string {
+  const hash = createHash('sha256');
+  for (const path of [...paths].sort()) {
+    hash.update(path.replaceAll('\\', '/'));
+    hash.update('\0');
+    try {
+      hash.update(readFileSync(path));
+    } catch {
+      // A missing implementation artifact is deliberately part of the
+      // fingerprint. The next successful build gets a different key.
+      hash.update('<missing>');
+    }
+  }
+  return `sha256:${hash.digest('hex')}`;
 }
 
 /**
@@ -99,43 +178,44 @@ function sortKeys(value: unknown): unknown {
 
 /** Derive a DDC key from semantic cook inputs, excluding publish environment. */
 export function semanticDdcKey(input: SemanticDdcInput): string {
-  const semantic = {
+  return semanticEntryKey({
     schemaVersion: input.schemaVersion,
-    importerVersion: input.importerVersion,
-    codecVersion: input.codecVersion,
-    sourceDependencies: [...input.sourceDependencies].sort((left, right) =>
-      JSON.stringify(left).localeCompare(JSON.stringify(right)),
-    ),
+    importer: input.importerVersion,
+    codec: input.codecVersion,
     settings: input.settings,
-    declaredGuids: [...input.declaredGuids].sort(),
-    cookProfile: input.cookProfile,
-  };
-  return createHash('sha256').update(stableSerialize(semantic)).digest('hex');
+    sourceBytes: input.sourceDependencies
+      .map((dependency) => (typeof dependency === 'string' ? dependency : dependency.digest))
+      .sort()
+      .map((digest) => new TextEncoder().encode(digest)),
+    declaredGuids: input.declaredGuids,
+    targetProfile: input.cookProfile,
+    producer: input.importerVersion,
+  });
 }
 
 export interface LogicalDdcCache {
   readonly key: (input: SemanticDdcInput) => string;
-  readonly read: (input: SemanticDdcInput) => LogicalPackage | null;
-  readonly write: (input: SemanticDdcInput, logicalPackage: LogicalPackage) => void;
+  readonly read: (input: SemanticDdcInput) => Promise<LogicalPackage | null>;
+  readonly write: (input: SemanticDdcInput, logicalPackage: LogicalPackage) => Promise<void>;
 }
 
 export function createLogicalDdcCache(cwd: string): LogicalDdcCache {
   return {
     key: semanticDdcKey,
-    read(input) {
+    async read(input) {
       return readLogical(cwd, semanticDdcKey(input));
     },
-    write(input, logicalPackage) {
-      writeLogical(cwd, semanticDdcKey(input), logicalPackage);
+    async write(input, logicalPackage) {
+      await writeLogical(cwd, semanticDdcKey(input), logicalPackage);
     },
   };
 }
 
-function logicalCacheDir(cwd: string): string {
-  return resolve(cwd, 'node_modules/.cache/forgeax-ddc/logical');
+function store(cwd: string): DdcEntryStore {
+  return new DdcEntryStore(resolve(cwd, 'node_modules/.cache/forgeax-ddc'));
 }
 
-function serialiseLogicalPackage(logicalPackage: LogicalPackage): Record<string, unknown> {
+function serialiseLogicalPackage(logicalPackage: LogicalPackage): SerializedLogicalPackage {
   return {
     ...logicalPackage,
     assets: logicalPackage.assets.map((asset) => ({
@@ -151,7 +231,7 @@ function serialiseLogicalPackage(logicalPackage: LogicalPackage): Record<string,
         ]),
       ),
     })),
-  };
+  } as SerializedLogicalPackage;
 }
 
 function readLogicalArtifact(artifact: {
@@ -171,73 +251,77 @@ function readLogicalArtifact(artifact: {
 }
 
 /** Read a logical package cache entry; malformed or partial entries are misses. */
-export function readLogical(cwd: string, key: string): LogicalPackage | null {
+export async function readLogical(cwd: string, key: string): Promise<LogicalPackage | null> {
   try {
-    const raw = JSON.parse(readFileSync(resolve(logicalCacheDir(cwd), `${key}.json`), 'utf8')) as {
-      schemaVersion: '2.0.0';
-      kind: 'internal-text-package';
-      assets: Array<{
-        guid: string;
-        kind: string;
-        name?: string;
-        payload: Record<string, unknown>;
-        refs: string[];
-        artifacts: Record<string, { mediaType: string; assetCodec?: unknown; bytes: string }>;
-      }>;
-    };
+    const entry = await store(cwd).read(key);
+    if (entry === null) return null;
+    const raw = entry.payload as SerializedLogicalPackage;
     if (raw.schemaVersion !== '2.0.0' || raw.kind !== 'internal-text-package') return null;
     return {
       ...raw,
       assets: raw.assets.map((asset) => ({
         ...asset,
         artifacts: Object.fromEntries(
-          Object.entries(asset.artifacts).map(([key, artifact]) => [
-            key,
+          Object.entries(asset.artifacts).map(([artifactKey, artifact]) => [
+            artifactKey,
             readLogicalArtifact(artifact),
           ]),
         ),
       })),
-    };
+    } as unknown as LogicalPackage;
   } catch {
+    ddcMissCount += 1;
     return null;
   }
 }
 
 /** Persist only logical bodies. IO failures degrade to a cache miss. */
-export function writeLogical(cwd: string, key: string, logicalPackage: LogicalPackage): void {
+export async function writeLogical(
+  cwd: string,
+  key: string,
+  logicalPackage: LogicalPackage,
+): Promise<void> {
   try {
-    mkdirSync(logicalCacheDir(cwd), { recursive: true });
-    writeFileSync(
-      resolve(logicalCacheDir(cwd), `${key}.json`),
-      JSON.stringify(serialiseLogicalPackage(logicalPackage)),
-    );
+    const payload = serialiseLogicalPackage(logicalPackage);
+    const base = {
+      key,
+      guid: key,
+      payload,
+      refs: [],
+      artifacts: {},
+      receipt: {
+        guid: key,
+        key,
+        producer: 'vite-plugin-pack/logical',
+        inputFingerprint: key,
+        outputDigest: '',
+      },
+    } as const;
+    await store(cwd).write({
+      ...base,
+      receipt: { ...base.receipt, outputDigest: ddcOutputDigest(base) },
+    });
   } catch {
+    ddcWriteFailureCount += 1;
     // DDC is an accelerator and must not become a correctness dependency.
   }
-}
-
-/** Absolute path of the build DDC directory under `node_modules/.cache`. */
-function buildCacheDir(cwd: string): string {
-  return resolve(cwd, 'node_modules/.cache/forgeax-ddc/build');
 }
 
 /**
  * Read a cached decode by key, or `null` on miss / unreadable cache.
  *
- * A hit requires BOTH the `<key>.bin` (decoded bytes) and the `<key>.json`
- * (metadata sidecar) to be present and parseable -- a half-written entry is
- * treated as a miss so the caller re-decodes (fail-open). Reconstructs the
- * full `importTextureEntry` success shape without touching the decoder.
+ * The shared DdcEntryStore publishes the bytes and metadata in one immutable
+ * entry, so a reader cannot observe a half-written pair.
  */
-export function read(cwd: string, key: string): DdcEntry | null {
-  const dir = buildCacheDir(cwd);
+export async function read(cwd: string, key: string): Promise<DdcEntry | null> {
   try {
-    const bytes = new Uint8Array(readFileSync(resolve(dir, `${key}.bin`)));
-    const metadata = JSON.parse(
-      readFileSync(resolve(dir, `${key}.json`), 'utf-8'),
-    ) as ImageMetadata;
-    return { bytes, metadata };
+    const entry = await store(cwd).read(key);
+    if (entry === null) return null;
+    const artifact = entry.artifacts.payload;
+    if (artifact === undefined) return null;
+    return { bytes: artifact.bytes, metadata: entry.payload as ImageMetadata };
   } catch {
+    ddcMissCount += 1;
     return null;
   }
 }
@@ -247,16 +331,44 @@ export function read(cwd: string, key: string): DdcEntry | null {
  * (unwritable cache dir, full disk) is swallowed -- the build proceeds with the
  * freshly decoded bytes it already has in hand.
  *
- * The `.json` metadata is written before the `.bin` so a concurrent reader
- * that observes the `.bin` also finds its sidecar (read() requires both).
  */
-export function write(cwd: string, key: string, entry: DdcEntry): void {
-  const dir = buildCacheDir(cwd);
+export async function write(cwd: string, key: string, entry: DdcEntry): Promise<void> {
   try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(resolve(dir, `${key}.json`), JSON.stringify(entry.metadata));
-    writeFileSync(resolve(dir, `${key}.bin`), entry.bytes);
+    const base = {
+      key,
+      guid: key,
+      payload: entry.metadata,
+      refs: [],
+      artifacts: { payload: { mediaType: 'application/octet-stream', bytes: entry.bytes } },
+      receipt: {
+        guid: key,
+        key,
+        producer: 'vite-plugin-pack/image',
+        inputFingerprint: key,
+        outputDigest: '',
+      },
+    } as const;
+    await store(cwd).write({
+      ...base,
+      receipt: { ...base.receipt, outputDigest: ddcOutputDigest(base) },
+    });
   } catch {
+    ddcWriteFailureCount += 1;
     // fail-open: cache is an accelerator, never a correctness dependency.
+  }
+}
+
+/** Remove abandoned atomic-write directories; never remove a completed entry. */
+export function cleanDdcTemps(cwd: string): void {
+  for (const namespace of ['texture-v2', 'logical-v1']) {
+    const directory = join(resolveDdcRoot(cwd), namespace);
+    try {
+      for (const name of readdirSync(directory)) {
+        if (name.startsWith('.'))
+          rmSync(resolve(directory, name), { recursive: true, force: true });
+      }
+    } catch {
+      // Cleanup is best effort and must not affect a build.
+    }
   }
 }

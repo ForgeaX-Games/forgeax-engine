@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
 export interface ShaderManifestInput {
   readonly hash: string;
   readonly wgsl: string;
@@ -18,7 +21,7 @@ export interface SharedMaterialShaderManifestEntry {
 }
 
 export const SHARED_ENGINE_SHADERS_CLASS = 'shared-engine-shaders';
-export const SHARED_ENGINE_SHADERS_MANIFEST = 'shared-app-inputs/shaders/manifest.json';
+export const SHARED_ENGINE_SHADERS_MANIFEST = 'shared-build-inputs/shaders/manifest.json';
 
 /**
  * Projects engine and app entries into an app-local manifest. Engine entry
@@ -49,12 +52,31 @@ export function loadSharedEngineShaderManifest(manifestPath: string): {
   readonly materialShaders: SharedMaterialShaderManifestEntry[];
 } {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    readonly schemaVersion?: number;
+    readonly producer?: string;
+    readonly inputFingerprint?: string;
+    readonly inventory?: readonly string[];
     readonly payload?: { readonly engineShaderManifest?: string };
   };
   const path = manifest.payload?.engineShaderManifest;
   if (path === undefined)
     throw new Error(`shared shader manifest lacks serialized payload: ${manifestPath}`);
   const repositoryRoot = dirname(dirname(manifestPath));
+  if (manifest.schemaVersion === 2) {
+    if (manifest.producer !== 'repo-build-inputs' || manifest.inputFingerprint === undefined) {
+      throw new Error(`shared shader manifest has invalid producer metadata: ${manifestPath}`);
+    }
+    if (!Array.isArray(manifest.inventory) || !manifest.inventory.includes(path)) {
+      throw new Error(`shared shader manifest inventory does not declare ${path}: ${manifestPath}`);
+    }
+    for (const inventoryPath of manifest.inventory) {
+      if (!existsSync(resolve(repositoryRoot, inventoryPath))) {
+        throw new Error(
+          `shared shader manifest inventory is missing ${inventoryPath}: ${manifestPath}`,
+        );
+      }
+    }
+  }
   const shaderManifest = JSON.parse(readFileSync(resolve(repositoryRoot, path), 'utf8')) as {
     readonly entries?: ShaderManifestInput[];
     readonly materialShaders?: SharedMaterialShaderManifestEntry[];
@@ -67,6 +89,3 @@ export function loadSharedEngineShaderManifest(manifestPath: string): {
   }
   return { entries: shaderManifest.entries, materialShaders: shaderManifest.materialShaders };
 }
-
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';

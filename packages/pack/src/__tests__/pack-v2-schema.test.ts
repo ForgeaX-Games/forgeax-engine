@@ -8,10 +8,12 @@ function validPack() {
   return {
     schemaVersion: '2.0.0',
     kind: 'internal-text-package',
+    packageId: 'pkg/fixture',
     assets: [
       {
         guid: GUID_A,
         kind: 'texture',
+        execution: 'cooked',
         payload: { kind: 'texture', width: 1, height: 1 },
         refs: [GUID_B],
         artifacts: {
@@ -31,6 +33,7 @@ function validPack() {
       {
         guid: GUID_B,
         kind: 'material',
+        execution: 'cooked',
         payload: { kind: 'material' },
         refs: [],
         artifacts: {},
@@ -112,6 +115,15 @@ describe('Pack v2 schema', () => {
     const asset = pack.assets[0];
     if (!asset) throw new Error('fixture asset is missing');
     delete asset.refs;
+
+    expect(validatePackV2(pack)).toBe(false);
+  });
+
+  it('rejects a v2 asset with no explicit execution mode', () => {
+    const pack = mutablePack();
+    const asset = pack.assets[0];
+    if (!asset) throw new Error('fixture asset is missing');
+    delete asset.execution;
 
     expect(validatePackV2(pack)).toBe(false);
   });

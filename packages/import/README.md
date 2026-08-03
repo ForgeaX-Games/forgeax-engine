@@ -1,5 +1,18 @@
 # @forgeax/engine-import
 
+## Authoring and recovery index
+
+The import contract is [`asset-authority.schema.json`](../../asset-authority.schema.json). `ImporterRegistry` and `runImport` are the build-time owner for external source plus Meta; every writable multi-output declaration uses a stable `sourceKey`, while `sourceIndex` remains diagnostic evidence only.
+
+| Need | Entry | Boundary |
+|:--|:--|:--|
+| Inspect producer evidence | Pack CLI `lookup` and `verify` JSON output | Read Catalog and receipt facts; do not parse messages |
+| Rebuild | Registered importer through `runImport` | Write Pack/DDC output through the shared finalizer |
+| Recover failed output | Fix source or Meta, then cold cook | Never return raw source as a runtime projection |
+| Preview old output | Explicit Catalog last-known-good locator | Read-only preview; not current and not publishable |
+
+The Importer owns neither DDC lifecycle nor Editor authoring writes. Editor writes go through its asset-authoring gateway, and runtime consumes the validated projection.
+
 Build-time asset **import** runner + `ImporterRegistry` — the build-time half of
 the engine's import/load split.
 

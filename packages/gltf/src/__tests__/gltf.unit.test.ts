@@ -973,9 +973,9 @@ import {
       importer: 'gltf',
       source: 'fixture.gltf',
       subAssets: [
-        { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
-        { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
-        { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        { guid: MESH_GUID, sourceIndex: 0, sourceKey: 'mesh', kind: 'mesh' },
+        { guid: MAT_GUID, sourceIndex: 0, sourceKey: 'material', kind: 'material' },
+        { guid: SCENE_GUID, sourceIndex: 0, sourceKey: 'scene', kind: 'scene' },
       ],
     };
   }
@@ -1332,6 +1332,7 @@ import {
     subAssets: readonly ImportSubAsset[];
     decodeCalls: GlbDecodeCall[];
     importSettings?: Readonly<Record<string, unknown>>;
+    compressedArtifact?: boolean;
   }): ImportContext {
     return {
       source: opts.source,
@@ -1349,16 +1350,24 @@ import {
       }),
       decodeImage: async (bytes, mimeType, settings) => {
         opts.decodeCalls.push({ mimeType, settings, byteCount: bytes.byteLength });
+        const texture: TextureAsset = {
+          ...GLB_MOCK_TEXTURE,
+          colorSpace: settings.colorSpace === 'linear' ? 'linear' : 'srgb',
+          format: settings.colorSpace === 'linear' ? 'rgba8unorm' : 'rgba8unorm-srgb',
+        };
+        const decodeValue = {
+          texture,
+          bytes: new Uint8Array(bytes),
+          ...(opts.compressedArtifact === true
+            ? {
+                mediaType: 'image/ktx2',
+                assetCodec: { name: 'basis', profile: 'etc1s' },
+              }
+            : {}),
+        };
         return {
           ok: true,
-          value: {
-            texture: {
-              ...GLB_MOCK_TEXTURE,
-              colorSpace: settings.colorSpace === 'linear' ? 'linear' : 'srgb',
-              format: settings.colorSpace === 'linear' ? 'rgba8unorm' : 'rgba8unorm-srgb',
-            },
-            bytes: new Uint8Array(bytes),
-          },
+          value: decodeValue,
         };
       },
       subAssets: opts.subAssets,
@@ -1402,6 +1411,38 @@ import {
 
         const mat = produced.find((p) => p.guid === MAT_GUID);
         expect(mat?.refs.map((r) => r.guid)).toContain(TEX_GUID);
+      });
+
+      it('preserves Basis artifact facts from a compressed embedded GLB texture', async () => {
+        const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+        const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d470';
+        const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d471';
+        const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d472';
+        const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d473';
+        const produced = unwrap(
+          await gltfImporter.import(
+            makeGlbCtx({
+              source: 'BoxTextured.glb',
+              bytes,
+              subAssets: [
+                { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+                { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+                { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+                { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+              ],
+              decodeCalls: [],
+              importSettings: { compressionMode: 'etc1s' },
+              compressedArtifact: true,
+            }),
+          ),
+        );
+
+        const texture = produced.find((asset) => asset.guid === TEX_GUID);
+        expect(texture?.artifacts.body?.mediaType).toBe('image/ktx2');
+        expect(texture?.artifacts.body?.assetCodec).toEqual({
+          name: 'basis',
+          profile: 'etc1s',
+        });
       });
     });
   });
@@ -2586,8 +2627,8 @@ import {
           importer: 'gltf',
           source: 'named.gltf',
           subAssets: [
-            { guid: NAME_MESH_GUID, sourceIndex: 0, kind: 'mesh' },
-            { guid: NAME_MAT_GUID, sourceIndex: 0, kind: 'material' },
+            { guid: NAME_MESH_GUID, sourceIndex: 0, sourceKey: 'mesh:Triangle', kind: 'mesh' },
+            { guid: NAME_MAT_GUID, sourceIndex: 0, sourceKey: 'material:RedMat', kind: 'material' },
           ],
         };
         const fs: ImportRunnerFs = {
@@ -2612,9 +2653,9 @@ import {
           importer: 'gltf',
           source: 'named.gltf',
           subAssets: [
-            { guid: NAME_MESH_GUID, sourceIndex: 0, kind: 'mesh' },
-            { guid: NAME_MAT_GUID, sourceIndex: 0, kind: 'material' },
-            { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+            { guid: NAME_MESH_GUID, sourceIndex: 0, sourceKey: 'mesh:Triangle', kind: 'mesh' },
+            { guid: NAME_MAT_GUID, sourceIndex: 0, sourceKey: 'material:RedMat', kind: 'material' },
+            { guid: SCENE_GUID, sourceIndex: 0, sourceKey: 'scene:MainScene', kind: 'scene' },
           ],
         };
         const fs: ImportRunnerFs = {

@@ -44,6 +44,7 @@
           "[m3-programmable] custom material normal-slot live mutation: PASS repeats=2",
           "[m3-programmable] custom material normal-slot resize/rebuild: PASS repeats=2",
           "[m3-programmable] custom material two-slot live resize/rebuild: PASS repeats=2",
+          "[m3-programmable] composed inherited material no-MSAA startup-true repeatability: PASS",
           "[m3-programmable] render graph seam: PASS",
           "[m3-programmable] depth-aware URP overlay: PASS",
           "[m3-programmable] fake-depth falsifier: PASS",

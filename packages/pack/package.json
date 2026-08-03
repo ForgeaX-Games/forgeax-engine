@@ -48,6 +48,11 @@
       "node": "./dist/resolve-asset-source.mjs",
       "default": null
     },
+    "./native-cooker": {
+      "types": "./dist/native-cooker.d.ts",
+      "node": "./dist/native-cooker.mjs",
+      "default": null
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

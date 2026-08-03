@@ -1,5 +1,18 @@
 # @forgeax/engine-vfx-compiler
 
+## Authoring and recovery index
+
+This package is a build-time producer. It reads authored VFX source, validates operators, and emits the shared producer product; it does not own runtime loading, Editor writes, or DDC lifecycle.
+
+| Need | Entry | Result |
+|:--|:--|:--|
+| Inspect | Producer receipt and Catalog evidence | Read subject, execution, lifecycle, and diagnostic fields |
+| Rebuild | `cookParticleEffect` and the registered importer | Produce a deterministic payload through the shared finalizer |
+| Recover failure | Repair source or operator declaration | Retry cold cook; do not claim a cache hit |
+| Stop publish | Failed validation or incomplete product | Return structured failure and block publication |
+
+The cross-category audit is [`asset-authority.schema.json`](../../asset-authority.schema.json); its `vfx-compiler` descriptor is supporting producer evidence, not a new asset category.
+
 > [!IMPORTANT]
 > `@forgeax/engine-vfx-compiler` is the build-time VFX boundary. It validates
 > authoring source, resolves public operator definitions, derives deterministic
@@ -29,29 +42,13 @@ import {
   defineParticleEffectSource,
   type ParticleEffectSource,
 } from '@forgeax/engine-vfx';
-import { ok } from '@forgeax/engine-types';
 import {
-  type ParticleOperatorDefinition,
-  type ParticleOperatorStage,
-  ParticleOperatorRegistry,
   cookParticleEffect,
+  createStockParticleOperatorRegistry,
 } from '@forgeax/engine-vfx-compiler';
 
 const materialGuid = '019e2cc6-0c86-79da-aa76-b0984c86d45d';
-const definition = (stage: ParticleOperatorStage, kind: string): ParticleOperatorDefinition => ({
-  stage,
-  kind,
-  version: 1,
-  parameterSchema: {},
-  validateParams: () => ok(undefined),
-  compile: { cpu: (params) => ({ stage, kind, params }) },
-});
-const operators = new ParticleOperatorRegistry([
-  definition('spawn', 'spawn-rate'),
-  definition('initialize', 'set-life'),
-  definition('update', 'gravity'),
-  definition('output', 'billboard'),
-]);
+const operators = createStockParticleOperatorRegistry();
 
 const source: ParticleEffectSource = {
   schemaVersion: 1,
@@ -87,10 +84,10 @@ if (!cooked.ok) {
 const { asset, refs, program, outputDigest } = cooked.value;
 ```
 
-`operators` is a host-configured `ParticleOperatorRegistry` containing
-definitions for every source operator. Registration is definition-driven:
-adding an operator does not require a switch in the cook algorithm, loader, or
-batch consumer.
+`createStockParticleOperatorRegistry()` is the public recipe for the paired
+stock compiler definitions. A host with custom operators can construct a
+`ParticleOperatorRegistry`, but it must provide matching runtime executors and
+keep the same definition-driven cook boundary.
 
 ## Public surface
 
@@ -115,6 +112,19 @@ projection from the host-owned ready asset. No runtime code imports this
 package, evaluates compiler definitions, or falls back to raw source.
 
 The compiler must never be imported by a player bundle.
+
+## Concrete Pack v2 handoff
+
+For Boss Lightning, configure the build plugin with
+`particleEffectImporter(createStockParticleOperatorRegistry())`. The sidecar
+publishes effect GUID `019e9c00-0000-7000-8000-000000000000`; cooking produces
+the canonical payload plus `particle-effect/program.json`, while the authored
+material package keeps GUIDs `019e9c00-0000-7000-8000-000000000001` and
+`019e9c00-0000-7000-8000-000000000002`. The resulting pack-index rows are the
+only runtime navigation authority. The runtime calls
+`loadParticleEffect(assets, effectGuid)`, validates the payload and artifact,
+then the CPU simulation publishes billboard and mesh batches for
+`@forgeax/engine-vfx-render` to prepare and draw.
 
 ```mermaid
 flowchart LR

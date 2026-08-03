@@ -8,7 +8,7 @@ import {
   type ParticleSimulation,
   particleSimulationPlugin,
 } from '@forgeax/engine-vfx';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const effect: LoadedParticleEffect = {
   kind: 'particle-effect',
@@ -33,24 +33,39 @@ const effect: LoadedParticleEffect = {
   },
 };
 
+const meshEffect: LoadedParticleEffect = {
+  ...effect,
+  program: {
+    ...effect.program,
+    emitters: effect.program.emitters.map((emitter) => ({
+      ...emitter,
+      output: { kind: 'mesh' as const, material: 'material-spark', mesh: 'mesh-spark' },
+    })),
+  },
+};
+
 const cpuExecutors = new ParticleCpuExecutorRegistry();
 
-async function setup() {
+async function setup(
+  loadedEffect: LoadedParticleEffect = effect,
+  assets: { lookup(guid: string): unknown } = { lookup: () => undefined },
+) {
   const world = new World({ time: { fixedDeltaSeconds: 0.1, maxDeltaSeconds: 1 } });
-  const handle = world.allocSharedRef('ParticleEffectAsset', effect);
+  const handle = world.allocSharedRef('ParticleEffectAsset', loadedEffect);
   const player = world
     .spawn({
       component: ParticleEffectPlayer,
       data: { effect: handle, playing: true, seed: 7, timeScale: 1 },
     })
     .unwrap();
-  const plugins = await runPlugins(
-    world,
-    [],
-    [particleSimulationPlugin({ assets: { lookup: () => undefined }, cpuExecutors })],
-  );
+  const plugins = await runPlugins(world, [], [particleSimulationPlugin({ assets, cpuExecutors })]);
   expect(plugins.ok).toBe(true);
   return { world, player };
+}
+
+function releaseCount(spy: ReturnType<typeof vi.spyOn>, handle: number): number {
+  const calls = spy.mock.calls as readonly (readonly [number])[];
+  return calls.filter(([candidate]) => candidate === handle).length;
 }
 
 describe('particle simulation lifecycle', () => {
@@ -74,5 +89,64 @@ describe('particle simulation lifecycle', () => {
     world.update(0.1).unwrap();
     expect(simulation.read(player)?.tick).toBe(world.getResource(FixedTime).tick);
     expect(simulation.reset(player).ok).toBe(true);
+  });
+
+  it('releases material and mesh outputs once across replacement, reset, and disappearance', async () => {
+    const assets = {
+      lookup: (guid: string) => ({ kind: guid === 'mesh-spark' ? 'mesh' : 'material', guid }),
+    };
+    const { world, player } = await setup(effect, assets);
+    const releaseSpy = vi.spyOn(world.sharedRefs, 'release');
+    const initialEffect = world.get(player, ParticleEffectPlayer).unwrap().effect;
+
+    world.update(0.1).unwrap();
+    const simulation = world.getResource<ParticleSimulation>(PARTICLE_SIMULATION_RESOURCE_KEY);
+    const billboard = simulation.read(player)?.batches.batches[0];
+    expect(billboard?.kind).toBe('billboard');
+    if (billboard?.kind !== 'billboard') return;
+    const billboardMaterial = billboard.material;
+
+    const replacementEffect = world.allocSharedRef('ParticleEffectAsset', meshEffect);
+    world.set(player, ParticleEffectPlayer, { effect: replacementEffect }).unwrap();
+    world.update(0.1).unwrap();
+    expect(releaseCount(releaseSpy, billboardMaterial)).toBe(1);
+    const mesh = simulation.read(player)?.batches.batches[0];
+    expect(mesh?.kind).toBe('mesh');
+    if (mesh?.kind !== 'mesh') return;
+    const meshMaterial = mesh.material;
+    const meshAsset = mesh.mesh;
+
+    simulation.replay(player).unwrap();
+    world.update(0.1).unwrap();
+    expect(releaseCount(releaseSpy, meshMaterial)).toBe(1);
+    expect(releaseCount(releaseSpy, meshAsset)).toBe(1);
+    const replayMesh = simulation.read(player)?.batches.batches[0];
+    expect(replayMesh?.kind).toBe('mesh');
+    if (replayMesh?.kind !== 'mesh') return;
+
+    simulation.reset(player).unwrap();
+    world.update(0.1).unwrap();
+    expect(releaseCount(releaseSpy, replayMesh.material)).toBe(1);
+    expect(releaseCount(releaseSpy, replayMesh.mesh)).toBe(1);
+    const resetMesh = simulation.read(player)?.batches.batches[0];
+    expect(resetMesh?.kind).toBe('mesh');
+    if (resetMesh?.kind !== 'mesh') return;
+
+    world.despawn(player).unwrap();
+    world.update(0.1).unwrap();
+    expect(releaseCount(releaseSpy, resetMesh.material)).toBe(1);
+    expect(releaseCount(releaseSpy, resetMesh.mesh)).toBe(1);
+    simulation.advance(world, []);
+    expect(releaseCount(releaseSpy, resetMesh.material)).toBe(1);
+    expect(releaseCount(releaseSpy, resetMesh.mesh)).toBe(1);
+    expect(world.sharedRefs.refcount(billboardMaterial)).toBe(0);
+    expect(world.sharedRefs.refcount(meshMaterial)).toBe(0);
+    expect(world.sharedRefs.refcount(meshAsset)).toBe(0);
+    expect(world.sharedRefs.refcount(replayMesh.material)).toBe(0);
+    expect(world.sharedRefs.refcount(replayMesh.mesh)).toBe(0);
+    expect(world.sharedRefs.refcount(resetMesh.material)).toBe(0);
+    expect(world.sharedRefs.refcount(resetMesh.mesh)).toBe(0);
+    world.sharedRefs.release(initialEffect);
+    world.sharedRefs.release(replacementEffect);
   });
 });

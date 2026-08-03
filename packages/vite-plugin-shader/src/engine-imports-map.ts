@@ -13,7 +13,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
 /** Regex matching the first `#define_import_path <path>` header line. */
-const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/m;
+const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_.:-]+)/m;
 
 /**
  * Scan one or more engine shader root directories for all `*.wgsl` files,

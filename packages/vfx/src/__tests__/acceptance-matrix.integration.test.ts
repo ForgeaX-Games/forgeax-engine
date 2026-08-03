@@ -181,10 +181,11 @@ describe('Wave 1 acceptance matrix', () => {
     for (const entry of matrix) expect(entry.verified, entry.id).toBe(true);
   });
 
-  it('records RenderFeature compatibility only as the later Wave 1 Gate', () => {
+  it('records completed compatibility without moving RenderFeature into VFX production', () => {
     const plan = readFileSync(resolve(repoRoot, 'docs/vfx-particle-runtime-design.md'), 'utf8');
-    expect(plan).toContain('Wave 1 Gate');
-    expect(plan).toContain('test-only adapter');
+    expect(plan).toContain('| Public compatibility | Complete |');
+    expect(plan).toContain('@forgeax/engine-vfx-render');
+    expect(plan).toContain('No production feature extracts');
     expect(publicText('src/index.ts')).not.toContain('RenderFeature');
   });
 });

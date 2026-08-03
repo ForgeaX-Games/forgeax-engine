@@ -145,6 +145,7 @@ import {
   worldRemoveResource,
   worldRemoveSystem,
   worldReplaceSystem,
+  worldScheduleData,
   worldSetErrorHandler,
   worldUpdate,
 } from './world-scheduling';
@@ -277,6 +278,42 @@ export interface WorldInspection {
   }>;
   /** Count systems in one explicit schedule. */
   scheduleSystemCount(schedule: import('./schedule-token').ScheduleToken): number;
+}
+
+/** JSON-safe schedule graph and access metadata returned by `world.scheduleData()`. */
+export interface WorldScheduleQueryData {
+  readonly with: readonly string[];
+  readonly without: readonly string[];
+  readonly optional: readonly string[];
+  readonly changed: readonly string[];
+  readonly added: readonly string[];
+}
+
+/** JSON-safe system registration and access metadata. */
+export interface WorldScheduleSystemData {
+  readonly name: string;
+  readonly sets: readonly string[];
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+  readonly queries: readonly WorldScheduleQueryData[];
+  readonly resources: readonly string[];
+}
+
+/** JSON-safe system-set membership and ordering metadata. */
+export interface WorldScheduleSetData {
+  readonly name: string;
+  readonly members: readonly string[];
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+  readonly chained: boolean;
+}
+
+/** JSON-safe projection of one explicit World schedule. */
+export interface WorldScheduleData {
+  readonly name: string;
+  readonly systems: readonly WorldScheduleSystemData[];
+  readonly systemSets: readonly WorldScheduleSetData[];
+  readonly dependencies: readonly (readonly [string, string])[];
 }
 
 /**
@@ -769,6 +806,11 @@ export class World {
    */
   inspect(): WorldInspection {
     return worldInspect(this);
+  }
+
+  /** Return the registered schedule graphs and their declared access metadata. */
+  scheduleData(): ReadonlyArray<WorldScheduleData> {
+    return worldScheduleData(this);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
