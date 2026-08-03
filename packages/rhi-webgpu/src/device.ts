@@ -1610,10 +1610,33 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       return ok(out as unknown as PipelineLayout);
     },
     createRenderPipeline(desc: RenderPipelineDescriptor): Result<RenderPipeline, RhiError> {
-      const out = rawDevice.createRenderPipeline(
-        mirror(desc, RPP_KEYS) as unknown as GPURenderPipelineDescriptor,
-      );
-      return ok(out as unknown as RenderPipeline);
+      try {
+        const out = rawDevice.createRenderPipeline(
+          mirror(desc, RPP_KEYS) as unknown as GPURenderPipelineDescriptor,
+        );
+        return ok(out as unknown as RenderPipeline);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        // Keep synchronous render-pipeline creation on the same structured
+        // Result boundary as compute-pipeline creation. A failed PSO must not
+        // escape as an exception and abort the caller's whole frame.
+        if (/compile|shader|wgsl/i.test(message)) {
+          return err(
+            new RhiErrorClass({
+              code: 'shader-compile-failed',
+              expected: 'render shader modules + entry points to be valid',
+              hint: `compile error: ${message}`,
+            }),
+          );
+        }
+        return err(
+          new RhiErrorClass({
+            code: 'webgpu-runtime-error',
+            expected: 'underlying GPUDevice.createRenderPipeline to succeed',
+            hint: `createRenderPipeline raised: ${message}`,
+          }),
+        );
+      }
     },
     createComputePipeline(desc: ComputePipelineDescriptor): Result<ComputePipeline, RhiError> {
       // Capability gate (research §1.2 NOTE; plan-strategy §4.3 boundary

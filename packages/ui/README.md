@@ -145,4 +145,4 @@ Interactive asset elements opt in with `pointer-events: auto`. The input package
 
 Handle `UiError` by its closed `code` union and machine-readable `detail`; do not parse message strings. Do not silently mount to `document.body`, create a second UI manager, inject stable markup from TS, or hide a missing asset behind an empty root.
 
-The independent Gallery/Preview Workbench, scenario matrix, visual baseline workflow, external design adapters, AI iteration workbench, and editor Content Browser integration belong to the follow-up design: [`2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md`](../../docs/specs/2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md).
+The independent Gallery/Preview Workbench, scenario matrix, visual baseline workflow, external design adapters, AI iteration workbench, and editor Content Browser integration belong to the follow-up design: [`2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/specs/2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md).

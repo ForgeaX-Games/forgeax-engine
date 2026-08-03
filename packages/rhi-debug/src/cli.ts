@@ -26,6 +26,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { defaultConnect } from '@forgeax/engine-types/inspector-client';
 import { DebugError } from './errors';
@@ -1059,10 +1060,13 @@ async function triggerBrowserDispatch(args: string[]): Promise<void> {
 
 // Guard so importing this module (tests, the ./cli subpath) does not auto-run
 // the CLI. When tsup bundles to dist/cli.mjs with the package.json#bin entry,
-// `node dist/cli.mjs <subcommand>` matches import.meta.url against argv[1].
+// `node dist/cli.mjs <subcommand>` compares canonical paths so workspace
+// symlinks and relative argv[1] values still reach the public entry point.
 const invokedPath =
   typeof process !== 'undefined' && Array.isArray(process.argv) ? process.argv[1] : undefined;
-if (invokedPath !== undefined && import.meta.url === new URL(`file://${invokedPath}`).href) {
+const invokedRealPath = invokedPath === undefined ? undefined : fs.realpathSync(invokedPath);
+const moduleRealPath = fs.realpathSync(fileURLToPath(import.meta.url));
+if (invokedRealPath !== undefined && invokedRealPath === moduleRealPath) {
   main(process.argv).catch((e: unknown) => {
     process.stderr.write(`Fatal: ${e instanceof Error ? e.message : String(e)}\n`);
     process.exit(1);

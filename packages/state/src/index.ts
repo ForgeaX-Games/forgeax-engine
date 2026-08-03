@@ -1,7 +1,6 @@
-// @forgeax/engine-state -- public barrel (feat-20260616-engine-state-and-state-scoped-entities M1)
+// @forgeax/engine-state -- public barrel
 //
-// Single-entry surface: defineState + StateToken + Resources + errors.
-// registerStatesPlugin / setNextState / transition system deferred to M2/M3.
+// Single-entry surface for typed state definitions, transitions, lifecycle, and inspection.
 
 export { inState } from './conditions';
 export type {
@@ -29,7 +28,6 @@ export type {
 export {
   addOnEnter,
   addOnExit,
-  getCallbacks,
   OnEnter,
   OnExit,
 } from './on-enter-on-exit';

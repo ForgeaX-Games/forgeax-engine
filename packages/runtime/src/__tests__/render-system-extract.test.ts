@@ -14,6 +14,7 @@ import {
   Camera,
   DirectionalLight,
   extractFrame,
+  extractFrames,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -342,6 +343,37 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       expect(frame.renderables).toHaveLength(0);
       expect(frame.frustumStats).toEqual({ culled: 1, total: 1 });
+    });
+
+    it('cross-world extract keeps frustum culling against the surfaced camera-owner camera', () => {
+      const cameraWorld = new World();
+      cameraWorld
+        .spawn(
+          { component: Transform, data: identity() },
+          { component: Camera, data: perspectiveCameraData() },
+        )
+        .unwrap();
+
+      const sceneWorld = new World();
+      sceneWorld
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 0] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: {} },
+        )
+        .unwrap();
+      sceneWorld
+        .spawn(
+          { component: Transform, data: { ...identity(), pos: [0, 0, 200] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: {} },
+        )
+        .unwrap();
+
+      const frame = extractFrames([cameraWorld, sceneWorld], { cameraOwner: 0, resourceOwner: 1 });
+
+      expect(frame.renderables).toHaveLength(1);
+      expect(frame.frustumStats).toEqual({ culled: 1, total: 2 });
     });
 
     it('AC-02: malformed MeshAsset AABBs stay conservative and out of cull statistics', () => {

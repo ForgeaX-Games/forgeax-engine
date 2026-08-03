@@ -6,6 +6,7 @@
 // the produced set stays a subset of the declared set (mirrors gltfImporter).
 // The import-runner then validates produced == declared and rejects mismatches.
 
+import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
 import { packMeshBin } from '@forgeax/engine-import';
 import { box3 } from '@forgeax/engine-math';
 import type {
@@ -21,6 +22,7 @@ import type {
   SkinPod,
   TexturePod,
 } from '@forgeax/engine-types';
+import { buildFbxNodePaths } from './parse-scene.js';
 
 type SubAsset = { readonly guid: string; readonly sourceIndex: number; readonly kind: string };
 
@@ -230,6 +232,7 @@ interface SceneBuildContext {
    * resolveSkinGuids accept both shapes).
    */
   readonly skinGuids: readonly string[];
+  readonly animationTargetIds: ReadonlySet<string>;
 }
 
 function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): ImportedAsset {
@@ -240,6 +243,14 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
     const e = pod.entities[i];
     if (!e) continue;
     for (const childIdx of e.children ?? []) parentOf.set(childIdx, i);
+  }
+  const targetIdByEntity = new Map<number, string>();
+  const nodePaths = buildFbxNodePaths(pod.entities);
+  for (let index = 0; index < nodePaths.length; index++) {
+    const path = nodePaths[index];
+    if (path === undefined || !path.ok) continue;
+    const targetId = deriveAnimationTargetId(path.value);
+    if (ctx.animationTargetIds.has(targetId)) targetIdByEntity.set(index, targetId);
   }
 
   const entities = pod.entities.map((e, idx) => {
@@ -260,6 +271,8 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
     // Name is required for postSpawnResolveJoints to match SkinAsset.jointPaths
     // against the spawned subtree (the skeleton joint resolution path).
     if (e.name) components.Name = { value: e.name };
+    const targetId = targetIdByEntity.get(idx);
+    if (targetId !== undefined) components.AnimationTargetId = { value: targetId };
 
     const parent = parentOf.get(idx);
     if (parent !== undefined) components.ChildOf = { parent };
@@ -464,7 +477,7 @@ export function toAssetPack(params: {
         name: clip.name ?? `Clip${i}`,
         duration: clip.duration,
         channels: clip.channels.map((ch) => ({
-          targetPath: ch.targetPath,
+          targetId: ch.targetId,
           property: ch.property,
           sampler: {
             input: Array.from(ch.sampler.input),
@@ -479,6 +492,9 @@ export function toAssetPack(params: {
   }
 
   const sceneGuid = guidOf('scene', 0);
+  const animationTargetIds = new Set(
+    params.animationClips.flatMap((clip) => clip.channels.map((channel) => channel.targetId)),
+  );
   if (sceneGuid !== undefined) {
     assets.push(
       buildSceneAsset(params.scene, sceneGuid, {
@@ -489,6 +505,7 @@ export function toAssetPack(params: {
         skeletonHandle,
         refs: sceneRefs,
         skinGuids,
+        animationTargetIds,
       }),
     );
   }

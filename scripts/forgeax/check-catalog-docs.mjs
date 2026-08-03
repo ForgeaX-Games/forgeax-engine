@@ -96,7 +96,7 @@ const materialDocuments = [
   ['skills/forgeax-engine-shader/SKILL.md', 'Route'],
   ['skills/forgeax-engine-assets/SKILL.md', 'Material assets follow'],
   ['rules/forgeax-engine-usage.md', 'MaterialAsset route'],
-  ['docs/material-asset-migration.md', 'MaterialAsset migration'],
+  ['.forgeax-harness/docs/material-asset-migration.md', 'MaterialAsset migration'],
 ];
 
 const materialRecoveryCodes = [
@@ -182,7 +182,7 @@ async function checkMaterialDocuments(root) {
           `engine/${relativePath}: remove retired material term ${JSON.stringify(token)}`,
         );
     }
-    if (relativePath === 'docs/material-asset-migration.md') {
+    if (relativePath === '.forgeax-harness/docs/material-asset-migration.md') {
       for (const token of materialRecoveryCodes) {
         if (!source.includes(token))
           failures.push(`engine/${relativePath}: document recovery code ${JSON.stringify(token)}`);

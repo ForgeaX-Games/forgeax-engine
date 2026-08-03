@@ -16,9 +16,11 @@
 //
 // Related: m7-4; t6; requirements AC-10/AC-22.
 
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   getCaptureFrameHelp,
@@ -186,6 +188,30 @@ describe('CLI --help output', () => {
       expect(help).toContain('reportPath');
       expect(help).toContain('runId');
     });
+  });
+});
+
+describe('CLI module entry', () => {
+  it('runs through a workspace symlink instead of silently exiting', () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const cliPath = path.join(repoRoot, 'packages/rhi-debug/dist/cli.mjs');
+    expect(fs.existsSync(cliPath)).toBe(true);
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rhi-debug-cli-entry-'));
+    const symlinkPath = path.join(dir, 'forgeax-rhi-debug.mjs');
+    fs.symlinkSync(cliPath, symlinkPath);
+
+    try {
+      const result = spawnSync(process.execPath, [symlinkPath, 'summary', '--help'], {
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('Usage: summary <tapePath>');
+      expect(result.stderr).toBe('');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

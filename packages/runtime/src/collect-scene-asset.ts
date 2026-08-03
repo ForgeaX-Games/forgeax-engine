@@ -292,6 +292,10 @@ export function serializeSceneAssetToPack(
       if (!fields) continue;
       const serializedFields: Record<string, unknown> = {};
       const schema = comp?.schema;
+      if (schema !== undefined && Object.keys(schema).length === 0) {
+        serializedComps[compName] = {};
+        continue;
+      }
       for (const fieldName of Object.keys(fields)) {
         const value = fields[fieldName];
         if (value === undefined) continue;
@@ -734,7 +738,14 @@ export function rootsToSceneAsset(
       if (!comp?.schema) continue;
 
       const schemaKeys = Object.keys(comp.schema);
-      if (schemaKeys.length === 0) continue;
+      // Empty-schema components are authored marker components, not absent
+      // state. Preserve their presence through scene-pack round-trips (for
+      // example AudioListener); transient markers have already been excluded
+      // above and therefore remain derived-only by declaration.
+      if (schemaKeys.length === 0) {
+        components[compName] = {};
+        continue;
+      }
 
       const fieldValues: Record<string, unknown> = {};
 

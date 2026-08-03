@@ -320,13 +320,18 @@ globalThis.fetch = async (url, ...rest) => {
 };
 
 // --- 4. Engine bootstrap ---
-const { World } = await import('@forgeax/engine-ecs');
+const { ENTITY_NULL_RAW, World } = await import('@forgeax/engine-ecs');
 const { Transform } = await import('@forgeax/engine-scene');
 const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
 const { Skin } = await import('@forgeax/engine-skinning');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { SceneInstance } = await import('@forgeax/engine-render');
-const { AnimationPlayer, registerAdvanceAnimationPlayer } = await import('@forgeax/engine-animation');
+const {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+  registerAdvanceAnimationPlayer,
+} = await import('@forgeax/engine-animation');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const MANIFEST_PATH = resolve(DIST_DIR, 'shaders', 'manifest.json');
@@ -374,9 +379,11 @@ console.log('[smoke] scene instantiated via loadByGuid<SceneAsset> (skin joints 
 const inst = world.get(sceneRoot, SceneInstance);
 if (!inst.ok) { console.error('[smoke] FAIL - scene root has no SceneInstance'); process.exit(1); }
 let skinEnt;
+const animationTargets = [];
 for (const raw of inst.value.mapping) {
-  if (raw === undefined || raw === 0) continue;
-  if (world.get(raw, Skin).ok) { skinEnt = raw; break; }
+  if (raw === undefined || raw === ENTITY_NULL_RAW) continue;
+  if (world.get(raw, AnimationTargetId).ok) animationTargets.push(raw);
+  if (skinEnt === undefined && world.get(raw, Skin).ok) skinEnt = raw;
 }
 if (skinEnt === undefined) { console.error('[smoke] FAIL - no Skin entity in instantiated scene'); process.exit(1); }
 
@@ -389,7 +396,7 @@ const clipHandle = world.allocSharedRef('AnimationClip', clipRes.value);
 // FALSIFY=static: pause the player so world.update(1 / 60).unwrap() cannot advance time; the
 // joint palette is re-uploaded with the same t=0 pose every frame, so the
 // distinct-hash count collapses to 1 and the "pose animates" gate trips.
-world.addComponent(skinEnt, {
+world.addComponent(sceneRoot, {
   component: AnimationPlayer,
   data: {
     // feat-20260713 M1 / w8: variable N-slot SoA. Single active slot -- all
@@ -403,6 +410,11 @@ world.addComponent(skinEnt, {
     looping: true,
   },
 });
+const bound = bindAnimationTargets(world, sceneRoot, animationTargets);
+if (!bound.ok) {
+  console.error('[smoke] FAIL - bindAnimationTargets:', bound.error.code);
+  process.exit(1);
+}
 
 // Camera + directional light. humanoid.fbx is in cm; ~150-unit body.
 world.spawn(

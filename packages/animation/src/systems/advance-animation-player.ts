@@ -35,11 +35,11 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //   - resolver miss          : skip slot
 //   - weights[i] < 0         : clamped via max(0, w); not written back (D-7)
 //   - duration mismatch      : per-slot modulo on its own duration
-//   - channel leaf mismatch  : skip channel
+//   - channel target missing : skip channel
 //   - channel missing on slot: per-channel normalize covers it
 //
 // w5 layers a dev-mode warn pass on top of these silent skips
-// (channel-leaf-mismatch / channel-missing-on-some-slot, once per
+// (channel-target-missing / channel-missing-on-some-slot, once per
 // (entity, channelKey, reason)).
 //
 // Decision anchors:
@@ -58,10 +58,15 @@ import {
   Entity,
   queryRun,
 } from '@forgeax/engine-ecs';
-import { Children, Name, Transform } from '@forgeax/engine-scene';
-import { Skin } from '@forgeax/engine-skinning';
+import { Transform } from '@forgeax/engine-scene';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
+import {
+  _resetAnimationWarnsForTests,
+  emitAnimationDiagnostic,
+  isAnimationDevMode,
+} from '../animation-diagnostic';
 import { AnimationPlayer } from '../animation-player';
+import { AnimationTargetId, AnimationTargets } from '../animation-target';
 import { AnimationPlayerSlotLengthMismatchError } from '../player-errors';
 import { resolveAnimationAsset } from '../resolve-animation-asset';
 
@@ -73,69 +78,7 @@ import { resolveAnimationAsset } from '../resolve-animation-asset';
 export const ADVANCE_ANIMATION_PLAYER_SYSTEM = 'advanceAnimationPlayer' as const;
 export const AnimationSet = defineSystemSet({ name: 'animation' });
 
-// ────────────────────────────────────────────────────────────────────────────
-// Dev-mode warn throttle (plan-strategy D-2 / charter P3)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Module-level WeakMap keyed by World — once-per-(entity, channelKey, reason)
- * warn dedupe (D-2). WeakMap lets a disposed World GC its set automatically;
- * tests reset via `_resetAnimationWarnsForTests`. Production code never
- * clears: a long-running scene accumulates one entry per distinct triple,
- * which is bounded by entity * channel * 2 reasons.
- */
-const warnedKeysByWorld: WeakMap<World, Set<string>> = new WeakMap();
-
-type WarnReason = 'channel-leaf-mismatch' | 'channel-missing-on-some-slot';
-
-/**
- * Returns `true` exactly once per (world, entityId, clipHandleRaw, channelIdx,
- * reason) tuple — subsequent calls with the same tuple return `false`. Caller
- * gates the actual `console.warn` so an emitted warn is guaranteed unique.
- */
-function shouldWarnOnce(
-  world: World,
-  entityId: number,
-  clipHandleRaw: number,
-  channelIdx: number,
-  reason: WarnReason,
-): boolean {
-  let bag = warnedKeysByWorld.get(world);
-  if (bag === undefined) {
-    bag = new Set();
-    warnedKeysByWorld.set(world, bag);
-  }
-  const key = `${entityId}|${clipHandleRaw}|${channelIdx}|${reason}`;
-  if (bag.has(key)) return false;
-  bag.add(key);
-  return true;
-}
-
-/**
- * @internal — Test-only seam: clear the per-World warn-key cache so a test
- * file can replay several `advanceAnimationPlayer` cycles and assert that
- * warns fire once per (entity, channelKey, reason) triple in each replay.
- * Production callers MUST NOT use this — production frames intentionally
- * accumulate the dedupe set so silent-after-first behaviour holds.
- */
-export function _resetAnimationWarnsForTests(world: World): void {
-  warnedKeysByWorld.delete(world);
-}
-
-/**
- * Vite constant-folds `import.meta.env.DEV` at build time so production
- * dead-code-strips this branch. The `process.env.NODE_ENV` fallback covers
- * tsup / esbuild / dawn-node where `import.meta.env` is undefined. Mirrors
- * the seam shape used by `isMeshSsboDevMode` in render-system-record.ts.
- */
-function isAnimDevMode(): boolean {
-  const importMetaDev = (import.meta as { env?: { DEV?: unknown } }).env?.DEV;
-  if (importMetaDev) return true;
-  const proc = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
-  if (proc === undefined) return false;
-  if (proc.env?.NODE_ENV === 'production') return false;
-  return true;
-}
+export { _resetAnimationWarnsForTests };
 
 /**
  * Advance all AnimationPlayer components by dt, blend the N active clips per
@@ -182,7 +125,6 @@ interface PlayerColumns {
   readonly speeds: Float32Array;
   readonly paused: boolean;
   readonly looping: boolean;
-  readonly targetRoot: EntityHandle | null;
 }
 
 /**
@@ -223,79 +165,7 @@ function advanceOnePlayer(world: World, entityRaw: number, dt: number): void {
   world.set(entity, AnimationPlayer, { times: newTimes });
 
   if (activeSlots.length === 0) return;
-  if (ap.targetRoot !== null && ap.targetRoot !== ENTITY_NULL_RAW) {
-    tickEntityTargets(world, entityRaw, ap.targetRoot, activeSlots);
-  } else {
-    tickEntityJoints(world, entity, entityRaw, activeSlots);
-  }
-}
-
-/**
- * Apply channels to ordinary scene Transforms rooted at AnimationPlayer.targetRoot.
- * Skin playback remains a separate path because Skin.joints is already the
- * resolved binding for imported rigs; code-authored scenes use the same clip
- * channel contract with Name/Children path resolution instead.
- */
-function tickEntityTargets(
-  world: World,
-  entityRaw: number,
-  targetRoot: EntityHandle,
-  activeSlots: ActiveSlot[],
-): void {
-  const accumulators = new Map<EntityHandle, JointAccumulator>();
-  for (const slot of activeSlots) {
-    for (let chIdx = 0; chIdx < slot.clip.channels.length; chIdx++) {
-      const channel = slot.clip.channels[chIdx];
-      if (channel === undefined) continue;
-      const target = resolveTargetPath(world, targetRoot, channel.targetPath);
-      if (target === undefined) {
-        emitTargetMismatchWarn(world, entityRaw, slot.clipHandleRaw, chIdx, channel.targetPath);
-        continue;
-      }
-      const sampled = sampleChannel(channel.sampler, slot.time);
-      if (sampled === undefined) continue;
-      let acc = accumulators.get(target);
-      if (acc === undefined) {
-        acc = createAccumulator();
-        accumulators.set(target, acc);
-      }
-      foldChannelIntoAccumulator(acc, channel.property, sampled, slot.weight);
-    }
-  }
-  for (const [target, acc] of accumulators) {
-    if (!world.get(target, Transform).ok) continue;
-    const partial = finalizeAccumulator(acc);
-    if (Object.keys(partial).length > 0) world.set(target, Transform, partial);
-  }
-}
-
-function resolveTargetPath(
-  world: World,
-  root: EntityHandle,
-  path: readonly string[],
-): EntityHandle | undefined {
-  if (path.length === 0) return undefined;
-  let current = root;
-  let index = 0;
-  const rootName = world.get(current, Name);
-  if (rootName.ok && rootName.value.value === path[0]) index = 1;
-  for (; index < path.length; index++) {
-    const wanted = path[index];
-    if (wanted === undefined) return undefined;
-    const children = world.get(current, Children);
-    if (!children.ok) return undefined;
-    let next: EntityHandle | undefined;
-    for (const child of children.value.entities) {
-      const childName = world.get(child as EntityHandle, Name);
-      if (childName.ok && childName.value.value === wanted) {
-        next = child as EntityHandle;
-        break;
-      }
-    }
-    if (next === undefined) return undefined;
-    current = next;
-  }
-  return current;
+  tickEntityTargets(world, entity, entityRaw, activeSlots);
 }
 
 /**
@@ -354,30 +224,60 @@ function collectActiveSlotsAndAdvanceTimes(
 }
 
 /**
- * Joint-write pass for one entity: requires Skin + at least one joint;
- * folds every active-slot channel into a per-joint TRS accumulator (linear
+ * Target-write pass for one player: resolves its explicit target mirror and
+ * folds every active-slot channel into a per-target TRS accumulator (linear
  * for translation/scale, nlerp with sign-fixed reference for rotation),
  * then writes one `world.set(joint, Transform, ...)` per touched joint.
  *
  * Dev-mode warns (D-2):
- *   - channel-leaf-mismatch: a clip channel's leaf does not resolve to any
- *     joint name on this entity's Skin. Once per (entityId, clip, chIdx).
+ *   - channel-target-missing: a clip channel ID does not resolve in this
+ *     player's explicit target set. Once per (entityId, clip, chIdx).
  *   - channel-missing-on-some-slot: a (joint, kind) tuple is covered by
  *     some slot but missing on another. The warn is emitted once per
  *     (entityId, the-covering-slot's-clip, that-slot's-chIdx) so users
  *     find the authoring point that has the channel; per-channel sumW
  *     normalize covers the runtime gap regardless.
  */
-function tickEntityJoints(
+interface TargetMap {
+  readonly entities: ReadonlyMap<string, EntityHandle>;
+  readonly duplicateIds: ReadonlySet<string>;
+  readonly hasStaleTarget: boolean;
+}
+
+function buildTargetMap(world: World, player: EntityHandle): TargetMap {
+  const targets = world.get(player, AnimationTargets);
+  if (!targets.ok) {
+    return { entities: new Map(), duplicateIds: new Set(), hasStaleTarget: false };
+  }
+  const result = new Map<string, EntityHandle>();
+  const ambiguous = new Set<string>();
+  let hasStaleTarget = false;
+  for (const raw of targets.value.targets) {
+    if (raw === ENTITY_NULL_RAW) continue;
+    const target = raw as EntityHandle;
+    const id = world.get(target, AnimationTargetId);
+    if (!id.ok) {
+      hasStaleTarget = true;
+      continue;
+    }
+    if (ambiguous.has(id.value.value)) continue;
+    if (result.has(id.value.value)) {
+      result.delete(id.value.value);
+      ambiguous.add(id.value.value);
+      continue;
+    }
+    result.set(id.value.value, target);
+  }
+  return { entities: result, duplicateIds: ambiguous, hasStaleTarget };
+}
+
+function tickEntityTargets(
   world: World,
   entity: EntityHandle,
   entityRaw: number,
   activeSlots: ActiveSlot[],
 ): void {
-  const skinResult = world.get(entity, Skin);
-  if (!skinResult.ok) return;
-  const skinJoints = skinResult.value.joints;
-  if (skinJoints.length === 0) return;
+  const targetMap = buildTargetMap(world, entity);
 
   // Per-joint accumulator: lazily allocated when first channel writes.
   // A Map keyed by jointIndex keeps the typical case (a few animated
@@ -386,9 +286,9 @@ function tickEntityJoints(
   // Per-slot signature of (joint, channel-kind) coverage — used to detect
   // channel-missing-on-some-slot once at the end of the channel walk. Lazy
   // build only when there are 2+ active slots and dev-mode is on (warn pass
-  // is dead in production via isAnimDevMode constant fold).
+  // is skipped in production by the shared diagnostics mode gate).
   const slotCoverage: SlotCoverage[] = [];
-  const wantsCoverage = activeSlots.length >= 2 && isAnimDevMode();
+  const wantsCoverage = activeSlots.length >= 2 && isAnimationDevMode();
   if (wantsCoverage) {
     for (let i = 0; i < activeSlots.length; i++) slotCoverage.push(new Map());
   }
@@ -399,29 +299,31 @@ function tickEntityJoints(
     for (let chIdx = 0; chIdx < slot.clip.channels.length; chIdx++) {
       // biome-ignore lint/style/noNonNullAssertion: bounded by channels.length
       const channel = slot.clip.channels[chIdx]!;
-      const leaf = channel.targetPath[channel.targetPath.length - 1];
-      if (leaf === undefined) continue;
-
-      const jointIndex = resolveJointIndexByName(world, skinJoints, leaf);
-      if (jointIndex < 0 || jointIndex >= skinJoints.length) {
-        emitLeafMismatchWarn(world, entityRaw, slot.clipHandleRaw, chIdx, leaf);
-        continue;
-      }
+      const target = resolveChannelTarget(
+        world,
+        entityRaw,
+        slot.clipHandleRaw,
+        chIdx,
+        channel.targetId,
+        targetMap,
+      );
+      if (target === undefined) continue;
+      const targetRaw = target as number;
 
       const sampled = sampleChannel(channel.sampler, slot.time);
       if (sampled === undefined) continue;
 
-      let acc = accumulators.get(jointIndex);
+      let acc = accumulators.get(targetRaw);
       if (acc === undefined) {
         acc = createAccumulator();
-        accumulators.set(jointIndex, acc);
+        accumulators.set(targetRaw, acc);
       }
 
       foldChannelIntoAccumulator(acc, channel.property, sampled, slot.weight);
 
       if (wantsCoverage) {
         // biome-ignore lint/style/noNonNullAssertion: parallel to activeSlots
-        recordSlotCoverage(slotCoverage[slotIdx]!, jointIndex, channel.property, chIdx);
+        recordSlotCoverage(slotCoverage[slotIdx]!, channel.targetId, channel.property, chIdx);
       }
     }
   }
@@ -430,21 +332,67 @@ function tickEntityJoints(
     emitMissingOnSomeSlotWarns(world, entityRaw, activeSlots, slotCoverage);
   }
 
-  for (const [jointIndex, acc] of accumulators) {
-    const jointHandle = skinJoints[jointIndex];
-    if (jointHandle === undefined) continue;
-    // ENTITY_NULL_RAW (0xFFFFFFFF) is the invalid-entity sentinel;
-    // handle 0 (index=0, gen=0) is valid in the ECS index space.
-    if (jointHandle === ENTITY_NULL_RAW) continue;
-    const jointEntity = jointHandle as unknown as EntityHandle;
-    const jointTransform = world.get(jointEntity, Transform as never);
-    if (!jointTransform.ok) continue;
-
+  for (const [targetRaw, acc] of accumulators) {
+    const target = targetRaw as EntityHandle;
     const partial = finalizeAccumulator(acc);
     if (Object.keys(partial).length > 0) {
-      world.set(jointEntity, Transform as never, partial as never);
+      world.set(target, Transform as never, partial as never);
     }
   }
+}
+
+function resolveChannelTarget(
+  world: World,
+  player: number,
+  clip: number,
+  channel: number,
+  targetId: string,
+  targetMap: TargetMap,
+): EntityHandle | undefined {
+  if (targetMap.duplicateIds.has(targetId)) {
+    emitTargetDiagnostic(
+      world,
+      player,
+      clip,
+      channel,
+      targetId,
+      'animation-target-id-duplicate',
+      'target-id-duplicate',
+      'assign a unique AnimationTargetId to each target owned by this player',
+    );
+    return undefined;
+  }
+  const target = targetMap.entities.get(targetId);
+  if (target === undefined) {
+    emitTargetDiagnostic(
+      world,
+      player,
+      clip,
+      channel,
+      targetId,
+      targetMap.hasStaleTarget ? 'animation-target-owner-stale' : 'animation-target-missing',
+      targetMap.hasStaleTarget ? 'target-stale' : 'target-missing',
+      targetMap.hasStaleTarget
+        ? 'remove the stale target relation or bind a live replacement'
+        : 'bind the matching AnimationTargetId to this player',
+    );
+    return undefined;
+  }
+  if (!world.get(target, Transform).ok) {
+    emitTargetDiagnostic(
+      world,
+      player,
+      clip,
+      channel,
+      targetId,
+      'animation-target-transform-missing',
+      'transform-missing',
+      'attach Transform to the bound animation target',
+      target as number,
+    );
+    return undefined;
+  }
+  return target;
 }
 
 /**
@@ -455,48 +403,49 @@ function tickEntityJoints(
  * authoring channel that exposed the asymmetry.
  */
 type ChannelKind = AnimationChannel['property'];
-type SlotCoverage = Map<number, Map<ChannelKind, number>>;
+type SlotCoverage = Map<string, Map<ChannelKind, number>>;
 
 function recordSlotCoverage(
   cov: SlotCoverage,
-  jointIndex: number,
+  targetId: string,
   kind: ChannelKind,
   chIdx: number,
 ): void {
-  let perJoint = cov.get(jointIndex);
-  if (perJoint === undefined) {
-    perJoint = new Map();
-    cov.set(jointIndex, perJoint);
+  let perTarget = cov.get(targetId);
+  if (perTarget === undefined) {
+    perTarget = new Map();
+    cov.set(targetId, perTarget);
   }
-  if (!perJoint.has(kind)) perJoint.set(kind, chIdx);
+  if (!perTarget.has(kind)) perTarget.set(kind, chIdx);
 }
 
-function emitLeafMismatchWarn(
+function emitTargetDiagnostic(
   world: World,
   entityRaw: number,
   clipHandleRaw: number,
   chIdx: number,
-  leaf: string,
+  targetId: string,
+  code:
+    | 'animation-target-missing'
+    | 'animation-target-transform-missing'
+    | 'animation-target-id-duplicate'
+    | 'animation-target-owner-stale',
+  reason: 'target-missing' | 'transform-missing' | 'target-id-duplicate' | 'target-stale',
+  hint: string,
+  target?: number,
 ): void {
-  if (!isAnimDevMode()) return;
-  if (!shouldWarnOnce(world, entityRaw, clipHandleRaw, chIdx, 'channel-leaf-mismatch')) return;
-  console.warn(
-    `[advanceAnimationPlayer] entity=${entityRaw} channel=${clipHandleRaw}:${chIdx} reason=channel-leaf-mismatch joint=${leaf} hint=add a Skin joint named '${leaf}' or rename the clip's targetPath leaf`,
-  );
-}
-
-function emitTargetMismatchWarn(
-  world: World,
-  entityRaw: number,
-  clipHandleRaw: number,
-  chIdx: number,
-  path: readonly string[],
-): void {
-  if (!isAnimDevMode()) return;
-  if (!shouldWarnOnce(world, entityRaw, clipHandleRaw, chIdx, 'channel-leaf-mismatch')) return;
-  console.warn(
-    `[advanceAnimationPlayer] entity=${entityRaw} channel=${clipHandleRaw}:${chIdx} reason=channel-leaf-mismatch targetPath=${path.join('/')} hint=add matching Name and ChildOf components below AnimationPlayer.targetRoot`,
-  );
+  emitAnimationDiagnostic(world, {
+    code,
+    hint,
+    detail: {
+      player: entityRaw,
+      clip: clipHandleRaw,
+      channel: chIdx,
+      targetId,
+      reason,
+      ...(target === undefined ? {} : { target }),
+    },
+  });
 }
 
 /**
@@ -513,23 +462,23 @@ function emitMissingOnSomeSlotWarns(
   slotCoverage: SlotCoverage[],
 ): void {
   // Union over all slots: jointIndex -> Set<ChannelKind>.
-  const union: Map<number, Set<ChannelKind>> = new Map();
+  const union: Map<string, Set<ChannelKind>> = new Map();
   for (const cov of slotCoverage) {
-    for (const [jointIndex, kindMap] of cov) {
-      let set = union.get(jointIndex);
+    for (const [targetId, kindMap] of cov) {
+      let set = union.get(targetId);
       if (set === undefined) {
         set = new Set();
-        union.set(jointIndex, set);
+        union.set(targetId, set);
       }
       for (const kind of kindMap.keys()) set.add(kind);
     }
   }
 
-  for (const [jointIndex, unionKinds] of union) {
+  for (const [targetId, unionKinds] of union) {
     for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
       // biome-ignore lint/style/noNonNullAssertion: parallel arrays
       const cov = slotCoverage[slotIdx]!;
-      const slotKinds = cov.get(jointIndex);
+      const slotKinds = cov.get(targetId);
       for (const kind of unionKinds) {
         if (slotKinds?.has(kind)) continue;
         // This slot is missing `kind` on jointIndex. Find the slot that
@@ -538,25 +487,24 @@ function emitMissingOnSomeSlotWarns(
           if (coveringIdx === slotIdx) continue;
           // biome-ignore lint/style/noNonNullAssertion: parallel arrays
           const coveringCov = slotCoverage[coveringIdx]!;
-          const coveringKinds = coveringCov.get(jointIndex);
+          const coveringKinds = coveringCov.get(targetId);
           if (coveringKinds === undefined) continue;
           const chIdx = coveringKinds.get(kind);
           if (chIdx === undefined) continue;
           // biome-ignore lint/style/noNonNullAssertion: parallel arrays
           const coveringSlot = activeSlots[coveringIdx]!;
-          if (
-            shouldWarnOnce(
-              world,
-              entityRaw,
-              coveringSlot.clipHandleRaw,
-              chIdx,
-              'channel-missing-on-some-slot',
-            )
-          ) {
-            console.warn(
-              `[advanceAnimationPlayer] entity=${entityRaw} channel=${coveringSlot.clipHandleRaw}:${chIdx} reason=channel-missing-on-some-slot joint=${jointIndex} kind=${kind} hint=author the missing ${kind} channel on the slot whose clip lacks it, or accept per-channel normalize fallback`,
-            );
-          }
+          emitAnimationDiagnostic(world, {
+            code: 'animation-channel-missing',
+            hint: `author the missing ${kind} channel on the slot whose clip lacks it`,
+            detail: {
+              player: entityRaw,
+              clip: coveringSlot.clipHandleRaw,
+              channel: chIdx,
+              targetId,
+              reason: 'channel-missing',
+              property: kind,
+            },
+          });
           break;
         }
       }
@@ -716,34 +664,6 @@ function createAccumulator(): JointAccumulator {
     sumWScale: 0,
     hasScale: false,
   };
-}
-
-/**
- * Find the index of a joint in Skin.joints by leaf-name matching.
- *
- * Channel targetPath leaf-name is matched against the Name component of
- * every entity referenced from skinJoints. parse-animation emits
- * targetPath = [nodeName] from the glTF authoring side; postSpawnResolveJoints
- * stamps Name on every joint entity so this lookup is O(joints) per channel.
- */
-function resolveJointIndexByName(
-  world: World,
-  skinJoints: Uint32Array | readonly number[],
-  leaf: string,
-): number {
-  const len = (skinJoints as { length: number }).length;
-  for (let i = 0; i < len; i++) {
-    const ent = (skinJoints as Uint32Array | readonly number[])[i];
-    if (ent === undefined) continue;
-    // Note: handle 0 is a VALID entity (slot 0 + gen 0); do NOT short-circuit
-    // on `ent === 0`. world.get() does the liveness check itself and returns
-    // !ok for stale / despawned handles.
-    const nameRes = world.get(ent as unknown as EntityHandle, Name as never);
-    if (!nameRes.ok) continue;
-    const value = (nameRes.value as { value?: string }).value;
-    if (value === leaf) return i;
-  }
-  return -1;
 }
 
 /**

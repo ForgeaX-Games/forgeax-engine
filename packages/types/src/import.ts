@@ -1,4 +1,5 @@
 import type { AssetStageErrorBase } from './asset-errors.js';
+import type { SourceOverrideMap } from './asset-producer.js';
 import type { PackIndexEntry } from './catalog.js';
 import type { Asset, AssetCodec, AssetRef, ImageError, TextureAsset } from './index.js';
 
@@ -58,7 +59,11 @@ export type ImportErrorCode =
   | 'import-produced-no-assets'
   | 'guid-mismatch'
   | 'import-internal-error'
-  | 'source-validation-failed';
+  | 'source-validation-failed'
+  | 'unknown-source-key'
+  | 'duplicate-source-key'
+  | 'invalid-source-overrides'
+  | 'invalid-source-override-payload';
 
 /** A source range shared by all import diagnostics. */
 export interface ImportSourceRange {
@@ -133,6 +138,12 @@ export type ImportErrorDetail =
   | {
       /** Source-located authoring findings retained across the import boundary. */
       readonly diagnostics: readonly ImportDiagnostic[];
+    }
+  | {
+      /** Source override identity that failed Meta topology validation. */
+      readonly sourceKey?: string;
+      readonly declaredSourceKeys: readonly string[];
+      readonly reason?: string;
     };
 
 /**
@@ -148,12 +159,14 @@ export type ImportErrorDetail =
 export class ImportError extends Error {
   readonly code: ImportErrorCode;
   readonly expected: string;
+  readonly actual?: string;
   readonly hint: string;
   readonly detail: ImportErrorDetail;
 
   constructor(args: {
     code: ImportErrorCode;
     expected: string;
+    actual?: string;
     hint: string;
     detail: ImportErrorDetail;
   }) {
@@ -161,6 +174,7 @@ export class ImportError extends Error {
     this.name = 'ImportError';
     this.code = args.code;
     this.expected = args.expected;
+    if (args.actual !== undefined) this.actual = args.actual;
     this.hint = args.hint;
     this.detail = args.detail;
   }
@@ -185,6 +199,14 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
     'the importer failed at runtime; branch on err.detail: a conversion THROW carries err.detail.reason (the loaded importer threw while converting the source — an importer bug, not a meta / source problem), while a build-time module-LOAD failure carries err.detail.loadError (the host importer module / native addon could not be imported)',
   'source-validation-failed':
     'the source violates an import authoring rule; inspect err.detail.diagnostics fields (code, sourcePath, sourceRange, rule, expected, actual, hint, and relatedLocations) and fix the referenced source',
+  'unknown-source-key':
+    'sourceOverrides contains a key absent from meta.subAssets[]; refresh the producer topology and use one of err.detail.declaredSourceKeys',
+  'duplicate-source-key':
+    'the producer declared the same sourceKey more than once; repair the Meta topology before importing',
+  'invalid-source-overrides':
+    'sourceOverrides must be an object keyed by producer-owned sourceKey values',
+  'invalid-source-override-payload':
+    'each sourceOverrides value must be a producer-owned object validated by the importer',
 };
 
 /**
@@ -216,6 +238,8 @@ export interface ImportedAsset<P = Asset> {
 export interface ImportSubAsset {
   readonly guid: string;
   readonly sourceIndex: number;
+  /** Producer-owned semantic identity used to look up sourceOverrides. */
+  readonly sourceKey?: string;
   readonly kind: string;
 }
 
@@ -284,6 +308,8 @@ export interface ImportContext {
   >;
   readonly subAssets: readonly ImportSubAsset[];
   readonly importSettings: Readonly<Record<string, unknown>>;
+  /** Optional Meta author facts passed through without importer-kind branching. */
+  readonly sourceOverrides?: SourceOverrideMap;
 }
 
 /**

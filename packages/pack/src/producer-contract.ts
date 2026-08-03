@@ -3,7 +3,9 @@ import type {
   ImportedOutputDeclaration,
   ProducerContractDiagnostic,
   ProducerContractResult,
+  SourceOverrideMap,
 } from '@forgeax/engine-types';
+import { validateSourceOverrideMap } from '@forgeax/engine-types';
 
 type ProducerObject = Record<string, unknown>;
 
@@ -21,6 +23,7 @@ function issue(
   expected: string,
   hint: string,
   actual?: string,
+  authority: 'producer' | 'pack' = 'producer',
 ): ProducerContractResult<never> {
   const subject: AssetSubjectRef = { type: 'asset', id: subjectId };
   return {
@@ -31,7 +34,7 @@ function issue(
       expected,
       ...(actual === undefined ? {} : { actual }),
       hint,
-      authority: 'producer',
+      authority,
     },
   };
 }
@@ -117,6 +120,33 @@ function validateFacts(
   return { ok: true, value };
 }
 
+function validateMetaSourceOverrides(
+  value: ProducerObject,
+  subjectId: string,
+): ProducerContractResult<ProducerObject> {
+  if (!('sourceOverrides' in value)) return { ok: true, value };
+  const declaredSourceKeys = Array.isArray(value.subAssets)
+    ? value.subAssets.flatMap((subAsset) =>
+        isRecord(subAsset) && hasText(subAsset.sourceKey) ? [subAsset.sourceKey] : [],
+      )
+    : [];
+  const result = validateSourceOverrideMap(value.sourceOverrides, declaredSourceKeys);
+  if (!result.ok) {
+    return issue(
+      result.error.code,
+      subjectId,
+      result.error.expected,
+      result.error.hint,
+      result.error.actual,
+      'pack',
+    );
+  }
+  return {
+    ok: true,
+    value: { ...value, sourceOverrides: result.value as SourceOverrideMap | undefined },
+  };
+}
+
 /**
  * Validate one package or imported-output producer declaration.
  *
@@ -141,6 +171,9 @@ export function validateProducerContract(value: unknown): ProducerContractResult
       : 'unknown';
   const facts = validateFacts(value, subjectId);
   if (!facts.ok) return facts;
+
+  const metaOverrides = validateMetaSourceOverrides(value, subjectId);
+  if (!metaOverrides.ok) return metaOverrides;
 
   if ('kind' in value && !hasText(value.kind)) {
     return issue(
@@ -201,7 +234,7 @@ export function validateProducerContract(value: unknown): ProducerContractResult
       'declare only producer-verified prior kinds that may preserve the GUID',
     );
   }
-  return facts;
+  return metaOverrides;
 }
 
 /**

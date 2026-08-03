@@ -63,4 +63,31 @@ describe('change detection', () => {
     world.insertResource('ChangeDetectionResource', { value: 2 });
     expect(world.getResourceChange('ChangeDetectionResource')?.changed).toBe(1);
   });
+
+  it('does not mark variable arrays changed when reserving capacity', () => {
+    const Values = defineComponent('ReserveChangeDetectionValues', { values: 'array<u32>' });
+    const world = new World();
+    const entity = world.spawn({ component: Values, data: { values: [4, 5] } }).unwrap();
+    const changed = createQueryState<readonly [typeof Values, typeof Entity]>({
+      with: [Values, Entity],
+      changed: [Values],
+    });
+    const seen: number[] = [];
+
+    queryRun(changed, world, (bundle) => seen.push(bundle.Entity.self.length));
+    expect(seen).toEqual([1]);
+    seen.length = 0;
+    world.update(1 / 60).unwrap();
+
+    world.reserveArrayCapacity(entity, Values, 'values', 32).unwrap();
+    queryRun(changed, world, (bundle) => seen.push(bundle.Entity.self.length));
+    expect(seen).toEqual([]);
+
+    world.update(1 / 60).unwrap();
+    const failure = world.reserveArrayCapacity(entity, Values, 'values', 70_000);
+    expect(failure.ok).toBe(false);
+    queryRun(changed, world, (bundle) => seen.push(bundle.Entity.self.length));
+    expect(seen).toEqual([]);
+    expect([...world.get(entity, Values).unwrap().values]).toEqual([4, 5]);
+  });
 });

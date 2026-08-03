@@ -10,7 +10,10 @@ const compilerReadme = readFileSync(
   'utf8',
 );
 const typesReadme = readFileSync(resolve(packageRoot, '..', 'types', 'README.md'), 'utf8');
-const handoff = readFileSync(resolve(repoRoot, 'docs/vfx-particle-runtime-design.md'), 'utf8');
+const handoff = readFileSync(
+  resolve(repoRoot, '.forgeax-harness/docs/vfx-particle-runtime-design.md'),
+  'utf8',
+);
 const assetsSkill = readFileSync(
   resolve(repoRoot, 'skills/forgeax-engine-assets/SKILL.md'),
   'utf8',
@@ -65,7 +68,7 @@ describe('VFX documentation contract', () => {
       'packages/vfx/README.md',
       'packages/vfx-compiler/README.md',
       'packages/types/README.md',
-      'docs/vfx-particle-runtime-design.md',
+      '.forgeax-harness/docs/vfx-particle-runtime-design.md',
       'skills/forgeax-engine-assets/SKILL.md',
     ]) {
       expect(existsSync(resolve(repoRoot, target)), target).toBe(true);

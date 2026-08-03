@@ -14,5 +14,7 @@
   "bun.lock",
   ".pnpm-version",
   ".bun-version",
-  ".nvmrc"
+  ".nvmrc",
+  "!.forgeax-harness/docs/**",
+  "!docs/**"
 ]

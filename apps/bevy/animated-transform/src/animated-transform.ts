@@ -1,128 +1,188 @@
-import { AnimationPlayer, defineAnimationGraph } from '@forgeax/engine-animation';
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
+import {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+  defineAnimationGraph,
+  deriveAnimationTargetId,
+} from '@forgeax/engine-animation';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
-import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
-import type { AnimationChannel, AnimationClip, MaterialAsset } from '@forgeax/engine-types';
-import { quat } from '@forgeax/engine-math';
+import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 
-const channel = (
-  targetPath: readonly string[],
-  property: AnimationChannel['property'],
-  input: number[],
-  output: number[],
-): AnimationChannel => ({
-  targetPath,
-  property,
-  sampler: {
-    input: new Float32Array(input),
-    output: new Float32Array(output),
-    interpolation: 'LINEAR',
-  },
-});
+export type AnimatedTransformInstanceKey = 'direct' | 'graph';
 
-export interface AnimatedTransformState {
+export interface AnimatedTransformInstance {
+  readonly key: AnimatedTransformInstanceKey;
+  readonly player: EntityHandle;
   readonly planet: EntityHandle;
   readonly orbitController: EntityHandle;
   readonly satellite: EntityHandle;
+  readonly targets: readonly EntityHandle[];
 }
 
-export function buildAnimatedTransformWorld(world: World): AnimatedTransformState {
-  const planetMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.standard({ baseColor: [0.18, 0.45, 0.95, 1] }),
-  );
-  const satelliteMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.standard({ baseColor: [0.95, 0.35, 0.12, 1] }),
-  );
+export interface AnimatedTransformDemo {
+  readonly instances: readonly [AnimatedTransformInstance, AnimatedTransformInstance];
+}
 
-  const planet = world
-    .spawn(
-      { component: Transform, data: { pos: [1, 0, 1], scale: [1.2, 1.2, 1.2] } },
-      { component: Name, data: { value: 'planet' } },
-      { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
-      { component: MeshRenderer, data: { materials: [planetMaterial] } },
-    )
-    .unwrap() as EntityHandle;
-  const orbitController = world
-    .spawn(
-      { component: Transform, data: {} },
-      { component: Name, data: { value: 'orbit_controller' } },
-      { component: ChildOf, data: { parent: planet } },
-    )
-    .unwrap() as EntityHandle;
-  const satellite = world
-    .spawn(
-      { component: Transform, data: { pos: [2.8, 0, 0], scale: [0.55, 0.55, 0.55] } },
-      { component: Name, data: { value: 'satellite' } },
-      { component: ChildOf, data: { parent: orbitController } },
-      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [satelliteMaterial] } },
-    )
-    .unwrap() as EntityHandle;
+const PLANET_ID = deriveAnimationTargetId(['Planet']);
+const ORBIT_ID = deriveAnimationTargetId(['Planet', 'OrbitController']);
+const SATELLITE_ID = deriveAnimationTargetId(['Planet', 'OrbitController', 'Satellite']);
 
-  const clip: AnimationClip = {
+function transformClip(): AnimationClip {
+  return {
     kind: 'animation-clip',
-    duration: 4,
+    duration: 1,
     channels: [
-      channel(
-        ['planet'],
-        'translation',
-        [0, 1, 2, 3, 4],
-        [1, 0, 1, -1, 0, 1, -1, 0, -1, 1, 0, -1, 1, 0, 1],
-      ),
-      channel(
-        ['planet', 'orbit_controller'],
-        'rotation',
-        [0, 1, 2, 3, 4],
-        [0, 0, 0, 1, 0, 0.3826834, 0, 0.9238795, 0, 0.7071068, 0, 0.7071068, 0, 0.9238795, 0, 0.3826834, 0, 1, 0, 0],
-      ),
-      channel(
-        ['planet', 'orbit_controller', 'satellite'],
-        'scale',
-        [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4],
-        [0.8, 0.8, 0.8, 1.2, 1.2, 1.2, 0.8, 0.8, 0.8, 1.2, 1.2, 1.2, 0.8, 0.8, 0.8, 1.2, 1.2, 1.2, 0.8, 0.8, 0.8, 1.2, 1.2, 1.2, 0.8, 0.8, 0.8],
-      ),
+      {
+        targetId: PLANET_ID,
+        property: 'translation',
+        sampler: {
+          input: new Float32Array([0, 1]),
+          output: new Float32Array([0, 0, 0, 0, 4, 0]),
+          interpolation: 'LINEAR',
+        },
+      },
+      {
+        targetId: ORBIT_ID,
+        property: 'rotation',
+        sampler: {
+          input: new Float32Array([0, 1]),
+          output: new Float32Array([0, 0, 0, 1, 0, 0, 1, 0]),
+          interpolation: 'LINEAR',
+        },
+      },
+      {
+        targetId: SATELLITE_ID,
+        property: 'scale',
+        sampler: {
+          input: new Float32Array([0, 1]),
+          output: new Float32Array([1, 1, 1, 2, 2, 2]),
+          interpolation: 'LINEAR',
+        },
+      },
     ],
   };
-  const clipHandle = world.allocSharedRef('AnimationClip', clip);
-  const graphResult = defineAnimationGraph((builder) => builder.clip(clipHandle));
-  if (!graphResult.ok) throw new Error(`[animated-transform] graph build failed: ${graphResult.error.code}`);
-  const graphHandle = world.allocSharedRef('AnimationGraph', graphResult.value);
-  world.addComponent(planet, {
-    component: AnimationPlayer,
-    data: { graph: graphHandle, nodeSpeeds: [1], targetRoot: planet, looping: true },
-  });
-
-  world.spawn({
-    component: DirectionalLight,
-    data: { direction: [-0.4, -0.8, -0.5], color: [1, 1, 1], intensity: 3, castShadow: false },
-  });
-  const eye: [number, number, number] = [0, 3.5, 14];
-  world.spawn(
-    {
-      component: Transform,
-      data: { pos: eye, quat: quat.fromLookAt(quat.create(), eye, [0, 0, 0], [0, 1, 0]) },
-    },
-    { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }) },
-  );
-
-  return { planet, orbitController, satellite };
 }
 
-export function readAnimatedTransformState(world: World, state: AnimatedTransformState) {
-  const snapshot = (entity: EntityHandle) => {
-    const transform = world.get(entity, Transform).unwrap();
-    return {
-      pos: new Float32Array(transform.pos),
-      quat: new Float32Array(transform.quat),
-      scale: new Float32Array(transform.scale),
-    };
-  };
+function spawnNamed(
+  world: World,
+  name: string,
+  parent: EntityHandle | undefined,
+  pos: readonly [number, number, number] = [0, 0, 0],
+): EntityHandle {
+  const entity = world.spawn({ component: Transform, data: { pos } }).unwrap() as EntityHandle;
+  world.addComponent(entity, { component: Name, data: { value: name } }).unwrap();
+  if (parent !== undefined) {
+    world.addComponent(entity, { component: ChildOf, data: { parent } }).unwrap();
+  }
+  return entity;
+}
+
+function addTargetId(world: World, entity: EntityHandle, value: AnimationTargetIdValue): void {
+  world.addComponent(entity, { component: AnimationTargetId, data: { value } }).unwrap();
+}
+
+function spawnInstance(
+  world: World,
+  key: AnimatedTransformInstanceKey,
+  x: number,
+  clipHandle: Handle<'AnimationClip', 'shared'>,
+): AnimatedTransformInstance {
+  const player = spawnNamed(world, `${key}-player`, undefined, [x, 0, 0]);
+  if (key === 'direct') {
+    world
+      .addComponent(player, {
+        component: AnimationPlayer,
+        data: {
+          clips: [clipHandle],
+          times: [0],
+          weights: [1],
+          speeds: [1],
+          paused: false,
+          looping: true,
+        },
+      })
+      .unwrap();
+  } else {
+    const graph = defineAnimationGraph((builder) => builder.clip(clipHandle));
+    if (!graph.ok) throw graph.error;
+    const graphHandle = world.allocSharedRef('AnimationGraph', graph.value);
+    world
+      .addComponent(player, {
+        component: AnimationPlayer,
+        data: {
+          graph: graphHandle,
+          nodeTimes: [0],
+          nodeWeights: [1],
+          nodeSpeeds: [1],
+          paused: false,
+          looping: true,
+        },
+      })
+      .unwrap();
+  }
+
+  const planet = spawnNamed(world, 'Planet', player);
+  const orbitController = spawnNamed(world, 'OrbitController', planet);
+  const satellite = spawnNamed(world, 'Satellite', orbitController, [2, 0, 0]);
+  addTargetId(world, planet, PLANET_ID);
+  addTargetId(world, orbitController, ORBIT_ID);
+  addTargetId(world, satellite, SATELLITE_ID);
+  const targets = [planet, orbitController, satellite] as const;
+  const bound = bindAnimationTargets(world, player, targets);
+  if (!bound.ok) throw bound.error;
+  return { key, player, planet, orbitController, satellite, targets };
+}
+
+export function buildAnimatedTransformWorld(world: World): AnimatedTransformDemo {
+  const clipHandle = world.allocSharedRef('AnimationClip', transformClip());
   return {
-    planet: snapshot(state.planet),
-    orbitController: snapshot(state.orbitController),
-    satellite: snapshot(state.satellite),
+    instances: [
+      spawnInstance(world, 'direct', -4, clipHandle),
+      spawnInstance(world, 'graph', 4, clipHandle),
+    ],
   };
+}
+
+function instanceFor(
+  demo: AnimatedTransformDemo,
+  key: AnimatedTransformInstanceKey,
+): AnimatedTransformInstance {
+  return key === 'direct' ? demo.instances[0] : demo.instances[1];
+}
+
+export function setAnimatedTransformPaused(
+  world: World,
+  demo: AnimatedTransformDemo,
+  key: AnimatedTransformInstanceKey,
+  paused: boolean,
+): void {
+  world.set(instanceFor(demo, key).player, AnimationPlayer, { paused }).unwrap();
+}
+
+export function setAnimatedTransformSpeed(
+  world: World,
+  demo: AnimatedTransformDemo,
+  key: AnimatedTransformInstanceKey,
+  speed: number,
+): void {
+  const player = instanceFor(demo, key).player;
+  world
+    .set(
+      player,
+      AnimationPlayer,
+      key === 'direct' ? { speeds: [speed] } : { nodeSpeeds: [speed] },
+    )
+    .unwrap();
+}
+
+export function replayAnimatedTransform(
+  world: World,
+  demo: AnimatedTransformDemo,
+  key: AnimatedTransformInstanceKey,
+): void {
+  const player = instanceFor(demo, key).player;
+  world
+    .set(player, AnimationPlayer, key === 'direct' ? { times: [0] } : { nodeTimes: [0] })
+    .unwrap();
 }

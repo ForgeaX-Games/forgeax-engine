@@ -167,7 +167,16 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         // The bound material resolves to a forgeax::msdf-text pass (not default).
         const passes = walkMaterialPassesOverSharedRefs(world, material as never, assets);
         expect(passes.ok).toBe(true);
-        expect(passes.unwrap().passes[0]?.program.module).toBe('forgeax::msdf-text');
+        const resolved = passes.unwrap();
+        expect(resolved.passes[0]?.program.module).toBe('forgeax::msdf-text');
+        expect(resolved.values?.baseColorTexture).toMatchObject({ texture: expect.any(String) });
+        expect(resolved.parameters).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: 'tintColor', type: 'color' }),
+            expect.objectContaining({ name: 'distanceRange', type: 'vec4' }),
+            expect.objectContaining({ name: 'baseColorTexture', type: 'texture' }),
+          ]),
+        );
       });
 
       it('(b) dirty text -> updateMesh in place, assets size unchanged (AC-08)', () => {

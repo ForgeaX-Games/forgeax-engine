@@ -22,7 +22,7 @@ export { err, ok, type Result } from '@forgeax/engine-types';
  * Domain-separated from `ImportErrorCode` (importer dispatch surface in
  * @forgeax/engine-types) and `AssetErrorCode` (runtime registry surface).
  */
-export type FbxErrorCode = 'fbx-mesh-type-unsupported';
+export type FbxErrorCode = 'fbx-mesh-type-unsupported' | 'fbx-animation-target-invalid';
 
 // === Per-code detail shapes (1 interface, 1 discriminated union) ===
 
@@ -32,23 +32,49 @@ export interface FbxMeshTypeUnsupportedDetail {
   readonly meshName: string;
 }
 
+export type FbxAnimationTargetInvalidDetail =
+  | {
+      readonly reason: 'hierarchy-cycle';
+      readonly nodeIndex: number;
+    }
+  | {
+      readonly reason:
+        | 'name-missing'
+        | 'path-invalid'
+        | 'path-duplicate'
+        | 'path-not-found'
+        | 'id-collision';
+      readonly clipIndex: number;
+      readonly channelIndex: number;
+      readonly targetNode: string;
+    };
+
 /** Discriminated detail family unifying all FbxError variants. */
-export type FbxErrorDetail = FbxMeshTypeUnsupportedDetail;
+export type FbxErrorDetail = FbxMeshTypeUnsupportedDetail | FbxAnimationTargetInvalidDetail;
 
 // === FbxError discriminated union (1 variant) ===
 
-export type FbxError = {
-  readonly code: 'fbx-mesh-type-unsupported';
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: FbxMeshTypeUnsupportedDetail;
-};
+export type FbxError =
+  | {
+      readonly code: 'fbx-mesh-type-unsupported';
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: FbxMeshTypeUnsupportedDetail;
+    }
+  | {
+      readonly code: 'fbx-animation-target-invalid';
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: FbxAnimationTargetInvalidDetail;
+    };
 
 // === FBX_ERROR_HINTS (Record<FbxErrorCode, string>) ===
 
 export const FBX_ERROR_HINTS: Readonly<Record<FbxErrorCode, string>> = {
   'fbx-mesh-type-unsupported':
     'NURBS and patch surfaces are not supported; convert to polygon mesh in a DCC tool before import',
+  'fbx-animation-target-invalid':
+    'name every node, keep the hierarchy acyclic, and export unique full animation target paths',
 };
 
 // === FBX_EXPECTED (Record<FbxErrorCode, string>) ===
@@ -56,12 +82,15 @@ export const FBX_ERROR_HINTS: Readonly<Record<FbxErrorCode, string>> = {
 const FBX_EXPECTED: Readonly<Record<FbxErrorCode, string>> = {
   'fbx-mesh-type-unsupported':
     'all meshes in the file are polygon (triangles/quads), not NURBS or patch surfaces',
+  'fbx-animation-target-invalid':
+    'an acyclic hierarchy where every animation channel uniquely matches one named Scene node and stable target ID',
 };
 
 // === DetailFor map + fbxErr factory ===
 
 interface DetailFor {
   readonly 'fbx-mesh-type-unsupported': FbxMeshTypeUnsupportedDetail;
+  readonly 'fbx-animation-target-invalid': FbxAnimationTargetInvalidDetail;
 }
 
 /**
@@ -71,11 +100,14 @@ interface DetailFor {
  * Charter P3 explicit-failure: `expected` + `hint` fields are sourced from
  * the SSOT tables — no producer can omit them.
  */
-export function fbxErr<C extends FbxErrorCode>(code: C, detail: DetailFor[C]): FbxError {
+export function fbxErr<C extends FbxErrorCode>(
+  code: C,
+  detail: DetailFor[C],
+): Extract<FbxError, { readonly code: C }> {
   return {
     code,
     expected: FBX_EXPECTED[code],
     hint: FBX_ERROR_HINTS[code],
     detail,
-  } as FbxError;
+  } as Extract<FbxError, { readonly code: C }>;
 }

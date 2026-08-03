@@ -432,6 +432,12 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
   const sceneIr = doc.scenes[doc.defaultSceneIndex];
   const resultNodes: MutableSceneEntity[] = [];
   if (sceneIr === undefined) return { kind: 'scene', entities: [] };
+  const animationTargetIds = new Map<number, string>();
+  for (const clip of doc.animationClips) {
+    for (const channel of clip.channels) {
+      animationTargetIds.set(channel.targetNodeIndex, channel.targetId);
+    }
+  }
 
   // Per-node world matrix accumulator (B3 fix).
   const parentWorld = mat4.create();
@@ -511,6 +517,10 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
 
     if (ir.name !== undefined && ir.name !== '') {
       components.Name = { value: ir.name };
+    }
+    const animationTargetId = animationTargetIds.get(gltfNodeIdx);
+    if (animationTargetId !== undefined) {
+      components.AnimationTargetId = { value: animationTargetId };
     }
 
     if (hasMesh) {

@@ -27,10 +27,15 @@
 // non-normalizing, so the additive layer's 0.3 stacks on top).
 
 import { createApp } from '@forgeax/engine-app';
-import { Update } from '@forgeax/engine-ecs';
+import { ENTITY_NULL_RAW, Update } from '@forgeax/engine-ecs';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { AnimationPlayer, defineAnimationGraph } from '@forgeax/engine-animation';
+import {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+  defineAnimationGraph,
+} from '@forgeax/engine-animation';
 
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 
@@ -170,13 +175,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[animation-graph] root has no SceneInstance');
     return;
   }
-  let playerEnt: EntityHandle | undefined;
+  let hasSkin = false;
+  const animationTargets: EntityHandle[] = [];
   for (let i = 0; i < inst.value.mapping.length; i++) {
     const entRaw = inst.value.mapping[i];
-    if (entRaw === undefined || entRaw === 0) continue;
+    if (entRaw === undefined || entRaw === ENTITY_NULL_RAW) continue;
     const ent = entRaw as EntityHandle;
-    if (!world.get(ent, Skin).ok) continue;
-    // Assign AnimationPlayer with graph handle.
+    if (world.get(ent, AnimationTargetId).ok) animationTargets.push(ent);
+    if (world.get(ent, Skin).ok) hasSkin = true;
+  }
+  if (!hasSkin) {
+    console.error('[animation-graph] no Skin entity in instantiated scene');
+    return;
+  }
+  // Assign AnimationPlayer with graph handle.
     // nodeWeights default to 1 per node (evaluateAnimationGraph falls back to 1
     // when nodeWeights[i] is out of range), so an empty array is a valid start.
     // We write a full 7-element nodeWeights to make the keyboard-driven params
@@ -185,7 +197,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // clip leaves we want to animate.
     //
     // Initial params: locomotion=0.5, walkRunRatio=0.5, overlayOn=false.
-    world.addComponent(ent, {
+  world.addComponent(root, {
       component: AnimationPlayer,
       data: {
         graph: graphHandle,
@@ -199,12 +211,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         nodeSpeeds: new Float32Array([1, 1, 1, 0, 0, 1, 0]),
         looping: true,
       },
-    });
-    playerEnt = ent;
-    break;
-  }
-  if (playerEnt === undefined) {
-    console.error('[animation-graph] no Skin entity in instantiated scene');
+  });
+  const playerEnt = root as EntityHandle;
+  const bound = bindAnimationTargets(world, playerEnt, animationTargets);
+  if (!bound.ok) {
+    console.error(
+      '[animation-graph] bindAnimationTargets failed:',
+      bound.error.code,
+      bound.error.detail,
+    );
     return;
   }
 

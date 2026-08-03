@@ -367,6 +367,7 @@ export async function scan(
         sourceKey?: string;
         kind: string;
       }[];
+      sourceOverrides?: unknown;
     };
     for (const sub of metaObj.subAssets) {
       if (!isValidGuid(sub.guid)) {

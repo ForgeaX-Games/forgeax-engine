@@ -44,6 +44,8 @@ export interface MockFailures {
    *  rejects — models the GPU instance being dropped mid-await (device
    *  destroyed / page teardown while the async query is in flight). */
   getCompilationInfoRejects?: boolean;
+  /** `createRenderPipeline` throws synchronously with this message. */
+  renderPipelineError?: string;
 }
 
 /** Mock-capture event union; consumed by passthrough assertions. */
@@ -399,6 +401,9 @@ function makeDevice(captured: MockCapture[], failures: MockFailures): MockDevice
     },
     createRenderPipeline(descriptor) {
       captured.push({ kind: 'createRenderPipeline', descriptor });
+      if (failures.renderPipelineError !== undefined) {
+        throw new Error(failures.renderPipelineError);
+      }
       return { [MOCK_BRAND]: 'render-pipeline' as const };
     },
     createComputePipeline(descriptor) {

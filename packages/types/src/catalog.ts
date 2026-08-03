@@ -8,6 +8,8 @@ import type {
   CookExecution,
   ProviderProvenance,
   ResourceRevision,
+  SourceOverrideDescriptor,
+  SourceOverrideMap,
   TopologyDiff,
 } from './asset-producer';
 
@@ -68,6 +70,9 @@ export interface CatalogEntry {
   readonly sourceKey?: string;
   /** Producer-declared output position; never used as identity when sourceKey exists. */
   readonly sourceIndex?: number;
+  /** Producer-owned author facts carried through the catalog without interpretation. */
+  readonly sourceOverrides?: SourceOverrideMap;
+  readonly sourceOverrideDescriptors?: readonly SourceOverrideDescriptor[];
   /** Typed graph edges emitted by the producer. */
   readonly relations?: readonly AssetRelation[];
   /** Structured producer diagnostics; consumers must not parse messages. */

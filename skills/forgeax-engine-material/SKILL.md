@@ -85,4 +85,4 @@ an engine resource.
 - Pack/cook record: [`packages/pack/README.md`](../../packages/pack/README.md)
 - Shader module and reflection: [`packages/shader/README.md`](../../packages/shader/README.md)
 - Runtime catalog: [`packages/assets-runtime/README.md`](../../packages/assets-runtime/README.md)
-- Migration: [`docs/material-asset-migration.md`](../../docs/material-asset-migration.md)
+- Migration: [`docs/material-asset-migration.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/material-asset-migration.md)

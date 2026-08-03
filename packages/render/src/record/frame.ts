@@ -62,7 +62,12 @@ import {
   resolveShadowMapSize,
   writebackGraphViews,
 } from './frame-targets';
-import { driveLazyEquirectProjection, warnMultiSkybox, warnMultiSkylight } from './helpers';
+import {
+  driveLazyEquirectProjection,
+  selectLazyEquirectHandle,
+  warnMultiSkybox,
+  warnMultiSkylight,
+} from './helpers';
 import { BUILTIN_MESH_ID_MAX, NINESLICE_QUAD_RAW_ID } from './main-pass-material';
 import { computeSplitLdrSprite } from './main-pass-sprite';
 import { cleanPerEntityCache, ensureMeshSsboCapacity, uploadMeshSsboBatch } from './mesh-ssbo';
@@ -190,7 +195,7 @@ export function recordFrame(
     //                          handle (R-2/AC-09: store records failed
     //                          permanently and never retries; the latch keeps
     //                          the channel from flooding)
-    const lazyEquirectHandle = skylight?.equirectHandle ?? skybox?.equirectHandle ?? 0;
+    const lazyEquirectHandle = selectLazyEquirectHandle(skylight, skybox);
     if (lazyEquirectHandle !== 0) {
       driveLazyEquirectProjection(internals, world, frameState, lazyEquirectHandle);
     }

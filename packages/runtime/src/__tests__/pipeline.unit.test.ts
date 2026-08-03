@@ -2751,7 +2751,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     'packages/runtime/README.md',
     'packages/types/src/index.ts',
     // Historical spec — allowed in AC-25 allow-list after w2 adds a migration footnote
-    'docs/specs/2026-06-01-customizable-render-pipeline-design.md',
+    '.forgeax-harness/docs/specs/2026-06-01-customizable-render-pipeline-design.md',
   ];
 
   describe('pipeline rename grep gate baseline (AC-25 red-phase)', () => {
@@ -2761,14 +2761,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // command-line and checked in w5 (grep gate enumeration) + finalize.
       //
       // The 9 source files (packages/ and types/) must all be renamed.
-      // The 1 historical spec (docs/specs/) stays with a migration footnote.
+      // The 1 historical spec (.forgeax-harness/docs/specs/) stays with a migration footnote.
       expect(EXPECTED_BASELINE_HITS.length).toBe(9);
 
       // Verify the structural groupings are correct
       const sourceFiles = EXPECTED_BASELINE_HITS.filter(
         (f) => f.startsWith('packages/') || f.startsWith('apps/'),
       );
-      const docFiles = EXPECTED_BASELINE_HITS.filter((f) => f.startsWith('docs/'));
+      const docFiles = EXPECTED_BASELINE_HITS.filter((f) => f.startsWith('.forgeax-harness/docs/'));
 
       // 8 source files to be fully renamed
       expect(sourceFiles.length).toBe(8);
@@ -2776,7 +2776,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(docFiles.length).toBe(1);
 
       // The one doc file is the customizable-render-pipeline design spec
-      expect(docFiles).toContain('docs/specs/2026-06-01-customizable-render-pipeline-design.md');
+      expect(docFiles).toContain(
+        '.forgeax-harness/docs/specs/2026-06-01-customizable-render-pipeline-design.md',
+      );
     });
 
     it('baseline: urp-pipeline.ts is the rename SSOT site', () => {

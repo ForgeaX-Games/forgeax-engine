@@ -34,6 +34,7 @@ import {
   assertMaterialAsset,
   type BindGroupLayoutDescriptor,
   type MaterialAsset,
+  type ParamSchemaEntry,
 } from '@forgeax/engine-types';
 import { loadEngineImportsMap } from './engine-imports-map.js';
 import { cookMaterialSource } from './material/cook-adapter.js';
@@ -59,6 +60,17 @@ export type { ForgeaXShaderRollupLog } from './wrap.js';
 export { toRollupLog } from './wrap.js';
 
 const materialSourceProvider = createMaterialSourceProvider((path) => readFile(path, 'utf8'));
+
+// The built-in MSDF material has a compact numeric UBO followed by three
+// sampler/texture pairs. Keep this schema beside the engine shader manifest
+// producer so reflection and runtime binding derive from the same contract.
+const MSDF_TEXT_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
+  { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
+  { name: 'distanceRange', type: 'vec4', default: [4, 512, 512, 0] },
+  { name: 'baseColorTexture', type: 'texture2d' },
+  { name: 'metallicRoughnessTexture', type: 'texture2d' },
+  { name: 'normalTexture', type: 'texture2d' },
+];
 
 /**
  * Build a `shaders/manifest.json`-shaped payload by compiling the engine's
@@ -205,7 +217,9 @@ export async function buildEngineShaderManifest(): Promise<{
       uvSetCount: engineUvSetCount,
     });
     if (file.reservedIdentifier !== undefined) {
-      const paramSchemaJson = '[]';
+      const paramSchemaJson = JSON.stringify(
+        file.reservedIdentifier === 'forgeax::msdf-text' ? MSDF_TEXT_PARAM_SCHEMA : [],
+      );
       materialShaders.push({
         identifier: file.reservedIdentifier,
         sourcePath: file.id,
@@ -1654,11 +1668,13 @@ async function compileEngineEntry(
   const surfaceVariants = isMaterialShader || hasVariantAxis;
   // Material parameter declarations are part of the authored MaterialAsset
   // contract. Runtime shader compilation no longer reads a WGSL sidecar.
-  const paramSchemaJson = '[]';
+  const baseIdentifier = file.reservedIdentifier ?? extractDefineImportPath(file.source) ?? file.id;
+  const paramSchemaJson = JSON.stringify(
+    baseIdentifier === 'forgeax::msdf-text' ? MSDF_TEXT_PARAM_SCHEMA : [],
+  );
   const variantAxes = scanVariantAxes(file.source);
   const axisCombos = variantAxes.length > 0 ? cartesianDefines(variantAxes) : [{}];
 
-  const baseIdentifier = file.reservedIdentifier ?? extractDefineImportPath(file.source) ?? file.id;
   const variants: MaterialShaderManifestVariant[] = [];
   // feat-20260613 fix-issue-2: bindingLayout is no longer a manifest field;
   // the variant-axis superset gate (below) needs the freshly compiled

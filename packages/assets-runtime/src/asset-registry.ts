@@ -113,6 +113,7 @@ import {
   type RuntimeEvidenceSource,
 } from './registry/asset-evidence';
 import { type CatalogRecord, fetchPackIndex } from './registry/catalog';
+import { CatalogReplica, type CatalogReplicaSnapshot } from './registry/catalog-state';
 import {
   instantiateFlat as instantiateFlatImpl,
   instantiate as instantiateImpl,
@@ -262,6 +263,7 @@ export class AssetRegistry {
   private catalogEnumerating: Promise<Result<readonly CatalogEntry[], AssetError>> | undefined;
   private readonly catalogListeners = new Set<CatalogListener>();
   private catalogSourceDispose: (() => void) | undefined;
+  private catalogReplica: CatalogReplica | undefined;
   // feat-20260614 M8 (D-15 / D-17 / D-19): the registry is a GUID -> payload
   // catalogue. It holds NO handle concept -- it cannot mint a column handle
   // (it has no World). `loadByGuid` returns the PAYLOAD; column minting
@@ -676,8 +678,9 @@ export class AssetRegistry {
   setCatalogSource(source: CatalogSource): void {
     this.catalogSourceDispose?.();
     this.catalogSource = source;
+    this.catalogReplica = new CatalogReplica(source);
     this.catalogEnumerating = undefined;
-    this.catalogSourceDispose = source.subscribe((delta) => {
+    this.catalogSourceDispose = this.catalogReplica.subscribe((delta) => {
       for (const listener of [...this.catalogListeners]) {
         try {
           listener(delta);
@@ -686,11 +689,12 @@ export class AssetRegistry {
         }
       }
     });
+    void this.catalogReplica.start();
   }
 
   enumerateCatalog(): Promise<Result<readonly CatalogEntry[], AssetError>> {
     if (this.catalogEnumerating !== undefined) return this.catalogEnumerating;
-    if (this.catalogSource === undefined) {
+    if (this.catalogSource === undefined || this.catalogReplica === undefined) {
       return Promise.resolve(
         err(
           new AssetError({
@@ -701,15 +705,19 @@ export class AssetRegistry {
         ),
       );
     }
-    const promise = this.catalogSource.enumerate().then((result) => {
-      if (result.ok) return ok([...result.value].sort((a, b) => a.guid.localeCompare(b.guid)));
-      return result;
-    });
+    const promise = this.catalogReplica
+      .start()
+      .then((result) => (result.ok ? ok(result.value.entries) : result));
     this.catalogEnumerating = promise;
     void promise.then(() => {
       this.catalogEnumerating = undefined;
     });
     return promise;
+  }
+
+  /** Read the immutable catalog projection folded by this registry. */
+  catalogSnapshot(): CatalogReplicaSnapshot | undefined {
+    return this.catalogReplica?.snapshot();
   }
 
   subscribeCatalog(listener: CatalogListener): () => void {

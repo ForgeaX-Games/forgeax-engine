@@ -35,10 +35,12 @@
 // (M2 t10) so the package surface exposes a single Handle shape (charter F1
 // single-entry indexability; AC-03 grep gate).
 
+import type { AnimationTargetIdValue } from './animation-target';
 import type { Handle } from './handle';
 import type { MaterialAsset } from './material/asset.js';
 import type { ParticleEffectAsset } from './vfx';
 
+export type { AnimationTargetIdValue } from './animation-target';
 export * from './asset.js';
 export * from './asset-errors.js';
 export * from './handle';
@@ -224,10 +226,10 @@ export interface AnimationSamplerPod {
   readonly interpolation: 'LINEAR' | 'STEP';
 }
 
-/** Animation channel (one joint-property pair). */
+/** Animation channel (one target-property pair). */
 export interface AnimationChannelPod {
-  /** Name path from scene root to target joint. */
-  readonly targetPath: readonly string[];
+  /** Stable animation target identity. */
+  readonly targetId: AnimationTargetIdValue;
   /** Target property: 'translation' | 'rotation' | 'scale'. */
   readonly property: 'translation' | 'rotation' | 'scale';
   /** Sampler driving this channel. */
@@ -240,7 +242,7 @@ export interface AnimationClipPod {
   readonly name?: string;
   /** Clip duration in seconds (max sampler.input[last]). */
   readonly duration: number;
-  /** Per-joint-property channels. */
+  /** Per-animation-target-property channels. */
   readonly channels: readonly AnimationChannelPod[];
 }
 
@@ -1442,10 +1444,10 @@ export interface SceneAsset {
 // AnimationChannel / AnimationSampler sub-types are inline here since they are
 // exclusively consumed by AnimationClip; no other asset or component references them.
 
-/** Per-joint-path target path description linking a sampler to a scene joint. */
+/** Stable target identity linking a sampler to a scene entity. */
 export interface AnimationChannel {
-  /** Sequence of Name component values from scene root to this joint (glTF node hierarchy). */
-  readonly targetPath: readonly string[];
+  /** Stable animation target identity. */
+  readonly targetId: AnimationTargetIdValue;
   /** Target transform property: 'translation' | 'rotation' | 'scale'. */
   readonly property: 'translation' | 'rotation' | 'scale';
   /** Sampler driving this channel. */
@@ -1453,7 +1455,7 @@ export interface AnimationChannel {
 }
 
 /**
- * Animation sampler — keyframe curve for a single joint-property pair.
+ * Animation sampler — keyframe curve for a single animation-target-property pair.
  *
  * `input` and `output` are Float32Arrays of equal length
  * (`output.length = input.length * elementCount`) where elementCount is:
@@ -1474,7 +1476,7 @@ export interface AnimationSampler {
  *
  * `duration` is max(sampler.input[last]) across all channels — the
  * longest channel defines the clip length. Each channel targets one
- * joint-property pair, resolved at post-spawn time via jointPath lookup.
+ * animation-target property, resolved during playback by `targetId`.
  */
 export interface AnimationClip {
   readonly kind: 'animation-clip';
@@ -4234,14 +4236,22 @@ export type {
   ProposedOutput,
   ProviderProvenance,
   ResourceRevision,
+  SourceOverrideDescriptor,
+  SourceOverrideDiagnostic,
+  SourceOverrideErrorCode,
+  SourceOverrideMap,
+  SourceOverridePayload,
+  SourceOverrideValidationResult,
   TopologyConflictReason,
   TopologyDiff,
   TopologyPreserved,
 } from './asset-producer';
 export {
   authoringCapabilityForAssetKind,
+  canonicalizeSourceOverrides,
   catalogOperationsFor,
   isCatalogProjectionValid,
+  validateSourceOverrideMap,
 } from './asset-producer';
 /**
  * One row in the pack-index catalog (`pack-index.json` for build path,

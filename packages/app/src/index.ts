@@ -77,6 +77,16 @@ export type {
   GameProjectionValue,
   GameReadDef,
 } from './game-context';
+export type {
+  GamePluginLoad,
+  GamePluginModule,
+  LoadedGamePlugin,
+} from './game-plugins';
+export {
+  addGamePluginSystems,
+  getPlayPluginFailure,
+  loadGamePluginModules,
+} from './game-plugins';
 export { inputPlugin } from './plugin-factories';
 
 import {

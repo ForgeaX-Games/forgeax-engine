@@ -720,7 +720,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       // tweak-20260611 M4: animation-clip sub-asset POD emit. GltfAnimationClipRecord
       // (gltf IR) and AnimationClip (runtime POD) are structurally compatible
       // — both carry duration + channels[]; channels' inner shape matches
-      // (targetPath / property / sampler). property is narrowed to the runtime
+      // (targetId / property / sampler). property is narrowed to the runtime
       // closed union ('translation' | 'rotation' | 'scale') by an unsafe cast
       // — parse-animation already fail-fasts on unsupported paths (morph
       // 'weights' / CUBICSPLINE) so any clip reaching here is the supported
@@ -732,7 +732,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         kind: 'animation-clip' as const,
         duration: rec.duration,
         channels: rec.channels.map((ch) => ({
-          targetPath: ch.targetPath,
+          targetId: ch.targetId,
           property: ch.property as 'translation' | 'rotation' | 'scale',
           sampler: {
             input: ch.sampler.input,

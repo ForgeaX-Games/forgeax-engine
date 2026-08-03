@@ -44,6 +44,7 @@ import {
   resetFontConcurrency,
   trackFontConcurrency,
 } from '@forgeax/engine-graphics-extras';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { FontAsset, Handle } from '@forgeax/engine-types';
 import { TextError } from '@forgeax/engine-types';
 import { MeshFilter, MeshRenderer } from './components';
@@ -68,7 +69,7 @@ const bakeCache = new Map<number, BakeRecord>();
 // Per-(font, tintColor) MSDF MaterialAsset cache (F-1 / plan D-7). The layout
 // system builds ONE MaterialAsset per distinct (font, color) and reuses its
 // handle across every GlyphText entity sharing that font + tint, so the atlas
-// texture + sampler + tintColor + distanceRange are bound to the
+// texture + generated sampler + tintColor + packed distance range are bound to the
 // `forgeax::msdf-text` shader without re-registering a material per frame or
 // per entity (avoids the unbounded-growth hazard mirrored by the mesh
 // bakeCache). Keyed by `${fontHandle}|${r},${g},${b},${a}` because tintColor
@@ -219,7 +220,7 @@ function processEntity(
     // A color change re-keys the per-(font, tint) material; re-resolve and
     // re-bind it in place so the tint follows the authoring edit (the mesh
     // handle stays stable, only MeshRenderer.material is overwritten).
-    const materialId = resolveTextMaterial(world, assets, gt, font, gpuStore);
+    const materialId = resolveTextMaterial(world, assets, gt, font);
     if (materialId !== cached.materialHandleId) {
       world.set(entity, MeshRenderer, {
         materials: [materialId] as unknown as never,
@@ -247,7 +248,7 @@ function processEntity(
   // `forgeax::msdf-text` shader + atlas texture + sampler are bound to this
   // text entity (plan D-7). Without this the MeshRenderer would carry material
   // handle 0 -> default mid-grey unlit, and the atlas would never be sampled.
-  const materialId = resolveTextMaterial(world, assets, gt, font, gpuStore);
+  const materialId = resolveTextMaterial(world, assets, gt, font);
 
   world.addComponent(entity, { component: MeshFilter, data: { assetHandle: bake.value.handle } });
   world.addComponent(entity, {
@@ -266,37 +267,20 @@ function processEntity(
  * Build (or reuse) the MSDF text MaterialAsset for `(font, tintColor)` and
  * return its raw unmanaged handle id. The material carries a single
  * Transparent-queue pass on the `forgeax::msdf-text` shader with premultiplied
- * blend, and values binding the tint color, the atlas distance range, and
- * the atlas texture + sampler (plan D-7). HDR tint components (>1) flow through
- * unchanged so bloom-enabled cameras pick up bright text (AC-12).
+ * blend, and values binding the tint color, packed atlas distance data, and an
+ * embedded atlas texture reference (the record stage supplies the sampler).
+ * HDR tint components (>1) flow through unchanged so bloom-enabled cameras
+ * pick up bright text (AC-12).
  */
 function resolveTextMaterial(
   world: World,
   assets: AssetRegistry,
   gt: GlyphTextData,
   font: FontAsset,
-  gpuStore: GpuResourceStore,
 ): number {
   const key = `${gt.fontHandle}|${gt.color[0]},${gt.color[1]},${gt.color[2]},${gt.color[3]}`;
   const cached = fontMaterialCache.get(key);
   if (cached !== undefined) return cached;
-
-  // feat-20260614 M8 (D-19): font.atlas / font.sampler are embedded GUIDs.
-  // Resolve each to a user-tier column handle by looking up the catalogued
-  // payload and minting via world.allocSharedRef; the material values
-  // carry the column handle ids the render path reads.
-  const atlasPayload = assets.lookup(font.atlas);
-  const samplerPayload = assets.lookup(font.sampler);
-  let atlasHandle: Handle<'TextureAsset', 'shared'> | undefined;
-  if (atlasPayload !== undefined) {
-    atlasHandle = world.allocSharedRef('TextureAsset', atlasPayload, () => {
-      // atlasHandle is always assigned at this point (alloc just returned it)
-      const h = atlasHandle;
-      if (h !== undefined) gpuStore.evictTexture(h);
-    });
-  }
-  const samplerHandle =
-    samplerPayload !== undefined ? world.allocSharedRef('SamplerAsset', samplerPayload) : undefined;
 
   const reg = assets.catalog(assets.parseGuid(deriveTextMaterialGuid(key)), {
     kind: 'material',
@@ -318,10 +302,21 @@ function resolveTextMaterial(
     ],
     values: {
       tintColor: [gt.color[0], gt.color[1], gt.color[2], gt.color[3]],
-      distanceRange: font.common.distanceRange,
-      ...(atlasHandle !== undefined ? { baseColorTexture: atlasHandle as unknown as number } : {}),
-      ...(samplerHandle !== undefined ? { sampler: samplerHandle as unknown as number } : {}),
+      distanceRange: [
+        font.common.distanceRange,
+        font.common.atlasWidth,
+        font.common.atlasHeight,
+        0,
+      ],
+      baseColorTexture: { texture: AssetGuid.format(font.atlas) },
     },
+    parameters: [
+      { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
+      { name: 'distanceRange', type: 'vec4', default: [4, 512, 512, 0] },
+      { name: 'baseColorTexture', type: 'texture' },
+      { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
+      { name: 'normalTexture', type: 'texture', optional: true },
+    ],
   });
   // catalog can only fail on schema validation; the literal passes/values
   // above are schema-valid for forgeax::msdf-text, so a failure here is an

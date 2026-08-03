@@ -112,6 +112,9 @@ const { createRenderer, rootsToSceneAsset, serializeSceneAssetToPack } = await i
 const { SceneInstance } = await import('@forgeax/engine-render');
 const { Skin } = await import('@forgeax/engine-skinning');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+// Fox scene nodes carry AnimationTargetId; importing the animation entrypoint
+// registers that component before SceneAsset instantiation resolves its names.
+await import('@forgeax/engine-animation');
 const { gltfDocToSceneAsset, meshIrToMeshAsset, parseGlb, toMaterialAsset } = await import(
   '@forgeax/engine-gltf'
 );

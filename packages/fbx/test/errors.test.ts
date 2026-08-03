@@ -5,6 +5,8 @@ function exhaustiveSwitch(code: FbxErrorCode): string {
   switch (code) {
     case 'fbx-mesh-type-unsupported':
       return 'mesh-type';
+    case 'fbx-animation-target-invalid':
+      return 'animation-target';
   }
 }
 
@@ -35,10 +37,25 @@ describe('FbxErrorCode', () => {
   it('FBX_ERROR_HINTS covers all FbxErrorCode members', () => {
     // TypeScript forces the Record key set to match FbxErrorCode.
     // This runtime check catches gaps at test time.
-    const codes: FbxErrorCode[] = ['fbx-mesh-type-unsupported'];
+    const codes: FbxErrorCode[] = [
+      'fbx-mesh-type-unsupported',
+      'fbx-animation-target-invalid',
+    ];
     for (const code of codes) {
       expect(FBX_ERROR_HINTS[code]).toBeTypeOf('string');
       expect(FBX_ERROR_HINTS[code].length).toBeGreaterThan(0);
     }
+  });
+
+  it('uses one animation target code with reason detail', () => {
+    const error = fbxErr('fbx-animation-target-invalid', {
+      reason: 'path-not-found',
+      clipIndex: 0,
+      channelIndex: 2,
+      targetNode: 'Root/Missing',
+    });
+    expect(error.code).toBe('fbx-animation-target-invalid');
+    expect(error.detail.reason).toBe('path-not-found');
+    expect(error.hint.length).toBeGreaterThan(0);
   });
 });

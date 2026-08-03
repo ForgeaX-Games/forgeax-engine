@@ -970,6 +970,15 @@ export class World {
     return this.componentAccess.capacity(entity, component, fieldName);
   }
 
+  reserveArrayCapacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
+    entity: EntityHandle,
+    component: Component<string, S>,
+    fieldName: K,
+    minimum: number,
+  ): Result<void, EcsError> {
+    return this.componentAccess.reserveArrayCapacity(entity, component, fieldName, minimum);
+  }
+
   _removeArrayElementByValue<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
     entity: EntityHandle,
     component: Component<string, S>,

@@ -20,9 +20,13 @@
 // child's authored local offset (cm->world scale + feet drop) -- never a
 // per-frame parent-follow copy.
 
-import { AnimationPlayer } from '@forgeax/engine-animation';
+import {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+} from '@forgeax/engine-animation';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { ENTITY_NULL_RAW, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import {
   CharacterController,
   Collider,
@@ -34,7 +38,7 @@ import {
 import { MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
-import type { AnimationClip, Handle, MaterialAsset, SceneAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 
 import { PLAYER_GROUPS } from '../collision-groups';
 
@@ -61,36 +65,12 @@ const CHILD_FEET_OFFSET_Y = -CHAR_HALF_TOTAL;
 type ClipHandle = Handle<'AnimationClip', 'shared'>;
 type SceneHandle = Handle<'SceneAsset', 'shared'>;
 
-// humanoid.fbx (D-3 shared fixture) authors its run clip with animation channels
-// targeting the FBX scene's Camera + Light nodes, which are NOT joints of the
-// player Skin. advanceAnimationPlayer skips them but warns once per channel
-// (`channel-leaf-mismatch joint=Camera / Light 1`) -- harmless but it trips the
-// D-10 zero-tolerance boot e2e gate. The non-skeleton leaves are deterministic
-// for this fixture (spike m6-1 confirmed exactly: Camera, Light 1). Stripped at
-// load time so the clip the AnimationPlayer plays carries only skeleton channels.
-const NON_SKELETON_CHANNEL_LEAVES: ReadonlySet<string> = new Set(['Camera', 'Light 1']);
-
-/**
- * Return an AnimationClip with the humanoid.fbx Camera/Light authoring channels
- * removed (the leaves in {@link NON_SKELETON_CHANNEL_LEAVES}). Pure over its
- * input -- the locomotion/idle crossfade (AC-05) is untouched because those
- * channels animate human joints, not Camera/Light. If no channel matches the
- * input is returned unchanged (no allocation), so a future clip without the
- * authoring nodes pays nothing.
- */
-export function stripNonSkeletonChannels(clip: AnimationClip): AnimationClip {
-  const kept = clip.channels.filter((ch) => {
-    const leaf = ch.targetPath[ch.targetPath.length - 1];
-    return leaf === undefined || !NON_SKELETON_CHANNEL_LEAVES.has(leaf);
-  });
-  if (kept.length === clip.channels.length) return clip;
-  return { ...clip, channels: kept };
-}
-
 export interface PlayerHandles {
   /** KCC parent entity -- player-move drives this Transform via moveAndSlide. */
   readonly parent: EntityHandle;
-  /** Skin-bearing child entity -- player-anim drives its AnimationPlayer. */
+  /** Scene root carrying AnimationPlayer for the complete imported target subtree. */
+  readonly animationPlayer: EntityHandle;
+  /** Skin-bearing descendant used by the renderer. */
   readonly skin: EntityHandle;
   /** Scene root entity (ChildOf parent) -- the visual hierarchy follow point. */
   readonly sceneRoot: EntityHandle;
@@ -181,7 +161,7 @@ export function spawnPlayer(
   //    slots: slot 0 = locomotion (run, speed 1), slot 1 = idle (same run clip
   //    held at speed 0). Spawn pose is idle (weights=[0,1]); player-anim
   //    crossfades the weights per frame.
-  const skinRes = findSkinEntity(world, sceneRoot);
+  const skinRes = collectAnimationTargets(world, sceneRoot);
   if (!skinRes.ok) {
     return {
       ok: false,
@@ -189,7 +169,7 @@ export function spawnPlayer(
     };
   }
   const skin = skinRes.value;
-  world.addComponent(skin, {
+  world.addComponent(sceneRoot, {
     component: AnimationPlayer,
     data: {
       clips: [locomotionClip, locomotionClip],
@@ -198,6 +178,10 @@ export function spawnPlayer(
       speeds: [1, 0],
     },
   });
+  const bound = bindAnimationTargets(world, sceneRoot, skinRes.targets);
+  if (!bound.ok) {
+    return { ok: false, error: { code: bound.error.code, hint: bound.error.hint } };
+  }
 
   // Override the humanoid's default grey FBX material with a vivid protagonist
   // colour. humanoid.fbx ships a flat mid-grey material that is invisible against
@@ -225,20 +209,23 @@ export function spawnPlayer(
   });
   world.set(skin, MeshRenderer, { materials: [playerMat] });
 
-  return { ok: true, value: { parent, skin, sceneRoot } };
+  return { ok: true, value: { parent, animationPlayer: sceneRoot, skin, sceneRoot } };
 }
 
 // Walk the SceneInstance mapping to find the first entity carrying Skin.
-function findSkinEntity(
+function collectAnimationTargets(
   world: World,
   sceneRoot: EntityHandle,
-): { ok: true; value: EntityHandle } | { ok: false } {
+): { ok: true; value: EntityHandle; targets: readonly EntityHandle[] } | { ok: false } {
   const inst = world.get(sceneRoot, SceneInstance);
   if (!inst.ok) return { ok: false };
+  let skin: EntityHandle | undefined;
+  const targets: EntityHandle[] = [];
   for (const entRaw of inst.value.mapping) {
-    if (entRaw === undefined || entRaw === 0) continue;
+    if (entRaw === undefined || entRaw === ENTITY_NULL_RAW) continue;
     const ent = entRaw as EntityHandle;
-    if (world.get(ent, Skin).ok) return { ok: true, value: ent };
+    if (world.get(ent, AnimationTargetId).ok) targets.push(ent);
+    if (skin === undefined && world.get(ent, Skin).ok) skin = ent;
   }
-  return { ok: false };
+  return skin === undefined ? { ok: false } : { ok: true, value: skin, targets };
 }

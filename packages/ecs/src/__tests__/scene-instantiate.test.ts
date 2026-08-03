@@ -542,6 +542,53 @@ describe('feat-20260713 M2 / w5 — add-or-patch apply double branch (AC-01)', (
     expect(tf?.posZ).toBe(3);
   });
 
+  it('flat instantiation retains parent mount overrides on the nested anchor for reopen/revert', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childWithTransform());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'Transform', field: 'posX', value: 42 }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const flat = world.instantiateSceneFlat(outerHandle);
+    expect(flat.ok).toBe(true);
+    if (!flat.ok) return;
+    const sceneInstance = resolveComponent('SceneInstance');
+    if (sceneInstance === undefined) return;
+    const childRoot = Array.from({ length: 12 }, (_, raw) => raw as unknown as EntityHandle).find(
+      (entity) => world.get(entity, sceneInstance).ok,
+    );
+    expect(childRoot).toBeDefined();
+    if (childRoot === undefined) return;
+    const state = world.getSceneInstanceState(childRoot);
+    expect(state.ok).toBe(true);
+    if (!state.ok) return;
+    const override = state.value.overrides.get(localId(0))?.get('Transform:posX');
+    expect(override?.value).toBe(42);
+
+    const mapping = readMapping(world, childRoot);
+    const member = mapping[0] as unknown as EntityHandle;
+    const transform = resolveComponent('Transform');
+    if (transform === undefined) return;
+    expect(world.get(member, transform).unwrap().posX).toBe(42);
+
+    const reverted = world.removeSceneOverride(childRoot, member, transform, 'posX');
+    expect(reverted.ok).toBe(true);
+    expect(world.get(member, transform).unwrap().posX).toBe(1);
+    expect(state.value.overrides.get(localId(0))).toBeUndefined();
+  });
+
   it('mixed order: add then field-patch of the same comp -> final value = patch value (array-order apply)', () => {
     const world = new World();
     const childHandle = registerSceneAsset(world, childWithTransform());

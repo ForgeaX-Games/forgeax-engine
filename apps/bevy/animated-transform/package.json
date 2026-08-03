@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Reproduction of Bevy's `animation/animated_transform` example using AnimationClip, AnimationGraph, AnimationPlayer, and named scene Transform targets.",
+  "description": "Ordinary Transform animation with direct and graph playback through the default app schedule.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:falsify": "node scripts/smoke-falsify.mjs"
   },
   "forgeax": {
     "bevyExample": {
@@ -23,15 +24,15 @@
     "metrics": {
       "bundle-size": {
         "enabled": false,
-        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+        "reason": "vite app bundle downstream of engine packages"
       },
       "fps": {
         "enabled": false,
-        "reason": "animated transform demo; fps no-regression covered by hello-cube / hello-room gates"
+        "reason": "deterministic animation assertions are the gate"
       },
       "bench": {
         "enabled": false,
-        "reason": "animated transform demo; bench focus on engine-math / pixel-parity"
+        "reason": "not a benchmark app"
       },
       "gate": {
         "enabled": true,
@@ -39,24 +40,26 @@
       },
       "spike-report": {
         "enabled": false,
-        "reason": "not a spike app; Bevy animated_transform reproduction"
+        "reason": "not a spike app"
       }
     }
   },
   "dependencies": {
+    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
-    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
-    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
+    "playwright": "^1.56.1",
+    "typescript": "6.0.3",
     "vite": "8.0.10",
     "webgpu": "^0.4.0"
   }

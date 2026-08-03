@@ -514,10 +514,18 @@ export const animationClipLoader: Loader = {
     for (const ch of channelsRaw) {
       if (typeof ch !== 'object' || ch === null) return undefined;
       const chObj = ch as Record<string, unknown>;
-      const targetPath = chObj.targetPath;
+      const targetId = chObj.targetId;
       const property = chObj.property;
       const samplerObj = chObj.sampler as Record<string, unknown> | undefined;
-      if (!Array.isArray(targetPath)) return undefined;
+      if (
+        typeof targetId !== 'string' ||
+        !/^[0-9a-f]{32}$/.test(targetId) ||
+        Object.keys(chObj).some(
+          (key) => key !== 'targetId' && key !== 'property' && key !== 'sampler',
+        )
+      ) {
+        return undefined;
+      }
       if (property !== 'translation' && property !== 'rotation' && property !== 'scale')
         return undefined;
       if (samplerObj === undefined) return undefined;
@@ -542,7 +550,7 @@ export const animationClipLoader: Loader = {
       }
       if (interpolation !== 'LINEAR' && interpolation !== 'STEP') return undefined;
       channels.push({
-        targetPath: targetPath as readonly string[],
+        targetId: targetId as AnimationChannel['targetId'],
         property: property as 'translation' | 'rotation' | 'scale',
         sampler: { input, output, interpolation },
       });

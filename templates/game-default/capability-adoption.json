@@ -4,24 +4,39 @@
   "rules": [
     {
       "id": "reachable-package-is-core",
-      "match": { "kind": "package", "templateImport": true },
+      "match": {
+        "kind": "package",
+        "templateImport": true
+      },
       "classification": "core",
-      "frontDoors": ["preview"],
-      "evidence": ["templates/game-default/main.ts"]
+      "frontDoors": [
+        "preview"
+      ],
+      "evidence": [
+        "templates/game-default/main.ts"
+      ]
     },
     {
       "id": "cross-solo-method-is-tooling",
-      "match": { "kind": "cross-solo-method" },
+      "match": {
+        "kind": "cross-solo-method"
+      },
       "classification": "tooling",
-      "frontDoors": ["game-default:audit"],
-      "evidence": ["templates/game-default/AGENTS.md"]
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "templates/game-default/AGENTS.md"
+      ]
     }
   ],
   "declarations": [
     {
       "id": "asset:hdr",
       "classification": "core",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/assets/scene.pack.json"
@@ -30,7 +45,9 @@
     {
       "id": "asset:mp3",
       "classification": "core",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/gameplay-audio.ts",
         "apps/preview/vite.config.ts",
@@ -40,7 +57,9 @@
     {
       "id": "package:@forgeax/engine-audio-webaudio",
       "classification": "core",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "apps/preview/src/main.ts",
         "packages/audio-webaudio/README.md"
@@ -49,7 +68,9 @@
     {
       "id": "app:hello/audio",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/gameplay-audio.ts",
         "apps/hello/audio/src/main.ts"
@@ -58,7 +79,9 @@
     {
       "id": "app:bevy/spatial-audio-3d",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/gameplay-audio.ts",
         "apps/bevy/spatial-audio-3d/src/spatial-audio-3d.ts"
@@ -67,7 +90,9 @@
     {
       "id": "app:bevy/3d-rotation",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/rotating-target.ts",
         "templates/game-default/src/scene-runtime.ts",
@@ -81,7 +106,9 @@
     {
       "id": "app:bevy/3d-scene",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/3d-scene/package.json",
         "apps/bevy/3d-scene/src/main.ts",
@@ -95,7 +122,9 @@
     {
       "id": "app:bevy/3d-shapes",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
@@ -108,7 +137,9 @@
     {
       "id": "app:bevy/component-hooks",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/scoring-target.ts",
         "templates/game-default/src/scene-runtime.ts",
@@ -122,7 +153,9 @@
     {
       "id": "app:bevy/animated-material",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/animated-target-material.ts",
         "templates/game-default/src/scene-runtime.ts",
@@ -136,7 +169,9 @@
     {
       "id": "app:bevy/animate-shader",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/animated-target.wgsl",
         "templates/game-default/src/animated-target-material.ts",
@@ -155,7 +190,9 @@
     {
       "id": "app:bevy/anti-aliasing",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/settings.ts",
         "templates/game-default/main.ts",
@@ -170,7 +207,9 @@
     {
       "id": "app:hello/custom-shader",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/hit-flash.wgsl",
         "templates/game-default/src/hit-flash-material.ts",
@@ -181,7 +220,9 @@
     {
       "id": "app:bevy/move-sprite",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/move-sprite/package.json",
         "templates/game-default/AGENTS.md"
@@ -192,7 +233,9 @@
     {
       "id": "app:bevy/sprite-animation",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/sprite-animation/package.json",
         "apps/bevy/sprite-animation/src/sprite-animation.ts",
@@ -204,7 +247,9 @@
     {
       "id": "app:hello/m3-programmable-rendering",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/hello/m3-programmable-rendering/package.json",
         "templates/game-default/AGENTS.md"
@@ -215,7 +260,9 @@
     {
       "id": "app:bevy/2d-rotation",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/2d-rotation/package.json",
         "apps/bevy/2d-rotation/src/rotation.ts",
@@ -227,7 +274,9 @@
     {
       "id": "app:bevy/mesh2d",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/mesh2d/package.json",
         "apps/bevy/mesh2d/src/mesh2d.ts",
@@ -239,7 +288,9 @@
     {
       "id": "app:bevy/transparency-2d",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/transparency-2d/package.json",
         "apps/bevy/transparency-2d/src/transparency-2d.ts",
@@ -251,7 +302,9 @@
     {
       "id": "app:bevy/sprite-slice",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/sprite-slice/package.json",
         "apps/bevy/sprite-slice/src/sprite-slice.ts",
@@ -264,7 +317,9 @@
     {
       "id": "app:bevy/rotate-to-cursor",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/rotate-to-cursor/package.json",
         "apps/bevy/rotate-to-cursor/src/rotate-to-cursor.ts",
@@ -277,7 +332,9 @@
     {
       "id": "app:bevy/texture-atlas",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/texture-atlas/package.json",
         "apps/bevy/texture-atlas/src/texture-atlas.ts",
@@ -289,7 +346,9 @@
     {
       "id": "app:bevy/sprite-sheet",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/sprite-sheet/package.json",
         "apps/bevy/sprite-sheet/src/sprite-sheet.ts",
@@ -301,7 +360,9 @@
     {
       "id": "app:bevy/2d-screen-shake",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/2d-screen-shake/package.json",
         "apps/bevy/2d-screen-shake/src/screen-shake.ts",
@@ -314,7 +375,9 @@
     {
       "id": "app:bevy/2d-top-down-camera",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/2d-top-down-camera/package.json",
         "apps/bevy/2d-top-down-camera/src/top-down-camera.ts",
@@ -327,7 +390,9 @@
     {
       "id": "app:bevy/mesh2d-alpha-mode",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/mesh2d-alpha-mode/package.json",
         "apps/bevy/mesh2d-alpha-mode/src/mesh2d-alpha-mode.ts",
@@ -340,7 +405,9 @@
     {
       "id": "app:bevy/audio",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/audio/package.json",
         "apps/bevy/audio/src/audio.ts",
@@ -356,7 +423,9 @@
     {
       "id": "asset:wav",
       "classification": "core",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/gameplay-audio.ts",
         "apps/preview/vite.config.ts",
@@ -367,7 +436,9 @@
     {
       "id": "app:bevy/audio-control",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/gameplay-audio.ts",
         "templates/game-default/src/settings.ts",
@@ -381,7 +452,9 @@
     {
       "id": "app:bevy/axes",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/debug-axes.ts",
         "templates/game-default/main.ts",
@@ -395,7 +468,9 @@
     {
       "id": "app:bevy/blend-modes",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/hit-flash-material.ts",
         "templates/game-default/src/hit-flash.wgsl",
@@ -405,13 +480,15 @@
         "apps/preview/scripts/smoke-render-evidence.mjs",
         "apps/bevy/blend-modes/src/main.ts"
       ],
-    "reason": "The canonical app remains the focused five-mode blend correctness matrix. game-default composes the public premultiplied-alpha renderState with its transient custom hit-feedback shader, emits premultiplied RGB, disables depth writes, and proves the exact flash/reset lifecycle in the real Preview WebGPU path.",
+      "reason": "The canonical app remains the focused five-mode blend correctness matrix. game-default composes the public premultiplied-alpha renderState with its transient custom hit-feedback shader, emits premultiplied RGB, disables depth writes, and proves the exact flash/reset lifecycle in the real Preview WebGPU path.",
       "betterConsumer": "templates/game-default"
     },
     {
       "id": "app:bevy/bloom",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/settings.ts",
         "templates/game-default/assets/ui/settings.pack.json",
@@ -427,7 +504,9 @@
     {
       "id": "app:bevy/depth-of-field",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/depth-of-field.ts",
         "templates/game-default/src/depth-of-field.wgsl",
@@ -448,7 +527,9 @@
     {
       "id": "app:bevy/fullscreen-material",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/chromatic-aberration.ts",
         "templates/game-default/src/chromatic-aberration.wgsl",
@@ -469,7 +550,9 @@
     {
       "id": "app:bevy/generate-custom-mesh",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/custom-projectile-mesh.ts",
         "templates/game-default/main.ts",
@@ -486,7 +569,9 @@
     {
       "id": "app:bevy/camera-orbit",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/camera-orbit.ts",
         "templates/game-default/src/gameplay-input.ts",
@@ -503,7 +588,9 @@
     {
       "id": "app:bevy/camera-pan",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/hud.ts",
@@ -520,7 +607,9 @@
     {
       "id": "app:bevy/camera-zoom",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/camera-zoom.ts",
@@ -538,7 +627,9 @@
     {
       "id": "app:bevy/change-detection",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/change-detection.ts",
         "templates/game-default/src/render-evidence.ts",
@@ -556,7 +647,9 @@
     {
       "id": "app:bevy/clear-color",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/clear-color.ts",
         "templates/game-default/src/settings.ts",
@@ -573,7 +666,9 @@
     {
       "id": "app:bevy/clearcoat",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/src/clearcoat-material.ts",
         "templates/game-default/src/scene-runtime.ts",
@@ -588,7 +683,9 @@
     {
       "id": "app:bevy/delayed-commands",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/render-evidence.ts",
@@ -604,7 +701,9 @@
     {
       "id": "app:bevy/contiguous-query",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/target-health.ts",
@@ -622,7 +721,9 @@
     {
       "id": "app:bevy/entity-disabling",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/target-disabling.ts",
@@ -641,7 +742,9 @@
     {
       "id": "app:bevy/gamepad-input",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/render-evidence.ts",
@@ -658,7 +761,9 @@
     {
       "id": "app:bevy/bloom-2d",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/bloom-2d/src/bloom-2d.ts",
         "apps/bevy/bloom-2d/src/main.ts",
@@ -672,7 +777,9 @@
     {
       "id": "app:bevy/cubic-splines",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/cubic-splines/src/cubic-splines.ts",
         "apps/bevy/cubic-splines/src/main.ts",
@@ -685,7 +792,9 @@
     {
       "id": "app:bevy/easing",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/easing/src/easing-demo.ts",
         "apps/bevy/easing/src/main.ts",
@@ -698,7 +807,9 @@
     {
       "id": "app:bevy/empty",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/empty/src/empty.ts",
         "apps/bevy/empty/src/main.ts",
@@ -711,7 +822,9 @@
     {
       "id": "app:bevy/fixed-timestep",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/gameplay-state.ts",
@@ -726,7 +839,9 @@
     {
       "id": "app:bevy/fog",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/fog/src/fog.ts",
         "apps/bevy/fog/src/main.ts",
@@ -739,7 +854,9 @@
     {
       "id": "app:bevy/free-camera",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/free-camera.ts",
@@ -757,7 +874,9 @@
     {
       "id": "app:bevy/alter-mesh",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/src/mesh-handle-swap.ts",
@@ -1109,7 +1228,9 @@
     {
       "id": "app:bevy/screenshot",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/screenshot/src/main.ts",
         "apps/bevy/screenshot/src/screenshot.ts",
@@ -1123,7 +1244,9 @@
     {
       "id": "app:bevy/shader-defs",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/shader-defs/src/main.ts",
         "apps/bevy/shader-defs/src/shader-defs.wgsl",
@@ -1138,7 +1261,9 @@
     {
       "id": "app:bevy/shader-material",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/shader-material/src/main.ts",
         "apps/bevy/shader-material/src/scene.ts",
@@ -1154,7 +1279,9 @@
     {
       "id": "app:bevy/shadow-biases",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/shadow-biases/src/main.ts",
         "apps/bevy/shadow-biases/scripts/smoke-dawn.mjs",
@@ -1166,7 +1293,9 @@
     {
       "id": "app:bevy/shadow-caster-receiver",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/shadow-caster-receiver/src/main.ts",
         "apps/bevy/shadow-caster-receiver/scripts/smoke-dawn.mjs",
@@ -1178,7 +1307,9 @@
     {
       "id": "app:bevy/skybox",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/skybox/src/main.ts",
         "apps/bevy/skybox/src/skybox.ts",
@@ -1192,7 +1323,9 @@
     {
       "id": "app:bevy/smooth-follow",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/smooth-follow/src/main.ts",
         "apps/bevy/smooth-follow/src/smooth-follow.ts",
@@ -1207,7 +1340,9 @@
     {
       "id": "app:bevy/soundtrack",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/soundtrack/src/main.ts",
         "apps/bevy/soundtrack/src/soundtrack.ts",
@@ -1227,7 +1362,9 @@
     {
       "id": "app:bevy/spatial-audio-2d",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/spatial-audio-2d/src/main.ts",
         "apps/bevy/spatial-audio-2d/src/spatial-audio-2d.ts",
@@ -1246,7 +1383,9 @@
     {
       "id": "app:bevy/specular-tint",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/specular-tint/src/main.ts",
         "apps/bevy/specular-tint/src/specular-tint.ts",
@@ -1261,7 +1400,9 @@
     {
       "id": "app:bevy/spotlight",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/spotlight/src/main.ts",
         "apps/bevy/spotlight/src/spotlight.ts",
@@ -1275,7 +1416,9 @@
     {
       "id": "app:bevy/sprite",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/sprite/src/main.ts",
         "apps/bevy/sprite/src/sprite.ts",
@@ -1291,7 +1434,9 @@
     {
       "id": "app:bevy/sprite-flipping",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/sprite-flipping/src/main.ts",
         "apps/bevy/sprite-flipping/src/texture.ts",
@@ -1307,7 +1452,9 @@
     {
       "id": "app:bevy/ssao",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/ssao/src/main.ts",
         "apps/bevy/ssao/src/ssao.ts",
@@ -1324,7 +1471,9 @@
     {
       "id": "app:bevy/states",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/states/src/main.ts",
         "apps/bevy/states/src/states.ts",
@@ -1337,7 +1486,9 @@
     {
       "id": "app:bevy/system-closure",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/system-closure/src/main.ts",
         "apps/bevy/system-closure/src/system-closure.ts",
@@ -1351,7 +1502,9 @@
     {
       "id": "app:bevy/system-param",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/system-param/src/main.ts",
         "apps/bevy/system-param/src/system-param.ts",
@@ -1365,7 +1518,9 @@
     {
       "id": "app:bevy/texture",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/texture/src/main.ts",
         "apps/bevy/texture/src/texture.ts",
@@ -1379,7 +1534,9 @@
     {
       "id": "app:bevy/time-elapsed",
       "classification": "guided",
-      "frontDoors": ["preview"],
+      "frontDoors": [
+        "preview"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
@@ -1397,7 +1554,9 @@
     {
       "id": "app:bevy/timers",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/timers/src/main.ts",
         "apps/bevy/timers/src/timers.ts",
@@ -1410,7 +1569,9 @@
     {
       "id": "app:bevy/tonemapping",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
@@ -1427,7 +1588,9 @@
     {
       "id": "app:bevy/touch-input",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/touch-input/src/main.ts",
         "apps/bevy/touch-input/src/touch-input.ts",
@@ -1442,7 +1605,9 @@
     {
       "id": "app:bevy/transform",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/transform/src/main.ts",
         "apps/bevy/transform/src/transform.ts",
@@ -1457,7 +1622,9 @@
     {
       "id": "app:bevy/translation",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/translation/src/main.ts",
         "apps/bevy/translation/src/translation.ts",
@@ -1472,7 +1639,9 @@
     {
       "id": "app:bevy/transparency-3d",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/transparency-3d/src/main.ts",
         "apps/bevy/transparency-3d/src/transparency-3d.ts",
@@ -1487,7 +1656,9 @@
     {
       "id": "app:bevy/update-gltf-scene",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/update-gltf-scene/src/main.ts",
         "apps/bevy/update-gltf-scene/src/update-gltf-scene.ts",
@@ -1502,7 +1673,9 @@
     {
       "id": "app:bevy/viewport-to-world",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/viewport-to-world/src/main.ts",
         "apps/bevy/viewport-to-world/src/viewport-to-world.ts",
@@ -1517,7 +1690,9 @@
     {
       "id": "app:bevy/window-resizing",
       "classification": "not-template-fit",
-      "frontDoors": ["game-default:audit"],
+      "frontDoors": [
+        "game-default:audit"
+      ],
       "evidence": [
         "apps/bevy/window-resizing/src/main.ts",
         "apps/bevy/window-resizing/src/window-resizing.ts",
@@ -1527,6 +1702,20 @@
       ],
       "reason": "The canonical app proves the public InputSnapshot key-edge path, canvas resize, renderer survival, and perspective camera aspect synchronization: typecheck/build pass, Dawn runs 100 webgpu frames with initial/steady/resized non-black renders, aspect=1.7778 for 640x360, and zero RHI errors; the reference PNG is visually inspected. It is nevertheless a static code-spawned diagnostic scene whose 1/2/3 keys manually mutate canvas dimensions and camera state, with no authored asset, browser smoke, gameplay/settings outcome, typed reset/re-entry owner, or recovery path. game-default already sizes the canvas from host/client dimensions and DPR, switches camera modes, and relies on engine-owned resize graph/resource invalidation; app/runtime tests cover autoAspect resize and post-resize rendering. Copying this demo would create a second resize policy without a distinct feature-loop mechanic. Revisit only for a user-facing responsive layout or split-screen owner with browser and reset evidence.",
       "betterConsumer": "apps/bevy/window-resizing"
+    },
+    {
+      "id": "app:bevy/animated-transform",
+      "classification": "guided",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/animation/README.md",
+        "apps/bevy/animated-transform/src/animated-transform.ts",
+        "apps/bevy/animated-transform/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "The canonical app is the focused ordinary-Transform target, direct/graph, control, and instance-isolation proof. game-default can adopt the public AnimationTargetId and explicit batch-binding flow when it gains authored clips; adding a second synthetic animation scene now would not compose with its current target-range assets.",
+      "betterConsumer": "apps/bevy/animated-transform"
     }
   ]
 }

@@ -84,6 +84,8 @@ export interface SemanticDdcInput {
   readonly settings: unknown;
   readonly declaredGuids: readonly string[];
   readonly cookProfile: string;
+  /** Optional producer-owned Meta facts; omitted and empty are legacy-equivalent. */
+  readonly sourceOverrides?: unknown;
   readonly publish?: unknown;
 }
 
@@ -178,11 +180,20 @@ function sortKeys(value: unknown): unknown {
 
 /** Derive a DDC key from semantic cook inputs, excluding publish environment. */
 export function semanticDdcKey(input: SemanticDdcInput): string {
+  const hasSourceOverrides =
+    input.sourceOverrides !== undefined &&
+    typeof input.sourceOverrides === 'object' &&
+    input.sourceOverrides !== null &&
+    !Array.isArray(input.sourceOverrides) &&
+    Object.keys(input.sourceOverrides).length > 0;
+  const settings = hasSourceOverrides
+    ? { settings: input.settings, sourceOverrides: input.sourceOverrides }
+    : input.settings;
   return semanticEntryKey({
     schemaVersion: input.schemaVersion,
     importer: input.importerVersion,
     codec: input.codecVersion,
-    settings: input.settings,
+    settings,
     sourceBytes: input.sourceDependencies
       .map((dependency) => (typeof dependency === 'string' ? dependency : dependency.digest))
       .sort()

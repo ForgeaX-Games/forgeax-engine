@@ -10,7 +10,10 @@
 //   - requirements AC-10 (IR extension)
 //   - charter P3 (fail-fast on unsupported interpolation/morph targets)
 
+import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
+import type { AnimationTargetIdValue } from '@forgeax/engine-types';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
+import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
 /** Supported interpolation modes (CUBICSPLINE is deferred to OOS-skin-cubicspline). */
 type Interpolation = 'LINEAR' | 'STEP';
@@ -123,8 +126,8 @@ function decodeFloatAccessor(
 }
 
 export interface GltfAnimationChannelRecord {
-  /** Sequence of Name values from scene root to target joint. */
-  readonly targetPath: readonly string[];
+  readonly targetId: AnimationTargetIdValue;
+  readonly targetNodeIndex: number;
   /** 'translation' | 'rotation' | 'scale'. */
   readonly property: string;
   /** Sampler driving this channel. */
@@ -157,7 +160,7 @@ export interface GltfAnimationClipRecord {
  */
 export function parseAnimation(
   animationsJson: readonly AnimationJson[] | undefined,
-  nodesJson: readonly { readonly name?: string }[],
+  nodesJson: readonly { readonly name?: string; readonly children?: readonly number[] }[],
   accessors: readonly AccessorJson[],
   bufferViews: readonly BufferViewJson[],
   buffers: readonly Uint8Array[],
@@ -167,6 +170,9 @@ export function parseAnimation(
   }
 
   const clips: GltfAnimationClipRecord[] = [];
+  const parentOf = buildNodeParentMap(nodesJson);
+  const nodeByPath = new Map<string, number>();
+  const pathById = new Map<AnimationTargetIdValue, string>();
 
   for (let animIdx = 0; animIdx < animationsJson.length; animIdx++) {
     const anim = animationsJson[animIdx];
@@ -259,18 +265,51 @@ export function parseAnimation(
         );
       }
 
-      // Build targetPath from node name (scene-level resolution at instantiate time).
       const targetNodeIdx = ch.target.node;
-      const targetPath: string[] = [];
-      if (targetNodeIdx !== undefined) {
-        const node = nodesJson[targetNodeIdx];
-        if (node !== undefined && node.name !== undefined) {
-          targetPath.push(node.name);
-        }
+      const path =
+        targetNodeIdx === undefined
+          ? { ok: false as const, reason: 'name-missing' as const, nodeIndex: -1 }
+          : resolveNamedNodePath(nodesJson, parentOf, targetNodeIdx);
+      if (!path.ok) {
+        return err(
+          gltfErr('gltf-animation-target-invalid', {
+            reason: path.reason,
+            animationIndex: animIdx,
+            channelIndex: chIdx,
+            nodeIndex: path.nodeIndex,
+          }),
+        );
       }
+      const pathKey = JSON.stringify(path.value);
+      const previousNode = nodeByPath.get(pathKey);
+      if (previousNode !== undefined && previousNode !== targetNodeIdx) {
+        return err(
+          gltfErr('gltf-animation-target-invalid', {
+            reason: 'path-duplicate',
+            animationIndex: animIdx,
+            channelIndex: chIdx,
+            nodeIndex: targetNodeIdx as number,
+          }),
+        );
+      }
+      nodeByPath.set(pathKey, targetNodeIdx as number);
+      const targetId = deriveAnimationTargetId(path.value);
+      const previousPath = pathById.get(targetId);
+      if (previousPath !== undefined && previousPath !== pathKey) {
+        return err(
+          gltfErr('gltf-animation-target-invalid', {
+            reason: 'id-collision',
+            animationIndex: animIdx,
+            channelIndex: chIdx,
+            nodeIndex: targetNodeIdx as number,
+          }),
+        );
+      }
+      pathById.set(targetId, pathKey);
 
       channels.push({
-        targetPath,
+        targetId,
+        targetNodeIndex: targetNodeIdx as number,
         property: ch.target.path,
         sampler: samplerRecord,
       });

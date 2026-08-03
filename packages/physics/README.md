@@ -96,8 +96,8 @@ Backend implementations use the narrowing helpers in `switch` statements for exh
 
 | Field | Type | Default | Description |
 |:--|:--|:--|:--|
-| `type` | `enum` | `0` (static) | `static` / `dynamic` / `kinematic` |
-| `mass` | `f32` | `0` | Additional mass (dynamic only; collider mass comes from density) |
+| `type` | `enum` | `1` (dynamic) | `static` / `dynamic` / `kinematic` |
+| `mass` | `f32` | `1` | Additional mass (dynamic only; collider mass comes from density) |
 | `linearDamping` | `f32` | `0` | Velocity damping per second |
 | `angularDamping` | `f32` | `0` | Angular velocity damping per second |
 | `gravityScale` | `f32` | `1` | Multiplier for world gravity |
@@ -109,14 +109,14 @@ Backend implementations use the narrowing helpers in `switch` statements for exh
 |:--|:--|:--|:--|
 | `shape` | `enum` | `0` (cuboid) | `cuboid` / `sphere` / `capsule` |
 | `halfExtents` | `array<f32, 3>` | `[0.5, 0.5, 0.5]` | Cuboid half-width/height/depth |
-| `radius` | `f32` | `0` | Sphere radius or capsule radius |
-| `halfHeight` | `f32` | `0` | Capsule half-height (along Y) |
+| `radius` | `f32` | `0.5` | Sphere radius or capsule radius |
+| `halfHeight` | `f32` | `0.5` | Capsule half-height (along Y) |
 | `friction` | `f32` | `0.5` | Coulomb friction coefficient |
 | `restitution` | `f32` | `0` | Bounciness (0 = inelastic, 1 = perfectly elastic) |
 | `density` | `f32` | `1` | Mass per volume (affects dynamic body total mass) |
 | `isSensor` | `bool` | `false` | Sensor-only collider (no contact response) |
-| `collisionGroups` | `u32` | `0` | Rapier collision groups bitmask |
-| `solverGroups` | `u32` | `0` | Rapier solver groups bitmask |
+| `collisionGroups` | `u32` | `0x0001ffff` | Rapier collision groups bitmask |
+| `solverGroups` | `u32` | `0xffffffff` | Rapier solver groups bitmask |
 
 ### CollidingEntities
 
@@ -195,7 +195,7 @@ do not rely on catching `body-not-found` as control flow.
 
 ## Error Codes
 
-`PhysicsErrorCode` (9 members, closed union). Exhaustive `switch` without `default`. SSOT: `packages/physics/src/errors.ts`.
+`PhysicsErrorCode` (9 members, closed union). Exhaustive `switch` without `default`. The public re-export is `packages/physics/src/errors.ts`; the union SSOT is `packages/types/src/index.ts`.
 
 `moveAndSlide` throws `PhysicsError` with `controller-requires-kinematic` (body is
 not kinematic), `body-not-found` (no Rapier body for the entity), or
@@ -206,4 +206,4 @@ not kinematic), `body-not-found` (no Rapier body for the entity), or
 - **Not a backend**: this package defines interfaces and schemas only. Runtime simulation requires a backend (`@forgeax/engine-physics-rapier3d` or `@forgeax/engine-physics-rapier2d`).
 - **ECS bridge**: backend packages call `registerPhysicsSystems(world, Transform)` to wire the three-phase tick pipeline into the ECS schedule.
 - **Fire-and-forget**: WASM backends load asynchronously; entities spawned before load are picked up once the `PhysicsWorld` resource appears.
-- **Component schemas SSOT**: `packages/physics/src/components.ts` is the authoritative definition for all physics component fields and types.
+- **Component schemas SSOT**: `packages/physics/src/components.ts` is the authoritative definition for all physics component fields, defaults, and types.

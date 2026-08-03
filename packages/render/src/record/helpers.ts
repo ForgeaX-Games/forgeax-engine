@@ -8,8 +8,28 @@ import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { EquirectProjectionFailedError } from '../errors/render';
 import type { RenderSystemInternals } from '../render-system';
-import type { CameraSnapshot, MaterialSnapshot } from '../render-system-extract';
+import type {
+  CameraSnapshot,
+  MaterialSnapshot,
+  SkyboxSnapshot,
+  SkylightSnapshot,
+} from '../render-system-extract';
 import type { RenderFrameState } from './frame-snapshot';
+
+/**
+ * Select the equirect source for the shared lazy projection.
+ *
+ * Skylight uses handle 0 as a real "solid-color ambient" sentinel, so nullish
+ * coalescing cannot distinguish "no equirect" from a valid snapshot. Prefer a
+ * non-zero Skylight handle and fall back to SkyboxBackground otherwise.
+ */
+export function selectLazyEquirectHandle(
+  skylight: Pick<SkylightSnapshot, 'equirectHandle'> | undefined,
+  skybox: Pick<SkyboxSnapshot, 'equirectHandle'> | undefined,
+): number {
+  const skylightHandle = skylight?.equirectHandle ?? 0;
+  return skylightHandle !== 0 ? skylightHandle : (skybox?.equirectHandle ?? 0);
+}
 
 /**
  * feat-20260608-multi-light-warn-once M3: warn-once latch for directional

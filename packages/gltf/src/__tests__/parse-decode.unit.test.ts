@@ -619,8 +619,8 @@ import { decomposeNodeTransform } from '../transform.js';
           [
             {
               channels: [
-                { sampler: 0, target: { path: 'translation' } },
-                { sampler: 1, target: { path: 'scale' } },
+                { sampler: 0, target: { node: 0, path: 'translation' } },
+                { sampler: 1, target: { node: 1, path: 'scale' } },
               ],
               samplers: [
                 { input: 0, output: 2, interpolation: 'LINEAR' },
@@ -628,7 +628,7 @@ import { decomposeNodeTransform } from '../transform.js';
               ],
             },
           ],
-          [],
+          [{ name: 'A' }, { name: 'B' }],
           [
             { componentType: 5126, type: 'SCALAR', count: 3, bufferView: 0 },
             { componentType: 5126, type: 'SCALAR', count: 3, bufferView: 1 },

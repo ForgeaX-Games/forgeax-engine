@@ -1969,12 +1969,21 @@ export function extractFrames(
   // _routeError (systemName carries worldId for source identification),
   // and the world's contribution is skipped (AC-09 graceful degradation).
 
-  // Parallel arrays: frames[i] stores the frame from worlds[wi] where
-  // wi appears in succeededIndices[i].
+  // The camera-owner frame must be extracted first: non-owner worlds do not
+  // carry the surfaced camera, but their renderables still need to be tested
+  // against that camera's frustum. Frames are placed back into worlds[] order
+  // before merge so queue / directional-light / worldId semantics stay stable.
   const succeededFrames: ExtractedFrame[] = [];
   const succeededIndices: number[] = [];
 
-  for (let wi = 0; wi < worlds.length; wi++) {
+  const extractionOrder = Array.from({ length: worlds.length }, (_, wi) => wi).sort((a, b) => {
+    if (a === cameraOwner) return -1;
+    if (b === cameraOwner) return 1;
+    return a - b;
+  });
+  const framesByWorld = new Map<number, ExtractedFrame>();
+
+  for (const wi of extractionOrder) {
     const world = worlds[wi];
     if (world === undefined) continue;
     try {
@@ -1993,16 +2002,27 @@ export function extractFrames(
       // Tilemap chunk streaming: materialize/evict chunks before extract.
       tilemapChunkExtractSystem(world, wi);
 
-      // D-4: the cameraOwner world uses cull:'self' (normal frustum culling
-      // against its own cameras — the cameras that are actually surfaced);
-      // every other world uses cull:'none' to avoid its own cameras silently
-      // culling geometry the surfaced camera would see. w4: frustum culling
-      // follows cameraOwner (the camera source), not resourceOwner.
-      const cullMode: 'self' | 'none' = wi === cameraOwner ? 'self' : 'none';
-      const frame = extractFrame(world, assets, pipelineState, gpuStore, { cull: cullMode });
+      // D-4: the cameraOwner world uses its own camera for normal frustum
+      // culling. Every other world uses the already-extracted camera-owner
+      // snapshots, preserving culling across the composite instead of
+      // disabling it. A non-owner world must never use its own cameras here:
+      // those cameras are not surfaced by this draw.
+      const isCameraOwner = wi === cameraOwner;
+      const cameraOwnerFrame = framesByWorld.get(cameraOwner);
+      const frame = extractFrame(
+        world,
+        assets,
+        pipelineState,
+        gpuStore,
+        isCameraOwner
+          ? { cull: 'self' }
+          : {
+              cull: 'external',
+              ...(cameraOwnerFrame === undefined ? {} : { cullCameras: cameraOwnerFrame.cameras }),
+            },
+      );
 
-      succeededFrames.push(frame);
-      succeededIndices.push(wi);
+      framesByWorld.set(wi, frame);
     } catch (err) {
       // Per-world failure: route to world's own error handler, skip contribution.
       try {
@@ -2017,6 +2037,14 @@ export function extractFrames(
         // If _routeError itself throws, the world already failed — skip silently.
       }
     }
+  }
+
+  // Restore the caller's world order after the camera-owner-first extraction.
+  for (let wi = 0; wi < worlds.length; wi++) {
+    const frame = framesByWorld.get(wi);
+    if (frame === undefined) continue;
+    succeededFrames.push(frame);
+    succeededIndices.push(wi);
   }
 
   // ── D-3: merge semantics ───────────────────────────────────────────────
@@ -2260,14 +2288,19 @@ export function extractFrame(
    * feat-20260708-composited-multi-world-rendering M2 / D-2 / D-4:
    * optional per-call overrides.
    *
-   * - `cull` (default `'self'`): when `'none'`, skip frustum-plane
-   *   construction and keep all renderables (used by extractFrames for
-   *   non-owner worlds whose cameras are discarded post-merge).
+   * - `cull` (default `'self'`): `'self'` uses this world's cameras,
+   *   `'external'` uses `cullCameras` supplied by the composite owner, and
+   *   `'none'` keeps the legacy always-visible escape hatch.
+   * - `cullCameras`: camera snapshots from the surfaced camera-owner world;
+   *   only consumed when `cull === 'external'`.
    *
    * This parameter is add-only (non-breaking): existing 4-arg callers
    * keep the default `'self'` behavior.
    */
-  opts?: { cull?: 'self' | 'none' },
+  opts?: {
+    cull?: 'self' | 'none' | 'external';
+    cullCameras?: readonly CameraSnapshot[];
+  },
 ): ExtractedFrame {
   // feat-20260708-composited-multi-world-rendering M2 / D-2: resetForFrame
   // has been lifted to extractFrames (the frame-level entry point).
@@ -2854,13 +2887,15 @@ export function extractFrame(
   // are skipped — entities are always-visible for those. Frustum plane cache
   // stored as Float32Array[] parallel to the cameras[] array.
   //
-  // feat-20260708-composited-multi-world-rendering M2 / D-4: when cullMode
-  // is 'none' (non-owner world in extractFrames), skip frustum construction
-  // entirely — all renderables are kept. This avoids the non-owner world's
-  // own cameras silently culling geometry that the owner camera would see.
+  // feat-20260708-composited-multi-world-rendering M2 / D-4: a composite
+  // non-owner world uses the camera-owner snapshots, not its own cameras.
+  // This keeps culling correct when the surfaced camera and renderables live
+  // in different worlds. The explicit 'none' mode remains the always-visible
+  // escape hatch for callers that genuinely need it.
   const frustumPlanes: Float32Array[] = [];
+  const cullingCameras = cullMode === 'external' ? (opts?.cullCameras ?? []) : cameras;
   if (cullMode !== 'none') {
-    for (const cam of cameras) {
+    for (const cam of cullingCameras) {
       // feat-20260613 M6 / w20: orthographic cameras have fov=0 by design;
       // the previous degeneracy guard (`fov <= 0`) was rejecting valid ortho
       // cameras and returning the always-visible escape hatch. Only the

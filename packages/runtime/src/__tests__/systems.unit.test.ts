@@ -63,6 +63,7 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import {
   createQueryState,
+  ENTITY_NULL_RAW,
   Entity,
   queryRun,
   Severity,
@@ -125,7 +126,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 // alias so the exhaustive-switch bodies below stay byte-identical (AC-09).
 type RuntimeLayerErrorCode = RenderErrorCode | AssetRuntimeErrorCode | SkinErrorCode;
 
-import { advanceAnimationPlayer as canonicalAdvanceAnimationPlayer } from '@forgeax/engine-animation';
+import {
+  AnimationTargetId,
+  bindAnimationTargets,
+  advanceAnimationPlayer as canonicalAdvanceAnimationPlayer,
+} from '@forgeax/engine-animation';
+import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
 import type {
   CameraSnapshot,
   ExtractedLights,
@@ -4051,6 +4057,26 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           return mapped ?? (allocated.has(handle) ? handle : 0);
         });
         world.set(entity, AnimationPlayer, { clips });
+        const skin = world.get(entity, Skin);
+        if (!skin.ok) continue;
+        const targets: EntityHandle[] = [];
+        for (const raw of skin.value.joints) {
+          if (raw === ENTITY_NULL_RAW) continue;
+          const target = raw as EntityHandle;
+          const name = world.get(target, Name);
+          if (!name.ok) continue;
+          if (!world.get(target, ChildOf).ok) {
+            world.addComponent(target, { component: ChildOf, data: { parent: entity } });
+          }
+          if (!world.get(target, AnimationTargetId).ok) {
+            world.addComponent(target, {
+              component: AnimationTargetId,
+              data: { value: deriveAnimationTargetId([name.value.value]) },
+            });
+          }
+          targets.push(target);
+        }
+        bindAnimationTargets(world, entity, targets);
       }
     });
     canonicalAdvanceAnimationPlayer(world, dt);
@@ -4156,7 +4182,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('LINEAR sampling with Skin+Transform: system runs without crash', () => {
       const world = new World();
       const sampler = makeSampler([0, 2], [0, 0, 0, 2, 4, 6], 'LINEAR');
-      const clip = makeClip(2, [{ targetPath: ['joint0'], property: 'translation', sampler }]);
+      const clip = makeClip(2, [
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler },
+      ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
       const jointE = world.spawn({ component: Transform, data: defaultTransform }).unwrap();
@@ -4193,7 +4221,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const halfSqrt2 = Math.sqrt(2) / 2;
       const sampler = makeSampler([0, 2], [0, 0, 0, 1, 0, halfSqrt2, 0, halfSqrt2], 'LINEAR');
-      const clip = makeClip(2, [{ targetPath: ['joint0'], property: 'rotation', sampler }]);
+      const clip = makeClip(2, [
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'rotation', sampler },
+      ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
       const jointE = world.spawn({ component: Transform, data: defaultTransform }).unwrap();
@@ -4226,7 +4256,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('STEP interpolation with Skin+Transform: system runs without crash', () => {
       const world = new World();
       const sampler = makeSampler([0, 2], [0, 0, 0, 5, 5, 5], 'STEP');
-      const clip = makeClip(2, [{ targetPath: ['joint0'], property: 'translation', sampler }]);
+      const clip = makeClip(2, [
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler },
+      ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
       const jointE = world.spawn({ component: Transform, data: defaultTransform }).unwrap();
@@ -4312,18 +4344,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //
   // Test scaffolding mirrors the T-17 helpers above (spawnLegacySinglePlayer
   // is single-clip; warn-pass tests need direct multi-slot setup or
-  // mismatched-leaf clips, so they use the SoA literal form inline).
+  // unmapped target clips, so they use the SoA literal form inline).
   // ──────────────────────────────────────────────────────────────────────────
 
   describe('M2 / w6 — advanceAnimationPlayer dev-mode warn throttle (D-2)', () => {
     it('60 consecutive frames with same (entity, channel, reason) emit warn exactly once', async () => {
       const { _resetAnimationWarnsForTests } = await import('@forgeax/engine-animation');
       const world = new World();
-      // Channel leaf 'mismatched-leaf' has no matching joint name 'real-joint'
-      // — every frame triggers channel-leaf-mismatch on (entity, clip:1, ch:0).
+      // Channel target ID has no matching bound target ID
+      // — every frame triggers channel-target-missing on (entity, clip:1, ch:0).
       const sampler = makeSampler([0, 1], [0, 0, 0, 1, 1, 1], 'LINEAR');
       const clip = makeClip(1, [
-        { targetPath: ['mismatched-leaf'], property: 'translation', sampler },
+        {
+          targetId: deriveAnimationTargetId(['mismatched-leaf']),
+          property: 'translation',
+          sampler,
+        },
       ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
@@ -4361,11 +4397,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         for (let i = 0; i < 60; i++) {
           advanceAnimationPlayer(world, resolver, 1 / 60);
         }
-        const leafMismatchCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' && (c[0] as string).includes('reason=channel-leaf-mismatch'),
+        const targetMissingCalls = warnSpy.mock.calls.filter(
+          (c) => (c[0] as { code?: string }).code === 'animation-target-missing',
         );
-        expect(leafMismatchCalls.length).toBe(1);
+        expect(targetMissingCalls.length).toBe(1);
       } finally {
         warnSpy.mockRestore();
       }
@@ -4374,14 +4409,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('two distinct channel indices on same entity each emit one warn (3 channels => 3 warns)', async () => {
       const { _resetAnimationWarnsForTests } = await import('@forgeax/engine-animation');
       const world = new World();
-      // Three channels each targeting an unmapped leaf — chIdx differs, so
+      // Three channels each targeting an unmapped ID — chIdx differs, so
       // the (entity, clip, chIdx, reason) key splits into 3 distinct entries
       // and the throttle should NOT collapse them.
       const sampler = makeSampler([0, 1], [0, 0, 0, 1, 1, 1], 'LINEAR');
       const clip = makeClip(1, [
-        { targetPath: ['leaf-A'], property: 'translation', sampler },
-        { targetPath: ['leaf-B'], property: 'translation', sampler },
-        { targetPath: ['leaf-C'], property: 'translation', sampler },
+        { targetId: deriveAnimationTargetId(['leaf-A']), property: 'translation', sampler },
+        { targetId: deriveAnimationTargetId(['leaf-B']), property: 'translation', sampler },
+        { targetId: deriveAnimationTargetId(['leaf-C']), property: 'translation', sampler },
       ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
@@ -4417,15 +4452,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         for (let i = 0; i < 5; i++) advanceAnimationPlayer(world, resolver, 1 / 60);
-        const leafMismatchCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' && (c[0] as string).includes('reason=channel-leaf-mismatch'),
+        const targetMissingCalls = warnSpy.mock.calls.filter(
+          (c) => (c[0] as { code?: string }).code === 'animation-target-missing',
         );
-        expect(leafMismatchCalls.length).toBe(3);
-        const chIdxValues = leafMismatchCalls.map((c) => {
-          const m = (c[0] as string).match(/channel=\d+:(\d+)/);
-          return m ? parseInt(m[1] ?? '-1', 10) : -1;
-        });
+        expect(targetMissingCalls.length).toBe(3);
+        const chIdxValues = targetMissingCalls.map(
+          (c) => (c[0] as { detail: { channel: number } }).detail.channel,
+        );
         expect(new Set(chIdxValues)).toEqual(new Set([0, 1, 2]));
       } finally {
         warnSpy.mockRestore();
@@ -4436,24 +4469,32 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { _resetAnimationWarnsForTests } = await import('@forgeax/engine-animation');
       const world = new World();
       // Slot 0: clip 1 has channel 0 = translation on 'real-joint' (resolves)
-      //         and channel 1 = translation on 'unknown-joint' (leaf-mismatch).
+      //         and channel 1 = translation on 'unknown-joint' (target-missing).
       // Slot 1: clip 2 has only channel 0 = rotation on 'real-joint'.
       // After tick:
-      //   - clip1.ch1 fires channel-leaf-mismatch (entity, 1, 1, leaf-mismatch).
+      //   - clip1.ch1 fires channel-target-missing (entity, 1, 1, target-missing).
       //   - The (real-joint, rotation) tuple is covered by slot1 but missing
       //     on slot0; slot1.ch0 fires channel-missing-on-some-slot
       //     (entity, 2, 0, missing-on-some-slot). The (real-joint, translation)
       //     tuple is covered by slot0 but missing on slot1; slot0.ch0 fires
       //     channel-missing-on-some-slot (entity, 1, 0, missing-on-some-slot).
-      // So we expect: leaf-mismatch=1, missing-on-some-slot=2.
+      // So we expect: target-missing=1, missing-on-some-slot=2.
       const sampT = makeSampler([0, 1], [0, 0, 0, 1, 1, 1], 'LINEAR');
       const sampR = makeSampler([0, 1], [0, 0, 0, 1, 0, 0, 0, 1], 'LINEAR');
       const clip1 = makeClip(1, [
-        { targetPath: ['real-joint'], property: 'translation', sampler: sampT },
-        { targetPath: ['unknown-joint'], property: 'translation', sampler: sampT },
+        {
+          targetId: deriveAnimationTargetId(['real-joint']),
+          property: 'translation',
+          sampler: sampT,
+        },
+        {
+          targetId: deriveAnimationTargetId(['unknown-joint']),
+          property: 'translation',
+          sampler: sampT,
+        },
       ]);
       const clip2 = makeClip(1, [
-        { targetPath: ['real-joint'], property: 'rotation', sampler: sampR },
+        { targetId: deriveAnimationTargetId(['real-joint']), property: 'rotation', sampler: sampR },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -4494,16 +4535,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         for (let i = 0; i < 5; i++) advanceAnimationPlayer(world, resolver, 1 / 60);
-        const leafCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' && (c[0] as string).includes('reason=channel-leaf-mismatch'),
+        const targetCalls = warnSpy.mock.calls.filter(
+          (c) => (c[0] as { code?: string }).code === 'animation-target-missing',
         );
         const missingCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' &&
-            (c[0] as string).includes('reason=channel-missing-on-some-slot'),
+          (c) => (c[0] as { code?: string }).code === 'animation-channel-missing',
         );
-        expect(leafCalls.length).toBe(1);
+        expect(targetCalls.length).toBe(1);
         // Both translation-on-slot1 and rotation-on-slot0 are missing — two
         // distinct (clip, chIdx, missing-on-some-slot) keys.
         expect(missingCalls.length).toBe(2);
@@ -4518,7 +4556,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //
   // Ten it blocks covering normalized blend math, invalid-skip, per-channel
   // normalize, duration-modulo, negative-weight clamp, paused time-stasis,
-  // resolver miss, and leaf-mismatch skips. All it blocks use the shared
+  // resolver miss, and target-missing skips. All it blocks use the shared
   // makeSampler / makeClip / makeResolver helpers from the enclosing block.
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -4527,7 +4565,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const sampT = makeSampler([0, 1], [1, 2, 3, 10, 20, 30], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
       ]);
       const resolver = makeResolver(new Map([[1, clipA]]));
 
@@ -4571,10 +4609,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const sampT1 = makeSampler([0, 1], [0, 0, 0, 4, 0, 0], 'LINEAR'); // pos (2,0,0) at t=0.5
       const sampT2 = makeSampler([0, 1], [0, 0, 0, 0, 6, 0], 'LINEAR'); // pos (0,3,0) at t=0.5
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT1 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT1 },
       ]);
       const clipB = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT2 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT2 },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -4625,13 +4663,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const sampT2 = makeSampler([0, 1], [0, 0, 0, 0, 3, 0], 'LINEAR');
       const sampT3 = makeSampler([0, 1], [0, 0, 0, 0, 0, 3], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT1 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT1 },
       ]);
       const clipB = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT2 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT2 },
       ]);
       const clipC = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT3 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT3 },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -4682,10 +4720,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const sampT1 = makeSampler([0, 1], [0, 0, 0, 10, 0, 0], 'LINEAR');
       const sampT2 = makeSampler([0, 1], [0, 0, 0, 0, 10, 0], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT1 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT1 },
       ]);
       const clipB = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT2 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT2 },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -4734,7 +4772,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const sampT = makeSampler([0, 1], [0, 0, 0, 4, 4, 4], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
       ]);
       const resolver = makeResolver(new Map([[1, clipA]]));
 
@@ -4791,10 +4829,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const sampT1 = makeSampler([0, 1], [0, 0, 0, 10, 0, 0], 'LINEAR');
       const sampT2 = makeSampler([0, 1], [0, 0, 0, 0, 10, 0], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT1 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT1 },
       ]);
       const clipB = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT2 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT2 },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -4856,7 +4894,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const sampT = makeSampler([0, 1], [0, 0, 0, 10, 10, 10], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
       ]);
       const resolver = makeResolver(new Map([[1, clipA]]));
       // clip handle 2 is not in resolver — resolver returns undefined, slot skipped.
@@ -4908,7 +4946,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const sampT = makeSampler([0, 1], [3, 0, 0, 3, 0, 0], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
       ]);
       const resolver = makeResolver(new Map([[1, clipA]]));
 
@@ -4951,10 +4989,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const sampTShort = makeSampler([0, 0.5], [0, 0, 0, 0.5, 0, 0], 'LINEAR');
       const sampTLong = makeSampler([0, 2], [0, 0, 0, 0, 2, 0], 'LINEAR');
       const clipShort = makeClip(0.5, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampTShort },
+        {
+          targetId: deriveAnimationTargetId(['joint0']),
+          property: 'translation',
+          sampler: sampTShort,
+        },
       ]);
       const clipLong = makeClip(2, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampTLong },
+        {
+          targetId: deriveAnimationTargetId(['joint0']),
+          property: 'translation',
+          sampler: sampTLong,
+        },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -5001,12 +5047,16 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(tf.pos[1]).toBeCloseTo(0.625);
     });
 
-    it('targetPath leaf mismatch skips channel (no crash)', () => {
+    it('targetId mismatch skips channel (no crash)', () => {
       const world = new World();
       const sampT = makeSampler([0, 1], [0, 0, 0, 4, 4, 4], 'LINEAR');
       const clip = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
-        { targetPath: ['nonexistent-joint'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
+        {
+          targetId: deriveAnimationTargetId(['nonexistent-joint']),
+          property: 'translation',
+          sampler: sampT,
+        },
       ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
@@ -5062,10 +5112,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         'LINEAR',
       );
       const clipA = makeClip(1, [
-        { targetPath: ['joint0'], property: 'rotation', sampler: sampR1 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'rotation', sampler: sampR1 },
       ]);
       const clipB = makeClip(1, [
-        { targetPath: ['joint0'], property: 'rotation', sampler: sampR2 },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'rotation', sampler: sampR2 },
       ]);
       const resolver = makeResolver(
         new Map([
@@ -5114,7 +5164,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const sampT = makeSampler([0, 2], [0, 0, 0, 2, 0, 0], 'LINEAR');
       const clip = makeClip(2, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
       ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
@@ -5155,7 +5205,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const sampT = makeSampler([0, 1], [0, 0, 0, 4, 4, 4], 'LINEAR');
       const clip = makeClip(1, [
-        { targetPath: ['joint0'], property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['joint0']), property: 'translation', sampler: sampT },
       ]);
       const resolver = makeResolver(new Map([[1, clip]]));
 
@@ -5202,12 +5252,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const sampR = makeSampler([0, 1], [0, 0, 0, 1, 0, 0, 0, 1], 'LINEAR');
       const sampS = makeSampler([0, 1], [1, 1, 1, 2, 2, 2], 'LINEAR');
       const clipA = makeClip(1, [
-        { targetPath: ['jointA'], property: 'translation', sampler: sampT },
-        { targetPath: ['jointA'], property: 'rotation', sampler: sampR },
-        { targetPath: ['jointA'], property: 'scale', sampler: sampS },
-        { targetPath: ['jointB'], property: 'translation', sampler: sampT },
-        { targetPath: ['jointB'], property: 'rotation', sampler: sampR },
-        { targetPath: ['jointB'], property: 'scale', sampler: sampS },
+        { targetId: deriveAnimationTargetId(['jointA']), property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['jointA']), property: 'rotation', sampler: sampR },
+        { targetId: deriveAnimationTargetId(['jointA']), property: 'scale', sampler: sampS },
+        { targetId: deriveAnimationTargetId(['jointB']), property: 'translation', sampler: sampT },
+        { targetId: deriveAnimationTargetId(['jointB']), property: 'rotation', sampler: sampR },
+        { targetId: deriveAnimationTargetId(['jointB']), property: 'scale', sampler: sampS },
       ]);
       const resolver = makeResolver(new Map([[1, clipA]]));
 

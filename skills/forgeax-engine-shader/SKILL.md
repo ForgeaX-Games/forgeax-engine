@@ -68,4 +68,4 @@ fixed by changing the demo's material data. This is the recovery route.
 - Material shape: [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md)
 - Asset catalog and pack roots: [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md)
 - Shader package: [`packages/shader/README.md`](../../packages/shader/README.md)
-- Migration: [`docs/material-asset-migration.md`](../../docs/material-asset-migration.md)
+- Migration: [`docs/material-asset-migration.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/material-asset-migration.md)

@@ -3,6 +3,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type {
+  AnimationClipPod,
+  AnimationTargetIdValue,
   MeshPod,
   ScenePod,
   SkeletonPod,
@@ -28,6 +30,7 @@ function emptySkin(): SkinPod {
 // variant) so toAssetPack resolves the declared GUID per (kind, sourceIndex).
 const MESH_SUB = { guid: 'guid-mesh-0', kind: 'mesh', sourceIndex: 0 };
 const SCENE_SUB = { guid: 'guid-scene-0', kind: 'scene', sourceIndex: 0 };
+const CLIP_SUB = { guid: 'guid-clip-0', kind: 'animation-clip', sourceIndex: 0 };
 
 describe('toAssetPack name plumbing (AC-10)', () => {
   it('multi-asset FBX: mesh name from MeshPod.name', () => {
@@ -126,5 +129,56 @@ describe('toAssetPack name plumbing (AC-10)', () => {
     const meshAsset = assets.find((a) => a.kind === 'mesh');
     expect(meshAsset).toBeDefined();
     expect(meshAsset?.name).toBeUndefined();
+  });
+
+  it('writes the same targetId into Scene and animation clip payloads', () => {
+    const targetId = 'ab65f0305fc1868ca96d3361a86bd9ba' as AnimationTargetIdValue;
+    const scene: ScenePod = {
+      entities: [
+        {
+          name: 'root',
+          transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+          meshIndex: null,
+          children: [1],
+        },
+        {
+          name: 'hip',
+          transform: { translation: [0, 1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+          meshIndex: null,
+          children: [],
+        },
+      ],
+    };
+    const animationClips: AnimationClipPod[] = [{
+      duration: 1,
+      channels: [{
+        targetId,
+        property: 'translation',
+        sampler: {
+          input: new Float32Array([0]),
+          output: new Float32Array([0, 0, 0]),
+          interpolation: 'LINEAR',
+        },
+      }],
+    }];
+    const assets = toAssetPack({
+      meshes: [],
+      scene,
+      materials: [],
+      textures: [],
+      skeleton: emptySkeleton(),
+      skin: emptySkin(),
+      animationClips,
+      subAssets: [SCENE_SUB, CLIP_SUB],
+    });
+    const scenePayload = assets.find((asset) => asset.kind === 'scene')?.payload as {
+      entities: readonly { components: Record<string, { value?: string }> }[];
+    };
+    const clipPayload = assets.find((asset) => asset.kind === 'animation-clip')?.payload as {
+      channels: readonly { targetId?: string; targetPath?: unknown }[];
+    };
+    expect(scenePayload.entities[1]?.components.AnimationTargetId?.value).toBe(targetId);
+    expect(clipPayload.channels[0]?.targetId).toBe(targetId);
+    expect(clipPayload.channels[0]?.targetPath).toBeUndefined();
   });
 });

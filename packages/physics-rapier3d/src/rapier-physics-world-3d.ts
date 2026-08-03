@@ -85,16 +85,6 @@ interface CharacterControllerTuning {
   snapToGroundDist: number;
 }
 
-/** Schema defaults mirror CharacterController defineComponent (components.ts). */
-const DEFAULT_CC_TUNING: CharacterControllerTuning = {
-  offset: 0.01,
-  maxSlopeClimbDeg: 45,
-  minSlopeSlideDeg: 30,
-  autoStepMaxHeight: 0.3,
-  autoStepMinWidth: 0.2,
-  snapToGroundDist: 0.2,
-};
-
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
@@ -486,7 +476,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
         };
       }
     }
-    return DEFAULT_CC_TUNING;
+    // The ECS token owns the defaults; keep the defensive no-context path on
+    // that projection so 3D cannot drift from the shared CharacterController schema.
+    return CharacterController.defaults as CharacterControllerTuning;
   }
 
   /**

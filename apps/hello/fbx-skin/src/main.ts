@@ -21,9 +21,13 @@ import { Update } from '@forgeax/engine-ecs';
 // AC-16: 3 instances pose-distinct via per-entity AnimationPlayer.
 
 import { createApp } from '@forgeax/engine-app';
-import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { ENTITY_NULL_RAW, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { AnimationPlayer } from '@forgeax/engine-animation';
+import {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+} from '@forgeax/engine-animation';
 import { Skin } from '@forgeax/engine-skinning';
 
 import { Transform } from '@forgeax/engine-scene';
@@ -127,42 +131,56 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       continue;
     }
     const root = instRes.value;
+    const rootTransform = world.get(root, Transform);
+    if (rootTransform.ok) {
+      world.set(root, Transform, {
+        pos: [
+          (rootTransform.value.pos[0] ?? 0) + pos[0],
+          (rootTransform.value.pos[1] ?? 0) + pos[1],
+          (rootTransform.value.pos[2] ?? 0) + pos[2],
+        ],
+      });
+    }
     const inst = world.get(root, SceneInstance);
     if (!inst.ok) continue;
+    let hasSkin = false;
+    const animationTargets: EntityHandle[] = [];
     for (const entRaw of inst.value.mapping) {
-      if (entRaw === undefined || entRaw === 0) continue;
+      if (entRaw === undefined || entRaw === ENTITY_NULL_RAW) continue;
       const ent = entRaw as EntityHandle;
-      if (!world.get(ent, Skin).ok) continue;
-      const tfRes = world.get(ent, Transform);
-      if (tfRes.ok) {
-        world.set(ent, Transform, {
-          pos: [
-            (tfRes.value.pos[0] ?? 0) + pos[0],
-            (tfRes.value.pos[1] ?? 0) + pos[1],
-            (tfRes.value.pos[2] ?? 0) + pos[2],
-          ],
-        });
-      }
+      if (world.get(ent, AnimationTargetId).ok) animationTargets.push(ent);
+      if (world.get(ent, Skin).ok) hasSkin = true;
+    }
+    if (hasSkin) {
       const clipIdx = i % Math.max(1, clipHandles.length);
       const clip = clipHandles[clipIdx];
-      if (clip !== undefined) {
-        // Variable N-slot init: all four parallel columns length-synced (D-5).
-        // A short write is not tail-padded and speeds no longer defaults to
-        // [1,1,1,1] (D-6), so speeds is written explicitly; paused/looping
-        // inherit the schema layer-2 defaults. Distinct times[0] per instance
-        // (i * 0.5) desyncs the three humanoids' poses (AC-16).
-        world.addComponent(ent, {
-          component: AnimationPlayer,
-          data: {
-            clips: [clip.handle],
-            times: [i * 0.5],
-            weights: [1],
-            speeds: [1],
-          },
-        });
+      if (clip === undefined) continue;
+      // Variable N-slot init: all four parallel columns length-synced (D-5).
+      // A short write is not tail-padded and speeds no longer defaults to
+      // [1,1,1,1] (D-6), so speeds is written explicitly; paused/looping
+      // inherit the schema layer-2 defaults. Distinct times[0] per instance
+      // (i * 0.5) desyncs the three humanoids' poses (AC-16).
+      const added = world.addComponent(root, {
+        component: AnimationPlayer,
+        data: {
+          clips: [clip.handle],
+          times: [i * 0.5],
+          weights: [1],
+          speeds: [1],
+        },
+      });
+      if (!added.ok) continue;
+      const bound = bindAnimationTargets(world, root, animationTargets);
+      if (!bound.ok) {
+        world.removeComponent(root, AnimationPlayer);
+        console.error(
+          `[fbx-skin] bindAnimationTargets[${i}] failed:`,
+          bound.error.code,
+          bound.error.detail,
+        );
+        continue;
       }
-      playerEnts.push(ent);
-      break;
+      playerEnts.push(root);
     }
   }
 

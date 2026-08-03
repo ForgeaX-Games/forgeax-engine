@@ -34,6 +34,10 @@ function hintFor(code: ImportErrorCode): string {
     case 'guid-mismatch':
     case 'import-internal-error':
     case 'source-validation-failed':
+    case 'unknown-source-key':
+    case 'duplicate-source-key':
+    case 'invalid-source-overrides':
+    case 'invalid-source-override-payload':
       return IMPORT_ERROR_HINTS[code];
   }
   const exhaustive: never = code;

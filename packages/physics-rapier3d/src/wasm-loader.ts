@@ -1,8 +1,7 @@
 // @forgeax/engine-physics-rapier3d — WASM loader for Rapier 3D compat variant.
 //
 // Dynamic import of @dimforge/rapier3d-compat (plan-strategy D-4: compat variant,
-// zero Vite configuration). SIMD detection via WebAssembly.validate() with
-// result caching (research Finding 7).
+// zero Vite configuration).
 //
 // Usage:
 //   const rapier = await loadRapier3D();
@@ -19,46 +18,6 @@ import { PhysicsError } from '@forgeax/engine-types';
  */
 // biome-ignore lint/suspicious/noExplicitAny: Rapier compat namespace type
 export type Rapier3DModule = any;
-
-/**
- * Minimal WASM SIMD test module — 8 bytes of WASM binary encoding
- * `i8x16.add` followed by `end`. If the runtime supports SIMD, this
- * validates as a legal module; otherwise WebAssembly.validate returns false.
- *
- * The module does nothing (it declares a SIMD instruction in an empty
- * function body), so it exercises the SIMD opcode validator without
- * allocating memory or calling into imported functions.
- *
- * Source (research Finding 7): Rapier compat docs §SIMD Feature Detection.
- */
-const SIMD_TEST_MODULE = new Uint8Array([
-  0x00,
-  0x61,
-  0x73,
-  0x6d, // WASM magic
-  0x01,
-  0x00,
-  0x00,
-  0x00, // version 1
-]);
-
-let simdCached: boolean | null = null;
-
-/**
- * Synchronously detect WebAssembly SIMD support. Cached — the first call
- * runs WebAssembly.validate, subsequent calls return the cached result.
- *
- * @returns true if the runtime supports WASM SIMD instructions.
- */
-export function detectSimd3D(): boolean {
-  if (simdCached !== null) return simdCached;
-  try {
-    simdCached = WebAssembly.validate(SIMD_TEST_MODULE);
-  } catch {
-    simdCached = false;
-  }
-  return simdCached;
-}
 
 /** Cached RAPIER instance — loaded once, reused across frames. */
 let rapierInstance: Rapier3DModule | null = null;

@@ -624,7 +624,7 @@ function makeStubGPU(): unknown {
           duration: 1,
           channels: [
             {
-              targetPath: ['root'],
+              targetId: 'a95da0ec669189f98273e8f86d8ad9f2',
               property: 'rotation',
               sampler: {
                 input: Array.from(inputFloat),
@@ -644,6 +644,9 @@ function makeStubGPU(): unknown {
           }
         | undefined;
       expect(out).toBeDefined();
+      expect((out?.channels[0] as { targetId?: string } | undefined)?.targetId).toBe(
+        'a95da0ec669189f98273e8f86d8ad9f2',
+      );
       expect(out?.channels[0]?.sampler.input).toBeInstanceOf(Float32Array);
       expect(out?.channels[0]?.sampler.output).toBeInstanceOf(Float32Array);
       expect(Array.from(out?.channels[0]?.sampler.input ?? new Float32Array())).toEqual([

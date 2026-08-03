@@ -74,6 +74,14 @@ function projectionFor(
   } as const;
 }
 
+export function currentProjectionFor(
+  subject: Parameters<typeof projectionFor>[0],
+  execution: Parameters<typeof projectionFor>[1],
+) {
+  const projection = projectionFor(subject, execution, 'current');
+  return { ...projection, projection };
+}
+
 export function projectPackageCatalog(
   entries: readonly Pick<
     PackIndexEntry,

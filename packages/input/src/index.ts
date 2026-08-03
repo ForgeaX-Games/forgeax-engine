@@ -59,7 +59,6 @@ export {
 export type {
   GestureEvent,
   GestureState,
-  RecognizerState,
   SwipeDirection,
 } from './gesture-recognizer';
 export {

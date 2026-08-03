@@ -1037,12 +1037,22 @@ import { toRollupLog } from '../wrap.js';
         );
       }
 
-      // Parameters belong to MaterialAsset values. The shader manifest only
-      // records compiled module provenance and therefore carries an empty
-      // compatibility array for every built-in entry.
+      // Most built-ins keep their parameter contract on MaterialAsset values;
+      // MSDF is the exception because its WGSL UBO shape is not the standard
+      // PBR layout and must be reflected into the runtime BGL.
       for (const ms of manifest.materialShaders) {
         const parsed = JSON.parse(ms.paramSchema) as Array<{ name: string; type: string }>;
-        expect(parsed.length, `paramSchema must stay empty for '${ms.identifier}'`).toBe(0);
+        if (ms.identifier === 'forgeax::msdf-text') {
+          expect(parsed).toEqual([
+            { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
+            { name: 'distanceRange', type: 'vec4', default: [4, 512, 512, 0] },
+            { name: 'baseColorTexture', type: 'texture2d' },
+            { name: 'metallicRoughnessTexture', type: 'texture2d' },
+            { name: 'normalTexture', type: 'texture2d' },
+          ]);
+        } else {
+          expect(parsed.length, `paramSchema must stay empty for '${ms.identifier}'`).toBe(0);
+        }
       }
     });
 

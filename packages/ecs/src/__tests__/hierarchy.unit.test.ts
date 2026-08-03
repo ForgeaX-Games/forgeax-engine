@@ -228,6 +228,47 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 }
+
+describe('reserveArrayCapacity', () => {
+  const Values = defineComponent('ReserveArrayValues', { values: 'array<u32>' });
+
+  it('reserves first allocation and growth without changing array values', () => {
+    const world = new World();
+    const entity = world.spawn({ component: Values, data: {} }).unwrap();
+
+    world.reserveArrayCapacity(entity, Values, 'values', 4).unwrap();
+    expect(world.capacity(entity, Values, 'values').unwrap()).toBeGreaterThanOrEqual(4);
+    expect([...world.get(entity, Values).unwrap().values]).toEqual([]);
+
+    world.push(entity, Values, 'values', 10).unwrap();
+    world.push(entity, Values, 'values', 20).unwrap();
+    const before = world.capacity(entity, Values, 'values').unwrap();
+
+    world.reserveArrayCapacity(entity, Values, 'values', 2).unwrap();
+    expect(world.capacity(entity, Values, 'values').unwrap()).toBe(before);
+    expect([...world.get(entity, Values).unwrap().values]).toEqual([10, 20]);
+
+    world.reserveArrayCapacity(entity, Values, 'values', 20).unwrap();
+    expect(world.capacity(entity, Values, 'values').unwrap()).toBeGreaterThanOrEqual(20);
+    expect([...world.get(entity, Values).unwrap().values]).toEqual([10, 20]);
+  });
+
+  it('leaves allocation, growth, count, content, and order unchanged on failure', () => {
+    const world = new World();
+    const empty = world.spawn({ component: Values, data: {} }).unwrap();
+    const allocFailure = world.reserveArrayCapacity(empty, Values, 'values', 70_000);
+    expect(allocFailure.ok).toBe(false);
+    expect(world.capacity(empty, Values, 'values').unwrap()).toBe(0);
+    expect([...world.get(empty, Values).unwrap().values]).toEqual([]);
+
+    const populated = world.spawn({ component: Values, data: { values: [3, 1, 2] } }).unwrap();
+    const beforeCapacity = world.capacity(populated, Values, 'values').unwrap();
+    const growFailure = world.reserveArrayCapacity(populated, Values, 'values', 70_000);
+    expect(growFailure.ok).toBe(false);
+    expect(world.capacity(populated, Values, 'values').unwrap()).toBe(beforeCapacity);
+    expect([...world.get(populated, Values).unwrap().values]).toEqual([3, 1, 2]);
+  });
+});
 {
   // --- from commands.test.ts ---
   describe('Deferred spawn/despawn (AC-14)', () => {

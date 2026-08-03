@@ -34,9 +34,15 @@ import type {
   ImportProduct,
   ProviderProvenance,
   ResourceRevision,
+  SourceOverrideMap,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
+import {
+  canonicalizeSourceOverrides,
+  IMPORT_ERROR_HINTS,
+  ImportError,
+  validateSourceOverrideMap,
+} from '@forgeax/engine-types';
 import { finalizeImportProducts } from './import-product.js';
 import type { ImporterRegistry } from './importer-registry.js';
 
@@ -168,6 +174,7 @@ export interface RunImportMeta {
   readonly revision?: ResourceRevision;
   readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly importSettings?: Readonly<Record<string, unknown>>;
+  readonly sourceOverrides?: SourceOverrideMap;
   /** Skip the normalized DDC pack when a downstream finalizer owns publication. */
   readonly buildPack?: boolean;
   readonly subAssets: ReadonlyArray<{
@@ -363,6 +370,27 @@ export async function runImport(
   const sourceKeyError = validateOutputSourceKeys(meta);
   if (sourceKeyError !== undefined) return errResult(sourceKeyError);
 
+  const declaredSourceKeys = meta.subAssets.flatMap((subAsset) =>
+    subAsset.sourceKey === undefined ? [] : [subAsset.sourceKey],
+  );
+  const sourceOverridesResult = validateSourceOverrideMap(meta.sourceOverrides, declaredSourceKeys);
+  if (!sourceOverridesResult.ok) {
+    const error = new ImportError({
+      code: sourceOverridesResult.error.code,
+      expected: sourceOverridesResult.error.expected,
+      hint: IMPORT_ERROR_HINTS[sourceOverridesResult.error.code],
+      detail: {
+        sourceKey: sourceOverridesResult.error.actual,
+        declaredSourceKeys,
+        reason: sourceOverridesResult.error.hint,
+      },
+    });
+    if (sourceOverridesResult.error.actual !== undefined) {
+      Object.assign(error, { actual: sourceOverridesResult.error.actual });
+    }
+    return errResult(error);
+  }
+
   const importer = registry.get(meta.importer);
   if (importer === undefined) {
     return errResult(
@@ -440,13 +468,22 @@ export async function runImport(
         );
       };
 
+  const canonicalSourceOverrides = canonicalizeSourceOverrides(sourceOverridesResult.value);
   const ctx: ImportContext = {
     source: meta.source,
     readSource: () => readSource(meta.source),
     readSibling,
     decodeImage,
-    subAssets: meta.subAssets,
+    subAssets: meta.subAssets.map(({ guid, sourceIndex, sourceKey, kind }) => ({
+      guid,
+      sourceIndex,
+      ...(sourceKey === undefined ? {} : { sourceKey }),
+      kind,
+    })),
     importSettings: meta.importSettings ?? {},
+    ...(canonicalSourceOverrides === undefined
+      ? {}
+      : { sourceOverrides: canonicalSourceOverrides }),
   };
 
   // Probe the source once up-front so a missing/unreadable source surfaces as

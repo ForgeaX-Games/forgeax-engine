@@ -46,9 +46,6 @@ export class AnimationAssetError extends Error {
   }
 }
 
-/** Closed union consumed by exhaustive animation recovery switches. */
-export type AnimationAssetLookupError = AnimationAssetError;
-
 /**
  * Resolve a graph or clip handle from the owning World.
  *

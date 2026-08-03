@@ -26,6 +26,7 @@ import {
   driveLazyEquirectProjection,
   GpuResourceStore,
   RhiErrorListenerRegistry,
+  selectLazyEquirectHandle,
   warnMultiSkybox,
   warnMultiSkylight,
 } from '@forgeax/engine-render/internal';
@@ -338,5 +339,20 @@ describe('warnMultiSkylight / warnMultiSkybox — once-warn naming the winner (M
 
     warnMultiSkybox(frameState, 2, 99);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('selectLazyEquirectHandle — shared Skylight/Skybox source selection', () => {
+  it('falls back to SkyboxBackground when Skylight is color-only (handle 0)', () => {
+    expect(selectLazyEquirectHandle({ equirectHandle: 0 }, { equirectHandle: 77 })).toBe(77);
+  });
+
+  it('prefers a non-zero Skylight equirect over the SkyboxBackground source', () => {
+    expect(selectLazyEquirectHandle({ equirectHandle: 55 }, { equirectHandle: 77 })).toBe(55);
+  });
+
+  it('returns the solid-color sentinel when neither source has an equirect', () => {
+    expect(selectLazyEquirectHandle({ equirectHandle: 0 }, undefined)).toBe(0);
+    expect(selectLazyEquirectHandle(undefined, undefined)).toBe(0);
   });
 });

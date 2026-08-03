@@ -510,6 +510,29 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       expect(ev.descriptor.layout).toBe('auto');
       expect(ev.descriptor.vertex.entryPoint).toBe('v');
     });
+
+    it('converts a synchronous render-pipeline failure into a structured Result.err', async () => {
+      const gpu = createMockGpu({ renderPipelineError: 'pipeline validation failed' });
+      const r = await requestDevice({ gpu });
+      if (!r.ok) throw new Error('mock requestDevice failed');
+      const device = r.value;
+
+      const out = device.createRenderPipeline({
+        label: 'invalid-rpp',
+        layout: 'auto',
+        vertex: {
+          module: {} as unknown as GPUShaderModule,
+          entryPoint: 'v',
+        },
+        fragment: undefined,
+      });
+
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.error.code).toBe('webgpu-runtime-error');
+      expect(out.error.expected).toBe('underlying GPUDevice.createRenderPipeline to succeed');
+      expect(out.error.hint).toContain('pipeline validation failed');
+    });
   });
 
   describe('S-7 + hard constraint 10 — `?: T | undefined` guard (omitted vs explicit undefined)', () => {

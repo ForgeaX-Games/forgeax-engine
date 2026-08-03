@@ -62,7 +62,7 @@ import { createGameProgress, GAME_PROGRESS_KEY, resetProgress } from './resource
 import { CORE_POSITIONS, spawnCore } from './spawn/spawn-core';
 import { GUARDIAN_SPAWNS, spawnGuardian } from './spawn/spawn-guardian';
 import { LEVEL_HALF, spawnLevel } from './spawn/spawn-level';
-import { spawnPlayer, stripNonSkeletonChannels } from './spawn/spawn-player';
+import { spawnPlayer } from './spawn/spawn-player';
 import { spawnPortal } from './spawn/spawn-portal';
 import { type AudioCueEntities, createAudioCueSystem, loadAudioCues } from './systems/audio-cue';
 import { createCollectSystem } from './systems/core-collect';
@@ -380,7 +380,10 @@ function wireStates(
       ...createMoveSystem(app, player.parent, camera, signal),
       runIf: playOnly,
     });
-    w.addSystem(Update, { ...createAnimSystem(app, player.skin, signal), runIf: playOnly });
+    w.addSystem(Update, {
+      ...createAnimSystem(app, player.animationPlayer, signal),
+      runIf: playOnly,
+    });
     w.addSystem(Update, { ...createSpinSystem(cores), runIf: playOnly });
     w.addSystem(Update, { ...createCollectSystem(player.parent), runIf: playOnly });
     w.addSystem(Update, {
@@ -612,5 +615,5 @@ async function loadClipHandle(
   // they animate nodes absent from the player Skin and otherwise trip the D-10
   // gate with channel-leaf-mismatch warnings. The handle is minted from the
   // stripped clip so the AnimationPlayer never sees the non-skeleton channels.
-  return world.allocSharedRef('AnimationClip', stripNonSkeletonChannels(res.value));
+  return world.allocSharedRef('AnimationClip', res.value);
 }

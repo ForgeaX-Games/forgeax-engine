@@ -45,6 +45,15 @@
       "type": "object",
       "description": "Importer-specific settings. Free-form object. Common texture keys: compressionMode ('auto' | 'etc1s' | 'uastc' | 'none', default 'auto'; see @forgeax/engine-image README), mipmap (boolean, bake mip chain offline)."
     },
+    "sourceOverrides": {
+      "type": "object",
+      "description": "Optional producer-owned Meta author facts keyed by declared subAssets[].sourceKey. An empty object is legacy-equivalent and omitted by canonical writers.",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Producer-owned payload; the pack schema validates object shape and the producer contract validates sourceKey identity.",
+        "additionalProperties": true
+      }
+    },
     "paramSchema": {
       "type": "array",
       "description": "Material-shader parameter schema (feat-20260528-material-shader-registration-unification). Only valid when importer is 'shader'. Each entry has name (string) and type (string) with an optional default.",

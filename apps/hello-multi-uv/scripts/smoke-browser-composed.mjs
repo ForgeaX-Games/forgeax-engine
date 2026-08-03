@@ -26,6 +26,10 @@ const depthLiveSwitch = process.env.FORGEAX_M3_DEPTH_LIVE_SWITCH === '1';
 const depthReverseLiveSwitch = process.env.FORGEAX_M3_DEPTH_REVERSE_LIVE_SWITCH === '1';
 const inheritanceLiveMaterialScenario = process.env.FORGEAX_M3_INHERITANCE_LIVE_MATERIAL === '1';
 const liveVariantSwitch = inheritanceLiveMaterialScenario && process.env.FORGEAX_M3_LIVE_VARIANT_SWITCH === '1';
+const inheritanceFalsifierKind = process.env.FORGEAX_M3_INHERITANCE_FALSIFIER_KIND ?? 'texture';
+if (inheritanceLiveMaterialScenario && inheritanceFalsifierKind !== 'texture' && inheritanceFalsifierKind !== 'pipeline') {
+  throw new Error(`unsupported inheritance falsifier kind: ${inheritanceFalsifierKind}`);
+}
 const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1' || inheritanceLiveMaterialScenario;
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
@@ -314,7 +318,9 @@ async function runLiveMaterialScenario(baseUrl, page) {
   const runLeg = async (falsified, label) => {
     const falsifierQuery = falsified
       ? inheritanceLiveMaterialScenario
-        ? '&falsify-live-inheritance'
+        ? inheritanceFalsifierKind === 'pipeline'
+          ? '&falsify-pipeline'
+          : '&falsify-live-inheritance'
         : '&falsify-live-material'
       : '';
     const liveMaterialQuery = inheritanceLiveMaterialScenario
@@ -409,14 +415,14 @@ async function runLiveMaterialScenario(baseUrl, page) {
   if (normal.after.state.pipeline !== 'M3_PIPELINE=custom' || normal.after.state.post !== 'M3_POST_EFFECT=inversion') {
     throw new Error(`normal rebind left composed scene: ${JSON.stringify(normal.after.state)}`);
   }
-  if (falsifiedLive?.baseColorSlotChanged === true && falsifiedLive.detailSlotChanged === true) {
+  if (inheritanceFalsifierKind === 'texture' && falsifiedLive?.baseColorSlotChanged === true && falsifiedLive.detailSlotChanged === true) {
     throw new Error(`live-material falsifier still changed both slots: ${JSON.stringify(falsifiedLive)}`);
   }
-  if (inheritanceLiveMaterialScenario) {
+  if (inheritanceLiveMaterialScenario && inheritanceFalsifierKind === 'texture') {
     if (falsifier.delta === null || falsifier.delta.changed !== 0) {
       throw new Error(`inheritance live-material falsifier changed pixels: ${JSON.stringify(falsifier.delta)}`);
     }
-  } else if (falsifier.delta === null || falsifier.delta.changed < 100) {
+  } else if (falsifier.delta === null || falsifier.delta.changed < 1000) {
     throw new Error(`live-material falsifier was not observable: ${JSON.stringify(falsifier.delta)}`);
   }
   if (inheritanceLiveMaterialScenario) {
@@ -432,14 +438,29 @@ async function runLiveMaterialScenario(baseUrl, page) {
     ) {
       throw new Error(`inheritance live material source evidence is incomplete: ${JSON.stringify(normalLive)}`);
     }
-    if (
-      normalLive.beforeTextureHandles[0] === normalLive.afterTextureHandles[0] ||
-      normalLive.beforeTextureHandles[1] === normalLive.afterTextureHandles[1] ||
-      falsifiedLive.beforeTextureHandles[0] !== falsifiedLive.afterTextureHandles[0] ||
-      falsifiedLive.beforeTextureHandles[1] !== falsifiedLive.afterTextureHandles[1] ||
-      falsifiedLive.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
-    ) {
+    const inheritanceMaterialCausality =
+      normalLive.beforeTextureHandles[0] !== normalLive.afterTextureHandles[0] &&
+      normalLive.beforeTextureHandles[1] !== normalLive.afterTextureHandles[1];
+    const falsifierMaterialCausality =
+      falsifiedLive.beforeTextureHandles[0] !== falsifiedLive.afterTextureHandles[0] &&
+      falsifiedLive.beforeTextureHandles[1] !== falsifiedLive.afterTextureHandles[1];
+    if (!inheritanceMaterialCausality) {
       throw new Error(`inheritance live material texture causality failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
+    }
+    if (inheritanceFalsifierKind === 'texture') {
+      if (
+        falsifierMaterialCausality ||
+        falsifiedLive.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
+      ) {
+        throw new Error(`inheritance live material texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
+      }
+    } else if (
+      !falsifierMaterialCausality ||
+      falsifiedLive.falsifierMarker !== null ||
+      falsifier.rhi.draws === normal.rhi.draws ||
+      falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256
+    ) {
+      throw new Error(`inheritance pipeline falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
     }
   }
   if (liveVariantSwitch) {
@@ -456,7 +477,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
       throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
     }
   }
-  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
+  console.log(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} falsifier=${inheritanceLiveMaterialScenario ? inheritanceFalsifierKind : 'texture'} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} draws=${normal.rhi.draws}/${falsifier.rhi.draws} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
 async function runDepthPostScenario(baseUrl, page) {

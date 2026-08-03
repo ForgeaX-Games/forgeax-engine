@@ -295,7 +295,7 @@ describe('animationClipLoader', () => {
         duration: 1,
         channels: [
           {
-            targetPath: ['root'],
+            targetId: 'a95da0ec669189f98273e8f86d8ad9f2',
             property: 'translation',
             sampler: { input: [0, 1], output: [0, 0, 0, 1, 1, 1], interpolation: 'LINEAR' },
           },
@@ -307,17 +307,37 @@ describe('animationClipLoader', () => {
     expect((out as { kind?: string }).kind).toBe('animation-clip');
   });
 
+  it('rejects legacy, dual, and malformed target wires', () => {
+    const sampler = { input: [0], output: [0, 0, 0], interpolation: 'LINEAR' };
+    const loadChannel = (channel: Record<string, unknown>) =>
+      animationClipLoader.load(
+        { channels: [{ ...channel, property: 'translation', sampler }] },
+        undefined,
+        emptyCtx,
+      );
+
+    expect(loadChannel({ targetPath: ['root'] })).toBeUndefined();
+    expect(
+      loadChannel({
+        targetId: 'a95da0ec669189f98273e8f86d8ad9f2',
+        targetPath: ['root'],
+      }),
+    ).toBeUndefined();
+    expect(loadChannel({ targetId: 'A95DA0EC669159F98273E8F86D8AD9F2' })).toBeUndefined();
+    expect(loadChannel({ targetId: 'a95da0ec669159f98273e8f86d8ad9f' })).toBeUndefined();
+  });
+
   it('rejects a bad property / missing sampler / bad interpolation', () => {
     expect(
       animationClipLoader.load(
-        { channels: [{ targetPath: ['r'], property: 'bogus' }] },
+        { channels: [{ targetId: 'a95da0ec669189f98273e8f86d8ad9f2', property: 'bogus' }] },
         undefined,
         emptyCtx,
       ),
     ).toBeUndefined();
     expect(
       animationClipLoader.load(
-        { channels: [{ targetPath: ['r'], property: 'scale' }] },
+        { channels: [{ targetId: 'a95da0ec669189f98273e8f86d8ad9f2', property: 'scale' }] },
         undefined,
         emptyCtx,
       ),
@@ -327,7 +347,7 @@ describe('animationClipLoader', () => {
         {
           channels: [
             {
-              targetPath: ['r'],
+              targetId: 'a95da0ec669189f98273e8f86d8ad9f2',
               property: 'scale',
               sampler: { input: [0], output: [0], interpolation: 'CUBIC' },
             },

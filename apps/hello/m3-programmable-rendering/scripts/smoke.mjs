@@ -1228,11 +1228,13 @@ console.log(
   `[m3-programmable] composed inherited material rebind repeatability: PASS normalChanged=${firstComposedInheritanceLive.normal.delta.changed} falsifierChanged=${firstComposedInheritanceLive.falsifier.delta.changed} dawnSha=${firstComposedInheritanceLive.normal.dawn.sha256}`,
 );
 
-function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
+function runComposedInheritanceStartRepeatability({ msaa, startVariant }) {
   const switchedVariant = startVariant === 'true' ? 'false' : 'true';
+  const mode = msaa ? 'msaa' : 'no-msaa';
+  const modeLabel = msaa ? 'MSAA' : 'no-MSAA';
   const artifactRoot = resolve(
     process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
-    `inheritance-live-material-composed-no-msaa-start-${startVariant}-repeatability`,
+    `inheritance-live-material-composed-${mode}-start-${startVariant}-repeatability`,
   );
   const runs = [];
   for (const pass of ['first', 'second']) {
@@ -1240,12 +1242,12 @@ function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
     runs.push({
       pass,
       result: run(
-        `browser composed inherited material no-MSAA startup-${startVariant} rebind ${pass}`,
+        `browser composed inherited material ${modeLabel} startup-${startVariant} rebind ${pass}`,
         ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
         {
           FORGEAX_M3_INHERITANCE_LIVE_MATERIAL: '1',
           FORGEAX_M3_LIVE_VARIANT_SWITCH: '1',
-          FORGEAX_M3_MSAA: '0',
+          FORGEAX_M3_MSAA: msaa ? '1' : '0',
           FORGEAX_M3_START_VARIANT: startVariant,
           FORGEAX_M3_RESIZE_CHURN: '1',
           FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
@@ -1258,12 +1260,12 @@ function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
   for (const runResult of runs) {
     if (
       runResult.result.status !== 0 ||
-      !runResult.result.output.includes(`[m3-live-material] PASS pipeline=custom post=inversion msaa=false startVariant=${startVariant} variantSwitch=true`) ||
+      !runResult.result.output.includes(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${msaa} startVariant=${startVariant} variantSwitch=true`) ||
       !runResult.result.output.includes('normalSlots=true/true') ||
       !runResult.result.output.includes('falsifierSlots=false/false') ||
       !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
     ) {
-      console.error(`[m3-programmable] composed inherited material no-MSAA startup-${startVariant} ${runResult.pass}: FAIL`);
+      console.error(`[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} ${runResult.pass}: FAIL`);
       process.exit(1);
     }
   }
@@ -1271,7 +1273,7 @@ function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
   const second = runs[1].snapshot;
   if (repeatabilityDiff(first, second) !== undefined) {
     console.error(
-      `[m3-programmable] composed inherited material no-MSAA startup-${startVariant} repeatability: FAIL - ${JSON.stringify({ first, second })}`,
+      `[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} repeatability: FAIL - ${JSON.stringify({ first, second })}`,
     );
     process.exit(1);
   }
@@ -1283,13 +1285,13 @@ function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
       value.after.pipeline !== 'M3_PIPELINE=custom' ||
       value.after.post !== 'M3_POST_EFFECT=inversion' ||
       value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
-      value.rhiTopology.msaaTextureResourceCount !== 0 ||
-      value.rhiTopology.resolveTargetCount !== 0 ||
+      value.rhiTopology.msaaTextureResourceCount !== (msaa ? 4 : 0) ||
+      value.rhiTopology.resolveTargetCount !== (msaa ? 1 : 0) ||
       value.draws !== 2 ||
       value.inspectedDraw === undefined ||
       value.dawn.nonBlackPixelCount === 0
     ) {
-      console.error(`[m3-programmable] composed inherited material no-MSAA startup-${startVariant} ${leg} topology: FAIL - ${JSON.stringify(value)}`);
+      console.error(`[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} ${leg} topology: FAIL - ${JSON.stringify(value)}`);
       process.exit(1);
     }
   }
@@ -1310,17 +1312,116 @@ function runComposedInheritanceNoMsaaStartRepeatability(startVariant) {
     falsifier.delta.changed !== 0
   ) {
     console.error(
-      `[m3-programmable] composed inherited material no-MSAA startup-${startVariant} oracle: FAIL - ${JSON.stringify(first)}`,
+      `[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} oracle: FAIL - ${JSON.stringify(first)}`,
     );
     process.exit(1);
   }
   console.log(
-    `[m3-programmable] composed inherited material no-MSAA startup-${startVariant} repeatability: PASS normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} dawnSha=${normal.dawn.sha256}`,
+    `[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} repeatability: PASS normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} dawnSha=${normal.dawn.sha256}`,
   );
 }
 
-runComposedInheritanceNoMsaaStartRepeatability('false');
-runComposedInheritanceNoMsaaStartRepeatability('true');
+function runComposedInheritancePipelineFalsifierRepeatability({ msaa, startVariant }) {
+  const switchedVariant = startVariant === 'true' ? 'false' : 'true';
+  const mode = msaa ? 'msaa' : 'no-msaa';
+  const modeLabel = msaa ? 'MSAA' : 'no-MSAA';
+  const artifactRoot = resolve(
+    process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+    `inheritance-live-material-composed-${mode}-start-${startVariant}-pipeline-falsifier-repeatability`,
+  );
+  const runs = [];
+  for (const pass of ['first', 'second']) {
+    const artifactDir = resolve(artifactRoot, pass);
+    runs.push({
+      pass,
+      result: run(
+        `browser composed inherited material ${modeLabel} startup-${startVariant} pipeline falsifier ${pass}`,
+        ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
+        {
+          FORGEAX_M3_INHERITANCE_LIVE_MATERIAL: '1',
+          FORGEAX_M3_INHERITANCE_FALSIFIER_KIND: 'pipeline',
+          FORGEAX_M3_LIVE_VARIANT_SWITCH: '1',
+          FORGEAX_M3_MSAA: msaa ? '1' : '0',
+          FORGEAX_M3_START_VARIANT: startVariant,
+          FORGEAX_M3_RESIZE_CHURN: '1',
+          FORGEAX_M3_DOUBLE_RESIZE_CHURN: '1',
+          FORGEAX_M3_ARTIFACT_DIR: artifactDir,
+        },
+      ),
+      snapshot: readLiveMaterialSnapshot(artifactDir),
+    });
+  }
+  for (const runResult of runs) {
+    if (
+      runResult.result.status !== 0 ||
+      !runResult.result.output.includes(`[m3-live-material] PASS pipeline=custom post=inversion msaa=${msaa} startVariant=${startVariant} variantSwitch=true falsifier=pipeline`) ||
+      !runResult.result.output.includes('normalSlots=true/true') ||
+      !runResult.result.output.includes('falsifierSlots=true/true') ||
+      !runResult.result.output.includes('draws=2/1') ||
+      !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
+    ) {
+      console.error(`[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} pipeline falsifier ${runResult.pass}: FAIL`);
+      process.exit(1);
+    }
+  }
+  const first = runs[0].snapshot;
+  const second = runs[1].snapshot;
+  if (repeatabilityDiff(first, second) !== undefined) {
+    console.error(
+      `[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} pipeline falsifier repeatability: FAIL - ${JSON.stringify({ first, second })}`,
+    );
+    process.exit(1);
+  }
+  for (const [leg, value] of Object.entries(first)) {
+    if (
+      value.before.variant !== `M3_MULTI_UV_VARIANT=${switchedVariant}` ||
+      value.after.variant !== `M3_MULTI_UV_VARIANT=${switchedVariant}` ||
+      value.after.pipeline !== 'M3_PIPELINE=custom' ||
+      value.after.post !== 'M3_POST_EFFECT=inversion' ||
+      value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
+      value.rhiTopology.msaaTextureResourceCount !== (msaa ? (leg === 'normal' ? 4 : 2) : 0) ||
+      value.rhiTopology.resolveTargetCount !== (msaa ? 1 : 0) ||
+      value.draws !== (leg === 'normal' ? 2 : 1) ||
+      value.inspectedDraw === undefined ||
+      value.dawn.nonBlackPixelCount === 0
+    ) {
+      console.error(`[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} pipeline falsifier ${leg}: FAIL - ${JSON.stringify(value)}`);
+      process.exit(1);
+    }
+  }
+  const normal = first.normal;
+  const falsifier = first.falsifier;
+  if (
+    normal.afterEvidence.inheritanceBacked !== true ||
+    normal.afterEvidence.baseColorSlotChanged !== true ||
+    normal.afterEvidence.detailSlotChanged !== true ||
+    normal.afterEvidence.afterComponentMaterialMatchesAfter !== true ||
+    normal.delta.changed < 1000 ||
+    falsifier.afterEvidence.inheritanceBacked !== true ||
+    falsifier.afterEvidence.baseColorSlotChanged !== true ||
+    falsifier.afterEvidence.detailSlotChanged !== true ||
+    falsifier.afterEvidence.falsifierMarker !== null ||
+    falsifier.delta.changed < 1000 ||
+    normal.dawn.sha256 === falsifier.dawn.sha256
+  ) {
+    console.error(
+      `[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} pipeline falsifier oracle: FAIL - ${JSON.stringify(first)}`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `[m3-programmable] composed inherited material ${modeLabel} startup-${startVariant} pipeline falsifier repeatability: PASS normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} draws=${normal.draws}/${falsifier.draws} dawnSha=${normal.dawn.sha256}/${falsifier.dawn.sha256}`,
+  );
+}
+
+runComposedInheritanceStartRepeatability({ msaa: false, startVariant: 'false' });
+runComposedInheritanceStartRepeatability({ msaa: false, startVariant: 'true' });
+runComposedInheritanceStartRepeatability({ msaa: true, startVariant: 'false' });
+runComposedInheritanceStartRepeatability({ msaa: true, startVariant: 'true' });
+runComposedInheritancePipelineFalsifierRepeatability({ msaa: false, startVariant: 'false' });
+runComposedInheritancePipelineFalsifierRepeatability({ msaa: false, startVariant: 'true' });
+runComposedInheritancePipelineFalsifierRepeatability({ msaa: true, startVariant: 'false' });
+runComposedInheritancePipelineFalsifierRepeatability({ msaa: true, startVariant: 'true' });
 
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',

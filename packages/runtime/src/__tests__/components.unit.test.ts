@@ -1103,7 +1103,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   //   nodeWeights: 'array<f32>'                  (default empty — per-node runtime knob)
   //   nodeTimes:   'array<f32>'                  (default empty — per-node seek time)
   //   nodeSpeeds:  'array<f32>'                  (default empty — per-node speed)
-  //   targetRoot:  'entity'                      (default null — ordinary Transform root)
   //   paused:  'bool'                                (default false)
   //   looping: 'bool'                                (default true)
   //
@@ -1113,11 +1112,11 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // handle + per-node runtime knobs extend the same component);
   // plan-tasks.json w3/w4/w24.
 
-  describe('AnimationPlayer — SoA 11-field schema lock (M1 / w3 + M3 / w24 + Transform target)', () => {
-    it('AnimationPlayer is a registered component with name "AnimationPlayer" and 11 SoA schema fields', () => {
+  describe('AnimationPlayer — SoA 10-field schema lock (M1 / w3 + M3 / w24)', () => {
+    it('AnimationPlayer is a registered component with name "AnimationPlayer" and 10 SoA schema fields', () => {
       expect(AnimationPlayer.name).toBe('AnimationPlayer');
       const schema = AnimationPlayer.schema as Record<string, unknown>;
-      expect(Object.keys(schema).length).toBe(11);
+      expect(Object.keys(schema).length).toBe(10);
       expect(schema).toEqual({
         clips: 'array<shared<AnimationClip>>',
         times: 'array<f32>',
@@ -1127,7 +1126,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         nodeWeights: 'array<f32>',
         nodeTimes: 'array<f32>',
         nodeSpeeds: 'array<f32>',
-        targetRoot: 'entity',
         paused: 'bool',
         looping: 'bool',
       });
@@ -1189,7 +1187,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(AnimationPlayer.schema).not.toHaveProperty('speed');
     });
 
-    it('AnimationPlayer spawn yields variable SoA defaults: clips/times/weights/speeds all empty, targetRoot=null, paused=false, looping=true (M1 / w4 variable columns, speeds default [])', () => {
+    it('AnimationPlayer spawn yields variable SoA defaults: clips/times/weights/speeds all empty, paused=false, looping=true (M1 / w4 variable columns, speeds default [])', () => {
       const world = new World();
       const e = world
         .spawn({
@@ -1202,7 +1200,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         times: Float32Array;
         weights: Float32Array;
         speeds: Float32Array;
-        targetRoot: EntityHandle | null;
         paused: boolean;
         looping: boolean;
       };
@@ -1219,7 +1216,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // an empty clips column.
       expect(ap.speeds).toBeInstanceOf(Float32Array);
       expect(ap.speeds.length).toBe(0);
-      expect(ap.targetRoot).toBeNull();
       expect(ap.paused).toBe(false);
       expect(ap.looping).toBe(true);
     });

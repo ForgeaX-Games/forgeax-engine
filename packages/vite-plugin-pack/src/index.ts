@@ -14,15 +14,20 @@ import {
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { type NativeCooker, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
-import { catalogOperationsFor, type Importer, type PackIndexEntry } from '@forgeax/engine-types';
+import type { Importer, PackIndexEntry } from '@forgeax/engine-types';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { projectAssetProduction } from './build/asset-production.js';
-import { buildCatalogProjection, type CatalogLegacyProjection } from './build-catalog.js';
+import {
+  buildCatalogProjection,
+  type CatalogLegacyProjection,
+  currentProjectionFor,
+} from './build-catalog.js';
 import { type AssetHostRefreshPolicy, CATALOG_DELTA_EVENT } from './catalog-client.js';
 import { calculateCatalogDelta } from './catalog-watch.js';
 import { compressArtifact } from './compress-artifact.js';
-import { readDdcMetrics, resolveDdcRoot } from './ddc-cache.js';
+import { readDdcMetrics, resolveDdcRoot, semanticDdcKey } from './ddc-cache.js';
 import { createAssetChangedEvent, emitAssetChanged } from './dev/asset-change-events.js';
+import { publishImportPublication } from './dev/import-publication.js';
 import { createPackageRoutes } from './dev/package-routes.js';
 import { createUiDependencyIndex } from './dev/ui-dependency-index.js';
 import { buildGuidToMetaMap, buildUrlToAbsolute, watchDevRoots } from './dev/watcher.js';
@@ -70,51 +75,15 @@ export {
 export type { PackIndexEntry };
 
 const COOKED_CURRENT_PROJECTION = {
-  subject: 'imported-output' as const,
-  execution: 'cooked' as const,
-  lifecycle: 'current' as const,
-  projection: {
-    subject: 'imported-output' as const,
-    execution: 'cooked' as const,
-    lifecycle: 'current' as const,
-    operations: catalogOperationsFor({
-      subject: 'imported-output',
-      execution: 'cooked',
-      lifecycle: 'current',
-    }),
-  },
+  ...currentProjectionFor('imported-output', 'cooked'),
 };
 
 const DIRECT_CURRENT_PROJECTION = {
-  subject: 'internal-asset' as const,
-  execution: 'direct' as const,
-  lifecycle: 'current' as const,
-  projection: {
-    subject: 'internal-asset' as const,
-    execution: 'direct' as const,
-    lifecycle: 'current' as const,
-    operations: catalogOperationsFor({
-      subject: 'internal-asset',
-      execution: 'direct',
-      lifecycle: 'current',
-    }),
-  },
+  ...currentProjectionFor('internal-asset', 'direct'),
 };
 
 const AUTHORED_COOKED_CURRENT_PROJECTION = {
-  subject: 'internal-asset' as const,
-  execution: 'cooked' as const,
-  lifecycle: 'current' as const,
-  projection: {
-    subject: 'internal-asset' as const,
-    execution: 'cooked' as const,
-    lifecycle: 'current' as const,
-    operations: catalogOperationsFor({
-      subject: 'internal-asset',
-      execution: 'cooked',
-      lifecycle: 'current',
-    }),
-  },
+  ...currentProjectionFor('internal-asset', 'cooked'),
 };
 
 // Minimal structural interface for Vite Plugin (duck-typed; no vite import needed).
@@ -286,6 +255,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // files that live outside the Vite root (e.g. submodule assets).
   let urlToAbs: Map<string, string> = new Map();
   let catalogReady = false;
+  let publishCatalogDelta:
+    | ((delta: import('@forgeax/engine-types').CatalogDelta) => void)
+    | undefined;
 
   // M4 / w32 (AC-20): GUID -> meta-path index built alongside the catalog so
   // `POST /__import/:guid` can find the declaring meta sidecar. Rebuilt on
@@ -346,11 +318,39 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     readonly execution?: 'direct' | 'cooked';
     readonly payload: Record<string, unknown>;
     readonly refs?: readonly string[];
+    readonly artifacts?: Readonly<Record<string, unknown>>;
   }
 
   interface AuthoredPackInput {
     readonly schemaVersion?: string;
     readonly assets?: readonly AuthoredPackAssetInput[];
+  }
+
+  // The checked-in DejaVu font package predates Pack v2: it is a valid
+  // internal-text-package with a 1.0.0 envelope and no explicit refs/artifacts.
+  // Publish the compatibility projection as Pack v2 at the transport boundary
+  // so runtime never has to accept two package contracts. Font refs are derived
+  // from the producer-owned atlasGuid/samplerGuid fields; all other legacy refs
+  // remain empty because their payload already carries its complete identity.
+  function upgradeLegacyAuthoredPack(pack: AuthoredPackInput): AuthoredPackInput {
+    if (pack.schemaVersion !== '1.0.0' || pack.assets === undefined) return pack;
+    return {
+      ...pack,
+      schemaVersion: '2.0.0',
+      assets: pack.assets.map((asset) => {
+        const fontRefs =
+          asset.kind === 'font'
+            ? [asset.payload.atlasGuid, asset.payload.samplerGuid].filter(
+                (guid): guid is string => typeof guid === 'string',
+              )
+            : [];
+        return {
+          ...asset,
+          refs: asset.refs ?? fontRefs,
+          artifacts: asset.artifacts ?? {},
+        };
+      }),
+    };
   }
 
   interface CookedAuthoredPack {
@@ -499,7 +499,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       let pack: AuthoredPackInput;
       try {
         body = readFileSync(sourcePath, 'utf-8');
-        pack = JSON.parse(body) as AuthoredPackInput;
+        pack = upgradeLegacyAuthoredPack(JSON.parse(body) as AuthoredPackInput);
       } catch {
         // buildCatalog reports malformed source packs; leave this row untouched
         // so the existing catalog error remains the visible diagnostic.
@@ -507,6 +507,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
       const firstGuid = pack.assets?.[0]?.guid?.toLowerCase();
       if (pack.schemaVersion !== '2.0.0' || firstGuid === undefined) continue;
+      body = JSON.stringify(pack);
       const cooked = await readCookedAuthoredPack(sourcePath);
       const packageUrl = `${DEV_PACK_PREFIX}${firstGuid}.pack.json`;
       published.set(entry.packageUrl, packageUrl);
@@ -678,6 +679,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // resulting PackIndexEntry[] for all rows belonging to this meta.
   async function startMetaImport(metaPath: string): Promise<PackIndexEntry[]> {
     const cwd = process.cwd();
+    const previousCatalog = [...catalog];
+    const previousImportedRows = new Map(importedRows);
     const { paths } = loadAssetConfig(cwd);
     let rm: unknown;
     try {
@@ -694,6 +697,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       importer: string;
       source?: string;
       importSettings?: unknown;
+      sourceOverrides?: unknown;
       subAssets: ReadonlyArray<{ guid: string; sourceIndex: number; kind: string }>;
     };
 
@@ -718,6 +722,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     if (meta.importSettings !== undefined) {
       (runMeta as { importSettings?: Readonly<Record<string, unknown>> }).importSettings =
         meta.importSettings as Readonly<Record<string, unknown>>;
+    }
+    if (meta.sourceOverrides !== undefined) {
+      (runMeta as { sourceOverrides?: unknown }).sourceOverrides = meta.sourceOverrides;
     }
 
     const runResult = await runImport(runMeta, importerRegistry, fsForImport);
@@ -947,6 +954,40 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
     }
 
+    if (firstSubGuid !== undefined && 'pack' in runResult.value) {
+      const desiredKey = semanticDdcKey({
+        schemaVersion: '2.0.0',
+        importerVersion: meta.importer,
+        codecVersion: 'pack-v2',
+        sourceDependencies: runResult.value.product.sourceDependencies,
+        settings: meta.importSettings ?? {},
+        declaredGuids: meta.subAssets.map((sub) => sub.guid),
+        cookProfile: 'dev',
+        ...(meta.sourceOverrides === undefined ? {} : { sourceOverrides: meta.sourceOverrides }),
+      });
+      const publication = await publishImportPublication({
+        root: resolveDdcRoot(cwd),
+        guid: firstSubGuid,
+        desiredKey,
+        pack,
+        previousCatalog,
+        nextCatalog: catalog,
+        onDelta: (delta) => publishCatalogDelta?.(delta),
+      });
+      if (!publication.ok) {
+        catalog = previousCatalog;
+        importedRows.clear();
+        for (const [guid, row] of previousImportedRows) importedRows.set(guid, row);
+        if (packUrl !== undefined) metaPackBodies.delete(packUrl);
+        throw new ImportError({
+          code: 'import-internal-error',
+          expected: publication.error.expected,
+          hint: publication.error.hint,
+          detail: { reason: publication.error.detail },
+        });
+      }
+    }
+
     return allEntries;
   }
 
@@ -1119,6 +1160,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // ─── configureServer (dev mode) ──────────────────────────────────────────
 
   function configureServer(server: ViteDevServerLike): void {
+    publishCatalogDelta = (delta) => {
+      server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: delta });
+    };
     // Async startup: scan roots to build the initial catalog.
     const { roots } = resolvePackBuildInputs(opts);
     Promise.all([
@@ -1666,7 +1710,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
       const sourcePath = resolve(cwd, entry.sourcePath);
       const source = readFileSync(sourcePath, 'utf-8');
-      const parsed = JSON.parse(source) as { readonly schemaVersion?: string };
+      const parsed = upgradeLegacyAuthoredPack(JSON.parse(source) as AuthoredPackInput);
       if (parsed.schemaVersion !== '2.0.0') continue;
       const cooked = await readCookedAuthoredPack(sourcePath);
       if (cooked !== undefined) {
@@ -1699,7 +1743,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         type: 'asset',
         name: `${entry.guid.toLowerCase()}.pack.json`,
         originalFileName: sourcePath,
-        source,
+        source: JSON.stringify(parsed),
       });
       const packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
       authoredPackUrls.set(entry.packageUrl, packUrl);
@@ -1892,6 +1936,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         importer: string;
         source?: string;
         importSettings?: unknown;
+        sourceOverrides?: unknown;
         subAssets: ReadonlyArray<{ guid: string; sourceIndex: number; kind: string }>;
       };
       const subAssets = meta.subAssets;
@@ -1932,6 +1977,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       if (meta.importSettings !== undefined) {
         (runMeta as { importSettings?: Readonly<Record<string, unknown>> }).importSettings =
           meta.importSettings as Readonly<Record<string, unknown>>;
+      }
+      if (meta.sourceOverrides !== undefined) {
+        (runMeta as { sourceOverrides?: unknown }).sourceOverrides = meta.sourceOverrides;
       }
 
       const runResult = await runImport(runMeta, importerRegistry, fsForImport);

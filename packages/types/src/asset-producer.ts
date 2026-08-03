@@ -151,6 +151,7 @@ export type AssetBindingCapability =
 export interface AssetAuthoringCapability {
   readonly placement: AssetPlacementCapability;
   readonly binding: AssetBindingCapability;
+  readonly sourceOverrides?: readonly SourceOverrideDescriptor[];
 }
 
 /** Built-in defaults for legacy rows that do not carry an explicit override. */
@@ -242,6 +243,147 @@ export interface ProviderProvenance {
   readonly source?: string;
 }
 
+/** Producer-owned JSON payload for one stable imported-output source key. */
+export type SourceOverridePayload = Readonly<Record<string, unknown>>;
+
+/** Optional Meta author facts keyed by the producer's stable sourceKey. */
+export type SourceOverrideMap = Readonly<Record<string, SourceOverridePayload>>;
+
+export interface SourceOverrideDescriptor {
+  readonly sourceKey: string;
+  readonly payloadSchema?: unknown;
+}
+
+export type SourceOverrideErrorCode =
+  | 'unknown-source-key'
+  | 'duplicate-source-key'
+  | 'invalid-source-overrides'
+  | 'invalid-source-override-payload';
+
+export interface SourceOverrideDiagnostic {
+  readonly code: SourceOverrideErrorCode;
+  readonly expected: string;
+  readonly actual?: string;
+  readonly hint: string;
+}
+
+export type SourceOverrideValidationResult =
+  | { readonly ok: true; readonly value: SourceOverrideMap | undefined }
+  | { readonly ok: false; readonly error: SourceOverrideDiagnostic };
+
+function sourceOverrideError(
+  code: SourceOverrideErrorCode,
+  expected: string,
+  hint: string,
+  actual?: string,
+): SourceOverrideValidationResult {
+  return {
+    ok: false,
+    error: { code, expected, hint, ...(actual === undefined ? {} : { actual }) },
+  };
+}
+
+function isSourceOverridePayload(value: unknown): value is SourceOverridePayload {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Canonicalize legacy/empty override maps without changing producer payloads. */
+export function canonicalizeSourceOverrides(value: unknown): SourceOverrideMap | undefined {
+  if (value === undefined) return undefined;
+  if (!isSourceOverridePayload(value)) return undefined;
+  const keys = Object.keys(value);
+  if (keys.length === 0) return undefined;
+  return Object.fromEntries(keys.sort().map((key) => [key, value[key]])) as SourceOverrideMap;
+}
+
+function validateSourceOverrideEntry(
+  sourceKey: string,
+  payload: unknown,
+  declared: ReadonlySet<string>,
+  seen: Set<string>,
+): SourceOverrideDiagnostic | undefined {
+  if (seen.has(sourceKey)) {
+    return {
+      code: 'duplicate-source-key',
+      expected: 'sourceKey values to be unique within sourceOverrides',
+      hint: 'remove the duplicate source override',
+      actual: sourceKey,
+    };
+  }
+  seen.add(sourceKey);
+  if (!declared.has(sourceKey)) {
+    return {
+      code: 'unknown-source-key',
+      expected: 'sourceKey to be declared by the producer topology',
+      hint: 'request a fresh Catalog topology before writing Meta',
+      actual: sourceKey,
+    };
+  }
+  if (!isSourceOverridePayload(payload)) {
+    return {
+      code: 'invalid-source-override-payload',
+      expected: 'each source override payload to be a producer-owned object',
+      hint: 'validate the payload with the producer schema',
+      actual: sourceKey,
+    };
+  }
+  return undefined;
+}
+
+function validateSourceOverrideEntries(
+  entries: readonly (readonly [string, unknown])[],
+  declared: ReadonlySet<string>,
+): SourceOverrideValidationResult {
+  const seen = new Set<string>();
+  for (const [sourceKey, payload] of entries) {
+    const error = validateSourceOverrideEntry(sourceKey, payload, declared, seen);
+    if (error !== undefined) return { ok: false, error };
+  }
+  return { ok: true, value: canonicalizeSourceOverrides(Object.fromEntries(entries)) };
+}
+
+/** Validate source override identity while leaving payload interpretation to the producer. */
+export function validateSourceOverrideMap(
+  value: unknown,
+  declaredSourceKeys: readonly string[],
+): SourceOverrideValidationResult {
+  const declared = new Set<string>();
+  for (const sourceKey of declaredSourceKeys) {
+    if (declared.has(sourceKey)) {
+      return sourceOverrideError(
+        'duplicate-source-key',
+        'sourceKey values declared by a producer to be unique',
+        'repair the producer topology before publishing Meta',
+        sourceKey,
+      );
+    }
+    declared.add(sourceKey);
+  }
+  if (value === undefined) return { ok: true, value: undefined };
+  if (Array.isArray(value)) {
+    const entries: (readonly [string, unknown])[] = [];
+    for (const item of value) {
+      if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== 'string') {
+        return sourceOverrideError(
+          'invalid-source-overrides',
+          'sourceOverrides to be an object keyed by sourceKey',
+          'pass a producer-owned source override map',
+        );
+      }
+      entries.push([item[0], item[1]]);
+    }
+    return validateSourceOverrideEntries(entries, declared);
+  }
+  if (!isSourceOverridePayload(value)) {
+    return sourceOverrideError(
+      'invalid-source-overrides',
+      'sourceOverrides to be an object keyed by sourceKey',
+      'pass a producer-owned source override map',
+    );
+  }
+  return validateSourceOverrideEntries(Object.entries(value), declared);
+}
+
 /** Monotonic producer observation used to validate catalog continuity. */
 export interface ResourceRevision {
   readonly digest: string;
@@ -294,6 +436,9 @@ export interface CatalogDiagnostic {
 export type ProducerContractErrorCode =
   | 'missing-source-key'
   | 'duplicate-source-key'
+  | 'unknown-source-key'
+  | 'invalid-source-overrides'
+  | 'invalid-source-override-payload'
   | 'source-index-ambiguous'
   | 'invalid-source-key'
   | 'invalid-source-index'

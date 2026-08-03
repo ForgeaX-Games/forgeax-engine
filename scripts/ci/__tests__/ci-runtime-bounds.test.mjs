@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 
 const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
+const vitestConfig = readFileSync(resolve('vitest.config.ts'), 'utf8');
 const uploadWithRetry = readFileSync(
   resolve('.github/actions/upload-artifact-with-retry/action.yml'),
   'utf8',
@@ -15,6 +16,22 @@ const uploadOptionalArtifact = readFileSync(
 
 test('coverage-pnpm bounds Vitest workers on the shared self-hosted machine', () => {
   assert.match(workflow, /pnpm exec vitest run --maxWorkers=4 --typecheck --coverage/);
+});
+
+test('CI harness materialization uses a blob-filtered docs-only clone', () => {
+  const materializeSteps = workflow.match(
+    /- name: Materialize harness documentation[\s\S]*?FORGEAX_HARNESS_SPARSE_DOCS: '1'/g,
+  );
+  assert.equal(materializeSteps?.length, 2);
+  assert.match(
+    readFileSync(resolve('scripts/sync-harness.mjs'), 'utf8'),
+    /--filter=blob:none[\s\S]*--sparse/,
+  );
+});
+
+test('browser WebGPU project bounds workers to protect the shared device', () => {
+  const browserProject = vitestConfig.slice(vitestConfig.indexOf("name: 'browser'"));
+  assert.match(browserProject, /maxWorkers: 2/);
 });
 
 test('coverage-pnpm uploads diagnostics only after a failed test run', () => {

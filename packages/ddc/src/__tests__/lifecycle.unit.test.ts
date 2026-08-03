@@ -69,7 +69,7 @@ describe('DDC lifecycle head', () => {
     await expect(lifecycle.inspect(GUID, KEY_B)).resolves.toMatchObject({
       state: 'failed',
       lastKnownGoodKey: KEY_A,
-      currentKey: undefined,
+      currentKey: KEY_A,
       failure: { code: 'producer-failed' },
     });
   });
@@ -94,7 +94,7 @@ describe('DDC lifecycle head', () => {
     await expect(lifecycle.inspect(GUID, KEY_B)).resolves.toMatchObject({
       state: 'stale',
       lastKnownGoodKey: KEY_A,
-      currentKey: undefined,
+      currentKey: KEY_A,
     });
   });
 

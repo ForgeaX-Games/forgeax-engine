@@ -591,7 +591,7 @@ grep -n "MAX_JOINTS" packages/runtime/src/systems/skin-palette-allocator.ts
 **根因**:Edge `edge://flags/#enable-unsafe-webgpu = Disabled` 这档配置下,浏览器**全局禁掉所有硬件 GL contexts**(`webgl` / `webgl2` / `experimental-webgl` 全返 null);只剩 Canvas2D。**与引擎无关,也无法在引擎层修复**——wgpu wasm GL backend 没有任何 GL context 可 attach。
 
 > [!CAUTION]
-> 不要去研究 "canvas pollution" / "type-lock" / "复用 canvas" / "重 mint canvas" 假说。这些都是当时调查中走过的弯路,**经一行 devtools 实验直接证伪**。完整反向避坑见 [`docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md`](../../docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md)。
+> 不要去研究 "canvas pollution" / "type-lock" / "复用 canvas" / "重 mint canvas" 假说。这些都是当时调查中走过的弯路,**经一行 devtools 实验直接证伪**。完整反向避坑见 [`docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md)。
 
 **判定**:让用户在 Edge devtools 跑一行,贴回输出。
 
@@ -663,7 +663,7 @@ pnpm metrics:run-fps -- --app apps/parity/instancing-static
 # → p95 fps + onError detail walk(在 demo 加 renderer.onError 钩子用 Object.getOwnPropertyNames 遍历嵌套 detail)
 ```
 
-参见 [`docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md`](../../docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md)。
+参见 [`docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/handover/2026-06-10-edge-webgpu-disabled-no-graceful-webgl-fallback.md)。
 
 ---
 

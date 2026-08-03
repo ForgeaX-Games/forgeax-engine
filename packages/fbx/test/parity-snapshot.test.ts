@@ -53,6 +53,7 @@ interface RawClip {
 }
 interface RawNode {
   readonly name: string;
+  readonly children?: readonly number[];
 }
 interface RawMaterial {
   readonly name?: string;
@@ -141,6 +142,10 @@ function liveDigest(name: string): unknown {
   const bytes = new Uint8Array(readFileSync(join(VENDOR, `${name}.fbx`)));
   return digest(parseFbxToObject(bytes) as RawDoc);
 }
+function liveDoc(name: string): RawDoc {
+  const bytes = new Uint8Array(readFileSync(join(VENDOR, `${name}.fbx`)));
+  return parseFbxToObject(bytes) as RawDoc;
+}
 function frozen(name: string): unknown {
   return JSON.parse(readFileSync(join(SNAP_DIR, `${name}-snapshot.json`), 'utf8'));
 }
@@ -207,6 +212,30 @@ describe('parity — four-class invariants on the frozen snapshot', () => {
     const run = d.clips.find((c) => c.name === 'run');
     expect(run?.channelCount).toBe(93);
     expect(run?.channelsByProperty).toEqual({ translation: 62, rotation: 31, scale: 0 });
+  });
+
+  it('humanoid animation targetNode values are unique full scene paths', () => {
+    const raw = liveDoc('humanoid');
+    const nodes = raw.nodes ?? [];
+    const parents = new Map<number, number>();
+    for (let index = 0; index < nodes.length; index++) {
+      for (const child of nodes[index]?.children ?? []) parents.set(child, index);
+    }
+    const scenePaths = nodes.map((_, index) => {
+      const names: string[] = [];
+      let current: number | undefined = index;
+      while (current !== undefined) {
+        names.push(nodes[current]?.name ?? '');
+        current = parents.get(current);
+      }
+      return names.reverse().join('/');
+    });
+    expect(new Set(scenePaths).size).toBe(scenePaths.length);
+    for (const clip of raw.clips ?? []) {
+      for (const channel of clip.channels) {
+        expect(scenePaths).toContain(channel.targetNode);
+      }
+    }
   });
 
   it('(AC-11) cube emits no clips (its only take is empty)', () => {

@@ -182,7 +182,10 @@ describe('Wave 1 acceptance matrix', () => {
   });
 
   it('records completed compatibility without moving RenderFeature into VFX production', () => {
-    const plan = readFileSync(resolve(repoRoot, 'docs/vfx-particle-runtime-design.md'), 'utf8');
+    const plan = readFileSync(
+      resolve(repoRoot, '.forgeax-harness/docs/vfx-particle-runtime-design.md'),
+      'utf8',
+    );
     expect(plan).toContain('| Public compatibility | Complete |');
     expect(plan).toContain('@forgeax/engine-vfx-render');
     expect(plan).toContain('No production feature extracts');

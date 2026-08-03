@@ -11,7 +11,7 @@ test('catalog gate covers the MaterialAsset authoring and recovery route', () =>
     'material-parent-not-found',
     'material-value-type-mismatch',
     'material-reflection-binding-mismatch',
-    'docs/material-asset-migration.md',
+    '.forgeax-harness/docs/material-asset-migration.md',
   ]) {
     assert.ok(gate.includes(token), `catalog gate must enforce ${token}`);
   }

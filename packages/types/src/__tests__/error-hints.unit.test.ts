@@ -118,6 +118,10 @@ describe('ImportErrorDetail load-vs-conversion layering (feat-20260629 D-5 / w10
       | 'guid-mismatch'
       | 'import-internal-error'
       | 'source-validation-failed'
+      | 'unknown-source-key'
+      | 'duplicate-source-key'
+      | 'invalid-source-overrides'
+      | 'invalid-source-override-payload'
     >();
   });
 });

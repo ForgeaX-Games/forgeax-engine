@@ -208,6 +208,7 @@ import {
     'gltf-skin-joint-name-missing',
     'gltf-image-extract-failed',
     'gltf-skin-attr-asymmetric',
+    'gltf-animation-target-invalid',
   ];
 
   function classifyByExhaustiveSwitch(err: GltfError): string {
@@ -242,6 +243,8 @@ import {
         return 'image-extract';
       case 'gltf-skin-attr-asymmetric':
         return 'skin-attr-asym';
+      case 'gltf-animation-target-invalid':
+        return 'animation-target';
     }
   }
 
@@ -277,7 +280,12 @@ import {
       case 'gltf-morph-unsupported':
         return gltfErr(code, { animationIndex: 0, channelIndex: 2, nodeIndex: 3 });
       case 'gltf-skin-joint-name-missing':
-        return gltfErr(code, { skinIndex: 0, jointPathIndex: 4, nodeIndex: 5 });
+        return gltfErr(code, {
+          reason: 'name-missing',
+          skinIndex: 0,
+          jointPathIndex: 4,
+          nodeIndex: 5,
+        });
       case 'gltf-image-extract-failed':
         return gltfErr(code, { imageIndex: 0, source: 'bufferView', reason: 'sample' });
       case 'gltf-skin-attr-asymmetric':
@@ -287,13 +295,20 @@ import {
           hasJoints: true,
           hasWeights: false,
         });
+      case 'gltf-animation-target-invalid':
+        return gltfErr(code, {
+          reason: 'name-missing',
+          animationIndex: 0,
+          channelIndex: 0,
+          nodeIndex: 0,
+        });
     }
   }
 
   describe('errors.test.ts', () => {
-    describe('GltfErrorCode roster (15-member, 9 original + 4 skin-animation + 1 image-extract + 1 skin-attr-asymmetric)', () => {
-      it('GLTF_ERROR_HINTS exposes exactly 15 keys', () => {
-        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(15);
+    describe('GltfErrorCode roster', () => {
+      it('GLTF_ERROR_HINTS exposes exactly 16 keys', () => {
+        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(16);
       });
 
       it.each(ALL_CODES)('hint for %s is a non-empty string', (code) => {
@@ -2304,7 +2319,8 @@ import {
           duration: 1.0,
           channels: [
             {
-              targetPath: ['root', 'jointA'],
+              targetId: 'ab9b78fd51898a86ab273a47863a7601' as never,
+              targetNodeIndex: 1,
               property: 'rotation',
               sampler: {
                 input: new Float32Array([0, 1]),

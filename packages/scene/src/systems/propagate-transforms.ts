@@ -93,8 +93,6 @@ interface GraphLike {
 interface InternalWorldSurface {
   /** @internal */
   _getGraph(): GraphLike;
-  /** @internal */
-  _getEntityGenerationForIndexSlot(indexSlot: number): number | undefined;
   /**
    * @internal Column-level zero-copy view of an `array<T, N>` / `buffer<N>` field.
    * Returns a `FieldView` (a TypedArray) aliasing the inline stride-N column bytes

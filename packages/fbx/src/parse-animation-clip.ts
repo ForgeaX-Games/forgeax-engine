@@ -25,11 +25,14 @@
 //   rotation: per-component lerp then normalize (nlerp); runtime slerps further
 //   output: AnimationClipPod.channels[].sampler.{input,output,interpolation:LINEAR}
 
+import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
 import type {
   AnimationChannelPod,
   AnimationClipPod,
   AnimationSamplerPod,
 } from '@forgeax/engine-types';
+import { err, type FbxError, fbxErr, ok, type Result } from './errors.js';
+import { buildFbxNodePaths } from './parse-scene.js';
 
 export interface FbxRawAnimChannel {
   readonly targetNode: string;
@@ -142,10 +145,97 @@ function buildSampler(ch: FbxRawAnimChannel, duration: number, fps: number): Ani
 
 function buildChannel(ch: FbxRawAnimChannel, duration: number, fps: number): AnimationChannelPod {
   return {
-    targetPath: ch.targetNode.split('/'),
+    targetId: deriveAnimationTargetId(ch.targetNode.split('/')),
     property: ch.property,
     sampler: buildSampler(ch, duration, fps),
   };
+}
+
+interface FbxAnimationNode {
+  readonly name: string;
+  readonly children: readonly number[];
+}
+
+export function resolveAnimationTargetIds(
+  nodes: readonly FbxAnimationNode[],
+  clips: readonly FbxRawClip[],
+): Result<void, FbxError> {
+  const nodesByPath = new Map<string, number[]>();
+  const nodePaths = buildFbxNodePaths(nodes);
+  const cycle = nodePaths.find((path) => !path.ok && path.reason === 'hierarchy-cycle');
+  if (cycle && !cycle.ok) {
+    return err(
+      fbxErr('fbx-animation-target-invalid', {
+        reason: 'hierarchy-cycle',
+        nodeIndex: cycle.nodeIndex,
+      }),
+    );
+  }
+  const hasAmbiguousName = nodePaths.some((path) => !path.ok);
+  for (let index = 0; index < nodePaths.length; index++) {
+    const result = nodePaths[index];
+    if (result === undefined || !result.ok) continue;
+    const path = result.value.join('/');
+    const matches = nodesByPath.get(path) ?? [];
+    matches.push(index);
+    nodesByPath.set(path, matches);
+  }
+
+  const pathById = new Map<string, string>();
+  for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
+    const clip = clips[clipIndex];
+    if (clip === undefined) continue;
+    for (let channelIndex = 0; channelIndex < clip.channels.length; channelIndex++) {
+      const channel = clip.channels[channelIndex];
+      if (channel === undefined) continue;
+      const segments = channel.targetNode.split('/');
+      if (segments.some((segment) => segment.length === 0)) {
+        return err(
+          fbxErr('fbx-animation-target-invalid', {
+            reason: 'path-invalid',
+            clipIndex,
+            channelIndex,
+            targetNode: channel.targetNode,
+          }),
+        );
+      }
+      const matches = nodesByPath.get(channel.targetNode);
+      if (matches === undefined) {
+        return err(
+          fbxErr('fbx-animation-target-invalid', {
+            reason: hasAmbiguousName ? 'name-missing' : 'path-not-found',
+            clipIndex,
+            channelIndex,
+            targetNode: channel.targetNode,
+          }),
+        );
+      }
+      if (matches.length !== 1) {
+        return err(
+          fbxErr('fbx-animation-target-invalid', {
+            reason: 'path-duplicate',
+            clipIndex,
+            channelIndex,
+            targetNode: channel.targetNode,
+          }),
+        );
+      }
+      const id = deriveAnimationTargetId(segments);
+      const previous = pathById.get(id);
+      if (previous !== undefined && previous !== channel.targetNode) {
+        return err(
+          fbxErr('fbx-animation-target-invalid', {
+            reason: 'id-collision',
+            clipIndex,
+            channelIndex,
+            targetNode: channel.targetNode,
+          }),
+        );
+      }
+      pathById.set(id, channel.targetNode);
+    }
+  }
+  return ok(undefined);
 }
 
 /**

@@ -3,7 +3,11 @@
 import type { ImportContext, Importer, ImportResult } from '@forgeax/engine-types';
 import { fbxErr } from './errors.js';
 import { initFbxWasm, parseFbx } from './index.js';
-import { type FbxRawAnimDoc, parseAnimationClips } from './parse-animation-clip.js';
+import {
+  type FbxRawAnimDoc,
+  parseAnimationClips,
+  resolveAnimationTargetIds,
+} from './parse-animation-clip.js';
 import { type FbxRawMaterial, parseMaterial } from './parse-material.js';
 import { type FbxRawDocument, type FbxRawMesh, parseMesh } from './parse-mesh.js';
 import { type FbxRawNodes, parseScene } from './parse-scene.js';
@@ -108,6 +112,17 @@ export const fbxImporter: Importer = {
 
     const skeleton = parseSkeleton(doc);
     const skin = parseSkin(doc);
+    const animationTargets = resolveAnimationTargetIds(
+      (doc as unknown as FbxRawNodes).nodes ?? [],
+      doc.clips ?? [],
+    );
+    if (!animationTargets.ok) {
+      const wrapper = new Error(
+        `${animationTargets.error.code}: ${animationTargets.error.expected}`,
+      );
+      (wrapper as { cause?: unknown }).cause = animationTargets.error;
+      throw wrapper;
+    }
     const animationClips = parseAnimationClips(doc);
 
     return {

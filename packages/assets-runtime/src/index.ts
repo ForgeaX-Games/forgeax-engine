@@ -108,6 +108,7 @@ export {
   type RuntimeAssetEvidenceAdapter,
   type RuntimeEvidenceSource,
 } from './registry/asset-evidence';
+export { CatalogReplica, type CatalogReplicaSnapshot } from './registry/catalog-state';
 export type { PostSpawnHook, SkinJointResolver } from './registry/instantiate';
 // ─── Scene instantiate collaboration contract types (D-1 injected hook) ─────
 export { buildSceneChildContext } from './registry/instantiate';

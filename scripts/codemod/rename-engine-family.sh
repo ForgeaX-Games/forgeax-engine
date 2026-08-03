@@ -41,12 +41,15 @@ phase G done
 phase B start
 node_modules/.bin/jscodeshift \
   --parser=tsx \
+  --cpus=1 \
   --extensions=ts,tsx,mts,cts,mjs,cjs,js,jsx \
   --fail-on-error \
   --ignore-pattern='**/dist/**' \
   --ignore-pattern='**/node_modules/**' \
   --ignore-pattern='**/coverage/**' \
   --ignore-pattern='**/*-progress.jsonl' \
+  --ignore-pattern='**/*.d.mts' \
+  --ignore-pattern='**/*.d.cts' \
   --ignore-pattern='.forgeax-harness/forgeax-loop/**' \
   --ignore-pattern='.knowledge-base/sources/**' \
   --ignore-pattern='packages/wgpu-wasm/pkg/**' \

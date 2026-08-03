@@ -13,6 +13,7 @@
 //   - charter P3 (fail-fast on invalid data)
 
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
+import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
 /** Maximum joints per skin (glTF spec practical limit). */
 const MAX_JOINTS = 256;
@@ -148,41 +149,22 @@ function decodeMat4Accessor(
 function resolveJointPath(
   nodeIndex: number,
   nodes: readonly NodeJson[],
+  parentOf: ReadonlyMap<number, number>,
   skinIndex: number,
   jointPathIndex: number,
 ): Result<readonly string[], GltfError> {
-  // Build parent map by walking all nodes' children arrays.
-  const parentOf = new Map<number, number>();
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i];
-    if (n === undefined) continue;
-    for (const child of n.children ?? []) {
-      parentOf.set(child, i);
-    }
+  const path = resolveNamedNodePath(nodes, parentOf, nodeIndex);
+  if (!path.ok) {
+    return err(
+      gltfErr('gltf-skin-joint-name-missing', {
+        reason: path.reason,
+        skinIndex,
+        jointPathIndex,
+        nodeIndex: path.nodeIndex,
+      }),
+    );
   }
-
-  // Walk upward from the joint node to find the path from root.
-  // Then reverse to get root->joint order.
-  const pathReversed: string[] = [];
-  let current = nodeIndex;
-  while (true) {
-    const node = nodes[current];
-    if (node === undefined) break;
-
-    const name = node.name;
-    if (name === undefined || name === '') {
-      return err(
-        gltfErr('gltf-skin-joint-name-missing', { skinIndex, jointPathIndex, nodeIndex: current }),
-      );
-    }
-    pathReversed.push(name);
-
-    const parent = parentOf.get(current);
-    if (parent === undefined) break;
-    current = parent;
-  }
-
-  return ok(pathReversed.reverse());
+  return ok(path.value);
 }
 
 /**
@@ -205,6 +187,7 @@ export function parseSkin(
   }
 
   const records: GltfSkeletonRecord[] = [];
+  const parentOf = buildNodeParentMap(nodesJson);
 
   for (let skinIdx = 0; skinIdx < skinsJson.length; skinIdx++) {
     const skin = skinsJson[skinIdx];
@@ -252,7 +235,7 @@ export function parseSkin(
     for (let j = 0; j < joints.length; j++) {
       const jointNodeIndex = joints[j];
       if (jointNodeIndex === undefined) continue;
-      const pathResult = resolveJointPath(jointNodeIndex, nodesJson, skinIdx, j);
+      const pathResult = resolveJointPath(jointNodeIndex, nodesJson, parentOf, skinIdx, j);
       if (!pathResult.ok) return err(pathResult.error);
       jointPaths.push(pathResult.value.join('/'));
     }

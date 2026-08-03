@@ -532,6 +532,50 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
   });
 });
 
+// feat-20260803-audio-listener-marker-roundtrip: an empty-schema component is
+// still authored presence. The collector must keep it in the SceneAsset and
+// Pack v2 payload so marker components such as AudioListener survive reopen.
+describe('marker component scene-pack round-trip', () => {
+  it('preserves an authored empty-schema component', () => {
+    defineComponent('Test_EmptySchemaMarker', {});
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { Test_EmptySchemaMarker: {} } }],
+    };
+
+    const world = new World();
+    const reg = makeRegistry();
+    const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
+    if (sg.ok) reg.catalog(sg.value, asset);
+    const handle = registerSceneAsset(world, asset);
+    const instantiated = world.instantiateScene(handle);
+    expect(instantiated.ok).toBe(true);
+    if (!instantiated.ok) return;
+
+    const collected = rootsToSceneAsset(reg, world, [instantiated.value.root]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+    const collectedEntity = findEntityWith(collected.value.entities, 'Test_EmptySchemaMarker');
+    expect(comp(collectedEntity, 'Test_EmptySchemaMarker')).toEqual({});
+
+    const serialized = serializeSceneAssetToPack(
+      collected.value,
+      '11111111-2222-4333-8444-555555555555',
+    );
+    expect(serialized.ok).toBe(true);
+    if (!serialized.ok) return;
+    const pack = serialized.value;
+    const payload = def((pack.assets as Array<Record<string, unknown>>)[0], 'assets[0]')
+      .payload as Record<string, unknown>;
+    const entities = payload.entities as Array<Record<string, unknown>>;
+    const markerEntity = entities.find((entity) => {
+      const components = entity.components as Record<string, unknown>;
+      return components.Test_EmptySchemaMarker !== undefined;
+    });
+    expect(markerEntity?.components).toMatchObject({ Test_EmptySchemaMarker: {} });
+  });
+});
+
 // feat-20260709 M2 / w4: serialization output shape + unknown-field downgrade
 // regression (TDD red-first; goes green with the w6 schema rewrite).
 describe('w4 -- Transform vec serialization shape (AC-05)', () => {

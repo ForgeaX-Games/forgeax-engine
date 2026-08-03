@@ -180,7 +180,7 @@ ownership is [`@forgeax/engine-render-graph`](../render-graph/README.md).
 > Wave 2 delivered this generic prepared public seam. A downstream Wave 3 VFX
 > integration owns visible particle draws; render must not gain a
 > particle-kind switch or VFX production dependency. See the
-> [VFX Wave 3 handoff](../../docs/vfx-particle-runtime-design.md).
+> [VFX Wave 3 handoff](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/vfx-particle-runtime-design.md).
 
 Dynamic consumers use the same boundary explicitly:
 

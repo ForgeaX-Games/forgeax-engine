@@ -234,6 +234,13 @@ export default defineConfig({
               },
             }),
             instances: [{ browser: 'chromium' }],
+            // Chromium's lavapipe WebGPU device is shared by browser workers.
+            // A renderer teardown in one file can destroy that device for live
+            // sibling pages, closing Vitest's transport and failing unrelated
+            // tests. Two workers bound GPU concurrency without serializing the
+            // whole suite; this is cheaper than restarting the full browser
+            // suite after an unbounded-worker device-loss cascade.
+            maxWorkers: 2,
             headless: !!process.env.CI,
           },
         },

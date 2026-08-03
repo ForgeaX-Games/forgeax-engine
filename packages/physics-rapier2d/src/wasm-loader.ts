@@ -1,8 +1,7 @@
 // @forgeax/engine-physics-rapier2d — WASM loader for Rapier 2D compat variant.
 //
 // Dynamic import of @dimforge/rapier2d-compat (plan-strategy D-4: compat variant,
-// zero Vite configuration). SIMD detection via WebAssembly.validate() with
-// result caching (research Finding 7).
+// zero Vite configuration).
 
 import type { PhysicsErrorCode } from '@forgeax/engine-types';
 import { PhysicsError } from '@forgeax/engine-types';
@@ -14,34 +13,6 @@ import { PhysicsError } from '@forgeax/engine-types';
  */
 // biome-ignore lint/suspicious/noExplicitAny: Rapier compat namespace type
 export type Rapier2DModule = any;
-
-const SIMD_TEST_MODULE = new Uint8Array([
-  0x00,
-  0x61,
-  0x73,
-  0x6d, // WASM magic
-  0x01,
-  0x00,
-  0x00,
-  0x00, // version 1
-]);
-
-let simdCached: boolean | null = null;
-
-/**
- * Synchronously detect WebAssembly SIMD support. Cached.
- *
- * @returns true if the runtime supports WASM SIMD instructions.
- */
-export function detectSimd2D(): boolean {
-  if (simdCached !== null) return simdCached;
-  try {
-    simdCached = WebAssembly.validate(SIMD_TEST_MODULE);
-  } catch {
-    simdCached = false;
-  }
-  return simdCached;
-}
 
 let rapierInstance: Rapier2DModule | null = null;
 let loadingPromise: Promise<Rapier2DModule | PhysicsError> | null = null;

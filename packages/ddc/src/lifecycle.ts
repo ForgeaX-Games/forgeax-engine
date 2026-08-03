@@ -111,6 +111,7 @@ export class DdcLifecycle {
       guid,
       desiredKey,
       active: lease,
+      ...(previous?.currentKey === undefined ? {} : { currentKey: previous.currentKey }),
       ...(supersededAttempts.length === 0 ? {} : { supersededAttempts }),
       ...(lastKnownGoodKey === undefined ? {} : { lastKnownGoodKey }),
     });
@@ -172,6 +173,7 @@ export class DdcLifecycle {
     await this.write({
       guid: lease.guid,
       desiredKey: lease.desiredKey,
+      ...(current.currentKey === undefined ? {} : { currentKey: current.currentKey }),
       ...(current.lastKnownGoodKey === undefined
         ? {}
         : { lastKnownGoodKey: current.lastKnownGoodKey }),

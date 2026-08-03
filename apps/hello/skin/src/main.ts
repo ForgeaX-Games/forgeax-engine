@@ -31,11 +31,15 @@ import { Update } from '@forgeax/engine-ecs';
 // smoke for the full skin path.
 
 import { createApp } from '@forgeax/engine-app';
-import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { ENTITY_NULL_RAW, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Skin } from '@forgeax/engine-skinning';
 
-import { AnimationPlayer } from '@forgeax/engine-animation';
+import {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+} from '@forgeax/engine-animation';
 
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 
@@ -161,13 +165,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[skin] root has no SceneInstance');
     return;
   }
-  let playerEnt: EntityHandle | undefined;
+  let hasSkin = false;
+  const animationTargets: EntityHandle[] = [];
   for (let i = 0; i < inst.value.mapping.length; i++) {
     const entRaw = inst.value.mapping[i];
-    if (entRaw === undefined || entRaw === 0) continue;
+    if (entRaw === undefined || entRaw === ENTITY_NULL_RAW) continue;
     const ent = entRaw as EntityHandle;
-    if (!world.get(ent, Skin).ok) continue;
-    world.addComponent(ent, {
+    if (world.get(ent, AnimationTargetId).ok) animationTargets.push(ent);
+    if (world.get(ent, Skin).ok) hasSkin = true;
+  }
+  if (!hasSkin) {
+    console.error('[skin] no Skin entity in instantiated scene');
+    return;
+  }
+  world.addComponent(root, {
       component: AnimationPlayer,
       data: {
         // Variable N-slot init: all four parallel columns are written
@@ -180,12 +191,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         weights: [1],
         speeds: [1],
       },
-    });
-    playerEnt = ent;
-    break;
-  }
-  if (playerEnt === undefined) {
-    console.error('[skin] no Skin entity in instantiated scene');
+  });
+  const playerEnt = root as EntityHandle;
+  const bound = bindAnimationTargets(world, playerEnt, animationTargets);
+  if (!bound.ok) {
+    console.error('[skin] bindAnimationTargets failed:', bound.error.code, bound.error.detail);
     return;
   }
 

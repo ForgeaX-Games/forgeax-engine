@@ -45,6 +45,7 @@ import {
   EntityIndexOverflowError,
   FixedArrayOverflowError,
   FixedSizeMismatchError,
+  ManagedBufferOutOfBoundsError,
   RemoveEssentialComponentError,
   StaleEntityError,
 } from './errors';
@@ -786,6 +787,64 @@ export class WorldComponentAccess {
     if (slotId === 0) return ok(0);
     const liveBytes = this.bufferPool.view(slotId);
     return ok(Math.floor(liveBytes.byteLength / elementBytes));
+  }
+
+  reserveArrayCapacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
+    entity: EntityHandle,
+    component: Component<string, S>,
+    fieldName: K,
+    minimum: number,
+  ): Result<void, EcsError> {
+    const record = this.lookupAlive(entity, 'reserveArrayCapacity', component.name);
+    if (!record.ok) return record;
+    const rec = record.value;
+    const arch = this.graph.archetypes[rec.archetypeId];
+    if (!arch) {
+      return err(
+        new StaleEntityError(entity as number, entityIndex(entity), entityGeneration(entity), {
+          operation: 'reserveArrayCapacity',
+          component: component.name,
+          expectedGeneration: entityGeneration(entity),
+          actualGeneration: rec.generation,
+        }),
+      );
+    }
+    const fieldCols = arch.columns.get(component.id);
+    if (!fieldCols) return err(new ComponentNotPresentError(entity as number, component.name));
+    const fieldNameStr = fieldName as string;
+    const col = fieldCols.get(fieldNameStr);
+    if (!col) return err(new ComponentNotPresentError(entity as number, component.name));
+    const arrayMeta = component.fields[fieldNameStr]?.arrayMeta;
+    if (arrayMeta === undefined) {
+      return err(new ComponentNotPresentError(entity as number, component.name));
+    }
+    if (arrayMeta.length !== undefined) {
+      if (minimum <= arrayMeta.length) return ok(undefined);
+      return err(
+        new FixedArrayOverflowError(fieldNameStr, arrayMeta.length, minimum, arrayMeta.elementType),
+      );
+    }
+    const meta = TYPE_METADATA[arrayMeta.elementType];
+    if (!meta?.byteSize) {
+      return err(new ComponentNotPresentError(entity as number, component.name));
+    }
+    const maximum = Math.floor(262_144 / meta.byteSize);
+    if (!Number.isSafeInteger(minimum) || minimum < 0 || minimum > maximum) {
+      return err(new ManagedBufferOutOfBoundsError(minimum, maximum));
+    }
+
+    const byteLength = minimum * meta.byteSize;
+    const slotId = col.view[rec.row] as number;
+    if (slotId === 0) {
+      if (minimum === 0) return ok(undefined);
+      const allocated = this.bufferPool.alloc(byteLength);
+      if (!allocated.ok) return allocated;
+      col.view[rec.row] = allocated.value.id;
+      return ok(undefined);
+    }
+    if (this.bufferPool.view(slotId).byteLength >= byteLength) return ok(undefined);
+    const grown = this.bufferPool.grow(slotId, byteLength);
+    return grown.ok ? ok(undefined) : grown;
   }
 
   /**

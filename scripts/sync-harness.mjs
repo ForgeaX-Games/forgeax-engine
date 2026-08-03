@@ -28,6 +28,17 @@ const root = resolve(__dirname, '..');
 const DIR = resolve(root, '.forgeax-harness');
 const REPO = 'https://github.com/ForgeaX-Games/forgeax-engine-harness.git';
 
+function resolveToken() {
+  const configured =
+    process.env.FORGEAX_HARNESS_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (configured) return configured;
+
+  // Local developers commonly authenticate through gh instead of exporting a
+  // token. Keep that path optional so public/offline installs remain usable.
+  const gh = spawnSync('gh', ['auth', 'token'], { encoding: 'utf8' });
+  return gh.status === 0 ? gh.stdout.trim() || undefined : undefined;
+}
+
 if (existsSync(resolve(root, '.forgeax-public-distribution'))) {
   process.stdout.write('[harness:sync] public distribution — skipped\n');
   process.exit(0);
@@ -38,8 +49,25 @@ if (process.env.FORGEAX_SKIP_HARNESS_SYNC) {
   process.exit(0);
 }
 
+const token = resolveToken();
+const sparseDocs = process.env.FORGEAX_HARNESS_SPARSE_DOCS === '1';
+
 function git(args, opts = {}) {
-  return spawnSync('git', args, { encoding: 'utf8', ...opts });
+  // Git 2.34 on the self-hosted runner does not honor GIT_CONFIG_COUNT for
+  // extra headers; scope the token to each Git invocation instead.
+  const authArgs = token
+    ? [
+        '-c',
+        `http.https://github.com/.extraheader=AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+        ...args,
+      ]
+    : args;
+  const { env: extraEnv, ...spawnOpts } = opts;
+  return spawnSync('git', authArgs, {
+    ...spawnOpts,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...extraEnv },
+  });
 }
 
 function warnExit0(msg) {
@@ -53,12 +81,35 @@ function failLoud(msg) {
 }
 
 if (!existsSync(resolve(DIR, '.git'))) {
-  // First run (or a fresh checkout): clone. Offline → graceful skip.
-  const r = git(['clone', '--quiet', REPO, DIR], { cwd: root });
+  // First run (or a fresh checkout): only the current main tree is needed.
+  // Avoid transferring the harness history and tags: CI materializes docs,
+  // while later syncs already advance the shallow clone with a normal fetch.
+  // Offline → graceful skip.
+  const cloneArgs = [
+    'clone',
+    '--quiet',
+    '--depth=1',
+    '--no-tags',
+    '--single-branch',
+    ...(sparseDocs ? ['--filter=blob:none', '--sparse'] : []),
+    REPO,
+    DIR,
+  ];
+  const r = git(cloneArgs, {
+    cwd: root,
+  });
   if (r.status !== 0) {
     warnExit0(
       `clone failed (offline?); .forgeax-harness not materialised:\n${(r.stderr || '').trim()}`,
     );
+  }
+  if (sparseDocs) {
+    const sparse = git(['sparse-checkout', 'set', 'docs'], { cwd: DIR });
+    if (sparse.status !== 0) {
+      warnExit0(
+        `sparse docs checkout failed; .forgeax-harness not fully materialised:\n${(sparse.stderr || '').trim()}`,
+      );
+    }
   }
   process.stdout.write('[harness:sync] cloned forgeax-engine-harness\n');
   process.exit(0);

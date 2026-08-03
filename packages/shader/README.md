@@ -77,4 +77,4 @@ declared vertex coordinate input per slot.
 
 - [`@forgeax/engine-types` MaterialAsset](../types/README.md#materialasset-route)
 - [`@forgeax/engine-pack` cook contract](../pack/README.md#materialasset-cook-contract)
-- [`MaterialAsset migration`](../../docs/material-asset-migration.md)
+- [`MaterialAsset migration`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/material-asset-migration.md)

@@ -48,7 +48,8 @@ export type GltfErrorCode =
   | 'gltf-morph-unsupported'
   | 'gltf-skin-joint-name-missing'
   | 'gltf-image-extract-failed'
-  | 'gltf-skin-attr-asymmetric';
+  | 'gltf-skin-attr-asymmetric'
+  | 'gltf-animation-target-invalid';
 
 // === Per-code detail shapes (15 interfaces, 1 discriminated union) ===
 
@@ -123,6 +124,7 @@ export interface GltfMorphUnsupportedDetail {
 
 /** `gltf-skin-joint-name-missing` payload: joint node has no name. */
 export interface GltfSkinJointNameMissingDetail {
+  readonly reason: 'name-missing' | 'hierarchy-cycle';
   readonly skinIndex: number;
   readonly jointPathIndex: number;
   readonly nodeIndex: number;
@@ -151,6 +153,19 @@ export interface GltfSkinAttrAsymmetricDetail {
   readonly hasWeights: boolean;
 }
 
+export interface GltfAnimationTargetInvalidDetail {
+  readonly reason:
+    | 'name-missing'
+    | 'path-invalid'
+    | 'path-duplicate'
+    | 'path-not-found'
+    | 'hierarchy-cycle'
+    | 'id-collision';
+  readonly animationIndex: number;
+  readonly channelIndex: number;
+  readonly nodeIndex: number;
+}
+
 /** Discriminated detail family unifying all 15 GltfError variants. */
 export type GltfErrorDetail =
   | GltfMalformedHeaderDetail
@@ -167,7 +182,8 @@ export type GltfErrorDetail =
   | GltfMorphUnsupportedDetail
   | GltfSkinJointNameMissingDetail
   | GltfImageExtractFailedDetail
-  | GltfSkinAttrAsymmetricDetail;
+  | GltfSkinAttrAsymmetricDetail
+  | GltfAnimationTargetInvalidDetail;
 
 // === GltfError discriminated union (15 variants) ===
 
@@ -261,6 +277,12 @@ export type GltfError =
       readonly expected: string;
       readonly hint: string;
       readonly detail: GltfSkinAttrAsymmetricDetail;
+    }
+  | {
+      readonly code: 'gltf-animation-target-invalid';
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: GltfAnimationTargetInvalidDetail;
     };
 
 // === GLTF_ERROR_HINTS (Record<GltfErrorCode, string>) ===
@@ -289,11 +311,13 @@ export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = {
   'gltf-morph-unsupported':
     'see OOS-skin-morph-anim; remove morph targets from animation channels in DCC tool',
   'gltf-skin-joint-name-missing':
-    'ensure every joint node in the skin has a non-empty name in the DCC tool',
+    'ensure every joint node has a non-empty name and the node hierarchy is acyclic',
   'gltf-image-extract-failed':
     'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-remote-gltf import <path>',
   'gltf-skin-attr-asymmetric':
     'glTF spec requires JOINTS_0 and WEIGHTS_0 to appear together for each skinned primitive; add the missing attribute or remove the present one in the DCC tool',
+  'gltf-animation-target-invalid':
+    'name every node in the animated hierarchy and ensure each animated full path is unique',
 };
 
 // === GLTF_EXPECTED (Record<GltfErrorCode, string>) ===
@@ -314,11 +338,14 @@ const GLTF_EXPECTED: Readonly<Record<GltfErrorCode, string>> = {
   'gltf-skin-joint-count-exceeded': 'skin.joints.length <= MAX_JOINTS (256)',
   'gltf-animation-cubicspline-unsupported': 'animation sampler interpolation is LINEAR or STEP',
   'gltf-morph-unsupported': 'no animation channel targets morph weights (path !== "weights")',
-  'gltf-skin-joint-name-missing': 'every joint node has a non-empty name',
+  'gltf-skin-joint-name-missing':
+    'every joint node has a non-empty name and belongs to an acyclic hierarchy',
   'gltf-image-extract-failed':
     'image bytes extractable from bufferView / data-URI / external URI without corruption',
   'gltf-skin-attr-asymmetric':
     'mesh primitive declares JOINTS_0 and WEIGHTS_0 symmetrically (both present or both absent)',
+  'gltf-animation-target-invalid':
+    'every animation channel resolves to one uniquely named scene node and stable target ID',
 };
 
 // === DetailFor map + gltfErr factory ===
@@ -339,6 +366,7 @@ interface DetailFor {
   readonly 'gltf-skin-joint-name-missing': GltfSkinJointNameMissingDetail;
   readonly 'gltf-image-extract-failed': GltfImageExtractFailedDetail;
   readonly 'gltf-skin-attr-asymmetric': GltfSkinAttrAsymmetricDetail;
+  readonly 'gltf-animation-target-invalid': GltfAnimationTargetInvalidDetail;
 }
 
 /**
@@ -348,11 +376,14 @@ interface DetailFor {
  * Charter proposition 4 explicit-failure: `expected` + `hint` fields are
  * sourced from the SSOT tables - no producer can omit them.
  */
-export function gltfErr<C extends GltfErrorCode>(code: C, detail: DetailFor[C]): GltfError {
+export function gltfErr<C extends GltfErrorCode>(
+  code: C,
+  detail: DetailFor[C],
+): Extract<GltfError, { readonly code: C }> {
   return {
     code,
     expected: GLTF_EXPECTED[code],
     hint: GLTF_ERROR_HINTS[code],
     detail,
-  } as GltfError;
+  } as Extract<GltfError, { readonly code: C }>;
 }

@@ -71,8 +71,13 @@ test('collectathon browser boot uses the trusted Linux WebGPU capability', () =>
 test('CI preserves main evidence while PR runs may be superseded', () => {
   assert.match(
     workflow,
-    /cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}/,
-    'ci must cancel only superseded pull-request runs',
+    /group:\s*\$\{\{\s*github\.workflow\s*\}\}\s*-\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*&&\s*github\.ref\s*\|\|\s*github\.run_id\s*\}\}/,
+    'ci must share a group only for pull-request runs',
+  );
+  assert.match(
+    workflow,
+    /cancel-in-progress:\s*true/,
+    'ci must cancel the older member of a shared pull-request group',
   );
   for (const [name, source] of [
     ['bench', benchWorkflow],

@@ -29,7 +29,7 @@ adding a new package surface.
 | Vec/Mat/Quat/Color / 从 mat4 读 pose / screenToRay | `forgeax-engine-math` |
 | authored package → cook/catalog → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
 | VFX source / operator cook / Pack v2 GUID load / CPU `ParticleSimulation` / `ParticleEffectPlayer` / `ParticleRenderBatch` | `forgeax-engine-assets` for the shared Pack v2 path, then `packages/vfx/README.md` and `packages/vfx-compiler/README.md` for the headless VFX contract |
-| Visible particle rendering / stock effects / VFX scene attachment | Wave 3 convergence per `docs/vfx-particle-runtime-design.md`; consume the completed generic prepared-graphics seam downstream and keep `engine-vfx` headless |
+| Visible particle rendering / stock effects / VFX scene attachment | Wave 3 convergence per [`vfx-particle-runtime-design.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/vfx-particle-runtime-design.md); consume the completed generic prepared-graphics seam downstream and keep `engine-vfx` headless |
 | inspector (JSON-RPC WS) / kubectl 式 CLI 子命令 | `forgeax-engine-cli` |
 | RigidBody / Collider / PhysicsWorld (rapier 2D/3D) | `forgeax-engine-physics` |
 | AudioSource / AudioListener / bus 拓扑 | `forgeax-engine-audio` |
@@ -50,4 +50,3 @@ API 签名 / error 码 / capability 全表 SSOT 在 `packages/<pkg>/src/` 与 `p
 任何对 AI 用户面的影响（公共 API 重命名、入口参数变化、`*ErrorCode` 增删、pack schema 变化、内置组件/系统默认行为变化、新增 `@forgeax/engine-*` 包、反复踩中的坑）必须在 finalize 前同步对应 skill。plan 阶段加 milestone `M-N: 同步 forgeax-engine-<cluster> skill`,与代码同 PR。direct-edit 也算。
 
 基线：commit [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03, #297) 一次性产出 11 skill;累积偏离显著时再统一 bump。
-

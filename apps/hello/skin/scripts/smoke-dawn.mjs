@@ -219,10 +219,15 @@ const mockCanvas = {
 
 // --- 3. Engine + Fox.glb pipeline -----------------------------------------------
 
-const { World } = await import('@forgeax/engine-ecs');
+const { ENTITY_NULL_RAW, World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { SceneInstance } = await import('@forgeax/engine-render');
-const { AnimationPlayer, registerAdvanceAnimationPlayer } = await import('@forgeax/engine-animation');
+const {
+  AnimationPlayer,
+  AnimationTargetId,
+  bindAnimationTargets,
+  registerAdvanceAnimationPlayer,
+} = await import('@forgeax/engine-animation');
 const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
 const { ChildOf, Transform } = await import('@forgeax/engine-scene');
 const { Skin } = await import('@forgeax/engine-skinning');
@@ -312,7 +317,7 @@ function recToClip(rec) {
         ? ch.property
         : 'rotation';
     channels.push({
-      targetPath: ch.targetPath,
+      targetId: ch.targetId,
       property,
       sampler: {
         input: ch.sampler.input,
@@ -436,13 +441,14 @@ for (const { x, clip, label } of lineup) {
     process.exit(1);
   }
   let skinned;
+  const animationTargets = [];
   for (let i = 0; i < inst.value.mapping.length; i++) {
     const e = inst.value.mapping[i];
-    if (e === 0) continue;
+    if (e === ENTITY_NULL_RAW) continue;
+    if (world.get(e, AnimationTargetId).ok) animationTargets.push(e);
     const skinRes = world.get(e, Skin);
-    if (skinRes.ok) {
+    if (skinRes.ok && skinned === undefined) {
       skinned = e;
-      break;
     }
   }
   if (skinned === undefined) {
@@ -454,14 +460,22 @@ for (const { x, clip, label } of lineup) {
   // speeds no longer defaults to [1,1,1,1] per D-6). The AC-03 distinct-clips
   // assertion below still holds because each instance writes a different handle
   // into clips[0].
-  world.set(skinned, AnimationPlayer, {
+  world.addComponent(root, {
+    component: AnimationPlayer,
+    data: {
     clips: [clip],
     times: new Float32Array([0]),
     weights: new Float32Array([1]),
     speeds: new Float32Array([1]),
     paused: false,
     looping: true,
+    },
   });
+  const bound = bindAnimationTargets(world, root, animationTargets);
+  if (!bound.ok) {
+    console.error(`[smoke] FAIL - bindAnimationTargets ${label}:`, bound.error.code);
+    process.exit(1);
+  }
   // tweak-20260611 M7: capture per-instance Skin entity + clip handle so the
   // post-loop AC-03 + AC-09 assertions can verify multi-instance isolation.
   perInstance.push({ label, root, skinned, clip });

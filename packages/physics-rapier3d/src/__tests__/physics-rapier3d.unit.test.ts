@@ -26,7 +26,7 @@ import {
 import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { createRapier3DPhysicsWorld, registerPhysicsSystems } from '../rapier-physics-world-3d';
-import { detectSimd3D, loadRapier3D } from '../wasm-loader';
+import { loadRapier3D } from '../wasm-loader';
 
 {
   // ─── from collision-event.test.ts ───
@@ -912,17 +912,6 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         const pos = body.translation();
         expect(pos.y).toBeLessThan(10);
-      });
-
-      it('detectSimd3D should return a boolean', () => {
-        const result = detectSimd3D();
-        expect(typeof result).toBe('boolean');
-      });
-
-      it('detectSimd3D should return consistent results on repeated calls', () => {
-        const first = detectSimd3D();
-        const second = detectSimd3D();
-        expect(first).toBe(second);
       });
     });
   });

@@ -10,4 +10,4 @@ export {
 } from './rapier-physics-world-3d';
 export { fromRapierQuat, fromRapierVec3, toRapierQuat, toRapierVec3 } from './vector-bridge';
 export type { Rapier3DModule } from './wasm-loader';
-export { detectSimd3D, loadRapier3D } from './wasm-loader';
+export { loadRapier3D } from './wasm-loader';

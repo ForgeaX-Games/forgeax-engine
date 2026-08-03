@@ -553,25 +553,7 @@ export function slerp(out: Quat, a: QuatLike, b: QuatLike, t: number): Quat {
 
   // Endpoint coincidence (|dot| → 1): nlerp fall-back avoids sin(0) division by zero
   if (cosTheta > 1 - EPS_SLERP_DOT_LIMIT) {
-    out[0] = ax + t * (bx - ax);
-    out[1] = ay + t * (by - ay);
-    out[2] = az + t * (bz - az);
-    out[3] = aw + t * (bw - aw);
-    // normalize
-    const lenSq =
-      (out[0] as number) * (out[0] as number) +
-      (out[1] as number) * (out[1] as number) +
-      (out[2] as number) * (out[2] as number) +
-      (out[3] as number) * (out[3] as number);
-    if (lenSq < EPS_NORMALIZE) {
-      return identity(out);
-    }
-    const inv = 1 / Math.sqrt(lenSq);
-    out[0] = (out[0] as number) * inv;
-    out[1] = (out[1] as number) * inv;
-    out[2] = (out[2] as number) * inv;
-    out[3] = (out[3] as number) * inv;
-    return out;
+    return nlerp(out, a, b, t);
   }
 
   const theta = Math.acos(cosTheta);

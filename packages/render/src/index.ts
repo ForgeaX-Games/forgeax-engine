@@ -31,13 +31,6 @@ export * from './errors/recover';
  * construction details remain under the internal entry.
  */
 export * from './features';
-/** Explicit prepared-graphics aliases keep the five-kind surface indexable. */
-export type {
-  PreparedKind,
-  RenderFeatureDrawRecord,
-  RenderFeatureGraphicsPassDescriptor,
-  RenderFeaturePreparedRef,
-} from './features/prepared-graphics';
 export * from './fullscreen-post-process-pass';
 export { Materials } from './materials';
 export * from './pipeline-errors';

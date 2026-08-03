@@ -4,6 +4,7 @@
     "apps/bevy/animate-shader/src/animate-shader.pack.json",
     "apps/bevy/parallax-mapping/src/parallax.pack.json",
     "apps/bevy/shader-defs/src/shader-defs.pack.json",
+    "apps/bevy/shader-material-2d/src/shader-material-2d.pack.json",
     "apps/bevy/shader-material/src/shader-material.pack.json",
     "apps/hello-multi-uv/src/multi-uv-demo.pack.json",
     "apps/hello/custom-shader/src/pulse-material.shader.pack.json",

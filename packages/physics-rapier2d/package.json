@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Rapier 2D WASM backend for forgeax-engine — WASM loader with SIMD detection, three-phase tick pipeline (syncBackend / stepSimulation / writeback), transform sync, collision event translation, raycast, teleport, despawn cleanup.",
+  "description": "Rapier 2D WASM backend for forgeax-engine — compat WASM loader, three-phase tick pipeline (syncBackend / stepSimulation / writeback), transform sync, collision event translation, raycast, teleport, despawn cleanup.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

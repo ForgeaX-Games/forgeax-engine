@@ -7,7 +7,10 @@
 
 import { describe, expect, it } from 'vitest';
 import type { AnimationClipPod } from '@forgeax/engine-types';
-import { parseAnimationClips } from '../src/parse-animation-clip.js';
+import {
+  parseAnimationClips,
+  resolveAnimationTargetIds,
+} from '../src/parse-animation-clip.js';
 import type { FbxRawAnimDoc } from '../src/parse-animation-clip.js';
 
 const MOCK_ANIM_RAW: FbxRawAnimDoc = {
@@ -40,7 +43,7 @@ describe('parseAnimationClips', () => {
 
     const ch = pod.channels[0]!;
     expect(ch.property).toBe('translation');
-    expect(ch.targetPath).toEqual(['root', 'hip']);
+    expect(ch.targetId).toBe('ab65f0305fc1868ca96d3361a86bd9ba');
 
     // 30 fps resample: 0..1.0 at 1/30 increments = 31 frames
     const sampler = ch.sampler;
@@ -130,5 +133,39 @@ describe('parseAnimationClips', () => {
     const pods = parseAnimationClips(MOCK_ANIM_RAW);
     expect(pods.length).toBe(1);
     expect(pods[0]!.channels[0]!.sampler.input.length).toBe(31);
+  });
+
+  it.each(['', '/root', 'root/', 'root//hip'])(
+    'rejects an invalid targetNode path: %s',
+    (targetNode) => {
+      const result = resolveAnimationTargetIds(
+        [{ name: 'root', children: [1] }, { name: 'hip', children: [] }],
+        [{ ...MOCK_ANIM_RAW.clips![0]!, channels: [{ ...MOCK_ANIM_RAW.clips![0]!.channels[0]!, targetNode }] }],
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('fbx-animation-target-invalid');
+        expect(result.error.detail.reason).toBe('path-invalid');
+      }
+    },
+  );
+
+  it('rejects cyclic node ancestry instead of looping', () => {
+    const result = resolveAnimationTargetIds(
+      [
+        { name: 'A', children: [1] },
+        { name: 'B', children: [0] },
+      ],
+      MOCK_ANIM_RAW.clips ?? [],
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('fbx-animation-target-invalid');
+      expect(result.error.detail).toEqual({
+        reason: 'hierarchy-cycle',
+        nodeIndex: 0,
+      });
+    }
   });
 });

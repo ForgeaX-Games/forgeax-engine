@@ -112,6 +112,16 @@ export interface SceneMembersSpawn {
   readonly mountEntitiesNeedingRootParent: EntityHandle[];
   /** Every mount carrier spawned by this scene, including explicitly parented carriers. */
   readonly mountEntities: EntityHandle[];
+  /**
+   * The child anchor and mapping for each mount. Flat scene opening has no
+   * outer SceneInstance state to own parent-namespace mount overrides, so it
+   * records those overrides on this child anchor after the shared spawn pass.
+   */
+  readonly mountInstances: readonly {
+    readonly mount: SceneInstanceMount;
+    readonly root: EntityHandle;
+    readonly mapping: Uint32Array;
+  }[];
   /** `entities.length + mounts + Σ memberCount`, captured at instantiate-time. */
   readonly totalSlots: number;
 }
@@ -397,6 +407,11 @@ export function worldSpawnSceneMembers(
   // wire ChildOf once the slot is live. Without this the edge was silently
   // dropped, and the mount carrier stayed unreachable from its owned parent.
   const mountEntitiesNeedingDeferredParent: Array<[EntityHandle, number]> = [];
+  const mountInstances: Array<{
+    readonly mount: SceneInstanceMount;
+    readonly root: EntityHandle;
+    readonly mapping: Uint32Array;
+  }> = [];
 
   // 1. Recurse into mounts[] FIRST so the mount-window slots
   //    (`mount.localId` + `[memberFirst, memberFirst+memberCount)`) are
@@ -437,6 +452,7 @@ export function worldSpawnSceneMembers(
     const childInstRes = world.get(childRes.value, sceneInstanceToken);
     if (!childInstRes.ok) return childInstRes;
     const childMapping = (childInstRes.value as unknown as { mapping: Uint32Array }).mapping;
+    mountInstances.push({ mount, root: childRes.value, mapping: childMapping });
     if (childMapping.length !== mount.memberCount) {
       return err({
         code: 'pack-mount-count-mismatch' as PackErrorCode,
@@ -550,6 +566,7 @@ export function worldSpawnSceneMembers(
     rootEntities,
     mountEntitiesNeedingRootParent,
     mountEntities,
+    mountInstances,
     totalSlots,
   });
 }
@@ -738,33 +755,40 @@ export function worldInstantiateSceneAssetFlat(
 ): Result<{ roots: EntityHandle[]; mountEntities: EntityHandle[] }, EcsError> {
   const membersRes = worldSpawnSceneMembers(world, handle, asset, stack, diagnostics);
   if (!membersRes.ok) return membersRes;
-  const { mapping, rootEntities, mountEntitiesNeedingRootParent, mountEntities } = membersRes.value;
+  const { rootEntities, mountEntitiesNeedingRootParent, mountEntities, mountInstances } =
+    membersRes.value;
   const childOfToken = resolveComponent('ChildOf');
-  const ownMounts = asset.mounts ?? [];
 
-  // Apply mount-time overrides through to the live member entity columns so a
-  // hand-authored pack's `mounts[].overrides` still take visual effect. There
-  // is no parent SceneInstanceState to record them in (flat = no anchor for
-  // THIS scene); the nested prefab keeps its OWN anchor for round-trip.
-  for (const mount of ownMounts) {
+  // Apply parent mount overrides to the live columns and record them on the
+  // nested child anchor. Flat mode has no outer SceneInstance state; without
+  // this hand-authored mounts[].overrides affect the live value but disappear
+  // from the child state, so Gateway re-open cannot discover or revert them.
+  for (const { mount, root, mapping: childMapping } of mountInstances) {
+    const childStateRes = worldGetSceneInstanceState(world, root);
+    if (!childStateRes.ok) return childStateRes;
     for (const ov of mount.overrides ?? []) {
-      // feat-20260713 M2 / w8: add-or-patch apply in the flat path too (same
-      // shared helper as the anchor loop). Flat mode records no
-      // SceneInstanceState, so overrides only need to take live effect.
-      const memberEntityRaw = mapping[ov.localId as unknown as number];
-      if (memberEntityRaw !== undefined && memberEntityRaw !== ENTITY_NULL_RAW) {
-        const applyRes = worldApplyMountOverride(
-          world,
-          memberEntityRaw as unknown as EntityHandle,
-          ov,
-        );
-        if (!applyRes.ok) {
-          return applyRes as Result<
-            { roots: EntityHandle[]; mountEntities: EntityHandle[] },
-            EcsError
-          >;
-        }
+      const childLocalId =
+        (ov.localId as unknown as number) - (mount.memberFirst as unknown as number);
+      const memberEntityRaw = childMapping[childLocalId];
+      if (memberEntityRaw === undefined || memberEntityRaw === ENTITY_NULL_RAW) continue;
+      const memberEntity = memberEntityRaw as unknown as EntityHandle;
+      const applyRes = worldApplyMountOverride(world, memberEntity, ov);
+      if (!applyRes.ok) {
+        return applyRes as Result<
+          { roots: EntityHandle[]; mountEntities: EntityHandle[] },
+          EcsError
+        >;
       }
+      let fieldMap = childStateRes.value.overrides.get(childLocalId as LocalEntityId);
+      if (fieldMap === undefined) {
+        fieldMap = new Map();
+        childStateRes.value.overrides.set(childLocalId as LocalEntityId, fieldMap);
+      }
+      fieldMap.set(mountOverrideStateKey(ov), {
+        comp: ov.comp,
+        ...(ov.field === undefined ? {} : { field: ov.field }),
+        value: ov.value,
+      });
     }
   }
 
