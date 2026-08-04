@@ -8,6 +8,9 @@ import {
   setTransparentSortConfig,
   TRANSPARENT_SORT_MODE_DISTANCE,
   TRANSPARENT_SORT_MODE_LAYER_Z,
+  SPRITE_PLAYBACK_MODE_LOOP,
+  SpriteAnimation,
+  SpriteRegionOverride,
 } from '@forgeax/engine-render/authoring';
 import { quat, type Handle, type MaterialAsset, type MeshAsset } from '@forgeax/engine-runtime';
 import { HANDLE_QUAD, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
@@ -44,12 +47,18 @@ import { installGameplayChangeDetection, type GameplayChangeDetectionHandle } fr
 import { createWorldScoreText, type WorldScoreTextHandle } from './src/world-score-text';
 import { installTargetHealth, TargetHealth, type TargetHealthHandle } from './src/target-health';
 import { installTargetDisabling, type TargetDisablingHandle } from './src/target-disabling';
+import { installVisibilityLoop, type VisibilityLoopHandle } from './src/visibility-loop';
 import { installDepthOfField, DEPTH_OF_FIELD_ID, type DepthOfFieldHandle } from './src/depth-of-field';
 import { installChromaticAberration, CHROMATIC_ABERRATION_ID, type ChromaticAberrationHandle } from './src/chromatic-aberration';
 import { createCustomProjectileMesh, resetCustomProjectileMesh, toggleCustomProjectileMesh, type CustomProjectileMesh } from './src/custom-projectile-mesh';
 import { createMeshHandleSwap, resetMeshHandleSwap, toggleMeshHandleSwap, type MeshHandleSwap } from './src/mesh-handle-swap';
 import { createFbxMeshSwap, resetFbxMeshSwap, toggleFbxMeshSwap, type FbxMeshSwap } from './src/fbx-mesh-swap';
-import { createGlbMeshSwap, resetGlbMeshSwap, toggleGlbMeshSwap, type GlbMeshSwap } from './src/glb-mesh-swap';
+import { createGltfMeshSwap, resetGltfMeshSwap, setGltfMeshSwapVariant, type GltfMeshSwap } from './src/gltf-mesh-swap';
+import { createJpegTextureSwap, jpegTextureSnapshot, resetJpegTextureSwap, toggleJpegTextureSwap, type JpegTextureSwap } from './src/jpeg-texture-swap';
+import { createVideoTexturePanel, type VideoTexturePanel } from './src/video-texture-panel';
+import { targetProfileLoader } from './src/target-profile-loader';
+import { createTargetProfileLoop, resetTargetProfile, targetProfilePoints, targetProfileSnapshot, toggleTargetProfile, type TargetProfileLoop } from './src/target-profile-loop';
+import { createSpriteAtlasLoop, spriteAtlasSnapshot, type SpriteAtlasLoop } from './src/sprite-atlas-loop';
 import { createFbxSkinnedTarget, type FbxSkinnedTarget } from './src/fbx-skinned-target';
 import { createFreeCameraState, resetFreeCamera, stepFreeCamera } from './src/free-camera';
 import { installMultiWorldOverlay, type MultiWorldOverlay } from './src/multi-world-overlay';
@@ -154,9 +163,26 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const origMaterialsOf = new Map<EntityHandle, readonly MatHandle[]>(flashables.map((f) => [f.e, f.materials] as [EntityHandle, readonly MatHandle[]]));
   const targetHealth: TargetHealthHandle = installTargetHealth(world, flashables.map((target) => target.e));
   const targetDisabling: TargetDisablingHandle = installTargetDisabling(world, flashables.map((target) => target.e));
+  const visibilityLoop: VisibilityLoopHandle = installVisibilityLoop(world, flashables[0]?.e);
   const meshHandleSwap: MeshHandleSwap | undefined = createMeshHandleSwap(world, flashables[0]?.e);
   const fbxMeshSwap: FbxMeshSwap | undefined = await createFbxMeshSwap(world, ctx?.assets, flashables[0]?.e);
-  const glbMeshSwap: GlbMeshSwap | undefined = await createGlbMeshSwap(world, ctx?.assets, flashables[0]?.e);
+  const gltfMeshSwap: GltfMeshSwap | undefined = await createGltfMeshSwap(world, ctx?.assets, flashables[0]?.e);
+  const jpegTextureSwap: JpegTextureSwap | undefined = await createJpegTextureSwap(world, ctx?.assets, flashables[0]?.e);
+  const videoTexturePanel: VideoTexturePanel | undefined = await createVideoTexturePanel(world, ctx?.assets, flashables[0]?.e);
+  registerCleanup?.(() => videoTexturePanel?.dispose());
+  ctx?.assets?.loaders.register(targetProfileLoader());
+  const targetProfile: TargetProfileLoop | undefined = await createTargetProfileLoop(world, ctx?.assets, flashables[0]?.e);
+  const toggleProfile = (): ReturnType<typeof targetProfileSnapshot> => {
+    if (targetProfile === undefined) return targetProfileSnapshot(undefined);
+    if (targetProfile.active === 'original') {
+      resetMeshHandleSwap(world, meshHandleSwap);
+      resetFbxMeshSwap(world, fbxMeshSwap);
+      resetGltfMeshSwap(world, gltfMeshSwap);
+      resetJpegTextureSwap(world, jpegTextureSwap);
+    }
+    toggleTargetProfile(world, targetProfile);
+    return targetProfileSnapshot(targetProfile);
+  };
   const fbxSkinnedTarget: FbxSkinnedTarget | undefined = await createFbxSkinnedTarget({ world, assets: ctx?.assets });
   registerCleanup?.(() => fbxSkinnedTarget?.dispose());
   const damageTarget = (entity: EntityHandle, points: number): void => {
@@ -214,6 +240,23 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // the shared DejaVu font root so this path is exercised by the template.
   const worldScoreText: WorldScoreTextHandle | undefined = await createWorldScoreText(world, ctx?.assets);
   registerCleanup?.(() => worldScoreText?.dispose());
+  const triggerScore = (): { readonly points: number | null } => {
+    const target = flashables[0];
+    const basePoints = target === undefined ? undefined : scoringPoints(target.e);
+    const points = basePoints === undefined ? undefined : targetProfilePoints(targetProfile, basePoints);
+    if (target === undefined || points === undefined) return { points: null };
+    changeDetection.recordHit(target.e, points);
+    damageTarget(target.e, points);
+    const transform = world.get(target.e, Transform);
+    if (transform.ok) {
+      worldScoreText?.show('+' + points, [
+        transform.value.pos[0] ?? 0,
+        (transform.value.pos[1] ?? 0) + 1.7,
+        transform.value.pos[2] ?? 0,
+      ]);
+    }
+    return { points };
+  };
 
   // ── one warm accent point light (learn-render §2 multiple-lights; the scene
   //    already has the directional Sun + IBL skylight — keep ≤1 of each). ───────
@@ -476,6 +519,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     { action: 'meshHandle', bindings: [KEY('h'), KEY('H'), PAD_BUTTON(2)] },
     { action: 'fbxMesh', bindings: [KEY('j'), KEY('J')] },
     { action: 'glbMesh', bindings: [KEY('k'), KEY('K')] },
+    { action: 'gltfMesh', bindings: [KEY('t'), KEY('T')] },
+    { action: 'jpegTexture', bindings: [KEY('l'), KEY('L')] },
+    { action: 'videoTexture', bindings: [KEY('m'), KEY('M')] },
+    { action: 'targetProfile', bindings: [KEY('p'), KEY('P')] },
+    { action: 'spriteAtlas', bindings: [KEY('n'), KEY('N')] },
+    { action: 'fontSource', bindings: [KEY('y'), KEY('Y')] },
+    { action: 'visibility', bindings: [KEY('b'), KEY('B')] },
     { action: 'freeUp', bindings: [KEY('e')] },
     { action: 'freeDown', bindings: [KEY('q')] },
     { action: 'freeRun', bindings: [KEY('Shift')] },
@@ -533,7 +583,15 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // shape stay explicit rather than silently sharing an implementation detail.
   const customProjectile: CustomProjectileMesh | undefined = ctx?.renderer === undefined
     ? undefined
-    : await createCustomProjectileMesh(world, ctx.renderer, ctx.assets);
+    : await createCustomProjectileMesh(world, ctx.renderer);
+  const spriteAtlasLoop: SpriteAtlasLoop | undefined = customProjectile === undefined
+    ? undefined
+    : await createSpriteAtlasLoop(
+      world,
+      ctx?.assets,
+      customProjectile.spriteMaterialHandle,
+      customProjectile.spriteLitMaterialHandle,
+    );
   const projectileMesh = customProjectile?.meshHandle ?? bulletMesh;
   const projectileMaterial = customProjectile?.materialHandle ?? bulletMat;
   type ProjectileVisual = 'mesh' | 'sprite' | 'sprite-lit';
@@ -555,12 +613,15 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const flashUntil = new Map<EntityHandle, number>();    // entity → remaining flash seconds
   const materialsForCurrentMesh = (entity: EntityHandle, flashing: boolean): readonly MatHandle[] => {
     const original = origMaterialsOf.get(entity) ?? [];
+    const textured = jpegTextureSwap?.entity === entity && jpegTextureSwap.active === 'jpeg'
+      ? jpegTextureSwap.jpegMaterials
+      : original;
     const replacementHasOneSubmesh =
       (fbxMeshSwap?.entity === entity && fbxMeshSwap.active === 'fbx') ||
       (meshHandleSwap?.entity === entity && meshHandleSwap.active === 'alternate') ||
-      (glbMeshSwap?.entity === entity && glbMeshSwap.active === 'glb');
-    if (replacementHasOneSubmesh) return [flashing ? flashMat : (original[0] ?? (0 as MatHandle))];
-    return flashing ? [flashMat, ...original.slice(1)] : [...original];
+      (gltfMeshSwap?.entity === entity && gltfMeshSwap.active !== 'original');
+    if (replacementHasOneSubmesh) return [flashing ? flashMat : (textured[0] ?? (0 as MatHandle))];
+    return flashing ? [flashMat, ...textured.slice(1)] : [...textured];
   };
   const triggerFlash = (entity?: EntityHandle): void => {
     const target = entity === undefined ? flashables[0]?.e : entity;
@@ -663,7 +724,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   const resetGameplay = () => {
     debugAxes.reset();
-    for (const bullet of bullets) world.despawn(bullet.e);
+    for (const bullet of bullets) {
+      spriteAtlasLoop?.untrack(bullet.e);
+      world.despawn(bullet.e);
+    }
     bullets.length = 0;
     for (const [entity, timer] of flashUntil) {
       if (timer > 0) world.set(entity, MeshRenderer, { materials: [...materialsForCurrentMesh(entity, false)] });
@@ -696,14 +760,18 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     world.set(camera, Camera, { fov: perspectiveFov });
     changeDetection.reset();
     targetDisabling.reset();
+    visibilityLoop.reset();
     targetHealth.reset();
     depthOfField.reset();
     chromaticAberration.reset();
     worldScoreText?.reset();
+    videoTexturePanel?.reset();
     if (customProjectile !== undefined) resetCustomProjectileMesh(customProjectile);
     resetMeshHandleSwap(world, meshHandleSwap);
     resetFbxMeshSwap(world, fbxMeshSwap);
-    resetGlbMeshSwap(world, glbMeshSwap);
+    resetGltfMeshSwap(world, gltfMeshSwap);
+    resetJpegTextureSwap(world, jpegTextureSwap);
+    resetTargetProfile(world, targetProfile);
     fbxSkinnedTarget?.reset();
     settingsState.depthOfField = false;
     appliedDepthOfField = false;
@@ -716,6 +784,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     gameplayAudio?.reset();
     materialElapsedOrigin = world.getResource(Time).elapsed;
     if (animatedMaterial) resetAnimatedMaterial(world, animatedMaterial);
+    spriteAtlasLoop?.reset();
     setProjectileVisual('mesh');
   };
   const gameplayState = installGameplayState({ world, reset: resetGameplay });
@@ -739,8 +808,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
             cameraProjection: cameraData.ok && cameraData.value.projection === 1 ? 'orthographic' : 'perspective',
             targetHealth: targetHealth.snapshot(),
             targetDisabling: targetDisabling.snapshot(),
+            visibility: visibilityLoop.snapshot(ctx.renderer),
+            jpegTexture: jpegTextureSnapshot(jpegTextureSwap),
+            videoTexture: videoTexturePanel?.snapshot() ?? { available: false, active: 'original', swaps: 0, guid: null, name: null, kind: null, url: null },
+            targetProfile: targetProfileSnapshot(targetProfile),
+            spriteAtlas: spriteAtlasSnapshot(spriteAtlasLoop),
             multiWorld: multiWorldOverlay?.snapshot() ?? { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 },
-            worldScoreText: worldScoreText?.snapshot() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0] },
+            worldScoreText: worldScoreText?.snapshot() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0], fontSource: 'legacy-pack', fontGuid: null, toggles: 0 },
             fbxSkinnedTarget: fbxSkinnedTarget?.snapshot() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
           };
         },
@@ -778,6 +852,70 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           fbxSkinnedTarget?.triggerHit();
           return { triggered: true };
         },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.trigger-score',
+        title: 'Trigger score text',
+        description: 'Run one real target-score outcome so the pooled world-space GlyphText can be inspected after a font-source switch.',
+        run: () => triggerScore(),
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-visibility',
+        title: 'Toggle target visibility',
+        description: 'Toggle author Visibility on the scored target without changing physics, picking, or Disabled lifecycle.',
+        run: () => {
+          visibilityLoop.toggle();
+          return visibilityLoop.snapshot(ctx.renderer);
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-jpeg-texture',
+        title: 'Toggle JPEG target texture',
+        description: 'Apply or restore the GUID-loaded JPEG albedo on the scored target without changing its mesh or gameplay owners.',
+        run: () => {
+          if (jpegTextureSwap === undefined) return jpegTextureSnapshot(undefined);
+          if (jpegTextureSwap.active === 'original') {
+            resetMeshHandleSwap(world, meshHandleSwap);
+            resetFbxMeshSwap(world, fbxMeshSwap);
+            resetGltfMeshSwap(world, gltfMeshSwap);
+          }
+          toggleJpegTextureSwap(world, jpegTextureSwap);
+          return jpegTextureSnapshot(jpegTextureSwap);
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-video-texture',
+        title: 'Toggle WebM target panel',
+        description: 'Toggle the licensed WebM through VideoAsset, VideoPlayer, and the host VideoElementProvider on the existing scored target.',
+        run: () => {
+          videoTexturePanel?.toggle();
+          return videoTexturePanel?.snapshot() ?? { available: false, active: 'original', swaps: 0, guid: null, name: null, kind: null, url: null };
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-target-profile',
+        title: 'Toggle target profile plugin',
+        description: 'Apply or restore the host-defined GUID target profile on the existing scored target.',
+        run: () => {
+          return toggleProfile();
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-sprite-atlas',
+        title: 'Toggle PNG sprite atlas',
+        description: 'Toggle the GUID-loaded atlas animation on newly spawned projectiles while retaining the existing hit and physics loop.',
+        run: () => {
+          if (spriteAtlasLoop === undefined) return spriteAtlasSnapshot(undefined);
+          const enabled = spriteAtlasLoop.toggle();
+          if (enabled) setProjectileVisual('sprite');
+          return spriteAtlasLoop.snapshot();
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-font-source',
+        title: 'Toggle TTF font plugin',
+        description: 'Switch the same pooled hit-score GlyphText between the legacy baked pack and the licensed TTF font importer output.',
+        run: () => ({ fontSource: worldScoreText?.toggleFontSource() ?? 'legacy-pack', ...(worldScoreText?.snapshot() ?? {}) }),
       }),
       ctx.gameProjection.registerAction({
         id: 'game-default.toggle-multi-world',
@@ -837,24 +975,52 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           if (meshHandleSwap !== undefined && snap.action('meshHandle').justPressed()) {
             if (meshHandleSwap.active === 'original') {
               resetFbxMeshSwap(world, fbxMeshSwap);
-              resetGlbMeshSwap(world, glbMeshSwap);
+              resetGltfMeshSwap(world, gltfMeshSwap);
+              resetJpegTextureSwap(world, jpegTextureSwap);
             }
             toggleMeshHandleSwap(world, meshHandleSwap);
           }
           if (fbxMeshSwap !== undefined && snap.action('fbxMesh').justPressed()) {
             if (fbxMeshSwap.active === 'original') {
               resetMeshHandleSwap(world, meshHandleSwap);
-              resetGlbMeshSwap(world, glbMeshSwap);
+              resetGltfMeshSwap(world, gltfMeshSwap);
+              resetJpegTextureSwap(world, jpegTextureSwap);
             }
             toggleFbxMeshSwap(world, fbxMeshSwap);
           }
-          if (glbMeshSwap !== undefined && snap.action('glbMesh').justPressed()) {
-            if (glbMeshSwap.active === 'original') {
+          if (gltfMeshSwap !== undefined && snap.action('glbMesh').justPressed()) {
+            if (gltfMeshSwap.active === 'original') {
               resetMeshHandleSwap(world, meshHandleSwap);
               resetFbxMeshSwap(world, fbxMeshSwap);
+              resetJpegTextureSwap(world, jpegTextureSwap);
             }
-            toggleGlbMeshSwap(world, glbMeshSwap);
+            setGltfMeshSwapVariant(world, gltfMeshSwap, gltfMeshSwap.active === 'glb' ? 'original' : 'glb');
           }
+          if (gltfMeshSwap !== undefined && snap.action('gltfMesh').justPressed()) {
+            if (gltfMeshSwap.active === 'original') {
+              resetMeshHandleSwap(world, meshHandleSwap);
+              resetFbxMeshSwap(world, fbxMeshSwap);
+              resetJpegTextureSwap(world, jpegTextureSwap);
+            }
+            setGltfMeshSwapVariant(world, gltfMeshSwap, gltfMeshSwap.active === 'gltf' ? 'original' : 'gltf');
+          }
+          if (jpegTextureSwap !== undefined && snap.action('jpegTexture').justPressed()) {
+            if (jpegTextureSwap.active === 'original') {
+              resetMeshHandleSwap(world, meshHandleSwap);
+              resetFbxMeshSwap(world, fbxMeshSwap);
+              resetGltfMeshSwap(world, gltfMeshSwap);
+            }
+            toggleJpegTextureSwap(world, jpegTextureSwap);
+          }
+          if (videoTexturePanel !== undefined && snap.action('videoTexture').justPressed()) videoTexturePanel.toggle();
+          if (targetProfile !== undefined && snap.action('targetProfile').justPressed()) {
+            toggleProfile();
+          }
+          if (spriteAtlasLoop !== undefined && snap.action('spriteAtlas').justPressed()) {
+            if (spriteAtlasLoop.toggle()) setProjectileVisual('sprite');
+          }
+          if (worldScoreText !== undefined && snap.action('fontSource').justPressed()) worldScoreText.toggleFontSource();
+          if (snap.action('visibility').justPressed()) visibilityLoop.toggle();
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
       const arrowLeft = snap.action('arrowLeft').isPressed();
@@ -986,12 +1152,23 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const bx = px + dirX * 0.6, byy = by + dirY * 0.6, bz = pz + dirZ * 0.6;
         const bulletQuat = quat.fromUnitVectors(quat.create(), [0, 1, 0], [dirX, dirY, dirZ]);
         const useSprite = projectileVisual !== 'mesh' && customProjectile !== undefined;
+        const atlasActive = spriteAtlasLoop?.active === true;
         const shotMesh = useSprite ? HANDLE_QUAD : projectileMesh;
-        const shotMaterial = projectileVisual === 'sprite-lit'
-          ? customProjectile!.spriteLitMaterialHandle
-          : projectileVisual === 'sprite'
-            ? customProjectile!.spriteMaterialHandle
-            : projectileMaterial;
+        const shotMaterial = atlasActive
+          ? projectileVisual === 'sprite-lit'
+            ? spriteAtlasLoop!.spriteLitMaterialHandle
+            : spriteAtlasLoop!.spriteMaterialHandle
+          : projectileVisual === 'sprite-lit'
+            ? customProjectile!.spriteLitMaterialHandle
+            : projectileVisual === 'sprite'
+              ? customProjectile!.spriteMaterialHandle
+              : projectileMaterial;
+        const spriteAnimationComponents = atlasActive
+          ? [
+            { component: SpriteAnimation, data: { frameCount: spriteAtlasLoop!.frameCount, frameDuration: spriteAtlasLoop!.frameDuration, regions: new Float32Array(spriteAtlasLoop!.regions), playbackMode: SPRITE_PLAYBACK_MODE_LOOP } },
+            { component: SpriteRegionOverride, data: { region: new Float32Array(spriteAtlasLoop!.regions.slice(0, 4)) } },
+          ]
+          : [];
         const e = commands.spawn(
           { component: Transform, data: { pos: [bx, byy, bz], quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!]} },
           { component: MeshFilter, data: { assetHandle: shotMesh } },
@@ -1003,7 +1180,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           // step so it reliably contacts props instead of tunneling through.
           { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } },
           { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: BULLET_RADIUS, halfHeight: BULLET_HALF_HEIGHT, friction: 0, restitution: 0.6 } },
+          ...spriteAnimationComponents,
         );
+        if (atlasActive) spriteAtlasLoop?.track(e);
         deferredBulletSpawns += 1;
         bullets.push({ e, x: bx, y: byy, z: bz, dx: dirX, dy: dirY, dz: dirZ, quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!], age: 0, hits: new Set<EntityHandle>() });
       }
@@ -1013,7 +1192,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       for (let i = bullets.length - 1; i >= 0; i--) {
         const b = bullets[i]!;
         b.age += dt;
-        if (b.age > BULLET_LIFE) { commands.despawn(b.e); deferredBulletDespawns += 1; bullets.splice(i, 1); continue; }
+        if (b.age > BULLET_LIFE) {
+          spriteAtlasLoop?.untrack(b.e);
+          commands.despawn(b.e);
+          deferredBulletDespawns += 1;
+          bullets.splice(i, 1);
+          continue;
+        }
         b.x += b.dx * BULLET_SPEED * dt;
         b.y += b.dy * BULLET_SPEED * dt;
         b.z += b.dz * BULLET_SPEED * dt;
@@ -1036,7 +1221,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           const ex = b.x - fxp, ey = b.y - fyp, ez = b.z - fzp;
           if (ex * ex + ey * ey + ez * ez < HIT2) {
             b.hits.add(fl.e);
-            const pts = scoringPoints(fl.e);
+            const basePoints = scoringPoints(fl.e);
+            const pts = basePoints === undefined ? undefined : targetProfilePoints(targetProfile, basePoints);
             if (pts !== undefined) {
               changeDetection.recordHit(fl.e, pts);
               damageTarget(fl.e, pts);
@@ -1075,6 +1261,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]});
       }
       worldScoreText?.step(dt, camera);
+      videoTexturePanel?.step(camera);
         },
       })
       .unwrap();
@@ -1085,20 +1272,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       flashables,
       triggerFlash: () => triggerFlash(),
       triggerScore: () => {
-        const target = flashables[0];
-        const points = target === undefined ? undefined : scoringPoints(target.e);
-        if (target !== undefined && points !== undefined) {
-          changeDetection.recordHit(target.e, points);
-          damageTarget(target.e, points);
-          const transform = world.get(target.e, Transform);
-          if (transform.ok) {
-            worldScoreText?.show('+' + points, [
-              transform.value.pos[0] ?? 0,
-              (transform.value.pos[1] ?? 0) + 1.7,
-              transform.value.pos[2] ?? 0,
-            ]);
-          }
-        }
+        triggerScore();
       },
       hitFlashBlendEnabled: () => {
         const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(flashMat);
@@ -1159,8 +1333,22 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       toggleMeshHandleSwap: meshHandleSwap === undefined ? undefined : () => toggleMeshHandleSwap(world, meshHandleSwap),
       fbxMeshSwap: fbxMeshSwap === undefined ? undefined : () => ({ active: fbxMeshSwap.active, swaps: fbxMeshSwap.swaps }),
       toggleFbxMeshSwap: fbxMeshSwap === undefined ? undefined : () => toggleFbxMeshSwap(world, fbxMeshSwap),
-      glbMeshSwap: glbMeshSwap === undefined ? undefined : () => ({ active: glbMeshSwap.active, swaps: glbMeshSwap.swaps }),
-      toggleGlbMeshSwap: glbMeshSwap === undefined ? undefined : () => toggleGlbMeshSwap(world, glbMeshSwap),
+      glbMeshSwap: gltfMeshSwap?.glb === undefined ? undefined : () => ({ active: gltfMeshSwap.active === 'glb' ? 'glb' : 'original', swaps: gltfMeshSwap.swaps }),
+      toggleGlbMeshSwap: gltfMeshSwap?.glb === undefined ? undefined : () => setGltfMeshSwapVariant(world, gltfMeshSwap, gltfMeshSwap.active === 'glb' ? 'original' : 'glb'),
+      gltfMeshSwap: gltfMeshSwap?.gltf === undefined ? undefined : () => ({ active: gltfMeshSwap.active === 'gltf' ? 'gltf' : 'original', swaps: gltfMeshSwap.swaps }),
+      toggleGltfMeshSwap: gltfMeshSwap?.gltf === undefined ? undefined : () => setGltfMeshSwapVariant(world, gltfMeshSwap, gltfMeshSwap.active === 'gltf' ? 'original' : 'gltf'),
+      jpegTexture: jpegTextureSwap === undefined ? undefined : () => jpegTextureSnapshot(jpegTextureSwap),
+      videoTexture: videoTexturePanel?.snapshot,
+      targetProfile: () => targetProfileSnapshot(targetProfile),
+      toggleTargetProfile: targetProfile === undefined ? undefined : toggleProfile,
+      toggleJpegTexture: jpegTextureSwap === undefined ? undefined : () => {
+        if (jpegTextureSwap.active === 'original') {
+          resetMeshHandleSwap(world, meshHandleSwap);
+          resetFbxMeshSwap(world, fbxMeshSwap);
+          resetGltfMeshSwap(world, gltfMeshSwap);
+        }
+        toggleJpegTextureSwap(world, jpegTextureSwap);
+      },
       fbxSkinnedTarget: fbxSkinnedTarget?.snapshot,
       characterController: () => {
         const controller = world.get(root, CharacterController);
@@ -1172,6 +1360,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       },
       targetHealth: () => targetHealth.snapshot(),
       targetDisabling: () => targetDisabling.snapshot(),
+      visibility: () => visibilityLoop.snapshot(ctx.renderer),
       worldScoreText: worldScoreText?.snapshot,
       isFlashed: (entity) => flashUntil.has(entity),
       reset: resetGameplay,
@@ -1248,7 +1437,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       runIf: inState(GameState, 'Play'),
       queries: [],
       after: ['game-camera-fallback'],
-      fn: () => worldScoreText?.step(world.getResource(Time).delta, camera),
+      fn: () => {
+        worldScoreText?.step(world.getResource(Time).delta, camera);
+        videoTexturePanel?.step(camera);
+      },
     }).unwrap();
   }
 }

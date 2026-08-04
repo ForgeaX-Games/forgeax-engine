@@ -2,10 +2,10 @@
 // feat-20260517-spawn-default-fallback / M4 / t15.
 //
 // AC-12 grep gate: assert that the EcsErrorCode closed union in
-// packages/ecs/src/errors.ts has exactly 47 members. The M2 approved
+// packages/ecs/src/errors.ts has exactly 48 members. The M2 approved
 // baseline is 43 existing members plus the three ECS time/schedule scope
-// codes (time-delta-invalid, time-config-invalid, schedule-scope-mismatch)
-// plus verify hotfix resource-protected.
+// codes (time-delta-invalid, time-config-invalid, schedule-scope-mismatch),
+// verify hotfix resource-protected, and the M1 visibility enum write code.
 //
 // The gate parses the `export type EcsErrorCode = ...` block: every
 // `| 'kebab-code'` literal arm contributes 1 to the count, and every
@@ -27,7 +27,7 @@ import { dirname, resolve } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ERRORS_TS = resolve(HERE, '..', 'src', 'errors.ts');
-const EXPECTED_COUNT = 47;
+const EXPECTED_COUNT = 48;
 
 /** @param {string} src @param {string} typeName */
 function parseUnionLiterals(src, typeName) {
@@ -121,13 +121,13 @@ console.log(baseline);
 if (actualCount !== EXPECTED_COUNT) {
   console.error('');
   console.error(
-    `[reason] EcsErrorCode member count drift detected: expected ${EXPECTED_COUNT} (M2 approved 43 -> 46 baseline), found ${actualCount}.`,
+    `[reason] EcsErrorCode member count drift detected: expected ${EXPECTED_COUNT} (M2 approved 43 -> 46 baseline plus M1 visibility validation), found ${actualCount}.`,
   );
   console.error(
     `[rerun]  node packages/ecs/scripts/check-ecs-error-code-count.mjs`,
   );
   console.error(
-    `[hint]   M2 approves exactly three new codes over the 43-member baseline. Any further EcsErrorCode member requires a new approved decision and an updated EXPECTED_COUNT.`,
+    `[hint]   M2 approves three codes over the 43-member baseline and M1 approves component-field-invalid-value. Any further EcsErrorCode member requires a new approved decision and an updated EXPECTED_COUNT.`,
   );
   console.error('');
   console.error('Members observed:');

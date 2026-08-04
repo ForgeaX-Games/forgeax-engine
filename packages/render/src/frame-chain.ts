@@ -7,7 +7,7 @@ export interface PreparedFrame {
   readonly extracted: ExtractedFrame;
   readonly resources: Map<unknown, unknown>;
 }
-export function extractFrame(worlds: readonly unknown[]): ExtractedFrame {
+export function buildFrameChain(worlds: readonly unknown[]): ExtractedFrame {
   return { worlds };
 }
 export function prepareFrame(

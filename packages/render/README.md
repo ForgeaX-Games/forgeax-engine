@@ -250,5 +250,34 @@ flowchart LR
   World["World data"] --> Extract["extract"]
   Extract --> Prepare["prepare"]
   Prepare --> Record["record"]
-  Record --> Rhi["RHI submission"]
+Record --> Rhi["RHI submission"]
 ```
+
+## Visibility contract
+
+Quick start:
+
+```ts
+import { Visibility, VisibilityStateValue, resolveVisibility } from '@forgeax/engine-render';
+
+world.spawn({
+  component: Visibility,
+  data: { state: VisibilityStateValue.hidden },
+}).unwrap();
+const snapshot = resolveVisibility(world);
+```
+
+| Stage | Truth | Diagnostic |
+|:--|:--|:--|
+| Author intent | `Visibility.state` is `inherited`, `hidden`, or `visible` | Read the ECS field or reflected `labels` |
+| Effective state | `resolveVisibility(world).effective(entity)` applies valid scene parents | Inspect `snapshot.diagnostics` and `VisibilityResolution.source` |
+| Render result | Render producers skip hidden candidates before material work | Read `renderer.visibilityStats`; it is not a frustum or picking metric |
+
+If the state write returns an error, preserve `code`, `expected`, `hint`, and
+`detail`, correct the enum value, and retry through `world.set`. If hierarchy
+diagnostics are present, repair the scene relation and resolve again. Do not
+hide the issue with a custom mesh, camera workaround, or material substitute.
+
+Out of scope: camera frustum policy, picking, app lifecycle, asset import, and
+VFX shadow behavior. `@forgeax/engine-vfx-render` remains the producer-owned
+particle bridge and consumes the same effective visibility boundary.

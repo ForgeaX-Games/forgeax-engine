@@ -1,5 +1,10 @@
 import { World } from '@forgeax/engine-ecs';
-import { Camera, extractFrame, perspective } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  extractFrame,
+  perspective,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
@@ -14,7 +19,7 @@ describe('render extract owner boundary', () => {
       .unwrap();
 
     expect(propagateTransforms(world).ok).toBe(true);
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.cameras).toHaveLength(1);
     expect(frame.cameras[0]?.position[2]).toBeCloseTo(3);
   });

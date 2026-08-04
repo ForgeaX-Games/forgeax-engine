@@ -3,15 +3,15 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.7 Advanced GLSL](https://learnopengl.com/Advanced-OpenGL/Advanced-GLSL)
 >
-> **Engine surface**: The View UBO is engine-managed — the AI user spawns a `Camera` + `DirectionalLight` and the engine auto-fills a 240 B std140 `View` struct at `@group(0) @binding(0)`. Zero user-side UBO code required (charter P4: uniform abstraction over manual binding).
+> **Engine surface**: The View UBO is engine-managed — the AI user spawns a `Camera` + `DirectionalLight` and the engine auto-fills a 784 B std140 `View` struct at `@group(0) @binding(0)`. Zero user-side UBO code required (charter P4: uniform abstraction over manual binding).
 
 ## Hit-rate index (AI user fast-locate)
 
 | LO sub-example | Hit? | forgeax equivalent | grep anchor |
 |:--|:--|:--|:--|
-| GLSL `layout(std140) uniform Matrices` hand-written UBO block | **engine-managed** | Engine allocates+populates View UBO (`@group(0)@binding(0)`, 240 B std140) automatically; user never writes a UBO declaration | `@group(0)` / `@binding(0)` |
+| GLSL `layout(std140) uniform Matrices` hand-written UBO block | **engine-managed** | Engine allocates+populates View UBO (`@group(0)@binding(0)`, 784 B std140) automatically; user never writes a UBO declaration | `@group(0)` / `@binding(0)` |
 | `glBindBufferRange(GL_UNIFORM_BUFFER, ...)` manual binding | **engine-managed** | Engine binds the View UBO at group 0 / binding 0 in every pipeline layout; user never calls a bind-buffer function | `common.wgsl:127` |
-| Uniform block layout with `std140` padding rules | **engine-managed** | Engine's `View` struct in `common.wgsl:17-43` uses WGSL-native `var<uniform>` (auto-std140); user reads the struct field list if curious | `struct View` |
+| Uniform block layout with `std140` padding rules | **engine-managed** | Engine's `View` struct in `common.wgsl:17-52,103-128` uses WGSL-native `var<uniform>` (auto-std140); user reads the struct field list if curious | `struct View` |
 | Uniform block per-shader-stage binding points | **engine-managed** | Engine binds View UBO once for all pipelines; every material shader `#import forgeax_view::common` picks it up | `forgeax_view::common` |
 | `glGetUniformBlockIndex` / `glUniformBlockBinding` query API | N/A | No query API needed; the engine does not expose the UBO binding to application code | N/A |
 | Shader uniform-set reuse (binding same UBO to multiple shaders) | **hit** | Engine's `View` struct is shared across all material shaders via naga_oil `#import` (charter P4: one View struct everywhere) | `#define_import_path forgeax_view::common` |
@@ -27,10 +27,10 @@ In forgeax, the View UBO is **engine-managed** — it is an internal detail the 
 The engine's View UBO lives at:
 
 ```
-@group(0) @binding(0) var<uniform> view : View;   // common.wgsl:127
+@group(0) @binding(0) var<uniform> view : View;   // common.wgsl:231
 ```
 
-The `View` struct layout (240 B std140, `packages/shader/src/common.wgsl:17-43`):
+The `View` struct layout (784 B std140, `packages/shader/src/common.wgsl:17-52,103-128`):
 
 | Byte range | Field | Size | Description |
 |:--|:--|--:|:--|
@@ -38,13 +38,18 @@ The `View` struct layout (240 B std140, `packages/shader/src/common.wgsl:17-43`)
 | 64..80 | `lightDir` | 16 B | `vec3<f32>` + 4 B pad — dominant directional light direction |
 | 80..96 | `lightColor` | 16 B | `vec3<f32>` + 4 B pad — dominant directional light color*intensity |
 | 96..112 | `cameraPos` | 16 B | `vec3<f32>` + 4 B pad — camera world-space position |
-| 112..176 | `lightSpaceMatrix` | 64 B | `mat4x4<f32>` — shadow-map light-space transform |
+| 112..176 | `lightViewProj_A` | 64 B | First directional-light shadow cascade |
 | 176..240 | `inverseViewProj` | 64 B | `mat4x4<f32>` — inverse of viewProjection (skybox reconstruction) |
+| 240..432 | `lightViewProj_B..D` | 192 B | Three additional directional-light shadow cascades |
+| 432..496 | `splitPlanes` | 64 B | Four cascade split-depth values in `vec4<f32>` slots |
+| 496..516 | `cascadeCount`, `cascadeBlend`, `depthBias`, `normalBias`, `pcfKernelSize` | 20 B | Directional shadow controls |
+| 516..528 | alignment padding | 12 B | 16-byte alignment before the matrix array |
+| 528..784 | `spotLightViewProj` | 256 B | Four fragment-read spot-light shadow matrices |
 
 **Host-side lifecycle** (all engine-internal, zero user code):
 
-1. **Allocation**: `createRenderer.ts` allocates the uniform buffer with `VIEW_UBO_BYTES = 240` during renderer setup (`packages/runtime/src/createRenderer.ts:1688`).
-2. **Per-frame write**: `render-system-record.ts` reads the active `Camera` + `DirectionalLight` components and builds the 60-float payload (comment in `common.wgsl:28`: "Host write in render-system-record.ts builds the 60-float payload").
+1. **Allocation**: the renderer allocates the uniform buffer with `VIEW_UBO_BYTES = 784` during setup (`packages/render/src/renderer/renderer-factory.ts`).
+2. **Per-frame write**: `view-ubo.ts` reads the extracted `Camera` + `DirectionalLight` state and builds the 196-float payload (`packages/render/src/record/view-ubo.ts`).
 3. **Binding**: Every pipeline layout declares `@group(0) @binding(0) var<uniform> view : View`; the engine binds this buffer once and all material shaders (`pbr.wgsl`, `unlit.wgsl`, etc.) reference it via `forgeax_view::common` naga_oil import.
 
 ### What the user writes (minimal proof: `src/index.ts`)
@@ -84,12 +89,13 @@ user spawns Camera { fov, aspect, near, far } + Transform { pos: [x, y, z] }
 user spawns DirectionalLight { direction: [x, y, z], color: [r, g, b], intensity }
   |-- render-system-record reads DirectionalLight -> builds lightDir, lightColor
   |
-render-system-record assembles the 60 f32 payload:
+view-ubo.ts assembles the 196 f32 payload:
   worldViewProj[0..16] | lightDir[16..20]+pad | lightColor[20..24]+pad
-  | cameraPos[24..28]+pad | lightSpaceMatrix[28..44] | inverseViewProj[44..60]
+  | cameraPos[24..28]+pad | cascades[28..124] | split/shadow controls[124..132]
+  | spotLightViewProj[132..196]
   |
   v
-device.queue.writeBuffer(viewUbo, 0, payload)   -- 240 bytes per frame
+device.queue.writeBuffer(viewUbo, 0, payload)   -- 784 bytes per frame
   |
   v
 every Forward-pass draw: @group(0) @binding(0) var<uniform> view : View
@@ -122,9 +128,9 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo" 
 
 | LO concept | LO C++ / OpenGL | forgeax equivalent |
 |:--|:--|:--|
-| UBO declaration in shader | `layout(std140) uniform Matrices { mat4 view; mat4 projection; vec3 lightDir; ... }` | `struct View` in `common.wgsl:36-43` — one superset struct shared across all shaders via `#import` |
-| UBO host allocation | `glGenBuffers(1, &ubo)` + `glBufferData(GL_UNIFORM_BUFFER, size, NULL, GL_STATIC_DRAW)` | Engine allocates 240 B uniform buffer in `createRenderer.ts:1688` |
-| UBO host per-frame write | `glBufferSubData(GL_UNIFORM_BUFFER, 0, size, &data)` | Engine writes 60-float payload each frame in `render-system-record.ts` (via `device.queue.writeBuffer`) |
+| UBO declaration in shader | `layout(std140) uniform Matrices { mat4 view; mat4 projection; vec3 lightDir; ... }` | `struct View` in `common.wgsl:103-128` — one superset struct shared across all shaders via `#import` |
+| UBO host allocation | `glGenBuffers(1, &ubo)` + `glBufferData(GL_UNIFORM_BUFFER, size, NULL, GL_STATIC_DRAW)` | Engine allocates a 784 B uniform buffer in `renderer-factory.ts` |
+| UBO host per-frame write | `glBufferSubData(GL_UNIFORM_BUFFER, 0, size, &data)` | Engine writes a 196-float payload each frame in `record/view-ubo.ts` (via `device.queue.writeBuffer`) |
 | UBO binding point | `glUniformBlockBinding(program, index, bindingPoint)` + `glBindBufferRange(GL_UNIFORM_BUFFER, bindingPoint, ...)` | Engine declares `@group(0) @binding(0) var<uniform> view : View` in every pipeline layout |
 | UBO reuse across shaders | Manual per-shader-program `glUniformBlockBinding` calls | naga_oil `#import forgeax_view::common` in every material shader — single definition, all consumers pull it |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |
@@ -145,7 +151,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo" 
 
 | File | Lines | Role |
 |:--|--:|:--|
-| `src/index.ts` | ~160 | Minimal proof — three cubes + camera + DirectionalLight, heavy comments referencing View UBO anchor (`common.wgsl:17-43`, `@group(0)@binding(0)`, 240 B std140) |
+| `src/index.ts` | ~160 | Minimal proof — three cubes + camera + DirectionalLight, heavy comments referencing View UBO anchor (`common.wgsl:17-128`, `@group(0)@binding(0)`, 784 B std140) |
 | `scripts/smoke-dawn.mjs` | ~220 | Dawn-node structural-only smoke: createApp boot + 300 frames + 0 RhiError assertion, no pixel readback |
 | `package.json` | ~55 | Workspace metadata + dependencies |
 

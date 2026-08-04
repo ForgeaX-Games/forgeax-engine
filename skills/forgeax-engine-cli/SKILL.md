@@ -20,7 +20,7 @@ description: >-
 | `world` | `World`（来自 `@forgeax/engine-ecs`） | ECS 读写：spawn / despawn / set / queryRun |
 | `renderer` | `Renderer` | 渲染器控制：创建/销毁 RT、读 backbuffer |
 | `assets` | `AssetRegistry` | 资产查询：loadByGuid / resolveName / rename |
-| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI 帧抓取：`captureFrame({...})` / `inspectAt({...})`。**仅当 createApp 运行在 `FORGEAX_ENGINE_RHI_DEBUG=1` 时注入**，否则 `undefined`（用前先 guard）。world / renderer / assets 三根恒在场。 |
+| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI 帧抓取：`captureFrames(frames, label?)` / Dawn-Node `inspectAt(tapePath, drawIdx, fields?)`。**仅当 createApp 运行在 `FORGEAX_ENGINE_RHI_DEBUG=1` 时注入**，否则 `undefined`（用前先 guard）。world / renderer / assets 三根恒在场。 |
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture through `startCapture({ frameLimit, eventLimit })`; injected only when the host opts in. |
 
 脚本内通过 `_import(specifier)` 按需引入引擎包（如 `const ecs = await _import('@forgeax/engine-ecs')`），拿到 `createQueryState` / `queryRun` / `Entity` 等。`_import` 是 eval 作用域注入的 import 函数——脚本内**无**裸 `import` 关键字。
@@ -86,15 +86,20 @@ ecs.queryRun(state, world, (bundle) => {
 
 ```js
 const ecs = await _import('@forgeax/engine-ecs');
-const { createQueryState, queryRun, Entity, Transform, MeshRenderer } = ecs;
+const scene = await _import('@forgeax/engine-scene');
+const render = await _import('@forgeax/engine-render');
+const { createQueryState, queryRun, Entity } = ecs;
+const { Transform } = scene;
+const { MeshRenderer } = render;
 
 const state = createQueryState({ with: [MeshRenderer, Transform, Entity] });
 let result = [];
 queryRun(state, world, (bundle) => {
   for (let i = 0; i < bundle.Entity.self.length; i++) {
+    const pos = bundle.Transform.pos;
     result.push({
       entity: bundle.Entity.self[i],
-      position: [bundle.Transform.position.x[i], bundle.Transform.position.y[i], bundle.Transform.position.z[i]],
+      position: [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]],
     });
   }
 });
@@ -109,27 +114,37 @@ queryRun(state, world, (bundle) => {
 
 ```js
 const ecs = await _import('@forgeax/engine-ecs');
-const state = ecs.createQueryState({ with: [ecs.Transform, ecs.Entity] });
+const scene = await _import('@forgeax/engine-scene');
+const state = ecs.createQueryState({ with: [scene.Transform, ecs.Entity] });
 
 ecs.queryRun(state, world, (bundle) => {
   for (let i = 0; i < bundle.Entity.self.length; i++) {
     const h = bundle.Entity.self[i];
-    const x = bundle.Transform.position.x[i];
-    const y = bundle.Transform.position.y[i];
-    const z = bundle.Transform.position.z[i];
+    const pos = bundle.Transform.pos;
+    const x = pos[i * 3];
+    const y = pos[i * 3 + 1];
+    const z = pos[i * 3 + 2];
     // 使用 h / x / y / z
   }
 });
 ```
 
+`Transform.pos` is the flat `array<f32, 3>` column; row `i` starts at
+`i * 3`. `quat` and `scale` use strides 4 and 3 respectively, and query
+bundles do not expose `.x` / `.y` / `.z` sub-fields.
+
 ### 写组件值 / 生命周期
 
 ```js
 // spawn——带组件
-const h = world.spawn([new Transform({ position: [0, 5, 0] })]);
+const scene = await _import('@forgeax/engine-scene');
+const h = world.spawn({
+  component: scene.Transform,
+  data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
+}).unwrap();
 
 // set——直接修改已存在实体的组件值
-world.set(h, new Transform({ position: [1, 2, 3] }));
+world.set(h, scene.Transform, { pos: [1, 2, 3] });
 
 // despawn
 world.despawn(h);
@@ -143,11 +158,12 @@ eval 内通过第 4 活根 `debugAdapter` 做 RHI 帧抓取：
 
 ```js
 // 抓取当前帧的稳态 tape（结构化 draw-call 数据）
-const tape = await debugAdapter.captureFrame({ label: 'my-snapshot' });
-// tape.frameModel 是结构化 FrameModel（与 RHI debug viewer / CLI summary 同一 SSOT）
+const capture = await debugAdapter.captureFrames(1, 'my-snapshot');
+const tape = capture.tapes[0];
+// tape.tapePath is the on-disk handoff for RHI-debug summary / inspect-offline
 
 // per-draw inspect
-const draw = await debugAdapter.inspectAt({ tape, drawIdx: 3 });
+const draw = await debugAdapter.inspectAt(tape.tapePath, 3);
 // draw.pipelineState / draw.bindings / draw.renderTargetPNG
 ```
 
@@ -349,7 +365,7 @@ forgeax-engine-remote-ecs entities --port 5731
 
 ## RHI 录帧 CLI（capture-frame / inspect-at / inspect-offline / summary）
 
-> `@forgeax/engine-rhi-debug` 的 `capture-frame` / `inspect-at` 子命令经 `client.eval` 通道（构造 `debugAdapter.captureFrame({...})` 脚本发送），不再走独立 JSON-RPC method。离线子命令 `inspect-offline <tape> <drawIdx>`（自举 dawn-node，per-draw，输出含 `pipelineState`）与 `summary <tape>`（纯函数零 GPU，整帧 `FrameModel`——RHI debug viewer 与 CLI 同一 SSOT）不连 WS。flag 表、输出 schema、症状定位工作流全在 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)（SSOT）。
+> `@forgeax/engine-rhi-debug` 的 `capture-frame` / `inspect-at` 子命令经 `client.eval` 通道（构造 `debugAdapter.captureFrames(frames, label?)` / `debugAdapter.inspectAt(tapePath, drawIdx, fields?)` 脚本发送），不再走独立 JSON-RPC method。离线子命令 `inspect-offline <tape> <drawIdx>`（自举 dawn-node，per-draw，输出含 `pipelineState`）与 `summary <tape>`（纯函数零 GPU，整帧 `FrameModel`——RHI debug viewer 与 CLI 同一 SSOT）不连 WS。flag 表、输出 schema、症状定位工作流全在 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)（SSOT）。
 
 ## forgeax-engine-remote-state plugin bin
 
@@ -386,3 +402,29 @@ Prints the current variant string for the named state token. Exit code 0 on succ
 
 > [!CAUTION]
 > **危险 API NOTE**：eval 全开可读写——脚本内可以调用 `renderer.dispose()`（销毁 GPU 上下文、整个 app 崩溃）、`world.despawn` 批量清实体、`AssetRegistry.clear()` 等破坏性操作。引擎不做代码层拦截。production 环境的天然安全来自不起 server（`app.remote` 为 `undefined`）；dev 环境的保护靠开发者自觉。AI 用户在 dev 模式 eval 前确认脚本不含毁灭性 API 调用。
+
+## Visibility diagnostics quick start
+
+Use the existing `introspect` and `eval` surfaces; there is no visibility CLI
+command. First inspect `components.schemas.Visibility`, then evaluate the
+same live path used by the app:
+
+```ts
+const ecs = await _import('@forgeax/engine-ecs');
+const render = await _import('@forgeax/engine-render');
+const query = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
+ecs.queryRun(query, world, bundle => console.log(bundle.Visibility.state));
+console.log(render.resolveVisibility(world).effective(entity));
+console.log(renderer.visibilityStats);
+```
+
+| Signal | Meaning | Recovery |
+|:--|:--|:--|
+| `current` | Component intent currently stored in ECS | Use reflected labels and retry a rejected `world.set` |
+| `effective` | Parent-resolved state consumed by render candidates | Repair `snapshot.diagnostics` when hierarchy input is invalid |
+| `visibilityStats` | Renderer count for explicitly hidden candidates | Inspect the real render path; do not add an RPC or CLI method |
+
+The remote server receives a JSON-safe registry projection from app. It keeps
+the two existing methods and the closed `RemoteError` shape; production remote
+still has no ECS, render, or runtime dependency. Camera, picking, lifecycle,
+assets, material authoring, and VFX shadow policy are out of scope.

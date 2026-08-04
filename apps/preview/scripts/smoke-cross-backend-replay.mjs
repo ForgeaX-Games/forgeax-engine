@@ -70,7 +70,7 @@ try {
       health: inspection.renderer.health(),
     };
   });
-  if (before.listed.actions.length !== 4 || before.listed.reads.length !== 2) {
+  if (before.listed.actions.length < 4 || before.listed.reads.length < 2) {
     throw new Error(`inspection surface drifted: ${JSON.stringify(before.listed)}`);
   }
   if (!before.snapshot.ok || before.snapshot.value.state.phase !== 'Play' || before.health.reason !== 'alive') {

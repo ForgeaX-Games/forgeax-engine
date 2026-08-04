@@ -72,9 +72,9 @@ import {
   type World,
 } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
-import { ChildOf, Children } from '../components';
 import { Transform } from '../components/transform';
 import { SceneError } from '../errors';
+import { projectHierarchy, type SceneHierarchySnapshot } from './hierarchy-projection';
 
 /**
  * System name used when `registerPropagateTransforms` installs the system
@@ -89,10 +89,10 @@ interface GraphLike {
   readonly archetypes: ReadonlyArray<Archetype | undefined>;
 }
 
-/** @internal */
 interface InternalWorldSurface {
   /** @internal */
   _getGraph(): GraphLike;
+  /** @internal */
   /**
    * @internal Column-level zero-copy view of an `array<T, N>` / `buffer<N>` field.
    * Returns a `FieldView` (a TypedArray) aliasing the inline stride-N column bytes
@@ -140,22 +140,6 @@ function getField(arch: Archetype, compId: ComponentId, fieldName: string): Floa
     );
   }
   return col.view as Float32Array;
-}
-
-function getRefField(arch: Archetype, compId: ComponentId, fieldName: string): Uint32Array {
-  const fieldCols = arch.columns.get(compId);
-  if (!fieldCols) {
-    throw new Error(
-      `[propagateTransforms] internal: component ${compId} missing on archetype ${arch.id}`,
-    );
-  }
-  const col = fieldCols.get(fieldName);
-  if (!col) {
-    throw new Error(
-      `[propagateTransforms] internal: field ${fieldName} missing on component ${compId}`,
-    );
-  }
-  return col.view as Uint32Array;
 }
 
 interface RowLocator {
@@ -229,10 +213,10 @@ function composeLocalInto(out: FieldView, arch: Archetype, row: number): void {
  *   const r = propagateTransforms(world);
  *   if (!r.ok) console.error(r.error.code, r.error.hint);
  */
-export function propagateTransforms(world: World): Result<void, SceneError> {
-  // Keep the Children type import active (no runtime consumption).
-  void Children.id;
-
+export function propagateTransforms(
+  world: World,
+  hierarchy: SceneHierarchySnapshot = projectHierarchy(world),
+): Result<void, SceneError> {
   const internal = asInternal(world);
   const graph = internal._getGraph();
 
@@ -241,15 +225,12 @@ export function propagateTransforms(world: World): Result<void, SceneError> {
   // in-memory slot directly (no world.get materialisation). Building the map
   // doubles as the live-set membership check (liveMap.has(entity)).
   const liveMap = new Map<EntityHandle, RowLocator>();
-  const rootArchetypes: Archetype[] = [];
-  const childArchetypes: Archetype[] = [];
+  const transformArchetypes: Archetype[] = [];
 
   for (const arch of graph.archetypes) {
     if (!arch) continue;
     if (!componentPresent(arch, Transform.id)) continue;
-    const hasChildOf = componentPresent(arch, ChildOf.id);
-    if (hasChildOf) childArchetypes.push(arch);
-    else rootArchetypes.push(arch);
+    transformArchetypes.push(arch);
 
     for (let row = 0; row < arch.size; row++) {
       const entity = readEntityAt(arch, row);
@@ -259,40 +240,46 @@ export function propagateTransforms(world: World): Result<void, SceneError> {
     }
   }
 
-  // Pass 1 -- roots: world = compose(local.TRS).
+  // Pass 1 -- roots: world = compose(local.TRS). The projection, rather than
+  // component presence, decides whether a malformed edge was cut.
   const processed = new Set<EntityHandle>();
-  for (const arch of rootArchetypes) {
+  for (const arch of transformArchetypes) {
     for (let row = 0; row < arch.size; row++) {
       const entity = readEntityAt(arch, row);
       const loc = liveMap.get(entity);
       if (loc === undefined) continue;
+      if (hierarchy.getParent(entity) !== undefined) continue;
       composeLocalInto(loc.worldView, arch, row);
       processed.add(entity);
     }
   }
 
-  // Pass 2 -- children: DFS walk per entity. `processed` marks entities whose
-  // Transform.world slot is already this-frame fresh (roots from Pass 1;
-  // children flip on successful compose+multiply).
+  // Pass 2 -- children: DFS through the same valid parent edges used by the
+  // resolver. Cycle and stale edges are absent from the projection, so this
+  // traversal always terminates and the affected entity is evaluated as root.
   const localMat = mat4.create() as unknown as Float32Array;
 
-  for (const arch of childArchetypes) {
-    const parentEntities = getRefField(arch, ChildOf.id, 'parent');
+  for (const arch of transformArchetypes) {
     for (let row = 0; row < arch.size; row++) {
       const selfEntity = readEntityAt(arch, row);
       const selfLoc = liveMap.get(selfEntity);
       if (selfLoc === undefined) continue;
-      const r = resolveEntity(
-        selfLoc,
-        parentEntities[row] as EntityHandle,
-        liveMap,
-        processed,
-        localMat,
-      );
+      const r = resolveEntity(selfLoc, hierarchy, liveMap, processed, localMat);
       if (!r.ok) return r;
     }
   }
 
+  const firstDiagnostic = hierarchy.diagnostics[0];
+  if (firstDiagnostic !== undefined) {
+    return err(
+      new SceneError({
+        code: firstDiagnostic.code,
+        expected: firstDiagnostic.expected,
+        hint: firstDiagnostic.hint,
+        detail: firstDiagnostic.detail,
+      }),
+    );
+  }
   return ok(undefined);
 }
 
@@ -307,52 +294,30 @@ export function propagateTransforms(world: World): Result<void, SceneError> {
  */
 function resolveEntity(
   selfLoc: RowLocator,
-  parentEntity: EntityHandle,
+  hierarchy: SceneHierarchySnapshot,
   liveMap: Map<EntityHandle, RowLocator>,
   processed: Set<EntityHandle>,
   localMat: Float32Array,
 ): Result<void, SceneError> {
   if (processed.has(selfLoc.entity)) return ok(undefined);
 
-  const parentLoc = liveMap.get(parentEntity);
-  if (parentLoc === undefined) {
-    return err(
-      new SceneError({
-        code: 'hierarchy-broken',
-        expected: 'ChildOf component references a live entity in the world',
-        hint: 'remove the stale ChildOf via world.removeComponent(entity, ChildOf) before destroying the referenced ancestor, or call engine.assets.inspect() to audit hierarchy',
-      }),
-    );
+  const parentEntity = hierarchy.getParent(selfLoc.entity);
+  if (parentEntity === undefined) {
+    composeLocalInto(selfLoc.worldView, selfLoc.arch, selfLoc.row);
+    processed.add(selfLoc.entity);
+    return ok(undefined);
   }
 
-  // Ensure the parent's world slot is fresh this frame. The parent may itself
-  // be a child (depth > 1) -- recurse on its ChildOf.parent first.
-  if (!processed.has(parentEntity)) {
-    const parentChildOf = parentLoc.arch.columns.get(ChildOf.id);
-    if (parentChildOf) {
-      const parentParentCol = parentChildOf.get('parent');
-      if (parentParentCol) {
-        const grandParent = (parentParentCol.view as Uint32Array)[parentLoc.row] as EntityHandle;
-        const r = resolveEntity(parentLoc, grandParent, liveMap, processed, localMat);
-        if (!r.ok) return r;
-      } else {
-        // Malformed ChildOf component (missing 'parent' field).
-        return err(
-          new SceneError({
-            code: 'hierarchy-broken',
-            expected: 'ChildOf component schema carries a parent entity field',
-            hint: 'check ChildOf component registration matches defineComponent("ChildOf", { parent: "entity" })',
-          }),
-        );
-      }
-    } else {
-      // Parent had no ChildOf field -> should have been processed in Pass 1;
-      // if not, it is a world desync (liveMap row drift). Compose its local as
-      // a defensive fallback so the child still gets a sane world.
-      composeLocalInto(parentLoc.worldView, parentLoc.arch, parentLoc.row);
-      processed.add(parentEntity);
-    }
+  const parentLoc = liveMap.get(parentEntity);
+  if (parentLoc === undefined) {
+    composeLocalInto(selfLoc.worldView, selfLoc.arch, selfLoc.row);
+    processed.add(selfLoc.entity);
+    return ok(undefined);
   }
+
+  // Ensure the parent's world slot is fresh this frame before multiplying.
+  const parentResult = resolveEntity(parentLoc, hierarchy, liveMap, processed, localMat);
+  if (!parentResult.ok) return parentResult;
 
   // world(self) = parent.world x compose(self.local). Compose into a scratch
   // mat4 then multiply into the live self.worldView slot (parent and self are

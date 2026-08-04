@@ -583,6 +583,9 @@ import { World } from '../world';
           // error code. Minor evolution +1 per AGENTS.md §Error model evolution
           // contract.
           'system-set-not-registered',
+          // feat-20260803-entity-visibility M1 — closed enum writes fail
+          // before storage mutation. Minor evolution +1 per the same contract.
+          'component-field-invalid-value',
         ]);
 
         const added: string[] = [];
@@ -714,6 +717,7 @@ import { World } from '../world';
             // case. Required to keep this exhaustive switch over EcsErrorCode
             // visually closed.
             case 'system-set-not-registered':
+            case 'component-field-invalid-value':
             case 'time-delta-invalid':
             case 'time-config-invalid':
             case 'schedule-scope-mismatch':

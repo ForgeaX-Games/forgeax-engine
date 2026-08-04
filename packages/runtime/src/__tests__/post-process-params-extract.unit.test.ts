@@ -8,13 +8,17 @@
 // collects into Map<shaderId, AllowSharedBufferSource>.
 
 import { World } from '@forgeax/engine-ecs';
-import { extractFrame, PostProcessParams } from '@forgeax/engine-render/internal';
+import {
+  extractFrame,
+  PostProcessParams,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
 
 describe('extractFrame PostProcessParams snapshot collection', () => {
   it('should contain postProcessParams empty map when no PostProcessParams entities exist', () => {
     const world = new World();
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.postProcessParams).toBeDefined();
     expect(frame.postProcessParams.size).toBe(0);
   });
@@ -26,7 +30,7 @@ describe('extractFrame PostProcessParams snapshot collection', () => {
       component: PostProcessParams,
       data: { shader: 'forgeax::tonemap', data: bytes },
     });
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.postProcessParams.size).toBe(1);
     expect(frame.postProcessParams.has('forgeax::tonemap')).toBe(true);
     const collected = frame.postProcessParams.get('forgeax::tonemap');
@@ -46,7 +50,7 @@ describe('extractFrame PostProcessParams snapshot collection', () => {
       component: PostProcessParams,
       data: { shader: 'mypkg::vignette', data: bytesB },
     });
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.postProcessParams.size).toBe(2);
     expect(frame.postProcessParams.has('forgeax::tonemap')).toBe(true);
     expect(frame.postProcessParams.has('mypkg::vignette')).toBe(true);
@@ -66,7 +70,7 @@ describe('extractFrame PostProcessParams snapshot collection', () => {
       component: PostProcessParams,
       data: { shader: 'forgeax::tonemap', data: new Uint8Array([3, 4, 5]) },
     });
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.postProcessParams.size).toBe(1);
     const collected = frame.postProcessParams.get('forgeax::tonemap');
     expect(collected).toBeDefined();
@@ -87,7 +91,7 @@ describe('extractFrame PostProcessParams snapshot collection', () => {
       component: PostProcessParams,
       data: { shader: 's3', data: new Uint8Array([2]) },
     });
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.postProcessParams.size).toBe(3);
     expect(frame.postProcessParams.get('s1')?.[0]).toBe(0);
     expect(frame.postProcessParams.get('s2')?.[0]).toBe(1);

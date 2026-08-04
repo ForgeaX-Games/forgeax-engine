@@ -2,6 +2,7 @@
 
 export * from './authoring';
 export * from './cluster-binner';
+export * from './components/light-helpers';
 export { createDebugDrawOnReady } from './debug-draw-glue';
 export { createEngineMetrics } from './engine-metrics';
 export * from './extract/schema-readers';

@@ -310,6 +310,10 @@ export interface _StandardForwardSceneView {
    * identical to no plan.
    */
   readonly foldDispatchPlan: import('./render-system-fold').FoldDispatchPlan | null;
+  /** @internal Prefix table produced with the final dispatch order. */
+  readonly materialSlotStart: readonly number[];
+  /** @internal Cumulative material-slot count matching `materialSlotStart`. */
+  readonly materialSlotCount: number;
   /**
    * @internal — feat-20260612-hdrp-ssao wiring fix.
    *

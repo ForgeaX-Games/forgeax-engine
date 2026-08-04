@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AnimationGraphClipMissingError, AnimationPlayerSlotLengthMismatchError } from '../index';
+import { AnimationGraphClipMissingError } from '../errors';
+import { AnimationPlayerSlotLengthMismatchError } from '../player-errors';
 
 describe('animation errors', () => {
   it('exposes structured codes and details', () => {

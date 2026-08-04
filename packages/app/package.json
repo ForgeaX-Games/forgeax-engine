@@ -52,7 +52,9 @@
     "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.71",
+    "@types/ws": "^8.5.10",
+    "ws": "^8.20.0"
   },
   "forgeax": {
     "metrics": {

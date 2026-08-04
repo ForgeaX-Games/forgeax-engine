@@ -8,6 +8,10 @@ const benchWorkflow = readFileSync(resolve('.github/workflows/bench.yml'), 'utf8
 const requiredWorkflow = readFileSync(resolve('.github/workflows/required-ci-checks.yml'), 'utf8');
 const postMergeMonitor = readFileSync(resolve('.github/workflows/post-merge-monitor.yml'), 'utf8');
 const requiredChecks = readFileSync(resolve('.github/workflows/required-ci-checks.yml'), 'utf8');
+const mesaVulkanAction = readFileSync(
+  resolve('.github/actions/install-mesa-vulkan-drivers/action.yml'),
+  'utf8',
+);
 const collectathonSmoke = readFileSync(
   resolve('apps/collectathon/scripts/smoke-browser.mjs'),
   'utf8',
@@ -133,4 +137,16 @@ test('post-merge issue lookup retries transient GitHub API transport failures', 
   const lookup = section.slice(0, nextStep === -1 ? undefined : nextStep + 1);
   assert.match(lookup, /retries: 3/);
   assert.match(lookup, /retry-exempt-status-codes: 400,401,403,404,422/);
+});
+
+test('Mesa install skips healthy hosts and retries transient apt index failures', () => {
+  assert.match(mesaVulkanAction, /host already has a lavapipe ICD/);
+  assert.match(mesaVulkanAction, /Acquire::Retries=3/);
+  assert.match(mesaVulkanAction, /Acquire::http::Timeout=30/);
+  assert.match(mesaVulkanAction, /Acquire::https::Timeout=30/);
+  assert.match(mesaVulkanAction, /Dir::Etc::sourceparts=-/);
+  assert.match(mesaVulkanAction, /ubuntu\.sources/);
+  assert.match(mesaVulkanAction, /update_attempts=3/);
+  assert.match(mesaVulkanAction, /apt index refresh failed; retrying/);
+  assert.match(mesaVulkanAction, /lvp_icd\*\.json/);
 });

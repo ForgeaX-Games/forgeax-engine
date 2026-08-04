@@ -43,3 +43,9 @@ describe('EcsErrorCode 31st member (D-9)', () => {
     expectTypeOf(_exhaust).parameter(0).toEqualTypeOf<EcsErrorCode>();
   });
 });
+
+describe('EcsErrorCode enum write validation', () => {
+  it("includes the 'component-field-invalid-value' literal", () => {
+    expectTypeOf<'component-field-invalid-value'>().toExtend<EcsErrorCode>();
+  });
+});

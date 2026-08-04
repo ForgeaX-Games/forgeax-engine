@@ -147,3 +147,27 @@ world.addSystem(Update, {
 ```
 
 For component schema, query, relationship, reflection, and scene APIs, read `packages/ecs/README.md` and the source contracts in `packages/ecs/src/`. The current scheduling surface is always token-first; no compatibility overload exists.
+
+## Visibility inspection quick start
+
+```ts
+const ecs = await _import('@forgeax/engine-ecs');
+const render = await _import('@forgeax/engine-render');
+const state = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
+ecs.queryRun(state, world, bundle => console.log(bundle.Visibility.state));
+const effective = render.resolveVisibility(world).effective(entity);
+```
+
+| Observation | Read from | Do not infer |
+|:--|:--|:--|
+| Current | `queryRun` and `Visibility.state` | Final render participation |
+| Effective | `resolveVisibility(world)` | Camera or picking state |
+| Invalid write | `Result.error.code`, `.expected`, `.hint`, `.detail` | A message-only failure |
+
+If a write fails, use the reflected enum labels to choose a valid value and
+retry `world.set`. If effective resolution reports hierarchy diagnostics, repair
+the scene relation before retrying. The app host only transports JSON-safe
+reflection; ECS remains the component owner.
+
+Out of scope: renderer culling, camera, picking, app lifecycle, assets, and VFX
+shadow policy. Route each question to its owning package skill.

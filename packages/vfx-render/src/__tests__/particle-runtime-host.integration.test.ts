@@ -125,6 +125,28 @@ describe('ParticleRuntimeHost public lifecycle', () => {
     }
   });
 
+  it('makes an incomplete stop observable as a remaining play binding', async () => {
+    const { createRenderer } = await import('@forgeax/engine-runtime');
+    const { rhi } = await import('@forgeax/engine-rhi-null');
+    const renderer = await createRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
+    expect((await renderer.ready).ok).toBe(true);
+    const host = createParticleRuntimeHost({ camera: { read: () => camera() } });
+    const editWorld = worldWithPlayer();
+    const playWorld = worldWithPlayer();
+
+    expect((await host.attachWorld({ world: editWorld, assets: renderer.assets })).ok).toBe(true);
+    expect((await host.attachWorld({ world: playWorld, assets: renderer.assets })).ok).toBe(true);
+
+    // Counterfactual teardown: stopping only the edit binding must leave the
+    // play binding observable instead of silently claiming a clean stop.
+    expect(host.detachWorld({ world: editWorld }).ok).toBe(true);
+    expect(playWorld.hasResource(PARTICLE_SIMULATION_RESOURCE_KEY)).toBe(true);
+    expect(playWorld.inspect().scheduleSystemCount(FixedUpdate)).toBe(1);
+
+    expect(host.detachWorld({ world: playWorld }).ok).toBe(true);
+    renderer.dispose();
+  });
+
   it('publishes structured attach and detach result types', () => {
     const host = createParticleRuntimeHost({ camera: { read: () => camera() } });
     expectTypeOf(host.attachWorld).toBeFunction();

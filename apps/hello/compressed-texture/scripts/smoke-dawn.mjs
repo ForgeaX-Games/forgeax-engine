@@ -255,16 +255,16 @@ if (!ready.ok) {
   process.exit(1);
 }
 
+const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const start = performance.now();
 let totalFrames = 0;
 const pixelReads = [];
-while (true) {
+for (let i = 0; i < TARGET_FRAMES; i++) {
   renderer.draw([world], { owner: 0 });
   totalFrames++;
-  const now = performance.now();
-  if (now - start >= SMOKE_DURATION_MS) break;
   await delay(0);
 }
+const frameWall = Math.round(performance.now() - start);
 
 // Battery: NDC centre pixel readback, prove non-black.
 if (sharedDevice && renderTarget) {
@@ -298,7 +298,7 @@ const pixelsNonBlack =
   pixelReads.some((p) => p.r > 10 || p.g > 10 || p.b > 10);
 const pixelJson = JSON.stringify(pixelReads);
 
-console.log(`[smoke] frames observed=${totalFrames}`);
+console.log(`[smoke] frames observed=${totalFrames} (wall=${frameWall}ms, target=${TARGET_FRAMES})`);
 console.log(`[smoke] pixelSamples=${pixelJson}`);
 
 if (!framesOk) {

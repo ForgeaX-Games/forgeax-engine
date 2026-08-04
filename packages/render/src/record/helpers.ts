@@ -226,22 +226,23 @@ export function driveLazyEquirectProjection(
 }
 
 /**
- * Returns true when a MaterialSnapshot represents a lit (non-unlit) material
- * that will render black with zero lights — i.e. the material has a
- * materialShaderId set and it is NOT the builtin unlit shader.
+ * Returns true when a MaterialSnapshot uses a builtin standard/PBR shader
+ * that will render black with zero lights.
  *
  * The default mid-grey fallback (materialShaderId === undefined) is excluded
  * — it routes through defaultMaterialSnapshot and never triggers the
- * zero-light warning.
+ * zero-light warning. Custom shaders are also excluded: their lighting
+ * contract is authored by the shader and cannot be inferred from this
+ * generic diagnostic.
  *
  * @internal — exported so AC-02 zero-light-warning test can anchor to
  * the production implementation rather than a test-local copy.
  */
 export function isLitMaterialSnapshot(material: MaterialSnapshot): boolean {
   return (
-    material.materialShaderId !== undefined &&
-    material.materialShaderId !== 'forgeax::default-unlit' &&
-    material.materialShaderId !== 'forgeax::sprite'
+    material.materialShaderId === 'forgeax::default-standard-pbr' ||
+    material.materialShaderId === 'forgeax::pbr-skin' ||
+    material.materialShaderId === 'forgeax::default-standard-pbr-skin'
   );
 }
 

@@ -42,7 +42,7 @@ import type {
   TextureAsset,
 } from '@forgeax/engine-types';
 import type { BakeAtlas, MsdfGenerator } from './cli-font.js';
-import { encodePng, realGeneratorFactory } from './cli-font.js';
+import { realGeneratorFactory } from './cli-font.js';
 
 /** Stable semantic identities for the three writable font outputs. */
 export function sourceKeyForFontOutput(kind: string): string | undefined {
@@ -132,8 +132,6 @@ async function importFont(ctx: ImportContext): Promise<ImportResult> {
   const atlasSub = ctx.subAssets.find((s) => s.kind === 'texture');
   const samplerSub = ctx.subAssets.find((s) => s.kind === 'sampler');
   const fontSub = ctx.subAssets.find((s) => s.kind === 'font');
-  const atlasBytes = encodePng(atlas.texture.width, atlas.texture.height, atlas.texture.data);
-
   const out: ImportedAsset[] = [];
   if (atlasSub !== undefined) {
     out.push({
@@ -143,9 +141,11 @@ async function importFont(ctx: ImportContext): Promise<ImportResult> {
       refs: [],
       artifacts: {
         atlas: {
-          mediaType: 'image/png',
-          assetCodec: { name: 'msdf' },
-          bytes: atlasBytes,
+          // Pack v2's runtime texture loader consumes non-Basis artifacts as
+          // raw pixels. Keep the baked RGBA8 MSDF atlas in that form here;
+          // the CLI still emits a PNG for standalone bake output.
+          mediaType: 'application/octet-stream',
+          bytes: atlas.texture.data,
         },
       },
     });

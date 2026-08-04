@@ -115,7 +115,12 @@ import {
 } from '@forgeax/engine-ecs';
 import { box3, frustum, type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import { RhiError } from '@forgeax/engine-rhi';
-import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import {
+  projectHierarchy,
+  propagateTransforms,
+  type SceneHierarchySnapshot,
+  Transform,
+} from '@forgeax/engine-scene';
 import {
   JointCountMismatchError,
   JointEntityDanglingError,
@@ -173,6 +178,11 @@ import {
   ShadowInvalidConfigError,
   SkinMaterialMismatchError,
 } from './errors/render';
+import { resolveVisibility, type VisibilitySnapshot } from './extract/visibility';
+import type {
+  RenderFeatureHiddenEntityReport,
+  RenderFeatureWorldVisibilitySnapshot,
+} from './features/types';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
@@ -954,6 +964,8 @@ export interface ExtractedFrame {
    * those that were removed from renderables by frustum culling.
    */
   readonly frustumStats: { readonly culled: number; readonly total: number };
+  /** Candidate entities rejected by author visibility before resource parsing. */
+  readonly visibilityStats: { readonly explicitlyHidden: number };
   /**
    * Per-frame post-process params snapshot collected from PostProcessParams
    * entities (D-1: data-driven params channel). Maps shader id to the
@@ -962,6 +974,12 @@ export interface ExtractedFrame {
    * Empty map when no PostProcessParams entities exist.
    */
   readonly postProcessParams: ReadonlyMap<string, Uint8Array>;
+  /** Visibility snapshots prepared for each contributing World. */
+  readonly visibilitySnapshots: readonly VisibilitySnapshot[];
+  /** World-labelled snapshots passed to generic RenderFeature extraction. */
+  readonly featureVisibilitySnapshots: readonly RenderFeatureWorldVisibilitySnapshot[];
+  /** Built-in hidden candidates, retained for host-side producer deduplication. */
+  readonly hiddenEntityReports: readonly RenderFeatureHiddenEntityReport[];
 }
 
 /**
@@ -1974,6 +1992,41 @@ export interface ExtractFramesOwner {
   readonly resourceOwner: number;
 }
 
+export interface PreparedExtractContext {
+  readonly assets: AssetRegistry | null | undefined;
+  readonly pipelineState: ExtractPipelineSurface | null | undefined;
+  readonly gpuStore: import('./gpu-resource-store').GpuResourceStore | undefined;
+  readonly cull: 'self' | 'none' | 'external';
+  readonly cullCameras: readonly CameraSnapshot[] | undefined;
+  readonly hierarchy: SceneHierarchySnapshot;
+  readonly visibility: VisibilitySnapshot;
+  readonly transformError: import('@forgeax/engine-scene').SceneError | undefined;
+}
+
+export function prepareExtractContext(
+  world: World,
+  options: {
+    readonly assets?: AssetRegistry | null;
+    readonly pipelineState?: ExtractPipelineSurface | null;
+    readonly gpuStore?: import('./gpu-resource-store').GpuResourceStore;
+    readonly cull?: 'self' | 'none' | 'external';
+    readonly cullCameras?: readonly CameraSnapshot[];
+  } = {},
+): PreparedExtractContext {
+  const hierarchy = projectHierarchy(world);
+  const transformResult = propagateTransforms(world, hierarchy);
+  return {
+    assets: options.assets,
+    pipelineState: options.pipelineState,
+    gpuStore: options.gpuStore,
+    cull: options.cull ?? 'self',
+    cullCameras: options.cullCameras,
+    hierarchy,
+    visibility: resolveVisibility(world, hierarchy),
+    transformError: transformResult.ok ? undefined : transformResult.error,
+  };
+}
+
 export function extractFrames(
   worlds: readonly World[],
   owner: number | ExtractFramesOwner,
@@ -2024,40 +2077,28 @@ export function extractFrames(
     const world = worlds[wi];
     if (world === undefined) continue;
     try {
-      // Per-world propagate: guarantee Transform.world is fresh before extract.
-      const propagateResult = propagateTransforms(world);
-      if (!propagateResult.ok) {
+      // Tilemap materialization must precede hierarchy projection so derived
+      // entities participate in the same World-local snapshot.
+      tilemapChunkExtractSystem(world, wi);
+      const isCameraOwner = wi === cameraOwner;
+      const cameraOwnerFrame = framesByWorld.get(cameraOwner);
+      const prepared = prepareExtractContext(world, {
+        ...(assets !== undefined ? { assets } : {}),
+        ...(pipelineState !== undefined ? { pipelineState } : {}),
+        ...(gpuStore !== undefined ? { gpuStore } : {}),
+        cull: isCameraOwner ? 'self' : 'external',
+        ...(cameraOwnerFrame === undefined ? {} : { cullCameras: cameraOwnerFrame.cameras }),
+      });
+      if (prepared.transformError !== undefined) {
         (world as World & { _routeError(err: Error, ctx: ErrorContext): void })._routeError(
-          propagateResult.error as unknown as Error,
+          prepared.transformError as unknown as Error,
           {
             severity: Severity.Error,
             systemName: `RenderSystem.extractFrames(world[${wi}]) (propagateTransforms)`,
           },
         );
       }
-
-      // Tilemap chunk streaming: materialize/evict chunks before extract.
-      tilemapChunkExtractSystem(world, wi);
-
-      // D-4: the cameraOwner world uses its own camera for normal frustum
-      // culling. Every other world uses the already-extracted camera-owner
-      // snapshots, preserving culling across the composite instead of
-      // disabling it. A non-owner world must never use its own cameras here:
-      // those cameras are not surfaced by this draw.
-      const isCameraOwner = wi === cameraOwner;
-      const cameraOwnerFrame = framesByWorld.get(cameraOwner);
-      const frame = extractFrame(
-        world,
-        assets,
-        pipelineState,
-        gpuStore,
-        isCameraOwner
-          ? { cull: 'self' }
-          : {
-              cull: 'external',
-              ...(cameraOwnerFrame === undefined ? {} : { cullCameras: cameraOwnerFrame.cameras }),
-            },
-      );
+      const frame = extractFrame(world, prepared);
 
       framesByWorld.set(wi, frame);
     } catch (err) {
@@ -2089,6 +2130,9 @@ export function extractFrames(
   // AC-04: renderables — concat by worlds[] order, stamp worldId.
   const renderables: RenderableSnapshot[] = [];
   const dispatchEntries: DispatchEntry[] = [];
+  const visibilitySnapshots: VisibilitySnapshot[] = [];
+  const featureVisibilitySnapshots: RenderFeatureWorldVisibilitySnapshot[] = [];
+  const hiddenEntityReports: RenderFeatureHiddenEntityReport[] = [];
 
   for (let fi = 0; fi < succeededFrames.length; fi++) {
     const f = succeededFrames[fi];
@@ -2096,6 +2140,14 @@ export function extractFrames(
     if (f === undefined || wId === undefined) continue;
 
     const base = renderables.length;
+    const visibilitySnapshot = f.visibilitySnapshots[0];
+    const world = worlds[wId];
+    if (visibilitySnapshot !== undefined) {
+      visibilitySnapshots.push(visibilitySnapshot);
+      if (world !== undefined)
+        featureVisibilitySnapshots.push({ world, snapshot: visibilitySnapshot });
+    }
+    hiddenEntityReports.push(...f.hiddenEntityReports);
     for (const r of f.renderables) {
       renderables.push({ ...r, worldId: wId });
     }
@@ -2263,6 +2315,9 @@ export function extractFrames(
     culled: succeededFrames.reduce((s, f) => s + f.frustumStats.culled, 0),
     total: succeededFrames.reduce((s, f) => s + f.frustumStats.total, 0),
   };
+  const visibilityStats = {
+    explicitlyHidden: succeededFrames.reduce((s, f) => s + f.visibilityStats.explicitlyHidden, 0),
+  };
 
   return {
     cameras,
@@ -2274,7 +2329,11 @@ export function extractFrames(
     skybox,
     skyboxCount,
     frustumStats,
+    visibilityStats,
     postProcessParams,
+    visibilitySnapshots,
+    featureVisibilitySnapshots,
+    hiddenEntityReports,
   };
 }
 
@@ -2316,35 +2375,14 @@ function hasFiniteOrderedLocalAabb(aabb: Float32Array | undefined): aabb is Floa
   return minX <= maxX && minY <= maxY && minZ <= maxZ;
 }
 
-export function extractFrame(
-  world: World,
-  assets?: AssetRegistry | null,
-  pipelineState?: ExtractPipelineSurface | null,
-  gpuStore?: import('./gpu-resource-store').GpuResourceStore,
-  /**
-   * feat-20260708-composited-multi-world-rendering M2 / D-2 / D-4:
-   * optional per-call overrides.
-   *
-   * - `cull` (default `'self'`): `'self'` uses this world's cameras,
-   *   `'external'` uses `cullCameras` supplied by the composite owner, and
-   *   `'none'` keeps the legacy always-visible escape hatch.
-   * - `cullCameras`: camera snapshots from the surfaced camera-owner world;
-   *   only consumed when `cull === 'external'`.
-   *
-   * This parameter is add-only (non-breaking): existing 4-arg callers
-   * keep the default `'self'` behavior.
-   */
-  opts?: {
-    cull?: 'self' | 'none' | 'external';
-    cullCameras?: readonly CameraSnapshot[];
-  },
-): ExtractedFrame {
+export function extractFrame(world: World, context: PreparedExtractContext): ExtractedFrame {
   // feat-20260708-composited-multi-world-rendering M2 / D-2: resetForFrame
   // has been lifted to extractFrames (the frame-level entry point).
   // extractFrame is now a pure world->snapshot function with no frame-level
   // side effects. See plan-decisions PD2 for the reviewer ruling.
+  const { assets, pipelineState, gpuStore, cull: cullMode } = context;
+  const visibility = context.visibility.hasAnyHiddenIntent ? context.visibility : undefined;
   const skinPaletteAllocator = pipelineState?.skinPaletteAllocator ?? null;
-  const cullMode = opts?.cull ?? 'self';
 
   const directionalLightQuery = createQueryState({ with: [DirectionalLight, Entity] });
 
@@ -2930,7 +2968,7 @@ export function extractFrame(
   // in different worlds. The explicit 'none' mode remains the always-visible
   // escape hatch for callers that genuinely need it.
   const frustumPlanes: Float32Array[] = [];
-  const cullingCameras = cullMode === 'external' ? (opts?.cullCameras ?? []) : cameras;
+  const cullingCameras = cullMode === 'external' ? (context.cullCameras ?? []) : cameras;
   if (cullMode !== 'none') {
     for (const cam of cullingCameras) {
       // feat-20260613 M6 / w20: orthographic cameras have fov=0 by design;
@@ -2976,6 +3014,7 @@ export function extractFrame(
   // feat-20260528-frustum-culling M3 / w11: frustum culling counters.
   let frustumCulled = 0;
   let frustumTotal = 0;
+  const explicitlyHidden = new Set<EntityHandle>();
   // feat-20260520-2d-sprite-layer-mvp M-3 / w22 (@new-surface): three-
   // bucket dispatch arrays. The legacy `materialDispatch` field stays as
   // a back-compat union (opaque + transparent + overlay back-compat
@@ -3163,6 +3202,10 @@ export function extractFrame(
     for (let i = 0; i < bundle.Entity.self.length; i++) {
       // feat-20260608 M2 / w11: read materials array via _getArrayView
       const entity = (entitySelf[i] ?? 0) as EntityHandle;
+      if (isRenderable && visibility?.effective(entity) === 'hidden') {
+        explicitlyHidden.add(entity);
+        continue;
+      }
       const layerVal = (fLayerValue?.[i] ?? 0) as number;
       // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
       // (carries PR #598 feat-20260703 D-7): dispatch entries for this entity
@@ -4163,7 +4206,11 @@ export function extractFrame(
     skybox,
     skyboxCount,
     frustumStats: { culled: frustumCulled, total: frustumTotal },
+    visibilityStats: { explicitlyHidden: explicitlyHidden.size },
     postProcessParams,
+    visibilitySnapshots: [context.visibility],
+    featureVisibilitySnapshots: [{ world, snapshot: context.visibility }],
+    hiddenEntityReports: [...explicitlyHidden].map((entity) => ({ world, entity })),
   };
 }
 

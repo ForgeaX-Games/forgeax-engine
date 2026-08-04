@@ -1,5 +1,10 @@
 import { encodeEntity, FixedUpdate, World } from '@forgeax/engine-ecs';
-import { Camera, type RenderPipeline } from '@forgeax/engine-render';
+import {
+  Camera,
+  type RenderPipeline,
+  Visibility,
+  VisibilityStateValue,
+} from '@forgeax/engine-render';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { Transform } from '@forgeax/engine-scene';
@@ -186,12 +191,13 @@ describe('particle prepared graphics public consumer', () => {
       renderer.installPipeline({ kind: 'render-pipeline', pipelineId: 'particle::prepared' }).ok,
     ).toBe(true);
     expect((await renderer.ready).ok).toBe(true);
-    expect(
-      world.spawn(
+    const player = world
+      .spawn(
         { component: Transform, data: { pos: [0, 0, 2] } },
         { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
-      ).ok,
-    ).toBe(true);
+        { component: Visibility, data: { state: VisibilityStateValue.visible } },
+      )
+      .unwrap();
     const drawCount = countDraws(renderer.device);
 
     world.addSystem(FixedUpdate, {
@@ -203,19 +209,33 @@ describe('particle prepared graphics public consumer', () => {
     expect(collectParticleRenderBuckets(world, current[0]?.batches.batches ?? [])).toHaveLength(1);
     expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
     expect(['preparing', 'ready']).toContain(feature.diagnostics().readiness);
-    // Custom material shader modules use the renderer's one-frame async cache;
-    // the next frame is the contract boundary for prepared pipeline readiness.
     await nextFrame();
     expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(feature.diagnostics().readiness).toBe('ready');
     expect(renderer.perFramePassNames).toContain('forgeax.vfx-render.particles::particles');
     expect(drawCount()).toBeGreaterThan(0);
     expect(feature.diagnostics().readiness).toBe('ready');
     expect(renderer.renderFeatureDiagnostics()[0]?.latestError).toBeUndefined();
 
+    world.set(player, Visibility, { state: VisibilityStateValue.hidden }).unwrap();
+    const beforeHiddenDraw = drawCount();
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    await nextFrame();
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawCount()).toBe(beforeHiddenDraw);
+    expect(renderer.perFramePassNames).not.toContain('forgeax.vfx-render.particles::shadow');
+
+    world.set(player, Visibility, { state: VisibilityStateValue.visible }).unwrap();
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    await nextFrame();
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawCount()).toBeGreaterThan(beforeHiddenDraw);
+
     current = [observation(world, [batch('mesh', 1)])];
     expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
     await nextFrame();
     expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(feature.diagnostics().readiness).toBe('ready');
     expect(drawCount()).toBeGreaterThan(1);
     expect(renderer.renderFeatureDiagnostics()[0]?.latestError).toBeUndefined();
 
@@ -223,8 +243,43 @@ describe('particle prepared graphics public consumer', () => {
     expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
     await nextFrame();
     expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(feature.diagnostics().readiness).toBe('ready');
     expect(drawCount()).toBeGreaterThan(2);
     expect(renderer.renderFeatureDiagnostics()[0]?.latestError).toBeUndefined();
+    renderer.dispose();
+  });
+
+  it('keeps the counterfactual without the particle feature visibly empty', async () => {
+    const { createRenderer } = await import('@forgeax/engine-runtime');
+    const { rhi } = await import('@forgeax/engine-rhi-null');
+    const renderer = await createRenderer(
+      canvas(),
+      { rhi, features: [] },
+      { shaderManifestUrl: manifest },
+    );
+    renderer.registerPipeline('particle::prepared-counterfactual', pipeline());
+    expect(
+      renderer.installPipeline({
+        kind: 'render-pipeline',
+        pipelineId: 'particle::prepared-counterfactual',
+      }).ok,
+    ).toBe(true);
+    expect((await renderer.ready).ok).toBe(true);
+
+    const world = new World();
+    expect(
+      world.spawn(
+        { component: Transform, data: { pos: [0, 0, 2] } },
+        { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
+      ).ok,
+    ).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(renderer.perFramePassNames).not.toContain('forgeax.vfx-render.particles::particles');
+    expect(renderer.renderFeatureDiagnostics()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ identity: 'forgeax.vfx-render.particles' }),
+      ]),
+    );
     renderer.dispose();
   });
 });

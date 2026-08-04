@@ -17,11 +17,19 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const dejavuFonts = resolve(monorepoRoot, 'forgeax-engine-assets', 'dejavu-fonts');
+const legacyFontRoots = [
+  resolve(dejavuFonts, 'DejaVuSansMono.atlas.png'),
+  resolve(dejavuFonts, 'DejaVuSansMono.atlas.png.meta.json'),
+  resolve(dejavuFonts, 'DejaVuSansMono.font.pack.json'),
+];
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [dejavuFonts] , refresh: reloadAssetHost() }),
+    // Keep this legacy-only oracle on the checked-in pack. The sibling TTF
+    // importer belongs to game-default/Preview and must not be silently
+    // discovered by a demo that has not registered the font plugin.
+    pluginPack({ roots: legacyFontRoots, refresh: reloadAssetHost() }),
   ],
   server: {
     fs: {

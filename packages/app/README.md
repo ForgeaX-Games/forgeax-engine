@@ -233,3 +233,30 @@ owns its renderer, World, input backend, and explicit plugin source list.
 - `Camera.clearColor` belongs to the Camera component, and bundler wiring belongs to `BundlerOptions`; neither is an App time responsibility.
 
 See `packages/app/src/types.ts` for option and Result types, `packages/app/src/internal/frame-loop.ts` for the frame-loop implementation, `packages/plugin/README.md` for the plugin runner, and `packages/ecs/README.md` for World schedule and time semantics.
+
+## Remote component discovery
+
+Quick start in a Node or dawn-node host:
+
+```ts
+import { createApp } from '@forgeax/engine-app';
+
+process.env.FORGEAX_ENGINE_REMOTE_SERVE = '1';
+const result = await createApp({ world, renderer });
+// Use the existing WS client to call the existing introspect method.
+```
+
+The app host derives JSON-safe descriptors from the global ECS component
+registry after plugins build. It injects those descriptors into the existing
+remote `introspect` response; app does not define, validate, or own a component.
+
+| Boundary | Contract | Recovery |
+|:--|:--|:--|
+| App -> remote | `startServer({ introspection })` carries data only | If remote is absent, verify dev mode or the explicit headless env flag |
+| Remote -> consumer | Existing `eval` and `introspect` methods remain the full surface | Use the returned `RemoteError` fields, never message parsing |
+| ECS/render | Registry and `Visibility` remain package-owned | Use `_import('@forgeax/engine-render')` in eval, not app-local labels |
+
+The descriptor is a transport projection, not a live token: it contains schema,
+field reflection, labels, and JSON-safe metadata, but no methods or validator
+functions. Camera, picking, lifecycle, assets, and VFX shadow policy remain
+outside the app host.

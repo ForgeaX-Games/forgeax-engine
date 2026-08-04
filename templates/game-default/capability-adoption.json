@@ -43,6 +43,59 @@
       ]
     },
     {
+      "id": "asset:jpg",
+      "classification": "guided",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "forgeax-engine-assets/README.md",
+        "forgeax-engine-assets/demo-assets/hello-sprite/wood-container.jpg",
+        "forgeax-engine-assets/demo-assets/hello-sprite/wood-container.jpg.meta.json",
+        "packages/image/README.md",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-inspection-recovery.mjs",
+        "templates/game-default/src/jpeg-texture-swap.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-212956-asset-jpg-guided-texture-gameplay-loop/REPORT.md"
+      ],
+      "reason": "The licensed wood-container.jpg sidecar proves the JPEG source -> image importer -> GUID catalog -> TextureAsset runtime path. game-default adopts it as one reversible material composition on the existing scored RedBox: L clones the authored PBR material slots with the loaded baseColorTexture while preserving the mesh, line-list accent, physics, hit, Visibility, inspection, and reset owners. The canonical sprite app remains the deeper 2D texture/sort oracle.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "asset:png",
+      "classification": "guided",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "forgeax-engine-assets/README.md",
+        "forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.png",
+        "forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.json",
+        "forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.png.meta.json",
+        "packages/image/README.md",
+        "packages/render/src/components/sprite-animation.ts",
+        "apps/hello/sprite-atlas/README.md",
+        "apps/hello/sprite-atlas/src/main.ts",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-inspection-recovery.mjs",
+        "templates/game-default/src/sprite-atlas-loop.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-232819-png-sprite-plugin-gameplay-loop/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-232819-png-sprite-plugin-gameplay-loop/artifacts/candidate-front-door.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-232819-png-sprite-plugin-gameplay-loop/artifacts/preview-inspection-recovery/report.json"
+      ],
+      "reason": "The licensed walk.atlas.png sidecar proves PNG source -> image importer -> GUID catalog -> TextureAsset delivery. game-default adopts it as a guided animation lesson on the existing projectile: N enables the atlas material, SpriteAnimation, and SpriteRegionOverride for newly spawned shots while the engine tick system advances four regions; hit, physics, audio, inspection, and R reset remain shared. The hello/sprite-atlas app remains the 10,000-entity fold/performance oracle, and the atlas JSON stays a build-time text channel rather than a runtime source parser.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
       "id": "asset:mp3",
       "classification": "core",
       "frontDoors": [
@@ -94,12 +147,63 @@
         "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/BoxTextured.glb.meta.json",
         "packages/gltf/README.md",
         "apps/preview/vite.config.ts",
-        "templates/game-default/src/glb-mesh-swap.ts",
+        "templates/game-default/src/gltf-mesh-swap.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-153313-classify-asset-glb-candidate/REPORT.md"
       ],
       "reason": "The license-safe Khronos BoxTextured.glb proves the binary GLB source/sidecar -> gltfImporter -> mesh/material/texture sub-assets -> GUID catalog -> runtime loader path. game-default adopts it as a format-switch lesson on the existing scored RedBox: K replaces the authored mesh with the imported one-submesh mesh and its imported MaterialAsset, including the embedded texture dependency, while hit, physics, input, inspection, and R reset remain one coherent feature loop. The canonical glTF apps remain focused parser, build-cook, and skinned-animation oracles; this template slice teaches the reusable consumer path without adding a second scene owner.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "asset:gltf",
+      "classification": "guided",
+      "frontDoors": [
+        "preview"
+      ],
+      "evidence": [
+        "forgeax-engine-assets/README.md",
+        "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/glTF/BoxTextured.gltf",
+        "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/glTF/BoxTextured.gltf.meta.json",
+        "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/glTF/BoxTextured0.bin",
+        "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/glTF/CesiumLogoFlat.png",
+        "packages/gltf/README.md",
+        "apps/preview/vite.config.ts",
+        "templates/game-default/src/gltf-mesh-swap.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-184438-classify-asset-gltf-candidate/REPORT.md"
+      ],
+      "reason": "The license-safe Khronos textual BoxTextured.gltf proves the external-buffer source closure (BoxTextured0.bin plus CesiumLogoFlat.png), gltfImporter sidecar GUIDs, four-subasset pack projection, and runtime payload refs. game-default adopts it as the complementary container-format lesson on the existing scored RedBox: T swaps the textual glTF mesh/material pair by GUID, while physics, hit, inspection, and R reset remain the same owners as the binary GLB and FBX lessons.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "asset:ttf",
+      "classification": "guided",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "forgeax-engine-assets/README.md",
+        "forgeax-engine-assets/dejavu-fonts/ATTRIBUTION.md",
+        "forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.ttf",
+        "forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.ttf.meta.json",
+        "packages/font/README.md",
+        "packages/font/src/font-importer.ts",
+        "apps/hello/text/README.md",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-inspection-recovery.mjs",
+        "templates/game-default/src/world-score-text.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/artifacts/preview-inspection-4/ttf-font-active.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/artifacts/preview-inspection-4/report.json"
+      ],
+      "reason": "The licensed DejaVuSansMono.ttf now has a Pack-v2 font sidecar with stable texture, sampler, and font GUIDs. Preview registers fontImporter, cooks the TTF to a raw RGBA8 MSDF atlas plus FontAsset pack, and game-default switches the existing pooled hit-score GlyphText between the legacy baked pack and the TTF-derived FontAsset with Y/R and inspection recovery. The focused hello text and M2 pipeline apps remain the standalone baked/Worker bake oracles; no second text scene is added.",
       "betterConsumer": "templates/game-default"
     },
     {
@@ -112,6 +216,29 @@
         "apps/preview/src/main.ts",
         "packages/audio-webaudio/README.md"
       ]
+    },
+    {
+      "id": "package:@forgeax/engine-font",
+      "classification": "guided",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/font/README.md",
+        "packages/font/src/font-importer.ts",
+        "packages/font/src/cli-font.ts",
+        "packages/font/src/__tests__/font-local-artifacts.test.ts",
+        "apps/preview/package.json",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-inspection-recovery.mjs",
+        "templates/game-default/src/world-score-text.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/REPORT.md"
+      ],
+      "reason": "The public font package is adopted at its real build/runtime boundary: Preview registers fontImporter, the existing pooled world-score owner loads the resulting FontAsset by declared GUID, and the same label can switch/reset between legacy and TTF sources. The importer publishes raw RGBA8 atlas bytes because Pack v2's runtime texture loader consumes non-Basis artifacts as pixels; the CLI PNG remains a standalone bake output."
     },
     {
       "id": "app:hello/audio",
@@ -1254,7 +1381,6 @@
         "apps/bevy/parenting/src/main.ts",
         "apps/bevy/parenting/src/parenting.ts",
         "apps/bevy/parenting/scripts/smoke-dawn.mjs",
-        "apps/bevy/parenting/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-181832-classify-parenting-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves ChildOf and propagateTransforms with a rotating parent and orbiting child: typecheck/build pass, Dawn runs 300 frames on webgpu, NDC-center is non-black, motionMeanDelta=0.05200, childMove=7.0212, and RHI errors are zero. It is a static code-spawned two-cube oracle with no gameplay input, reset/re-entry owner, asset delivery, recovery path, or browser loop. game-default already authors a multi-part Player hierarchy in scene.pack.json, resolves it through SceneAsset localId mapping, mutates gameplay-owned rotating targets, and restores them through one typed reset owner; copying this scene would duplicate hierarchy policy and violate the template's pack-vs-runtime spawn boundary.",
@@ -1270,7 +1396,6 @@
         "apps/bevy/pbr/src/main.ts",
         "apps/bevy/pbr/src/pbr.ts",
         "apps/bevy/pbr/scripts/smoke-dawn.mjs",
-        "apps/bevy/pbr/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-184329-classify-pbr-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the standard PBR parameter contract with an 11x5 metallic/roughness sphere matrix and an unlit control: after the prescribed root pnpm build refreshed workspace dist, typecheck/build pass, Dawn runs 300 frames on webgpu, center-region lit=255.0000, earlyMaxBright=1.0000, roughness-spread=0.0623, and RHI errors are zero. It is a static code-spawned material gallery with no gameplay input, reset/re-entry owner, browser loop, asset delivery, or recovery path. game-default already owns authored standard PBR, DirectionalLight plus HDR Skylight IBL, gameplay emissive feedback, and a clearcoat parameter slice; copying the matrix would duplicate presentation without a new feature-loop contract. Revisit only when a material parameter changes a resettable gameplay outcome and browser evidence observes it.",
@@ -1287,7 +1412,6 @@
         "apps/bevy/play-sound-effect/src/play-sound-effect.ts",
         "apps/bevy/play-sound-effect/scripts/smoke-dawn.mjs",
         "apps/bevy/play-sound-effect/scripts/smoke-browser.mjs",
-        "apps/bevy/play-sound-effect/artifacts/play-sound-effect-after.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-190915-classify-play-sound-effect-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves a real GUID-loaded one-shot SFX: typecheck/build, Dawn structural audio smoke, and Chrome Web Audio evidence all pass; two Space edges reach audio=running with active=1 and app.stop closes the context with activeSourceCount=0. It nevertheless uses the same SFX GUID already owned by game-default's gameplay-audio.ts. The template already loads that clip, routes spatial Player hit feedback through the sfx bus, combines looping music controls, settings, re-arm, and typed reset/recovery. Adding a second Space-triggered AudioSource owner would duplicate the public audio contract rather than compose a new feature-loop mechanic.",
@@ -1303,7 +1427,6 @@
         "apps/bevy/random-sampling/src/main.ts",
         "apps/bevy/random-sampling/src/random-sampling.ts",
         "apps/bevy/random-sampling/scripts/smoke-dawn.mjs",
-        "apps/bevy/random-sampling/artifacts/random-sampling-ref.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-195448-classify-random-sampling-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves a procedural sampling/render contract: after the prescribed root pnpm build refreshed a fresh worktree's package dist, typecheck/build pass, Dawn runs 300 frames on webgpu, the wireframe cube and random point scene are non-black and colored, and RHI errors are zero. It is nevertheless an unseeded Math.random() gallery that code-spawns persistent points, reads low-level S/D/M keyboard edges directly, has no browser smoke, no reset/despawn owner, and no gameplay outcome. game-default already owns one frozen InputSnapshot/InputMap boundary, authored SceneAsset content, bounded transient spawns, typed R reset, and browser semantic evidence; copying this gallery would add a second input owner and teach non-reproducible lifecycle. Revisit only with a deterministic seed or public sampling contract that changes a resettable gameplay outcome.",
@@ -1319,7 +1442,6 @@
         "apps/bevy/rotate-environment-map/src/main.ts",
         "apps/bevy/rotate-environment-map/src/rotate-environment-map.ts",
         "apps/bevy/rotate-environment-map/scripts/smoke-dawn.mjs",
-        "apps/bevy/rotate-environment-map/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-202956-classify-rotate-environment-map-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves GUID-loaded EquirectAsset composition: typecheck/build pass, Dawn runs 300 frames on webgpu, shared SkyboxBackground and Skylight rotation advance (angle=0.065) with a non-dark HDR render (maxLuma=1.0000) and zero engine errors. It is nevertheless a static code-spawned PBR sphere/floor with time-only environment rotation, no browser smoke, input/reset/re-entry or gameplay owner, and it reuses the same HDR environment concept already authored in game-default's SceneAsset (Skylight + SkyboxBackground) with asset-content evidence and typed reset. Copying it would duplicate the environment/asset owner rather than compose a new feature-loop mechanic; revisit when environment rotation changes a resettable gameplay outcome through the existing InputMap and browser evidence.",
@@ -1336,8 +1458,6 @@
         "apps/bevy/run-conditions/src/run-conditions.ts",
         "apps/bevy/run-conditions/scripts/smoke-dawn.mjs",
         "apps/bevy/run-conditions/scripts/smoke-browser.mjs",
-        "apps/bevy/run-conditions/artifacts/frame-early.png",
-        "apps/bevy/run-conditions/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-210329-classify-run-conditions-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves a useful ECS scheduling oracle: typecheck/build pass, Dawn runs 300 frames with the set gate closed for 124 frames then open, gatedRuns=176, pulseRuns=1, motionMeanDelta=0.01225, lateFrameMaxBright=1.0000, and Chrome reaches the same gate/pulse state with no console errors. It is nevertheless a synthetic two-bar time gate with no input, authored scene, gameplay outcome, reset/re-entry owner, asset lifecycle, or recovery path. game-default already owns typed GameState Play/Reset runIf gates across Update and FixedUpdate, state-scoped cleanup, and browser semantic evidence; adding a second defineSystemSet showcase would duplicate scheduling ownership rather than compose a feature-loop mechanic. Keep the focused run-conditions app canonical and revisit only when a real gameplay subsystem needs a shared system-set condition beyond inState.",
@@ -1353,8 +1473,6 @@
         "apps/bevy/scale/src/main.ts",
         "apps/bevy/scale/src/scale.ts",
         "apps/bevy/scale/scripts/smoke-dawn.mjs",
-        "apps/bevy/scale/artifacts/frame-early.png",
-        "apps/bevy/scale/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-213000-classify-scale-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves bounded non-uniform Transform.scale scheduling: typecheck/build pass, Dawn runs 300 frames on webgpu, the lit cube renders with motionMeanDelta=0.00134 above the 0.0005 floor, finalScale=[1,1.3000006675720215,1], finalDirection=[0,-1,0], and RHI errors are zero; early and late captures show the silhouette changing. It is nevertheless a static code-spawned single-cube transform gallery driven only by Time, with no input action, authored asset/scene, gameplay outcome, reset/re-entry owner, browser witness, or recovery boundary. game-default already owns authored Transform hierarchy, gameplay-driven target motion, deferred projectiles, typed R reset, and browser semantic evidence; copying this cube would duplicate a lower-level transform oracle rather than compose a feature-loop mechanic. Keep apps/bevy/scale canonical and revisit when scale changes a resettable gameplay outcome through the existing input/state owners.",
@@ -1370,7 +1488,6 @@
         "apps/bevy/screenshot/src/main.ts",
         "apps/bevy/screenshot/src/screenshot.ts",
         "apps/bevy/screenshot/scripts/smoke-dawn.mjs",
-        "apps/bevy/screenshot/dist/smoke/screenshot-scene.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-222328-classify-screenshot-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves renderer readback and input edge semantics: typecheck/build pass, Dawn renders a lit plane/cube scene with center pixel R=171 G=161 B=150 A=255, Space rising edge triggers exactly once, held Space does not retrigger, and RHI errors are zero. It is nevertheless a code-spawned static window scene whose only outcome is a developer-triggered PNG download; the browser path uses a module-global screenshotDue flag, perpetual requestAnimationFrame polling, temporary canvas toDataURL, and no browser smoke or host cleanup registration. game-default already owns one semantic InputMap/InputSnapshot boundary, authored gameplay, typed R reset, controlled UI cleanup, and browser semantic/pixel evidence; FORGE.md treats UI screenshots as auxiliary. Adding a second browser-only download owner would duplicate the evidence boundary and lifecycle risk rather than compose gameplay. Revisit when a host-neutral screenshot service has an explicit lifecycle owner and a resettable photo-mode outcome.",
@@ -1386,7 +1503,6 @@
         "apps/bevy/shader-defs/src/main.ts",
         "apps/bevy/shader-defs/src/shader-defs.wgsl",
         "apps/bevy/shader-defs/scripts/smoke-dawn.mjs",
-        "apps/bevy/shader-defs/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-230845-classify-shader-defs-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves build-time shader composition and a static module-slot variant: typecheck/build pass, the generated manifest contains the bevy::shader_defs artifact, Dawn renders 100 frames on webgpu, left/right readback pixels are [63,137,255] and [255,63,63], and RHI errors are zero; the PNG shows the blue and red variant cubes. It is nevertheless a code-spawned two-cube shader gallery with a static IS_RED define, no input action, authored scene, gameplay outcome, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns build-time custom WGSL, authored MaterialAsset parameter mutation, hit feedback, animated shader time, GUID/meta shader packages, and browser render evidence; copying a second static variant gallery would duplicate the shader lesson without composing the feature loop. Keep apps/bevy/shader-defs canonical and revisit when a variant axis changes a resettable gameplay outcome through the template's existing material and input owners.",
@@ -1403,7 +1519,6 @@
         "apps/bevy/shader-material/src/scene.ts",
         "apps/bevy/shader-material/src/shader-material.wgsl",
         "apps/bevy/shader-material/scripts/smoke-dawn.mjs",
-        "apps/bevy/shader-material/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-235009-classify-shader-material-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves a composed custom MaterialAsset path: typecheck/build pass, Dawn renders 300 frames on webgpu with visiblePixels=3526, brightPixels=817, colorBins=125, zero renderer errors, and the PNG shows a four-color textured cube with transparent borders. It combines a generated checker TextureAsset upload, a color uniform, custom WGSL, and premultiplied alpha blending. It is nevertheless a static code-spawned cube gallery with no input action, authored scene, gameplay outcome, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns build-time custom WGSL, hit-flash premultiplied alpha, a runtime-uploaded checker texture on the projectile, authored MaterialAsset mutation, typed R reset, and browser render evidence; copying this gallery would duplicate the material/texture lesson rather than compose the feature loop. Keep apps/bevy/shader-material canonical and revisit when the texture/material state changes a resettable gameplay outcome through the template's existing input and asset owners.",
@@ -1447,7 +1562,6 @@
         "apps/bevy/skybox/src/main.ts",
         "apps/bevy/skybox/src/skybox.ts",
         "apps/bevy/skybox/scripts/smoke-dawn.mjs",
-        "apps/bevy/skybox/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-020119-classify-skybox-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the full HDR skybox path: typecheck/build pass, Dawn observes 132 webgpu frames with a skybox pass, maxLuma=1.0000, a PNG artifact, zero engine errors, and FALSIFY=remove-skybox darkens the frame to maxLuma=0.0000. The GUID-loaded Newport Loft equirect reaches SkyboxBackground and Skylight through pack-index/runtime loading. It is nevertheless a static code-spawned presentation scene with no authored scene, input action, gameplay/settings lifecycle, reset/re-entry owner, or recovery boundary. game-default already authors SkyboxBackground and Skylight in assets/scene.pack.json, exposes HDR GUID reload/intensity/missing-asset evidence, typed R reset, and browser rendering; adding a second HDR gallery would duplicate the same asset/presentation lesson rather than compose the feature loop. Keep apps/bevy/skybox canonical and revisit when skybox mode changes a resettable gameplay or settings outcome through the template's existing asset and lifecycle owners.",
@@ -1463,8 +1577,6 @@
         "apps/bevy/smooth-follow/src/main.ts",
         "apps/bevy/smooth-follow/src/smooth-follow.ts",
         "apps/bevy/smooth-follow/scripts/smoke-dawn.mjs",
-        "apps/bevy/smooth-follow/artifacts/frame-early.png",
-        "apps/bevy/smooth-follow/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-022503-classify-smooth-follow-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves a shared frame-rate-independent motion path: typecheck/build pass, Dawn observes 100 webgpu frames, lateFrameMaxBright=0.9451, motionMeanDelta=0.00770, follower distance shrinks 2.5395 to 0.6346 (ratio 0.250), early/late PNGs show the follower catching the target, and RHI errors are zero. The app and smoke import the same World/step SSOT, so the engine oracle is strong. It is nevertheless a static code-spawned two-sphere gallery with no authored scene, input action, gameplay/settings lifecycle, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns exponential camera damping, authored moving targets, typed R reset, and browser render evidence; adding a second standalone damping gallery would duplicate the motion lesson rather than compose the feature loop. Keep apps/bevy/smooth-follow canonical and revisit when damping changes a resettable gameplay or camera-setting outcome through the template's existing owners.",
@@ -1481,8 +1593,6 @@
         "apps/bevy/soundtrack/src/soundtrack.ts",
         "apps/bevy/soundtrack/scripts/smoke-dawn.mjs",
         "apps/bevy/soundtrack/scripts/smoke-browser.mjs",
-        "apps/bevy/soundtrack/artifacts/soundtrack-before.png",
-        "apps/bevy/soundtrack/artifacts/soundtrack-after.png",
         "templates/game-default/src/gameplay-audio.ts",
         "templates/game-default/src/settings.ts",
         "templates/game-default/AGENTS.md",
@@ -1503,8 +1613,6 @@
         "apps/bevy/spatial-audio-2d/src/spatial-audio-2d.ts",
         "apps/bevy/spatial-audio-2d/scripts/smoke-dawn.mjs",
         "apps/bevy/spatial-audio-2d/scripts/smoke-browser.mjs",
-        "apps/bevy/spatial-audio-2d/artifacts/spatial-audio-before.png",
-        "apps/bevy/spatial-audio-2d/artifacts/spatial-audio-listener-left.png",
         "templates/game-default/main.ts",
         "templates/game-default/src/gameplay-audio.ts",
         "templates/game-default/AGENTS.md",
@@ -1523,7 +1631,6 @@
         "apps/bevy/specular-tint/src/main.ts",
         "apps/bevy/specular-tint/src/specular-tint.ts",
         "apps/bevy/specular-tint/scripts/smoke-dawn.mjs",
-        "apps/bevy/specular-tint/artifacts/smoke-frame.png",
         "forgeax-engine-assets/learn-opengl/textures/container2_specular_colored.png.meta.json",
         ".forgeax-harness/solo/game-default/experiments/20260731-034412-classify-specular-tint-candidate/REPORT.md"
       ],
@@ -1540,7 +1647,6 @@
         "apps/bevy/spotlight/src/main.ts",
         "apps/bevy/spotlight/src/spotlight.ts",
         "apps/bevy/spotlight/scripts/smoke-dawn.mjs",
-        "apps/bevy/spotlight/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-040433-classify-spotlight-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the public SpotLight cone path: typecheck/build pass, Dawn runs 100 webgpu frames, the NDC-center sample is [0.7412,0.7412,0.7412], the ground plane, four cone lights, and deterministic cube set are visible, and RHI errors are zero. It is nevertheless a static code-spawned gallery with no authored scene, asset delivery, input, gameplay/settings lifecycle, reset/re-entry owner, browser smoke, or recovery boundary. game-default already owns authored directional/point lighting, a live gameplay target loop, typed reset, and browser render evidence; copying another light gallery would duplicate presentation without adding a feature-loop behavior. Keep apps/bevy/spotlight canonical and revisit only when a license-safe authored lighting slice gives the player a resettable gameplay or settings outcome through the template's existing owners.",
@@ -1557,8 +1663,6 @@
         "apps/bevy/sprite/src/sprite.ts",
         "apps/bevy/sprite/scripts/smoke-dawn.mjs",
         "apps/bevy/sprite/scripts/smoke-browser.mjs",
-        "apps/bevy/sprite/artifacts/smoke-frame.png",
-        "apps/bevy/sprite/artifacts/sprite-browser.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-043836-classify-sprite-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the public image-backed sprite path: typecheck/build pass, Dawn runs 100 webgpu frames with visiblePixels=5600 and channelSpreadPixels=5600, Chrome reaches the ready marker with a 960x540 canvas and screenshot, and renderer errors are zero. It is nevertheless a single static code-generated sprite with no authored source asset/sidecar/GUID, input, gameplay/settings outcome, reset/re-entry owner, or recovery boundary. game-default already owns a resettable 3D gameplay loop, authored HUD and scene assets, runtime texture/material mutation, and browser smoke; copying a lone sprite would create a second presentation path rather than a feature-loop behavior. Keep apps/bevy/sprite canonical and revisit as a template HUD/gameplay marker only with a license-safe authored asset through the normal pack path and a resettable user outcome.",
@@ -1575,8 +1679,6 @@
         "apps/bevy/sprite-flipping/src/texture.ts",
         "apps/bevy/sprite-flipping/scripts/smoke-dawn.mjs",
         "apps/bevy/sprite-flipping/scripts/smoke-browser.mjs",
-        "apps/bevy/sprite-flipping/artifacts/smoke-frame.png",
-        "apps/bevy/sprite-flipping/artifacts/sprite-flipping-browser.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-045623-classify-sprite-flipping-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the public forgeax::sprite flipX/flipY path: typecheck/build pass, Dawn runs 100 webgpu frames, all three asymmetric normal/flipX/flipY orientation samples match, Chrome reaches the uploaded-texture ready marker on a 960x540 canvas, and renderer errors are zero. It is nevertheless a static three-sprite gallery with a procedurally generated texture and no authored source asset/sidecar/GUID, input, gameplay/settings outcome, reset/re-entry owner, or recovery boundary. game-default already owns authored asset delivery, a resettable 3D gameplay loop, material mutation, and browser smoke; copying another orientation gallery would duplicate presentation rather than add a feature-loop behavior. Keep apps/bevy/sprite-flipping canonical and revisit only when flip state affects a license-safe authored HUD/gameplay asset with a resettable user outcome.",
@@ -1593,9 +1695,6 @@
         "apps/bevy/ssao/src/ssao.ts",
         "apps/bevy/ssao/scripts/smoke-dawn.mjs",
         "apps/bevy/ssao/scripts/smoke-browser.mjs",
-        "apps/bevy/ssao/artifacts/ssao-off.png",
-        "apps/bevy/ssao/artifacts/ssao-on.png",
-        "apps/bevy/ssao/artifacts/ssao-browser.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-000445-classify-ssao-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the HDRP SSAO pipeline end to end: typecheck/build pass, Dawn observes 300 frames with ssaoDiffMean=31.9766 and changedPixels=6344, both ssao-calc and ssao-blur passes, and zero renderer errors; Chrome reaches enabled=true with meshCount=7 and pipeline=forgeax::hdrp without page or console errors. It is nevertheless a static seven-mesh occlusion gallery with no input, gameplay/settings lifecycle, reset/re-entry, authored asset boundary, or recovery owner. game-default already owns a URP camera with bloom, FXAA, authored scene content, and one settings/reset owner; replacing that pipeline or adding a hidden HDRP switch would split presentation ownership rather than compose a feature-loop behavior. Keep apps/bevy/ssao canonical until a public pipeline-level SSAO feature can compose with the existing game world while preserving its post-processing and reset evidence.",
@@ -1658,7 +1757,6 @@
         "apps/bevy/texture/src/main.ts",
         "apps/bevy/texture/src/texture.ts",
         "apps/bevy/texture/scripts/smoke-dawn.mjs",
-        "apps/bevy/texture/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-063315-classify-texture-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves TextureAsset upload and baseColorTexture sampling: typecheck/build pass, Dawn runs 100 webgpu frames, the checkerboard is visible with NDC-center distance 0.9985 from black, and renderer errors are zero. It is nevertheless a static code-spawned three-quad gallery with no authored source asset/sidecar/GUID, input, gameplay/settings outcome, reset/re-entry owner, or recovery path. game-default already owns a stronger texture composition in custom-projectile-mesh.ts: it uploads a TextureAsset, binds it to a standard material on a hand-authored mesh, mutates UVs with G, and restores them through the single R reset owner. Copying the gallery would duplicate texture delivery without a feature-loop behavior. Keep apps/bevy/texture canonical until an authored import/compression or lifecycle lesson exceeds that existing boundary.",
@@ -1677,8 +1775,6 @@
         "apps/bevy/time-elapsed/src/main.ts",
         "apps/bevy/time-elapsed/src/time-elapsed.ts",
         "apps/bevy/time-elapsed/scripts/smoke-dawn.mjs",
-        "apps/bevy/time-elapsed/artifacts/frame-early.png",
-        "apps/bevy/time-elapsed/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-065109-classify-time-elapsed-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the engine-owned Time.elapsed contract: typecheck/build pass, Dawn runs 100 webgpu frames with lateFrameMaxBright=0.6980, motionMeanDelta=0.00632, maxYErr=5.774e-8 against the closed-form oscillator, and zero renderer errors; early/late PNGs show the motion. game-default adopts the public concept in its authored animated YellowPillar: the Update system reads Time.elapsed minus a reset-time origin, eliminating the former materialElapsed += Time.delta duplicate while preserving R phase-zero reset. The canonical app remains the closed-form clock oracle; the template owns the integrated gameplay/reset composition.",
@@ -1711,8 +1807,6 @@
         "apps/bevy/tonemapping/src/main.ts",
         "apps/bevy/tonemapping/src/tonemapping.ts",
         "apps/bevy/tonemapping/scripts/smoke-dawn.mjs",
-        "apps/bevy/tonemapping/artifacts/tonemap-none.png",
-        "apps/bevy/tonemapping/artifacts/tonemap-agx.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-080116-classify-tonemapping-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the seven-mode HDR tonemap path: typecheck/build pass, the 120-frame webgpu Dawn smoke exercises all modes, five produce material pixel differences, the tonemap pass is present, and renderer errors are zero. It is nevertheless a static code-spawned 21-sphere comparison field with keyboard-only mode cycling and no authored assets, gameplay outcome, reset/re-entry owner, or browser witness. game-default already owns an authored Camera with TONEMAP_REINHARD_EXTENDED, HDR skybox, bloom, antialiasing, and one settings/reset boundary; copying the gallery would duplicate presentation rather than add a feature-loop behavior. Revisit only when a real first-user settings requirement needs a reset-safe mode selector extending the existing camera/settings owner.",
@@ -1729,7 +1823,6 @@
         "apps/bevy/touch-input/src/touch-input.ts",
         "apps/bevy/touch-input/scripts/smoke-dawn.mjs",
         "apps/bevy/touch-input/scripts/smoke-browser.mjs",
-        "apps/bevy/touch-input/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-083645-classify-touch-input-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves normalized touch semantics at the frozen InputSnapshot boundary: typecheck/build pass, Dawn runs 100 webgpu frames with two presses, one release, one cancel, three active-contact frames, and zero renderer errors, while Chrome proves the same edges and active coordinates. It is nevertheless a diagnostic three-marker scene with no authored asset delivery, gameplay outcome, settings boundary, typed reset/re-entry owner, or recovery path. game-default already owns one InputSnapshot/InputMap boundary for pointer-lock look, screen-pick aim, click-to-shoot, wheel camera controls, keyboard actions, and gamepad parity, with R as the single reset owner; adding a parallel touch resource would split input authority and duplicate pointer semantics. Revisit when a touch-first mechanic needs to extend that existing boundary.",
@@ -1745,8 +1838,6 @@
         "apps/bevy/transform/src/main.ts",
         "apps/bevy/transform/src/transform.ts",
         "apps/bevy/transform/scripts/smoke-dawn.mjs",
-        "apps/bevy/transform/artifacts/frame-early.png",
-        "apps/bevy/transform/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-090031-classify-transform-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves public Transform mutation and math composition: typecheck/build pass, Dawn runs 100 webgpu frames with motionMeanDelta=0.00221, orbitDistance=3.0231, center scale=0.6372, visible early/late PNGs, and zero RHI errors. It is nevertheless a code-spawned sphere/cube orbit oracle with app-local Orbiting and CenterSphere components and no authored asset delivery, input, gameplay/settings outcome, typed reset/re-entry owner, browser witness, or recovery path. game-default already teaches Transform through its authored SceneAsset, Player hierarchy, camera modes, projectile movement/orientation, physics writeback, YellowPillar rotation, hit feedback, debug axes, and one R reset owner; copying this gallery would duplicate the Transform concept and split motion/reset ownership. Revisit only for a distinct authored-hierarchy or physics-ordering mechanic.",
@@ -1762,8 +1853,6 @@
         "apps/bevy/translation/src/main.ts",
         "apps/bevy/translation/src/translation.ts",
         "apps/bevy/translation/scripts/smoke-dawn.mjs",
-        "apps/bevy/translation/artifacts/frame-early.png",
-        "apps/bevy/translation/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-092417-classify-translation-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves local-axis Transform translation and speed reversal: typecheck/build pass, Dawn runs 100 webgpu frames with NDC-center distance 0.1019, motionMeanDelta=0.00524, early/late PNGs, and zero RHI errors. It is nevertheless a static code-spawned cube/ground scene with app-local Movable state and no authored asset delivery, input, gameplay/settings outcome, typed reset/re-entry owner, browser witness, or recovery path. game-default already owns authored Transform data, Player/camera/projectile motion, physics writeback, local-space quaternion math, target rotation, hit feedback, debug axes, and one R reset owner; copying this gallery would duplicate motion presentation and split movement/reset ownership. Revisit only for a distinct translation mechanic that composes with the existing owner.",
@@ -1779,8 +1868,6 @@
         "apps/bevy/transparency-3d/src/main.ts",
         "apps/bevy/transparency-3d/src/transparency-3d.ts",
         "apps/bevy/transparency-3d/scripts/smoke-dawn.mjs",
-        "apps/bevy/transparency-3d/artifacts/frame-early.png",
-        "apps/bevy/transparency-3d/artifacts/frame-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-094452-classify-transparency-3d-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves four public 3D transparency paths: typecheck/build pass, Dawn runs 300 webgpu frames with alphaMeanDelta=0.00440, alphaStateDelta=0.48176, lateMaxLuma=1.0000, early/late PNGs, and zero RHI errors. It is nevertheless a static code-spawned material gallery with no authored source asset, input-driven gameplay outcome, typed reset/re-entry owner, browser witness, or recovery path. game-default already owns authored premultiplied transparent hit feedback with depthWriteEnabled=false, transparent sorting, custom WGSL premultiplication, a target hit/reset loop, and browser semantic/pixel evidence; apps/bevy/blend-modes remains the canonical multi-mode blend oracle. Copying this gallery would add a second transient material owner without a distinct feature-loop behavior. Revisit when an authored target needs alpha masking or alpha-to-coverage as a reset-safe settings/gameplay choice.",
@@ -1797,7 +1884,6 @@
         "apps/bevy/update-gltf-scene/src/update-gltf-scene.ts",
         "apps/bevy/update-gltf-scene/scripts/smoke-dawn.mjs",
         "apps/bevy/update-gltf-scene/scripts/smoke-browser.mjs",
-        "apps/bevy/update-gltf-scene/artifacts/update-gltf-scene-browser.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-101420-classify-update-gltf-scene-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves a real glTF and sidecar chain: typecheck/build pass, Dawn runs 100 webgpu frames with meanLuma=0.0273, descendants=1, motionDelta=0.02298, Chrome reaches ready=1 at 960x540 with no page/console/HTTP errors, and the browser PNG is visible. It is nevertheless a static one-box reproduction that reuses apps/hello/gltf/assets/box.gltf, performs an app-local parse/catalog bridge instead of consuming a template-owned cooked source asset, and has no authored gameplay/settings outcome, input action, typed reset/re-entry owner, or recovery path. game-default already owns GUID-loaded SceneAsset instantiation, an authored pack hierarchy, Transform/motion updates, physics writeback, material animation, debug axes, and one reset owner; copying the imported Box would duplicate the scene lesson or violate the pack-vs-runtime authoring boundary. Revisit when a cooked, license-safe glTF source composes with a real gameplay target and survives reset/re-entry/browser evidence.",
@@ -1813,8 +1899,6 @@
         "apps/bevy/viewport-to-world/src/main.ts",
         "apps/bevy/viewport-to-world/src/viewport-to-world.ts",
         "apps/bevy/viewport-to-world/scripts/smoke-dawn.mjs",
-        "apps/bevy/viewport-to-world/dist/smoke/viewport-early.png",
-        "apps/bevy/viewport-to-world/dist/smoke/viewport-late.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-103438-classify-viewport-to-world-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the public viewportToWorld ray and cursor-to-ground intersection: typecheck/build pass, Dawn runs 100 webgpu frames with marker moved=true, maxBright=0.8941, and zero renderer errors; early/late PNGs are captured and the late image was inspected. It is nevertheless a static code-spawned plane/marker scene with no authored asset, browser smoke, gameplay/settings outcome, typed reset/re-entry owner, or recovery path. game-default already composes the same screen-to-ray/picking contract with normalized input, top-down and Map camera modes, click-to-shoot target selection, target feedback, and one R reset owner; copying the marker would split the input/picking lesson without adding a distinct feature-loop behavior. Revisit when an authored placement/build mechanic extends the existing owner with browser semantic and visual proof.",
@@ -1830,7 +1914,6 @@
         "apps/bevy/window-resizing/src/main.ts",
         "apps/bevy/window-resizing/src/window-resizing.ts",
         "apps/bevy/window-resizing/scripts/smoke-dawn.mjs",
-        "apps/bevy/window-resizing/artifacts/window-resizing-ref.png",
         ".forgeax-harness/solo/game-default/experiments/20260731-105434-classify-window-resizing-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the public InputSnapshot key-edge path, canvas resize, renderer survival, and perspective camera aspect synchronization: typecheck/build pass, Dawn runs 100 webgpu frames with initial/steady/resized non-black renders, aspect=1.7778 for 640x360, and zero RHI errors; the reference PNG is visually inspected. It is nevertheless a static code-spawned diagnostic scene whose 1/2/3 keys manually mutate canvas dimensions and camera state, with no authored asset, browser smoke, gameplay/settings outcome, typed reset/re-entry owner, or recovery path. game-default already sizes the canvas from host/client dimensions and DPR, switches camera modes, and relies on engine-owned resize graph/resource invalidation; app/runtime tests cover autoAspect resize and post-resize rendering. Copying this demo would create a second resize policy without a distinct feature-loop mechanic. Revisit only for a user-facing responsive layout or split-screen owner with browser and reset evidence.",
@@ -1941,7 +2024,7 @@
         "templates/game-default/src/scene-runtime.ts",
         "templates/game-default/main.ts",
         "apps/preview/src/main.ts",
-        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-physics-candidate/REPORT.md"
+        ".forgeax-harness/solo/game-default/experiments/20260804-015731-classify-hello-physics-candidate/REPORT.md"
       ],
       "reason": "The canonical app proves the minimal createApp + Rapier 3D plugin contract with a dynamic sphere, static ground, 300-frame gravity smoke, PhysicsWorld readiness, and zero app errors. game-default already absorbs the reusable lesson through its authored scene physics attachment, dynamic targets, kinematic Player/CharacterController, fixed-step gameplay, typed reset, and Preview plugin host; do not copy the standalone cube scene. Keep the candidate as the minimal physics bootstrap oracle while Preview remains the guided consumer.",
       "betterConsumer": "templates/game-default"
@@ -1967,16 +2050,9 @@
     },
     {
       "id": "app:hello/compressed-texture",
-      "classification": "guided",
-      "frontDoors": ["preview"],
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
       "evidence": [
-        "templates/game-default/assets/compressed-projectile.png.meta.json",
-        "templates/game-default/assets/generate-assets.mjs",
-        "templates/game-default/src/custom-projectile-mesh.ts",
-        "templates/game-default/src/render-evidence.ts",
-        "templates/game-default/main.ts",
-        "apps/preview/vite.config.ts",
-        "apps/preview/scripts/smoke-custom-mesh.mjs",
         "apps/hello/compressed-texture/package.json",
         "apps/hello/compressed-texture/src/main.ts",
         "apps/hello/compressed-texture/scripts/smoke-browser.mjs",
@@ -1984,8 +2060,8 @@
         ".forgeax-harness/solo/game-default/experiments/20260731-144013-classify-hello-compressed-texture-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260731-144013-classify-hello-compressed-texture-candidate/artifacts/candidate-gates.txt"
       ],
-      "reason": "The canonical app proves the image importer, GUID-addressed texture catalog, Basis/ETC1S compressed upload, uncompressed falsifier, browser dual-scene smoke, and CPU/GPU parity witness. game-default adopts the concept as a thin guided slice on the existing projectile owner: a generated, license-safe authored PNG is scanned by the Preview pack plugin, loaded by GUID, uploaded into the projectile material, and observed through the same G toggle and R reset path. The procedural checker remains only for no-asset/unit hosts, so the browser smoke fails if the authored source path regresses.",
-      "betterConsumer": "templates/game-default"
+      "reason": "The canonical app proves the image importer, GUID-addressed texture catalog, Basis/ETC1S compressed upload, uncompressed falsifier, browser dual-scene smoke, and CPU/GPU parity witness. Carrying that lesson in game-default required a generated, gitignored PNG plus an orphan-prone sidecar and made copied games depend on a Preview-only generation side effect. game-default keeps only its self-contained procedural custom-mesh texture; authored compression remains in the focused canonical app.",
+      "betterConsumer": "apps/hello/compressed-texture"
     },
     {
       "id": "app:hello/culling",
@@ -2413,10 +2489,7 @@
         "apps/hello/m8-integrated-capstone/scripts/smoke.mjs",
         "apps/hello/m8-integrated-capstone/scripts/smoke-browser.mjs",
         "apps/hello/m8-integrated-capstone/scripts/smoke-dawn.mjs",
-        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/REPORT.md",
-        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/artifacts/browser-summary.json",
-        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/artifacts/frame-0.tape.bin",
-        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/artifacts/rhi-inspect.json"
+        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/REPORT.md"
       ],
       "reason": "The M8 direct host composes content HMR, audio, physics, picking, custom material selection, remote-live mutation, RHI capture, structured fault, and same-process recovery in one long-lived journey: browser and Dawn pass with seven stable entities, RHI capture has 16 draws and 238 commands, and before/after frames remain non-black. It is nevertheless a synthetic code-spawned scene with direct Space polling and direct createApp ownership; it bypasses game-default's authored SceneAsset, normalized InputMap, HUD, typed Reset, Preview cleanup, and public inspection/recovery front doors. Copying it would add a second scene/capstone owner. Keep it as the integrated acceptance oracle and reuse its pressure sequence when Preview exposes a documented P7 seam; do not transplant its harness into the template.",
       "betterConsumer": "apps/hello/m8-integrated-capstone"
@@ -2711,7 +2784,164 @@
         ".forgeax-harness/solo/game-default/experiments/20260804-140058-classify-hello-video-cutscene-candidate/artifacts/cutscene-after.png"
       ],
       "reason": "The candidate is a focused host-engine media oracle: the deterministic Dawn smoke proves createApp start/pause/resume/stop, a frozen World during pause, a one-frame dt baseline after resume, and the guarded resume-after-stop failure. Its compositor browser smoke proves the DOM overlay transition hidden -> visible -> hidden and a mean-color delta of 383.73 between canvas-only and the cutscene frame; headed Chrome adds zero page errors, console errors, or HTTP responses >=400. The video itself is a host-owned <video> element with no engine asset/component, authored Pack/GUID delivery, input action, gameplay consequence, typed state/reset/re-entry owner, cleanup beyond the host overlay, or Preview recovery path. game-default already owns App pause/resume only through its scene/gameplay lifecycle, typed reset, cleanup, recovery, UI, audio, and one coherent feature loop; importing a second media host would add no reusable template concept. Keep hello-video-cutscene as the canonical host-boundary oracle and revisit only if a licensed media asset changes an existing gameplay/state outcome through the template lifecycle owner. Audio remains explicitly out of scope because the fixture uses a muted video element.",
-       "betterConsumer": "apps/hello/video-cutscene"
+      "betterConsumer": "apps/hello/video-cutscene"
+    },
+    {
+      "id": "app:hello/tilemap",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/tilemap/README.md",
+        "apps/hello/tilemap/package.json",
+        "apps/hello/tilemap/src/main.ts",
+        "apps/hello/tilemap/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-123526-classify-hello-tilemap-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-123526-classify-hello-tilemap-candidate/artifacts/tilemap-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-123526-classify-hello-tilemap-candidate/artifacts/browser-console.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-123526-classify-hello-tilemap-candidate/artifacts/browser-requests.txt"
+      ],
+      "reason": "The canonical app is a static tilemap rendering oracle with authored tile data and a focused Dawn/browser proof, but it has no input, gameplay outcome, reset/re-entry owner, cleanup, recovery, or Preview game loop. game-default already owns a 3D camera, authored scene, picking, physics, HUD, and typed reset; adding a parallel 2D map and camera would duplicate the template's interaction vocabulary. Keep tilemap as the canonical 2D renderer consumer and revisit only when a licensed map changes an existing gameplay outcome through the same lifecycle owners.",
+      "betterConsumer": "apps/hello/tilemap"
+    },
+    {
+      "id": "app:hello/tilemap-object-layer",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/tilemap-object-layer/README.md",
+        "apps/hello/tilemap-object-layer/package.json",
+        "apps/hello/tilemap-object-layer/src/main.ts",
+        "apps/hello/tilemap-object-layer/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-125116-classify-hello-tilemap-object-layer-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-125116-classify-hello-tilemap-object-layer-candidate/artifacts/object-layer-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-125116-classify-hello-tilemap-object-layer-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-125116-classify-hello-tilemap-object-layer-candidate/artifacts/browser-requests-full.txt"
+      ],
+      "reason": "The canonical app proves tilemap object-layer projection and its browser/Dawn behavior, but remains a static 2D object-layer gallery without gameplay, input, reset/re-entry, cleanup, recovery, or Preview ownership. game-default's authored 3D scene and physics/picking/reset loop already provide the consumer boundary; copying a second map/object lifecycle would add concepts without a feature-loop outcome.",
+      "betterConsumer": "apps/hello/tilemap-object-layer"
+    },
+    {
+      "id": "app:hello/tonemap",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/tonemap/README.md",
+        "apps/hello/tonemap/package.json",
+        "apps/hello/tonemap/src/main.ts",
+        "apps/hello/tonemap/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-130914-classify-hello-tonemap-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-130914-classify-hello-tonemap-candidate/artifacts/tonemap-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-130914-classify-hello-tonemap-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-130914-classify-hello-tonemap-candidate/artifacts/browser-requests-full.txt"
+      ],
+      "reason": "The canonical app is a post-process tone-mapping comparison oracle with deterministic Dawn/browser evidence, not a gameplay composition: it has no authored asset loop, input, reset/re-entry, cleanup, recovery, or Preview game owner. game-default already owns the Camera post-process boundary and render evidence; adding another tone-map gallery would duplicate camera/pipeline presentation rather than teach a new feature-loop interaction.",
+      "betterConsumer": "apps/hello/tonemap"
+    },
+    {
+      "id": "app:hello/topology",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/topology/README.md",
+        "apps/hello/topology/package.json",
+        "apps/hello/topology/src/main.ts",
+        "apps/hello/topology/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-132526-classify-hello-topology-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-132526-classify-hello-topology-candidate/artifacts/topology-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-132526-classify-hello-topology-candidate/artifacts/falsifiers.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-132526-classify-hello-topology-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-132526-classify-hello-topology-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-132526-classify-hello-topology-candidate/artifacts/browser-requests-summary.txt"
+      ],
+      "reason": "The canonical app isolates primitive topology and its falsifiers with a valid browser/Dawn gate, but it is a static geometry diagnostic with no input, gameplay consequence, reset/re-entry, cleanup, recovery, or Preview owner. game-default already demonstrates authored MeshAsset/MaterialAsset behavior in a resettable target loop; a parallel topology gallery would not compose a new classic feature use.",
+      "betterConsumer": "apps/hello/topology"
+    },
+    {
+      "id": "app:hello/transform-hierarchy",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/transform-hierarchy/README.md",
+        "apps/hello/transform-hierarchy/package.json",
+        "apps/hello/transform-hierarchy/src/main.ts",
+        "apps/hello/transform-hierarchy/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-133600-classify-hello-transform-hierarchy-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-133600-classify-hello-transform-hierarchy-candidate/artifacts/hierarchy-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-133600-classify-hello-transform-hierarchy-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-133600-classify-hello-transform-hierarchy-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-133600-classify-hello-transform-hierarchy-candidate/artifacts/browser-requests-summary.txt"
+      ],
+      "reason": "The canonical app proves parent/child world-transform propagation with deterministic visual and browser evidence, but its static hierarchy has no authored pack lifecycle, input, gameplay consequence, reset/re-entry, cleanup, recovery, or Preview owner. game-default already owns authored ChildOf scene parts and rotating gameplay targets, so copying a second hierarchy scene would duplicate the same relationship vocabulary.",
+      "betterConsumer": "apps/hello/transform-hierarchy"
+    },
+    {
+      "id": "app:hello/triangle",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/triangle/README.md",
+        "apps/hello/triangle/package.json",
+        "apps/hello/triangle/src/main.ts",
+        "apps/hello/triangle/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-134749-classify-hello-triangle-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-134749-classify-hello-triangle-candidate/artifacts/triangle-browser-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-134749-classify-hello-triangle-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-134749-classify-hello-triangle-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-134749-classify-hello-triangle-candidate/artifacts/browser-requests-summary.txt"
+      ],
+      "reason": "The canonical app is the minimal triangle bootstrap/render oracle with a fixed browser proof, but it has no authored asset delivery, input, gameplay consequence, reset/re-entry, cleanup, recovery, or Preview game owner. game-default already teaches the complete MeshAsset/MaterialAsset/scene and reset loop; importing a second minimal bootstrap would regress progressive disclosure by adding another entry point rather than composing a feature.",
+      "betterConsumer": "apps/hello/triangle"
+    },
+    {
+      "id": "app:hello/entity-visibility",
+      "classification": "guided",
+      "frontDoors": ["preview", "game-default:audit"],
+      "evidence": [
+        "apps/hello/entity-visibility/README.md",
+        "apps/hello/entity-visibility/package.json",
+        "apps/hello/entity-visibility/src/main.ts",
+        "apps/hello/entity-visibility/scripts/smoke-dawn.mjs",
+        "apps/hello/entity-visibility/scripts/smoke-browser.mjs",
+        "packages/render/README.md",
+        "templates/game-default/src/visibility-loop.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-inspection-recovery.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-205254-entity-visibility-guided-loop/REPORT.md"
+      ],
+      "reason": "The canonical app proves Visibility intent, hierarchy inheritance, renderer filtering, shadow participation, and browser/Dawn falsifiers. game-default adopts only the thin gameplay composition: B toggles Visibility on the existing scored RedBox while physics, picking, scoring, Disabled lifecycle, inspection, and R reset remain their existing owners. The standalone app remains the deeper hierarchy/shadow oracle.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "asset:webm",
+      "classification": "guided",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "forgeax-engine-assets/README.md",
+        "forgeax-engine-assets/demo-assets/hello-video-cutscene/cutscene.webm",
+        "packages/types/README.md",
+        "packages/graphics-extras/README.md",
+        "apps/hello/video-texture/README.md",
+        "apps/hello/video-texture/src/index.ts",
+        "apps/hello/video-texture/scripts/smoke-dawn.mjs",
+        "apps/hello/video-texture/scripts/smoke-browser.mjs",
+        "apps/hello/video-cutscene/README.md",
+        "apps/hello/video-cutscene/scripts/smoke-browser.mjs",
+        "apps/preview/vite.config.ts",
+        "templates/game-default/src/video-texture-panel.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-010944-asset-webm-host-video-plugin-loop/INTAKE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-010944-asset-webm-host-video-plugin-loop/REPORT.md"
+      ],
+      "reason": "The licensed WebM is a runtime-only URL descriptor, not a Pack-imported binary. game-default adopts the existing VideoAsset -> VideoPlayer -> host VideoElementProvider -> GPU texture route as one pooled camera-facing panel above the scored target. M or the inspection action toggles it, while the existing App/World, input, target-hit, inspection, typed reset, and Stop cleanup owners remain singular. Preview serves the submodule file through publicDir; no fake WebM importer or duplicate sidecar authority is introduced.",
+      "betterConsumer": "templates/game-default"
     }
   ]
 }

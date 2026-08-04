@@ -11,13 +11,7 @@ import { websocketListenerCommands } from './packages/net-websocket/__tests__/su
 import materialContractInventory from './scripts/material-contract-inventory.json' with {
   type: 'json',
 };
-import { generateTemplateAssets } from './templates/game-default/assets/generate-assets.mjs';
-
-// The browser project mounts pluginPack directly instead of loading the
-// preview Vite config. Materialize the template's generated PNG before that
-// scanner runs, keeping the ignored source and its tracked sidecar a single
-// valid asset boundary in CI and local browser runs.
-generateTemplateAssets();
+import { targetProfileImporter } from './templates/game-default/src/target-profile-importer';
 
 // Monorepo-root anchor for pluginPack roots (see browser project below).
 // `new URL('.', import.meta.url)` already yields this file's directory
@@ -27,6 +21,11 @@ generateTemplateAssets();
 // charter F1 prefers the single-step explicit form for grep traceability.
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const materialPackages = materialContractInventory.materialPackages;
+// The entity-visibility screenshot test gets a fresh browser process because
+// Chromium's shared GPU device can outlive a Vitest file but not its teardown.
+const entityVisibilityBrowserTest =
+  'apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts';
+const runEntityVisibilityBrowserTest = process.env.FORGEAX_BROWSER_ENTITY_VISIBILITY === '1';
 
 // Root vitest config - declares projects per K-3 split policy:
 //
@@ -115,6 +114,18 @@ export default defineConfig({
           include: ['packages/ecs/src/**/*.perf.test.ts'],
         },
       },
+      // -- render-perf: named render performance project --
+      //
+      // Keep render wall-clock benchmarks out of the V8 coverage project.
+      // Coverage instrumentation changes hot-loop timing, while this project
+      // preserves the uninstrumented performance signal alongside ecs-perf.
+      {
+        test: {
+          name: 'render-perf',
+          environment: 'node',
+          include: ['packages/render/src/**/*.perf.test.ts'],
+        },
+      },
       // -- browser layer: vitest browser mode (AC-05) --
       //
       // M5-followup (feat-20260518-pbr-direct-lighting-mvp): inject
@@ -187,7 +198,7 @@ export default defineConfig({
             // the middleware for the SSAO onerror-gate. Without these the gltf
             // meta resolves to importer-not-registered (422). imageImporter also
             // covers any non-pre-baked image sidecars under the scanned roots.
-            importers: [imageImporter, gltfImporter, audioImporter],
+            importers: [imageImporter, gltfImporter, audioImporter, targetProfileImporter()],
           }),
         ],
         server: {
@@ -201,7 +212,18 @@ export default defineConfig({
             '**/dist/**',
             '**/.worktrees/**',
             '**/.claude/worktrees/**',
+            ...(runEntityVisibilityBrowserTest ? [] : [entityVisibilityBrowserTest]),
           ],
+          // Chromium's lavapipe WebGPU device is shared by browser workers.
+          // A renderer/page teardown in one file can destroy that device for
+          // a live sibling page, closing Vitest's transport and producing
+          // zero-pixel readback in an otherwise healthy test. Browser Mode's
+          // page/module isolation does not isolate the Chromium GPU process,
+          // so one worker is the lifecycle boundary for this real-WebGPU
+          // project. Keep the suite parallelism explicit and bounded here;
+          // the dawn project remains separately isolated below.
+          fileParallelism: false,
+          maxWorkers: 1,
           browser: {
             enabled: true,
             commands: websocketListenerCommands,
@@ -226,11 +248,12 @@ export default defineConfig({
                 channel: 'chrome-beta',
                 args: [
                   '--enable-unsafe-webgpu',
-                  '--enable-features=Vulkan',
+                  '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
                   '--use-vulkan=swiftshader',
                   '--disable-vulkan-surface',
                   '--ignore-gpu-blocklist',
                   '--disable-gpu-driver-bug-workarounds',
+                  '--disable-dawn-features=disallow_unsafe_apis',
                   // feat-20260619-audio-resource-ownership-deterministic-reclaim M5:
                   // browser tests need AudioContext to start in 'running' state
                   // without a real user gesture (headless chromium autoplay policy
@@ -241,14 +264,7 @@ export default defineConfig({
               },
             }),
             instances: [{ browser: 'chromium' }],
-            // Chromium's lavapipe WebGPU device is shared by browser workers.
-            // A renderer teardown in one file can destroy that device for live
-            // sibling pages, closing Vitest's transport and failing unrelated
-            // tests. Two workers bound GPU concurrency without serializing the
-            // whole suite; this is cheaper than restarting the full browser
-            // suite after an unbounded-worker device-loss cascade.
-            maxWorkers: 2,
-            headless: !!process.env.CI,
+            headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0' && !!process.env.CI,
           },
         },
       },

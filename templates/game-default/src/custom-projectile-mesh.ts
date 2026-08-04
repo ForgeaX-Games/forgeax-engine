@@ -1,12 +1,8 @@
 import type { World } from '@forgeax/engine-ecs';
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Materials, type Renderer } from '@forgeax/engine-render';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
-
-export const GAME_DEFAULT_PROJECTILE_TEXTURE_GUID = 'a7f20c14-5d85-4c8f-9b25-1d8d1b2a7c31';
 
 const FLOATS_PER_VERTEX = 12;
 const TEXTURE_SIZE = 32;
@@ -55,7 +51,7 @@ export interface CustomProjectileMesh {
   readonly alternateVertices: Float32Array;
   uvMode: 'upper' | 'lower';
   toggles: number;
-  readonly textureSource: 'authored-compressed' | 'procedural-fallback';
+  readonly textureSource: 'procedural';
   readonly textureFormat: TextureAsset['format'];
 }
 
@@ -121,24 +117,8 @@ function makeTexture(): TextureAsset {
 export async function createCustomProjectileMesh(
   world: World,
   renderer: Renderer,
-  assets?: AssetRegistry,
 ): Promise<CustomProjectileMesh | undefined> {
-  let texture = makeTexture();
-  let textureSource: CustomProjectileMesh['textureSource'] = 'procedural-fallback';
-  if (assets !== undefined) {
-    const guid = AssetGuid.parse(GAME_DEFAULT_PROJECTILE_TEXTURE_GUID);
-    if (guid.ok) {
-      const loaded = await assets.loadByGuid<TextureAsset>(guid.value);
-      if (loaded.ok) {
-        texture = loaded.value;
-        textureSource = 'authored-compressed';
-      } else {
-        console.warn(`[game] compressed projectile texture unavailable: ${loaded.error.code} — ${loaded.error.hint}`);
-      }
-    } else {
-      console.warn(`[game] compressed projectile texture GUID invalid: ${guid.error.code}`);
-    }
-  }
+  const texture = makeTexture();
   const textureHandle = world.allocSharedRef('TextureAsset', texture);
   const upload = await renderer.store.uploadTexture(textureHandle, texture, {
     bytes: texture.data,
@@ -208,7 +188,7 @@ export async function createCustomProjectileMesh(
     alternateVertices,
     uvMode: 'upper',
     toggles: 0,
-    textureSource,
+    textureSource: 'procedural',
     textureFormat: texture.format,
   };
 }

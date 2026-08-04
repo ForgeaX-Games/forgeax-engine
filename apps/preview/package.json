@@ -65,7 +65,10 @@
       "../../forgeax-engine-assets/collectathon-audio/bgm-loop.wav.meta.json",
       "../../forgeax-engine-assets/vendor/fbx-test",
       "../../forgeax-engine-assets/khronos-gltf-samples/BoxTextured",
-      "../../forgeax-engine-assets/dejavu-fonts"
+      "../../forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.ttf.meta.json",
+      "../../forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.atlas.png.meta.json",
+      "../../forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.font.pack.json",
+      "../../forgeax-engine-assets/demo-assets/hello-sprite-atlas"
     ]
   },
   "dependencies": {
@@ -82,6 +85,7 @@
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
+    "@forgeax/engine-font": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",

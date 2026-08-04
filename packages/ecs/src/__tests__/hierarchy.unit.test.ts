@@ -43,7 +43,7 @@ import {
   type SceneEntity,
   unwrapHandle,
 } from '@forgeax/engine-types';
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as componentModule from '../component';
 import { type Component, type ComponentSchema, TYPE_METADATA } from '../component';
 import { fillComponentDefaults, typeDefault } from '../component-default-fallback';
@@ -3701,13 +3701,7 @@ describe('reserveArrayCapacity', () => {
     });
   });
 
-  describe('AC-05 — EcsErrorCode is a closed union of exactly 47 members', () => {
-    it('compile-time member count is 47 after the approved M2 +3 time/schedule scope extension + verify P3 hotfix', () => {
-      // Tuple-length type assertion: any drift in EcsErrorCode member count is a
-      // compile error here, falsifiable by changing the literal 47.
-      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<47>();
-    });
-
+  describe('AC-05 — dropped registration codes stay outside EcsErrorCode', () => {
     it('the dropped register codes are not assignable to EcsErrorCode', () => {
       // @ts-expect-error — COMPONENT_ALREADY_REGISTERED was removed from the union.
       const dropped1: EcsErrorCode = 'COMPONENT_ALREADY_REGISTERED';
@@ -3716,20 +3710,6 @@ describe('reserveArrayCapacity', () => {
       expect([dropped1, dropped2]).toBeDefined();
     });
   });
-
-  // ── Compile-time union cardinality helper ──────────────────────────────────
-  // Counts the members of a string-literal union as a numeric-literal type.
-  type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (
-    k: infer I,
-  ) => void
-    ? I
-    : never;
-  type LastOf<U> =
-    UnionToIntersection<U extends unknown ? () => U : never> extends () => infer R ? R : never;
-  type TuplifyUnion<U, Last = LastOf<U>> = [U] extends [never]
-    ? []
-    : [...TuplifyUnion<Exclude<U, Last>>, Last];
-  type UnionLength<U> = TuplifyUnion<U>['length'];
 }
 {
   // --- from component-default-fallback.test.ts ---

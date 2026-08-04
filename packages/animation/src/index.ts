@@ -16,12 +16,14 @@ export type {
 export { AnimationPlayer } from './animation-player';
 /** Stable target identity, explicit ownership, and atomic batch binding. */
 export * from './animation-target';
-export * from './errors';
 /** Build the existing graph-to-player slot path; this is not an animation FSM. */
-export * from './graph/define-animation-graph';
-export * from './graph/describe-animation-graph';
-export * from './graph/serialize-animation-graph';
-export * from './player-errors';
+export {
+  type AnimationGraphNodeRef,
+  animationGraphNodeChildren,
+  defineAnimationGraph,
+} from './graph/define-animation-graph';
+export { describeAnimationGraph } from './graph/describe-animation-graph';
+export { serializeAnimationGraph } from './graph/serialize-animation-graph';
 export { animationPlugin } from './plugin';
 export {
   AnimationAssetError,

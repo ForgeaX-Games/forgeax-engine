@@ -99,6 +99,7 @@ import {
   MeshFilter,
   MeshRenderer,
   PointLight,
+  prepareExtractContext,
   SpotLight,
 } from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
@@ -443,7 +444,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       spawnDirectional(baselineWorld);
 
       // Sanity: extract surfaces 1 / 0 / 0 (retreat path).
-      const baselineFrame = extractFrame(baselineWorld, assets);
+      const baselineFrame = extractFrame(
+        baselineWorld,
+        prepareExtractContext(baselineWorld, { assets }),
+      );
       expect(baselineFrame.lights.directional).toBeDefined();
       expect(baselineFrame.lights.point).toHaveLength(0);
       expect(baselineFrame.lights.spot).toHaveLength(0);
@@ -485,7 +489,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       spawnSpotAimingAtOrigin(ninelightWorld, 0, -1.5, 1.5, 1.5, 12, 12, 25);
 
       // Sanity: extract surfaces 1 / 4 / 4.
-      const ninelightFrame = extractFrame(ninelightWorld, assets);
+      const ninelightFrame = extractFrame(
+        ninelightWorld,
+        prepareExtractContext(ninelightWorld, { assets }),
+      );
       expect(ninelightFrame.lights.directional).toBeDefined();
       expect(ninelightFrame.lights.point).toHaveLength(4);
       expect(ninelightFrame.lights.spot).toHaveLength(4);

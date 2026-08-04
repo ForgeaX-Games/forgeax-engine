@@ -65,6 +65,7 @@ import { statePlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { AppError } from './errors';
 import { makeCleanupFunnel } from './internal/cleanup';
+import { projectComponentIntrospection } from './internal/component-introspection';
 import { ErrorFanoutRegistry } from './internal/error-fanout';
 import { createFrameLoop } from './internal/frame-loop';
 import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
@@ -569,44 +570,11 @@ async function createAppFromCanvas(
 
   // Step 3.3: Remote eval server auto-start (deferred from Step 2.4 so
   // World is available). Dynamic import keeps @forgeax/engine-app free
-  // of static dep on @forgeax/engine-remote.
-  let remoteHandle: { readonly port: number; close(): Promise<void> } | undefined;
-  if (shouldStartRemote) {
-    try {
-      const remoteServerMod = (await import(
-        /* @vite-ignore */ '@forgeax/engine-remote/server'
-      )) as unknown as {
-        startServer: (opts: {
-          port: number;
-          host?: string;
-          world: unknown;
-          renderer?: unknown;
-          assets?: unknown;
-          debugAdapter?: unknown;
-          profiler?: unknown;
-        }) => Promise<{
-          ok: boolean;
-          value?: { port: number; close(): Promise<void> };
-          error?: { code: string };
-        }>;
-      };
-      const serverResult = await remoteServerMod.startServer({
-        port: 0, // OS-assigned ephemeral port
-        host: '127.0.0.1',
-        world,
-        renderer,
-        assets: renderer.assets,
-        ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
-        ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
-      });
-      if (serverResult.ok && serverResult.value) {
-        remoteHandle = { port: serverResult.value.port, close: serverResult.value.close };
-      }
-    } catch (_e) {
-      // Dynamic import or server start failed — app continues without remote.
-      // The error is logged by startServer internally.
-    }
-  }
+  // of static dep on @forgeax/engine-remote. Component reflection crosses
+  // this boundary as JSON-safe host data; app does not own any component.
+  const remoteHandle = shouldStartRemote
+    ? await startRemoteServer(world, renderer, _debugAdapter, opts?.profiler)
+    : undefined;
 
   const buildArgs: BuildAppArgs = {
     renderer,
@@ -873,6 +841,49 @@ export function syncCameraAspect(world: World, canvasW: number, canvasH: number)
   });
 }
 
+async function startRemoteServer(
+  world: World,
+  renderer: Renderer,
+  debugAdapter: unknown | undefined,
+  profiler: import('@forgeax/engine-profiler').Profiler | undefined,
+): Promise<{ readonly port: number; close(): Promise<void> } | undefined> {
+  try {
+    const remoteServerMod = (await import(
+      /* @vite-ignore */ '@forgeax/engine-remote/server'
+    )) as unknown as {
+      startServer: (opts: {
+        port: number;
+        host?: string;
+        world: unknown;
+        renderer?: unknown;
+        assets?: unknown;
+        debugAdapter?: unknown;
+        introspection?: readonly unknown[];
+        profiler?: unknown;
+      }) => Promise<{
+        ok: boolean;
+        value?: { port: number; close(): Promise<void> };
+      }>;
+    };
+    const serverResult = await remoteServerMod.startServer({
+      port: 0,
+      host: '127.0.0.1',
+      world,
+      renderer,
+      assets: renderer.assets,
+      introspection: projectComponentIntrospection(),
+      ...(debugAdapter !== undefined ? { debugAdapter } : {}),
+      ...(profiler !== undefined ? { profiler } : {}),
+    });
+    if (serverResult.ok && serverResult.value !== undefined) {
+      return { port: serverResult.value.port, close: serverResult.value.close };
+    }
+  } catch (_error) {
+    // Dynamic import or server start failed; the app continues without remote.
+  }
+  return undefined;
+}
+
 async function createAppFromAssemble(
   args: AppAssembleArgs,
 ): Promise<Result<App, AssembleAppError>> {
@@ -893,10 +904,19 @@ async function createAppFromAssemble(
     return err(pluginResult.error);
   }
 
+  const shouldStartRemote = resolveRemoteServeFlag(
+    undefined,
+    (globalThis as { process?: { env?: { FORGEAX_ENGINE_REMOTE_SERVE?: string } } }).process?.env,
+  );
+  const remoteHandle = shouldStartRemote
+    ? await startRemoteServer(args.world, args.renderer, undefined, args.profiler)
+    : undefined;
+
   const buildArgs: BuildAppArgs = {
     renderer: args.renderer,
     world: args.world,
     pluginRegistry: pluginResult.value,
+    ...(remoteHandle !== undefined ? { remoteHandle } : {}),
   };
 
   // M3 (w15): read pre-injected backends from world resources. The host

@@ -68,7 +68,8 @@ describe.skipIf(!browserReady)('zero-feature browser render baseline', () => {
   let canvas: HTMLCanvasElement | undefined;
 
   afterEach(() => {
-    renderer?.dispose();
+    // Browser Mode files share Chromium's GPU process. Do not dispose the
+    // renderer here: that destroys the shared device for the next file.
     if (canvas?.parentNode !== null) canvas?.parentNode?.removeChild(canvas);
     renderer = undefined;
     canvas = undefined;

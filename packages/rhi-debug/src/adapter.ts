@@ -34,7 +34,7 @@ export interface CreateDebugRhiAdapterArgs {
 }
 
 /**
- * Produce a DebugRhiAdapter that routes captureFrame / inspectAt /
+ * Produce a DebugRhiAdapter that routes captureFrames / inspectAt /
  * replayDispose RPC calls through the live recorder + a cached replay
  * pipeline.
  *

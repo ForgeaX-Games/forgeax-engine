@@ -32,6 +32,7 @@ import {
   Camera,
   extractFrame,
   getActiveCamera,
+  prepareExtractContext,
   selectActiveCameraIndex,
   setActiveCamera,
 } from '@forgeax/engine-render/internal';
@@ -152,7 +153,7 @@ describe('w7 — extractFrame ActiveCamera selection', () => {
     const assets = makeAssets();
     spawnCamera(world, 1.0);
     spawnCamera(world, 2.0);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     // No selection -> existing behavior: both cameras flow through; record
     // stage fires multi-camera diagnostic + uses first hit. We assert extract
     // does NOT prune when there is no ActiveCamera.
@@ -165,7 +166,7 @@ describe('w7 — extractFrame ActiveCamera selection', () => {
     spawnCamera(world, 1.0);
     const cam2 = spawnCamera(world, 2.0);
     setActiveCamera(world, cam2);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     // Active camera resolved -> sole snapshot (no multi-camera diagnostic).
     expect(frame.cameras.length).toBe(1);
     expect(frame.cameras[0]?.fov).toBeCloseTo(2.0, 5);
@@ -177,7 +178,7 @@ describe('w7 — extractFrame ActiveCamera selection', () => {
     spawnCamera(world, 1.0);
     spawnCamera(world, 2.0);
     setActiveCamera(world, 999999);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     // Unresolvable -> behave as if no ActiveCamera (do not prune).
     expect(frame.cameras.length).toBe(2);
   });
@@ -187,7 +188,7 @@ describe('w7 — extractFrame ActiveCamera selection', () => {
     const assets = makeAssets();
     const cam = spawnCamera(world, 1.5);
     setActiveCamera(world, cam);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     expect(frame.cameras.length).toBe(1);
     expect(frame.cameras[0]?.fov).toBeCloseTo(1.5, 5);
   });
@@ -196,7 +197,7 @@ describe('w7 — extractFrame ActiveCamera selection', () => {
     const world = new World();
     const assets = makeAssets();
     spawnCamera(world, 0.9);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     expect(frame.cameras.length).toBe(1);
     expect(frame.cameras[0]?.fov).toBeCloseTo(0.9, 5);
   });

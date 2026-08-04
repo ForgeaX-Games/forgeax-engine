@@ -12,6 +12,8 @@ import type { ChromaticAberrationHandle, ChromaticAberrationSnapshot } from './c
 import type { FbxSkinnedTargetSnapshot } from './fbx-skinned-target';
 import type { WorldScoreTextSnapshot } from './world-score-text';
 import type { MultiWorldOverlaySnapshot } from './multi-world-overlay';
+import type { VisibilityLoopSnapshot } from './visibility-loop';
+import type { JpegTextureSnapshot } from './jpeg-texture-swap';
 
 export const GAME_DEFAULT_RENDER_EVIDENCE_KEY = '__forgeaxGameDefaultRenderEvidence';
 
@@ -47,6 +49,8 @@ export type GameDefaultRenderEvidence = {
   readonly toggleMeshHandleSwap?: () => void;
   readonly toggleFbxMeshSwap?: () => void;
   readonly toggleGlbMeshSwap?: () => void;
+  readonly toggleGltfMeshSwap?: () => void;
+  readonly toggleJpegTexture?: () => void;
   readonly gamepad: () => GamepadEvidence;
   readonly characterController?: () => CharacterControllerEvidence;
   readonly setViewMode: (mode: 'topdown' | 'orbit' | 'fps' | 'pan') => void;
@@ -73,12 +77,13 @@ export type GameDefaultRenderEvidence = {
       readonly representation: 'mesh' | 'sprite' | 'sprite-lit';
       readonly uvMode: 'upper' | 'lower';
       readonly toggles: number;
-      readonly textureSource: 'authored-compressed' | 'procedural-fallback';
+      readonly textureSource: 'procedural';
       readonly textureFormat: string;
     };
     readonly meshHandleSwap: { readonly available: boolean; readonly active: 'original' | 'alternate'; readonly swaps: number };
     readonly fbxMeshSwap: { readonly available: boolean; readonly active: 'original' | 'fbx'; readonly swaps: number };
     readonly glbMeshSwap: { readonly available: boolean; readonly active: 'original' | 'glb'; readonly swaps: number };
+    readonly gltfMeshSwap: { readonly available: boolean; readonly active: 'original' | 'gltf'; readonly swaps: number };
     readonly fbxSkinnedTarget: FbxSkinnedTargetSnapshot;
     readonly gamepad: GamepadEvidence;
     readonly characterController: CharacterControllerEvidence | null;
@@ -87,6 +92,8 @@ export type GameDefaultRenderEvidence = {
     readonly worldScoreText: WorldScoreTextSnapshot;
     readonly multiMaterial: MultiMaterialEvidence;
     readonly multiWorld: MultiWorldOverlaySnapshot;
+    readonly visibility: VisibilityLoopSnapshot;
+    readonly jpegTexture: JpegTextureSnapshot;
     readonly materialShaderIdentifiers: readonly string[];
     readonly state?: GameplayStateWitness;
     readonly changeDetection?: GameplayChangeDetectionWitness;
@@ -132,7 +139,7 @@ type RenderEvidenceArgs = {
     readonly representation: 'mesh' | 'sprite' | 'sprite-lit';
     readonly uvMode: 'upper' | 'lower';
     readonly toggles: number;
-    readonly textureSource: 'authored-compressed' | 'procedural-fallback';
+    readonly textureSource: 'procedural';
     readonly textureFormat: string;
   };
   readonly toggleCustomProjectileMesh?: () => void;
@@ -144,6 +151,10 @@ type RenderEvidenceArgs = {
   readonly toggleFbxMeshSwap?: () => void;
   readonly glbMeshSwap?: () => { readonly active: 'original' | 'glb'; readonly swaps: number };
   readonly toggleGlbMeshSwap?: () => void;
+  readonly gltfMeshSwap?: () => { readonly active: 'original' | 'gltf'; readonly swaps: number };
+  readonly toggleGltfMeshSwap?: () => void;
+  readonly jpegTexture?: () => JpegTextureSnapshot;
+  readonly toggleJpegTexture?: () => void;
   readonly input?: () => InputSnapshot;
   readonly characterController?: () => CharacterControllerEvidence;
   readonly viewMode: () => 'topdown' | 'orbit' | 'fps' | 'pan';
@@ -161,6 +172,7 @@ type RenderEvidenceArgs = {
   readonly worldScoreText?: () => WorldScoreTextSnapshot;
   readonly multiMaterial?: () => MultiMaterialEvidence;
   readonly multiWorld?: () => MultiWorldOverlaySnapshot;
+  readonly visibility?: () => VisibilityLoopSnapshot;
   readonly isFlashed: (entity: EntityHandle) => boolean;
   readonly reset: () => void;
   readonly state?: GameplayStateHandle;
@@ -192,6 +204,8 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
     ...(args.toggleMeshHandleSwap ? { toggleMeshHandleSwap: args.toggleMeshHandleSwap } : {}),
     ...(args.toggleFbxMeshSwap ? { toggleFbxMeshSwap: args.toggleFbxMeshSwap } : {}),
     ...(args.toggleGlbMeshSwap ? { toggleGlbMeshSwap: args.toggleGlbMeshSwap } : {}),
+    ...(args.toggleGltfMeshSwap ? { toggleGltfMeshSwap: args.toggleGltfMeshSwap } : {}),
+    ...(args.toggleJpegTexture ? { toggleJpegTexture: args.toggleJpegTexture } : {}),
     gamepad: () => readGamepadEvidence(args.input),
     ...(args.characterController ? { characterController: args.characterController } : {}),
     setViewMode: args.setViewMode,
@@ -218,7 +232,7 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
         representation: 'mesh',
         uvMode: 'upper',
         toggles: 0,
-        textureSource: 'procedural-fallback',
+        textureSource: 'procedural',
         textureFormat: 'rgba8unorm-srgb',
       },
       meshHandleSwap: args.meshHandleSwap?.() === undefined
@@ -230,14 +244,37 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
       glbMeshSwap: args.glbMeshSwap?.() === undefined
         ? { available: false, active: 'original', swaps: 0 }
         : { available: true, ...args.glbMeshSwap()! },
+      gltfMeshSwap: args.gltfMeshSwap?.() === undefined
+        ? { available: false, active: 'original', swaps: 0 }
+        : { available: true, ...args.gltfMeshSwap()! },
       fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
       gamepad: readGamepadEvidence(args.input),
       characterController: args.characterController?.() ?? null,
       targetHealth: args.targetHealth?.() ?? { contiguousSupported: false, contiguousCalls: 0, rows: 0, lengthsEqual: true, totalCurrent: 0, totalMax: 0, damageEvents: 0 },
       targetDisabling: args.targetDisabling?.() ?? { activeCount: 0, disabledCount: 0, disableEvents: 0 },
-      worldScoreText: args.worldScoreText?.() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0] },
+      worldScoreText: args.worldScoreText?.() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0], fontSource: 'legacy-pack', fontGuid: null, toggles: 0 },
       multiMaterial: args.multiMaterial?.() ?? { available: false, materialCount: 0, submeshCount: 0, topologies: [], slotsAligned: false },
       multiWorld: args.multiWorld?.() ?? { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 },
+      visibility: args.visibility?.() ?? {
+        available: false,
+        intent: 'inherited',
+        effective: 'visible',
+        source: 'default',
+        toggles: 0,
+        explicitlyHidden: 0,
+      },
+      jpegTexture: args.jpegTexture?.() ?? {
+        available: false,
+        active: 'original',
+        swaps: 0,
+        guid: null,
+        name: null,
+        kind: null,
+        width: 0,
+        height: 0,
+        format: null,
+        colorSpace: null,
+      },
       materialShaderIdentifiers: [...args.renderer!.shader.materialShaderIdentifiers()],
       ...(args.state ? { state: args.state.snapshot() } : {}),
       ...(args.changeDetection ? { changeDetection: args.changeDetection.snapshot() } : {}),

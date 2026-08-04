@@ -30,7 +30,13 @@
 import { AssetRegistry, HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Camera, extractFrame, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  extractFrame,
+  MeshFilter,
+  MeshRenderer,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type {
   Handle,
@@ -127,7 +133,7 @@ describe('AC-06 / R-7 — video GUID in values is a recognised texture field (M4
       .unwrap();
 
     propagateTransforms(world);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     expect(frame.renderables.length).toBe(1);
     const mat = frame.renderables[0]?.material;
     expect(mat).toBeDefined();

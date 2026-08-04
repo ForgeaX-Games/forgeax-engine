@@ -32,19 +32,19 @@
     "test:fx": "vitest run scripts/__tests__/fx.test.ts",
     "test": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
     "test:unit": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
-    "test:browser": "vitest run --project=browser",
+    "test:browser": "FORGEAX_BROWSER_ENTITY_VISIBILITY=1 vitest run --project=browser apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts && FORGEAX_BROWSER_ENTITY_VISIBILITY=0 vitest run --project=browser",
     "test:browser:watch": "vitest --project=browser",
     "test:browser:wgpu-wasm": "vitest run --project=browser packages/engine/__tests__/renderer-wgpu-wasm.browser.test.ts",
     "test:dawn": "pnpm -r build && vitest run --project=dawn",
     "test:browser-no-webgpu": "vitest run --project=browser-no-webgpu",
     "test:webkit:learn-render": "node scripts/dev-verify/verify-webkit-learn-render.mjs --tier=core",
-    "test:perf": "vitest run --project=ecs-perf",
+    "test:perf": "vitest run --project=ecs-perf --project=render-perf",
     "test:portability": "vitest run --project='@forgeax/engine-math' --project='@forgeax/engine-ecs'",
     "test:all": "pnpm test:unit && pnpm test:browser && pnpm test:dawn",
     "test:watch": "vitest",
     "test:type": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit --typecheck",
     "r12-lint": "node packages/rhi/scripts/r12-lint.mjs",
-    "lint:grep": "node scripts/lint/grep-r12-lint.mjs && node scripts/lint/grep-error-hints.mjs && node scripts/lint/grep-pbr-ibl-callsite.mjs && node scripts/lint/grep-console-errors.mjs && node scripts/lint/grep-pass-kind.mjs && node scripts/lint/grep-image-kind-convergence.mjs && node scripts/grep/check-pack-schema-dist-fresh.mjs && node scripts/grep/check-csm-unique-shadow-path.mjs && node scripts/grep/check-shader-manifest-ssot.mjs && node scripts/forgeax/check-render-animation-boundary.mjs && node scripts/check-public-import-examples.mjs && node scripts/check-material-contract-inventory.mjs",
+    "lint:grep": "node scripts/lint/grep-r12-lint.mjs && node scripts/lint/grep-error-hints.mjs && node scripts/lint/grep-pbr-ibl-callsite.mjs && node scripts/lint/grep-console-errors.mjs && node scripts/lint/grep-pass-kind.mjs && node scripts/lint/grep-image-kind-convergence.mjs && node scripts/grep/check-pack-schema-dist-fresh.mjs && node scripts/grep/check-csm-unique-shadow-path.mjs && node scripts/grep/check-shader-manifest-ssot.mjs && node scripts/grep/check-game-default-self-contained.mjs && node scripts/forgeax/check-render-animation-boundary.mjs && node scripts/check-public-import-examples.mjs && node scripts/check-material-contract-inventory.mjs && node scripts/forgeax/check-render-extract-single-query.mjs",
     "check:material-contract-inventory": "node scripts/check-material-contract-inventory.mjs",
     "check:public-import-examples": "node scripts/check-public-import-examples.mjs",
     "grep:r12-lint": "node scripts/lint/grep-r12-lint.mjs",
@@ -138,7 +138,8 @@
     "vite": "8.0.10",
     "vitest": "4.1.5",
     "wait-on": "^7.2.0",
-    "webgpu": "^0.4.0"
+    "webgpu": "^0.4.0",
+    "ws": "^8.20.0"
   },
   "simple-git-hooks": {
     "pre-commit": "node scripts/check-workspaces-equivalence.mjs && node scripts/check-staged-lockfiles.mjs"

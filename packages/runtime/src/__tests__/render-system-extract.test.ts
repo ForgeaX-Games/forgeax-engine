@@ -18,6 +18,7 @@ import {
   MeshFilter,
   MeshRenderer,
   PointLight,
+  prepareExtractContext,
   SpotLight,
 } from '@forgeax/engine-render/internal';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
@@ -159,7 +160,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       expect(propagateTransforms(world).ok).toBe(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.renderables.length).toBe(1);
 
       const w = frame.renderables[0]?.transform.world;
@@ -189,7 +190,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       expect(propagateTransforms(world).ok).toBe(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.renderables.length).toBe(1);
       const w = frame.renderables[0]?.transform.world as Float32Array;
       const expected = mat4.create();
@@ -213,7 +214,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       expect(propagateTransforms(world).ok).toBe(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.cameras.length).toBe(1);
       const pos = frame.cameras[0]?.position;
       // rig (0,5,0) x camera local (1,0,2) -> world (1,5,2).
@@ -249,7 +250,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       expect(propagateTransforms(world).ok).toBe(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.point.length).toBe(1);
       expect(frame.lights.point[0]?.position?.[0]).toBeCloseTo(3, 5);
       expect(frame.lights.point[0]?.position?.[2]).toBeCloseTo(7, 5);
@@ -272,7 +273,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         })
         .unwrap();
       expect(propagateTransforms(world).ok).toBe(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.directional).toBeDefined();
       expect(frame.lights.directional?.direction?.[1]).toBeCloseTo(-1, 5);
     });
@@ -300,7 +301,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           )
           .unwrap();
         expect(propagateTransforms(world).ok).toBe(true);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
         expect(frame.renderables).toHaveLength(0);
       }
       {
@@ -323,7 +324,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           )
           .unwrap();
         expect(propagateTransforms(world).ok).toBe(true);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
         expect(frame.renderables).toHaveLength(1);
       }
     });
@@ -340,7 +341,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       expect(propagateTransforms(world).ok).toBe(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
 
       expect(frame.renderables).toHaveLength(0);
       expect(frame.frustumStats).toEqual({ culled: 1, total: 1 });
@@ -410,7 +411,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           .unwrap();
 
         expect(propagateTransforms(world).ok).toBe(true);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
 
         // Invalid/missing bounds must never cause a false negative visibility
         // result. They are a producer-contract failure, not a valid cull
@@ -433,7 +434,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(propagateTransforms(world).ok).toBe(true);
 
       const getSpy = vi.spyOn(world, 'get');
-      extractFrame(world);
+      extractFrame(world, prepareExtractContext(world));
       // The mesh-walk must NOT call world.get(entity, Transform) to read the
       // resolved world mat4 -- it goes through the zero-materialization column
       // array view (_getArrayView). Any Transform materialization here would
@@ -616,7 +617,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables.length).toBe(1);
 
       // AC-05: the child's snapshot should inherit passes from the parent,
@@ -648,7 +649,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
       // AC-06: all 76 entities should produce renderables with non-empty
       // inherited passes.
@@ -682,7 +683,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables.length).toBe(1);
 
       // RED: child's metallic should be 0.9 (child overrides), roughness
@@ -711,7 +712,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables.length).toBe(1);
 
       const snap = frame.renderables[0]?.material;
@@ -860,7 +861,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('render-system-extract sprite paramSnapshot slicesAndMode (M3 / w9)', () => {
     it('(1) no slicesAndMode in values -> paramSnapshot.slicesAndMode absent', () => {
       const { world, assets } = spawnSpriteScene({});
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       // Renderable filter: post-ablation sprite carries forgeax::sprite
       // shaderId, NOT shadingModel='sprite' (the union member is gone in
       // AC-01).
@@ -882,7 +883,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { world, assets } = spawnSpriteScene({
         slicesAndMode: [0.25, 0.25, 0.25, 0.25],
       });
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const renderable = frame.renderables.find(
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
@@ -898,7 +899,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { world, assets } = spawnSpriteScene({
         slicesAndMode: [0.25, 0.25, 0.25, -0.25],
       });
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const renderable = frame.renderables.find(
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
@@ -914,7 +915,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(4) default identity region fold; pivotAndSize absent when not supplied', () => {
       const { world, assets } = spawnSpriteScene({});
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const renderable = frame.renderables.find(
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
@@ -930,7 +931,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(5) flipX=1 folds into paramSnapshot.region: region.x += region.z; region.z = -region.z (D-8)', () => {
       const { world, assets } = spawnSpriteScene({ flipX: 1 });
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const renderable = frame.renderables.find(
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
@@ -1001,7 +1002,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       spawnCamera(world, { clearColor: [0.25, 0.5, 0.75, 1.0] });
       propagateTransforms(world);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.cameras.length).toBe(1);
       const cam = frame.cameras[0];
       expect(cam).toBeDefined();
@@ -1017,7 +1018,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnCamera(world, { clearColor: [0.1, 0.2, 0.3, 1.0] });
       spawnCamera(world, { clearColor: [0.9, 0.8, 0.7, 1.0] });
       propagateTransforms(world);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.cameras.length).toBeGreaterThanOrEqual(1);
       const cam0 = frame.cameras[0];
       expect(cam0).toBeDefined();
@@ -1042,7 +1043,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         )
         .unwrap();
       propagateTransforms(world);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       const cam = frame.cameras[0];
       expect(cam).toBeDefined();
       if (!cam) return;
@@ -1195,7 +1196,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
       propagateTransforms(world);
 
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const renderable = frame.renderables.find(
         (r) => r.material.materialShaderId === 'learn-render::5-5-parallax',
       );
@@ -1268,7 +1269,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
       propagateTransforms(world);
 
-      const snapshot = extractFrame(world, assets).renderables[0]?.material;
+      const snapshot = extractFrame(world, prepareExtractContext(world, { assets })).renderables[0]
+        ?.material;
       expect(snapshot?.textureHandles?.get('baseColorTexture')).toBe(baseColorHandle);
       expect(snapshot?.textureHandles?.get('metallicRoughnessTexture')).toBe(
         metallicRoughnessHandle,

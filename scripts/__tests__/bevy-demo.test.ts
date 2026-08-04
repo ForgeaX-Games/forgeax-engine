@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runNodeSmoke } from '../bevy-demo.mjs';
 
 const repoRoot = resolve(__dirname, '..', '..');
 const script = resolve(repoRoot, 'scripts/bevy-demo.mjs');
@@ -168,6 +169,170 @@ describe('bevy-demo.mjs', () => {
     expect(result.stderr).toContain('bevy-demo-description-missing');
   });
 
+  it('validates implemented Bevy declarations outside the dedicated apps/bevy tree', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'hello', 'implemented-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/hello-implemented-demo',
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/hello-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/hello-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-description-missing');
+    expect(result.stderr).toContain('apps/hello/implemented-demo/package.json');
+  });
+
+  it('rejects the generated scaffold smoke on an implemented app', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-implemented-demo',
+        description: 'Reproduction of the implemented demo.',
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/bevy-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(app, 'scripts', 'smoke-dawn.mjs'),
+      "console.error('[reason] bevy-demo-scaffold-unimplemented: implemented-demo');\n",
+    );
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-smoke-stale');
+  });
+
+  it('rejects an implemented app without the smoke script invoked by the fleet', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-implemented-demo',
+        description: 'Reproduction of the implemented demo.',
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/bevy-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-smoke-script-missing');
+  });
+
+  it('rejects the standard smoke command when its entry point is missing', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-implemented-demo',
+        description: 'Reproduction of the implemented demo.',
+        scripts: { smoke: 'node scripts/smoke-dawn.mjs' },
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/bevy-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-smoke-entry-missing');
+  });
+
+  it('rejects a standard smoke entry without the PASS marker', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-implemented-demo',
+        description: 'Reproduction of the implemented demo.',
+        scripts: { smoke: 'node scripts/smoke-dawn.mjs' },
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/bevy-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+    writeFileSync(join(app, 'scripts', 'smoke-dawn.mjs'), '');
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-smoke-pass-missing');
+  });
+
+  it('reaps a standard smoke whose module would exit normally after PASS', async () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(join(app, 'scripts', 'smoke-dawn.mjs'), "console.log('[smoke] PASS');\n");
+
+    const result = await runNodeSmoke(root, { dir: app });
+    expect(result).toEqual({ status: 0, signal: 'SIGKILL' });
+  });
+
+  it('accepts a standard smoke only after PASS triggers SIGKILL reap', async () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(app, 'scripts', 'smoke-dawn.mjs'),
+      "console.log('[smoke] PASS');\nsetInterval(() => {}, 1000);\n",
+    );
+
+    const result = await runNodeSmoke(root, { dir: app });
+    expect(result).toEqual({ status: 0, signal: 'SIGKILL' });
+  });
+
+  it('rejects a standard smoke that reports PASS but exits nonzero', async () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(app, 'scripts', 'smoke-dawn.mjs'),
+      "console.log('[smoke] PASS');\nprocess.exitCode = 1;\n",
+    );
+
+    const result = await runNodeSmoke(root, { dir: app });
+    expect(result.status).not.toBe(0);
+    expect(result.signal).toBeNull();
+  });
+
   it('refuses to claim a blank scaffold is implemented', () => {
     const root = tempRoot();
     const input = join(root, 'implemented.json');
@@ -189,12 +354,14 @@ describe('bevy-demo.mjs', () => {
   it('accepts bounded smoke concurrency in a dry run', () => {
     const root = tempRoot();
     const app = join(root, 'apps', 'bevy', 'tiny-demo');
-    mkdirSync(app, { recursive: true });
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(join(app, 'scripts', 'smoke-dawn.mjs'), "console.log('[smoke] PASS');\n");
     writeFileSync(
       join(app, 'package.json'),
       JSON.stringify({
         name: '@forgeax/bevy-tiny-demo',
         description: 'Implemented smoke fixture.',
+        scripts: { smoke: 'node scripts/smoke-dawn.mjs' },
         forgeax: {
           bevyExample: { name: 'tiny_demo', category: 'Animation', status: 'implemented' },
           smokeInvocation: 'pnpm --filter @forgeax/bevy-tiny-demo smoke',
@@ -210,12 +377,14 @@ describe('bevy-demo.mjs', () => {
   it('derives smoke concurrency from runner resources', () => {
     const root = tempRoot();
     const app = join(root, 'apps', 'bevy', 'tiny-demo');
-    mkdirSync(app, { recursive: true });
+    mkdirSync(join(app, 'scripts'), { recursive: true });
+    writeFileSync(join(app, 'scripts', 'smoke-dawn.mjs'), "console.log('[smoke] PASS');\n");
     writeFileSync(
       join(app, 'package.json'),
       JSON.stringify({
         name: '@forgeax/bevy-tiny-demo',
         description: 'Implemented smoke fixture.',
+        scripts: { smoke: 'node scripts/smoke-dawn.mjs' },
         forgeax: {
           bevyExample: { name: 'tiny_demo', category: 'Animation', status: 'implemented' },
           smokeInvocation: 'pnpm --filter @forgeax/bevy-tiny-demo smoke',
@@ -233,12 +402,14 @@ describe('bevy-demo.mjs', () => {
     const root = tempRoot();
     for (const id of ['a-demo', 'b-demo', 'c-demo', 'd-demo', 'e-demo']) {
       const app = join(root, 'apps', 'bevy', id);
-      mkdirSync(app, { recursive: true });
+      mkdirSync(join(app, 'scripts'), { recursive: true });
+      writeFileSync(join(app, 'scripts', 'smoke-dawn.mjs'), "console.log('[smoke] PASS');\n");
       writeFileSync(
         join(app, 'package.json'),
         JSON.stringify({
           name: `@forgeax/bevy-${id}`,
           description: 'Implemented smoke fixture.',
+          scripts: { smoke: 'node scripts/smoke-dawn.mjs' },
           forgeax: {
             bevyExample: {
               name: id.replace('-', '_'),

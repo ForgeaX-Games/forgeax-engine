@@ -60,8 +60,57 @@ describe('material texture UV scale [w37]', () => {
       },
       new World(),
     );
-    const f32 = new Float32Array(payload);
+    const f32 = new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4);
     expect(Array.from(f32.slice(24, 32))).toEqual([0.125, 0.25, 2, 3, 1, 0.5, 1, 1]);
     expect(Array.from(f32.slice(40, 48))).toEqual([0.75, 0.25, 4, 5, 0, 0, 1, 1]);
+  });
+
+  it('keeps identity UV records for metadata-free standard and legacy materials', () => {
+    const standard = buildPbrMaterialUboPayload({
+      baseColor: vec3.create(1, 1, 1),
+      metallic: 0,
+      roughness: 0.5,
+      materialShaderId: 'forgeax::default-standard-pbr',
+    });
+    applyMaterialTextureUvScales(
+      standard,
+      {
+        baseColor: vec3.create(1, 1, 1),
+        metallic: 0,
+        roughness: 0.5,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      },
+      new World(),
+    );
+    expect(
+      Array.from(
+        new Float32Array(standard.buffer, standard.byteOffset, standard.byteLength / 4).slice(24),
+      ),
+    ).toEqual([
+      0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1,
+      1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+    ]);
+
+    const legacy = buildPbrMaterialUboPayload({
+      baseColor: vec3.create(1, 1, 1),
+      metallic: 0,
+      roughness: 0.5,
+      materialShaderId: 'forgeax::default-unlit',
+    });
+    applyMaterialTextureUvScales(
+      legacy,
+      {
+        baseColor: vec3.create(1, 1, 1),
+        metallic: 0,
+        roughness: 0.5,
+        materialShaderId: 'forgeax::default-unlit',
+      },
+      new World(),
+    );
+    expect(
+      Array.from(
+        new Float32Array(legacy.buffer, legacy.byteOffset, legacy.byteLength / 4).slice(20, 30),
+      ),
+    ).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
   });
 });

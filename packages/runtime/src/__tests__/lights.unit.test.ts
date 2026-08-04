@@ -37,6 +37,7 @@ import {
   packLightArrayHeader,
   packPointLight,
   packSpotLight,
+  prepareExtractContext,
   Skylight,
   SpotLight,
 } from '@forgeax/engine-render/internal';
@@ -479,7 +480,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
         propagateTransforms(world);
 
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
         expect(frame.lights).toBeDefined();
 
         // -- directional --
@@ -581,7 +582,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
         propagateTransforms(world);
 
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
         expect(frame.lights.directional).toBeUndefined();
         expect(frame.lights.point).toHaveLength(0);
         expect(frame.lights.spot).toHaveLength(0);
@@ -630,7 +631,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
           .unwrap();
 
         propagateTransforms(world);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
 
         expect(frame.lights.spot).toHaveLength(1);
         const s = frame.lights.spot[0];
@@ -699,7 +700,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
           .unwrap();
 
         propagateTransforms(world);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
 
         expect(frame.lights.spot).toHaveLength(1);
         const s = frame.lights.spot[0];
@@ -755,7 +756,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
           .unwrap();
 
         propagateTransforms(world);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
 
         expect(frame.lights.spot).toHaveLength(1);
         const s = frame.lights.spot[0];
@@ -828,7 +829,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         for (let i = 0; i < 5; i++) spawnSpot(world, i, true);
 
         propagateTransforms(world);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
 
         expect(frame.lights.spot).toHaveLength(5);
         const tiles = frame.lights.spot.map((s) => s.shadowAtlasTile);
@@ -861,7 +862,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         spawnSpot(world, 1, true);
 
         propagateTransforms(world);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, prepareExtractContext(world));
 
         expect(frame.lights.spot).toHaveLength(2);
         const shadowless = frame.lights.spot.find((s) => s.castShadow === false);

@@ -23,6 +23,7 @@ import {
   type MaterialSnapshot,
   MeshFilter,
   MeshRenderer,
+  prepareExtractContext,
 } from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
@@ -51,7 +52,7 @@ import { describe, expect, it } from 'vitest';
   // (render-system-record.ts:2194-2277 -- baseColor, metallic, roughness,
   // channelMap u32 packing, emissive, occlusionStrength, paramSnapshot
   // schema-driven overlay) into a pure helper
-  // `buildPbrMaterialUboPayload(material) -> ArrayBuffer(128B)` so this
+  // `buildPbrMaterialUboPayload(material) -> Uint8Array(288B)` so this
   // regression test can exercise the PBR write byte-for-byte.
   //
   // The helper MUST produce the exact byte sequence the inline path produced
@@ -73,9 +74,9 @@ import { describe, expect, it } from 'vitest';
   // new error members).
 
   const mod = recordModule as unknown as {
-    buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
+    buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => Uint8Array;
     applyMaterialTextureUvScales?: (
-      payload: ArrayBuffer,
+      payload: ArrayBuffer | Uint8Array,
       material: MaterialSnapshot,
       world: World,
     ) => void;
@@ -126,7 +127,7 @@ import { describe, expect, it } from 'vitest';
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
       expect(buf.byteLength).toBe(288);
-      const f32 = new Float32Array(buf);
+      const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at
       // f32[6..9] (metallicChannel/roughnessChannel/aoChannel/extraChannel).
@@ -437,7 +438,7 @@ import { describe, expect, it } from 'vitest';
         )
         .unwrap();
       propagateTransforms(world);
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       // feat-20260625 M3 / w12: sprite filter is now materialShaderId, not
       // shadingModel; region lands on paramSnapshot.region (D-8 / AC-07).
       const sprite = frame.renderables.find(
@@ -469,7 +470,7 @@ import { describe, expect, it } from 'vitest';
         )
         .unwrap();
       propagateTransforms(world);
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const sprite = frame.renderables.find(
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
@@ -515,7 +516,7 @@ import { describe, expect, it } from 'vitest';
         )
         .unwrap();
       propagateTransforms(world);
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       const sprites = frame.renderables.filter(
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
@@ -562,7 +563,7 @@ import { describe, expect, it } from 'vitest';
 
   const mod = recordModule as unknown as {
     applyParamSnapshotToUbo?: (
-      payload: ArrayBuffer,
+      payload: ArrayBuffer | Uint8Array,
       paramSchema: readonly ParamSchemaEntry[] | undefined,
       paramSnapshot:
         | Readonly<Record<string, number | readonly number[] | string | undefined>>
@@ -886,7 +887,7 @@ import { describe, expect, it } from 'vitest';
 
   const mod = recordModule as unknown as {
     applyParamSnapshotToUbo?: (
-      payload: ArrayBuffer,
+      payload: ArrayBuffer | Uint8Array,
       paramSchema: readonly ParamSchemaEntry[] | undefined,
       paramSnapshot:
         | Readonly<Record<string, number | readonly number[] | string | undefined>>
@@ -1032,13 +1033,13 @@ import { describe, expect, it } from 'vitest';
 
   const mod = recordModule as unknown as {
     applyParamSnapshotToUbo?: (
-      payload: ArrayBuffer,
+      payload: ArrayBuffer | Uint8Array,
       paramSchema: readonly ParamSchemaEntry[] | undefined,
       paramSnapshot:
         | Readonly<Record<string, number | readonly number[] | string | undefined>>
         | undefined,
     ) => void;
-    buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
+    buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => Uint8Array;
   };
 
   // Mirror the engine-shipped default-standard-pbr.material.json schema
@@ -1151,11 +1152,15 @@ import { describe, expect, it } from 'vitest';
       const payload = mod.buildPbrMaterialUboPayload(material);
       // The explicit baseline is intentionally opaque; importer-supplied
       // paramSnapshot values must overwrite all four baseColor components.
-      expect(new Float32Array(payload)[3]).toBe(1);
+      expect(new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)[3]).toBe(
+        1,
+      );
       mod.applyParamSnapshotToUbo(payload, STANDARD_PBR_SCHEMA, {
         baseColor: [0.5, 0.6, 0.7, 0.5],
       });
-      expect(new Float32Array(payload)[3]).toBe(0.5);
+      expect(new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)[3]).toBe(
+        0.5,
+      );
     });
 
     it('honours f32 slot offsets independently (slot 1 width = 4 floats from metallic..extraChannel)', () => {
@@ -1761,14 +1766,12 @@ import { describe, expect, it } from 'vitest';
   });
 }
 
-// --- tweak-20260701 M2 AC-02: zero-light warning polarity (shadingModel -> materialShaderId) ---
+// --- tweak-20260701 M2 AC-02: zero-light warning polarity ---
 {
   // AC-02: the zero-light black-screen warning must still fire for
-  // PBR/standard materials and remain silent for unlit / sprite / default
-  // materials. The pre-tweak condition was:
-  //   materialShaderId !== undefined && shadingModel === undefined
-  // Post-M1 shadingModel is deleted; the equivalent rewrite is:
-  //   materialShaderId !== undefined && materialShaderId !== 'forgeax::default-unlit'
+  // builtin PBR/standard materials and remain silent for custom, unlit /
+  // sprite / default materials. Custom shader lighting contracts are authored
+  // by the shader and cannot be inferred by this generic diagnostic.
   //
   // The test imports `isLitMaterialSnapshot` from the production
   // render-system-record module — the same function that recordFrame's
@@ -1786,15 +1789,15 @@ import { describe, expect, it } from 'vitest';
     } as unknown as MaterialSnapshot;
   }
 
-  describe('AC-02: zero-light warning polarity (shadingModel -> materialShaderId)', () => {
+  describe('AC-02: zero-light warning polarity', () => {
     it('standard / PBR material (materialShaderId !== undefined, !== default-unlit) -> lit', () => {
       const snap = makeSnap('forgeax::default-standard-pbr');
       expect(isLitMaterialSnapshot(snap)).toBe(true);
     });
 
-    it('custom shader material (materialShaderId !== undefined, !== default-unlit) -> lit', () => {
+    it('custom shader material -> not lit (custom lighting contract)', () => {
       const snap = makeSnap('my-custom-shader');
-      expect(isLitMaterialSnapshot(snap)).toBe(true);
+      expect(isLitMaterialSnapshot(snap)).toBe(false);
     });
 
     it('unlit material (materialShaderId === forgeax::default-unlit) -> not lit (no warn)', () => {

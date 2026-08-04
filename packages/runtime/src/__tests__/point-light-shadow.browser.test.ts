@@ -187,7 +187,8 @@ describe('M0 cube_array comparison sampler (browser)', () => {
     readbackBuffer.destroy();
     resultBuffer.destroy();
     cubeAtlas.destroy();
-    device.destroy();
+    // Browser Mode files share Chromium's GPU process. Destroying the device
+    // here poisons the next real-WebGPU browser file with device-lost.
   });
 });
 

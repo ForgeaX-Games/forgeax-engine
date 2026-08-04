@@ -64,7 +64,7 @@ Four live roots are always present in eval scope. The fifth root is opt-in:
 | `world` | `World` (from `@forgeax/engine-ecs`) | ECS read/write: `spawn`, `despawn`, `set`, `queryRun` |
 | `renderer` | `Renderer` | Renderer control: create/destroy render targets, read backbuffer |
 | `assets` | `AssetRegistry` | Asset queries: `loadByGuid`, `resolveName`, `rename` |
-| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrame({...})`, `inspectAt({...})`. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). |
+| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrames(frames, label?)`, `inspectAt(tapePath, drawIdx, fields?)`. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). Browser capture uses the separate `window.__forgeax.captureFrame(frames)` surface. |
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture: `startCapture({ frameLimit, eventLimit })`. **Only defined when the host passes `profiler` to `createApp` or `startServer`.** |
 
 A fifth injection — `_import(specifier)` — enables dynamic ESM imports inside eval scope. **Plain `import` keyword is NOT available**; scripts use `await _import('@forgeax/engine-ecs')` to pull in engine packages.
@@ -95,17 +95,23 @@ ecs.queryRun(state, world, (bundle) => {
 **With component data — read position of all MeshRenderers:**
 
 ```js
-const { createQueryState, queryRun, Entity, Transform, MeshRenderer } = await _import('@forgeax/engine-ecs');
+const ecs = await _import('@forgeax/engine-ecs');
+const scene = await _import('@forgeax/engine-scene');
+const render = await _import('@forgeax/engine-render');
+const { createQueryState, queryRun, Entity } = ecs;
+const { Transform } = scene;
+const { MeshRenderer } = render;
 
 const state = createQueryState({ with: [MeshRenderer, Transform, Entity] });
 let results = [];
 queryRun(state, world, (bundle) => {
   for (let i = 0; i < bundle.Entity.self.length; i++) {
+    const pos = bundle.Transform.pos;
     results.push({
       entity: bundle.Entity.self[i],
-      x: bundle.Transform.position.x[i],
-      y: bundle.Transform.position.y[i],
-      z: bundle.Transform.position.z[i],
+      x: pos[i * 3],
+      y: pos[i * 3 + 1],
+      z: pos[i * 3 + 2],
     });
   }
 });
@@ -115,27 +121,37 @@ queryRun(state, world, (bundle) => {
 
 ```js
 const ecs = await _import('@forgeax/engine-ecs');
-const state = ecs.createQueryState({ with: [ecs.Transform, ecs.Entity] });
+const scene = await _import('@forgeax/engine-scene');
+const state = ecs.createQueryState({ with: [scene.Transform, ecs.Entity] });
 
 ecs.queryRun(state, world, (bundle) => {
   for (let i = 0; i < bundle.Entity.self.length; i++) {
     const h = bundle.Entity.self[i];
-    const px = bundle.Transform.position.x[i];
-    const py = bundle.Transform.position.y[i];
-    const pz = bundle.Transform.position.z[i];
+    const pos = bundle.Transform.pos;
+    const px = pos[i * 3];
+    const py = pos[i * 3 + 1];
+    const pz = pos[i * 3 + 2];
     // Use h, px, py, pz
   }
 });
 ```
 
+`Transform.pos` is the flat `array<f32, 3>` column, so row `i` starts at
+`i * 3`; the same stride rule applies to `quat` (4), `scale` (3), and other
+fixed-array fields.
+
 ### Write / Lifecycle
 
 ```js
 // Spawn with components
-const h = world.spawn([new Transform({ position: [0, 5, 0] })]);
+const scene = await _import('@forgeax/engine-scene');
+const h = world.spawn({
+  component: scene.Transform,
+  data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
+}).unwrap();
 
 // Set — mutate existing component values
-world.set(h, new Transform({ position: [1, 2, 3] }));
+world.set(h, scene.Transform, { pos: [1, 2, 3] });
 
 // Despawn
 world.despawn(h);
@@ -148,11 +164,12 @@ world.despawn(h);
 
 ```js
 // Capture the current steady-state frame
-const tape = await debugAdapter.captureFrame({ label: 'my-snapshot' });
-// tape.frameModel is a structured FrameModel — shared SSOT with RHI debug viewer and CLI `summary`
+const capture = await debugAdapter.captureFrames(1, 'my-snapshot');
+const tape = capture.tapes[0];
+// tape.tapePath is the on-disk handoff consumed by RHI-debug `summary` / `inspect-offline`
 
 // Per-draw inspection
-const draw = await debugAdapter.inspectAt({ tape, drawIdx: 3 });
+const draw = await debugAdapter.inspectAt(tape.tapePath, 3);
 // draw: { pipelineState, bindings, renderTargetPNG }
 ```
 
@@ -271,3 +288,25 @@ The engine bundle is physically isolated from the remote package — `@forgeax/e
 | `check-no-help-string-array.mjs` | Remote internal | No hand-rolled `--help` string arrays in remote `src/` |
 | `check-no-cli-deps.mjs` | Remote internal | No commander/yargs/cac/sade deps in remote `package.json` |
 | `check-readme-sections.mjs` | Remote internal | This README's 5 H2 section headings are character-exact present |
+## Injected component schemas
+
+Quick start: call the existing `introspect` method, find
+`components.schemas.Visibility`, then use the existing `eval` method with
+`_import('@forgeax/engine-render')` and `_import('@forgeax/engine-ecs')` to
+inspect a live entity.
+
+The schema is host data projected from the app's registered ECS components. The
+remote package merges it into OpenRPC `components.schemas` while preserving the
+existing `eval` / `introspect` methods and the closed remote error mapping.
+
+| Diagnostic | Meaning | Recovery |
+|:--|:--|:--|
+| Missing `Visibility` schema | The host did not inject post-plugin registry data | Start the app with remote enabled and inspect the host wiring |
+| `current` differs from `effective` | Parent inheritance changed the render decision | Read `resolveVisibility(world).diagnostics` and `source` |
+| Invalid write | ECS rejected a field value | Switch on the returned error `code`, then follow `expected`, `hint`, and `detail` |
+| `visibilityStats` unchanged | No eligible render candidate was counted | Inspect the real entity and renderer path; do not add a remote method |
+
+This is a JSON-safe reflection boundary, not a component registry in remote.
+Remote production has no imports from ECS, render, or runtime and adds no RPC,
+CLI, or MCP method. Camera, picking, lifecycle, assets, and VFX shadow policy
+remain out of scope.

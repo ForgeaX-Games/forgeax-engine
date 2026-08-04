@@ -87,3 +87,20 @@ Pause, replay, seed changes, despawn cleanup, and output readiness remain in
 
 This package is not a VFX authoring frontend, editor, transport, compatibility
 feature, or alternate simulation owner.
+
+## Visibility boundary
+
+Quick start: keep VFX simulation and `ParticleRenderBatch` production in
+`@forgeax/engine-vfx`; register this feature as a render producer. The render
+host applies effective entity visibility before a particle draw contributes.
+
+| Observation | Owner | Recovery |
+|:--|:--|:--|
+| Author intent | ECS `Visibility` | Correct the component through `world.set` |
+| Parent-derived effective state | `@forgeax/engine-render` + scene hierarchy | Repair `snapshot.diagnostics`, then resolve again |
+| Particle readiness | `diagnostics()` in this package | Follow the structured error hint and retry the next frame |
+
+`visibilityStats` is a renderer observation, not a VFX simulation counter.
+There is no VFX-specific visibility component, shadow, camera, picking,
+lifecycle, or asset fallback in this package. A failed particle draw must route
+to the owning engine boundary rather than a demo-side stand-in.

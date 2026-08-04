@@ -325,7 +325,7 @@ export function parseTriggerBrowserArgs(args: readonly string[]): TriggerBrowser
  * Execute capture-frame command.
  *
  * Connects to the target WebSocket, sends an eval script that calls
- * debugAdapter.captureFrame (eval-scope live root injected by w20),
+ * debugAdapter.captureFrames (eval-scope live root injected by w20),
  * and outputs the result as JSON.
  */
 export async function runCaptureFrame(options: {
@@ -342,12 +342,12 @@ export async function runCaptureFrame(options: {
   const client = connectResult.value;
 
   try {
-    // Build the script: call debugAdapter.captureFrame (eval-scope live root).
+    // Build the script: call debugAdapter.captureFrames (eval-scope live root).
     // debugAdapter is the 4th eval-scope root injected by createApp via
     // execute.ts ExecuteContext.debugAdapter (w20).
     const framesJson = JSON.stringify(options.frames);
     const labelExpr = options.label !== undefined ? JSON.stringify(options.label) : 'undefined';
-    const script = `debugAdapter.captureFrame({ frames: ${framesJson}, label: ${labelExpr} })`;
+    const script = `debugAdapter.captureFrames(${framesJson}, ${labelExpr})`;
 
     const rawResult = await client.eval(script);
     const result = rawResult as Record<string, unknown> | undefined;
@@ -401,7 +401,7 @@ export async function runInspectAt(options: {
       options.fields !== undefined
         ? JSON.stringify(options.fields.split(',').map((f) => f.trim()))
         : 'undefined';
-    const script = `debugAdapter.inspectAt({ tapePath: ${tapePathJson}, drawIdx: ${drawIdxJson}, fields: ${fieldsExpr} })`;
+    const script = `debugAdapter.inspectAt(${tapePathJson}, ${drawIdxJson}, ${fieldsExpr})`;
 
     const rawResult = await client.eval(script);
     const result = rawResult as Record<string, unknown> | undefined;

@@ -1,3 +1,79 @@
+import type { Component, ComponentSchema, FieldReflection } from '../component';
+
+/**
+ * Returned when a closed enum field receives a value outside its reflected
+ * labels. The write owner runs this before any archetype or column mutation.
+ */
+export class ComponentFieldInvalidValueError extends Error {
+  override readonly name = 'ComponentFieldInvalidValueError';
+  readonly code = 'component-field-invalid-value' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly entity: number | undefined;
+    readonly component: string;
+    readonly field: string;
+    readonly received: unknown;
+    readonly allowedValues: Readonly<Record<string, number>>;
+  };
+
+  constructor(
+    entity: number | undefined,
+    component: string,
+    field: string,
+    received: unknown,
+    allowedValues: Readonly<Record<string, number>>,
+  ) {
+    const entries = Object.entries(allowedValues)
+      .map(([label, value]) => `${label}=${value}`)
+      .join(', ');
+    const expected = `${component}.${field} in { ${entries} }`;
+    const hint = `Set ${component}.${field} to one of the reflected enum values: ${entries}`;
+    super(
+      `${component}.${field} received an invalid enum value.\n` +
+        `  code: component-field-invalid-value\n` +
+        `  component: ${component}\n` +
+        `  field: ${field}\n` +
+        `  received: ${String(received)}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail = { entity, component, field, received, allowedValues };
+  }
+}
+
+/**
+ * Validate the closed enum fields present in a write payload. Enums without
+ * labels remain open numeric fields for compatibility with existing schemas.
+ */
+export function validateEnumFieldValues<S extends ComponentSchema>(
+  component: Component<string, S>,
+  raw: Partial<Record<string, unknown>> | undefined,
+  entity?: number,
+): ComponentFieldInvalidValueError | null {
+  if (raw === undefined) return null;
+  const fields = component.fields as Readonly<Record<string, FieldReflection>>;
+  const rawValues = raw as Record<string, unknown>;
+  for (const fieldName of Object.keys(rawValues)) {
+    const reflection = fields[fieldName];
+    if (reflection?.type !== 'enum' || reflection.labels === undefined) continue;
+    const value = rawValues[fieldName];
+    const allowedValues = Object.values(reflection.labels);
+    if (typeof value !== 'number' || !Number.isInteger(value) || !allowedValues.includes(value)) {
+      return new ComponentFieldInvalidValueError(
+        entity,
+        component.name,
+        fieldName,
+        value,
+        reflection.labels,
+      );
+    }
+  }
+  return null;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // feat-20260519-light-casters-point-spot-pbr w2 — closed-union evolution +1.
 //

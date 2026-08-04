@@ -11,7 +11,7 @@ import { createProfiler } from '@forgeax/engine-profiler';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { RemoteError } from '../errors';
-import { type ConsoleHandle, startServer } from '../server';
+import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer } from '../server';
 
 {
   // --- from server.test.ts ---
@@ -210,6 +210,67 @@ import { type ConsoleHandle, startServer } from '../server';
       });
     });
 
+    it('merges host component descriptors without changing methods or errors', async () => {
+      const descriptors = [
+        {
+          name: 'Visibility',
+          schema: { state: 'enum' },
+          fields: {
+            state: {
+              type: 'enum',
+              labels: { inherited: 0, hidden: 1, visible: 2 },
+            },
+          },
+          meta: {
+            quickStart: 'set Visibility.state through World.set',
+            recovery: { code: 'component-field-invalid-value', hint: 'use an allowed label' },
+          },
+        },
+      ] satisfies readonly ComponentIntrospectionDescriptor[];
+
+      const startResult = await startServer({
+        port: 0,
+        host: '127.0.0.1',
+        world: {},
+        introspection: descriptors,
+      });
+      expect(startResult.ok).toBe(true);
+      if (!startResult.ok) throw startResult.error;
+
+      try {
+        const ws = await connect(startResult.value.port);
+        const resp = await send(ws, { jsonrpc: '2.0', method: 'introspect', id: 13 });
+        const doc = resp.result as {
+          methods: Array<{ name: string }>;
+          components: {
+            schemas: Record<string, unknown>;
+            errors: Record<string, unknown>;
+          };
+        };
+        expect(doc.methods.map((method) => method.name)).toEqual(['eval', 'introspect']);
+        expect(doc.components.schemas.Visibility).toEqual(descriptors[0]);
+        expect(Object.keys(doc.components.errors)).toHaveLength(4);
+        expect(doc.components.errors).toHaveProperty('script-runtime-error');
+        expect(doc.components.errors).toHaveProperty('server-not-running');
+        ws.close();
+      } finally {
+        await startResult.value.close();
+      }
+    });
+
+    it('keeps injected schemas passive for the existing eval method', async () => {
+      await withServer(async (handle) => {
+        const ws = await connect(handle.port);
+        const resp = await send(ws, {
+          jsonrpc: '2.0',
+          method: 'eval',
+          params: { script: 'JSON.stringify({ methods: 2, schemas: 1 })' },
+          id: 14,
+        });
+        expect(resp.result).toBe('{"methods":2,"schemas":1}');
+        ws.close();
+      });
+    });
     it('projects the opted-in profiler root and bounded capture capability', async () => {
       const profiler = createProfiler();
       await withServer(

@@ -29,6 +29,7 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*",
     "@webgpu/types": "^0.1.71"
   },
   "peerDependencies": {

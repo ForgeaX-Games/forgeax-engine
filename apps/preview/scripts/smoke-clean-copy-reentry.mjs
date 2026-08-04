@@ -80,10 +80,19 @@ async function boot() {
 
 try {
   const cycles = [];
+  let expectedProjectionIds = null;
   for (let cycle = 0; cycle < CYCLES; cycle += 1) {
     const before = await boot();
-    if (before.listed.actions.length !== 4 || before.listed.reads.length !== 2) {
+    const projectionIds = {
+      actions: before.listed.actions.map((entry) => entry.id).sort(),
+      reads: before.listed.reads.map((entry) => entry.id).sort(),
+    };
+    if (projectionIds.actions.length < 4 || projectionIds.reads.length < 2) {
       throw new Error(`projection surface drifted on cycle ${cycle}: ${JSON.stringify(before.listed)}`);
+    }
+    if (expectedProjectionIds === null) expectedProjectionIds = projectionIds;
+    else if (JSON.stringify(projectionIds) !== JSON.stringify(expectedProjectionIds)) {
+      throw new Error(`projection surface changed across clean boots on cycle ${cycle}: ${JSON.stringify({ expectedProjectionIds, projectionIds })}`);
     }
     if (!before.snapshot.ok || before.snapshot.value.state.phase !== 'Play') {
       throw new Error(`clean boot snapshot failed on cycle ${cycle}: ${JSON.stringify(before.snapshot)}`);

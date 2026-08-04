@@ -151,6 +151,7 @@ import {
   getTransparentSortConfig,
   hasIblCache,
   mergeSkylightIntoMaterialBgl,
+  prepareExtractContext,
   SKYLIGHT_BINDING_OFFSET,
   SKYLIGHT_MERGED_ENTRY_COUNT,
   setTransparentSortConfig,
@@ -7852,20 +7853,26 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ]);
 
       // Use the extract API directly so we can inspect the snapshot shape.
-      const { extractFrame } = (await import('@forgeax/engine-render/internal')) as {
+      const { extractFrame, prepareExtractContext } = (await import(
+        '@forgeax/engine-render/internal'
+      )) as {
         extractFrame: (
           w: unknown,
-          a: unknown,
+          context: unknown,
         ) => {
           renderables: Array<{
             materials?: ReadonlyArray<{ baseColor: Float32Array | readonly number[] }>;
             material?: { baseColor: Float32Array | readonly number[] };
           }>;
         };
+        prepareExtractContext: (w: unknown, options: unknown) => unknown;
       };
       // The renderer exposes its AssetRegistry via .assets.
       const rendererAny = renderer as unknown as { assets: unknown };
-      const frame = extractFrame(world, rendererAny.assets);
+      const frame = extractFrame(
+        world,
+        prepareExtractContext(world, { assets: rendererAny.assets }),
+      );
       expect(frame.renderables.length).toBe(1);
       const r = frame.renderables[0];
       if (!r) throw new Error('expected renderable');
@@ -8654,11 +8661,12 @@ function makeSkinM2StubAllocator(): SkinM2StubAllocator {
   };
 }
 
-type ExtractFrameWithPipeline = (
-  w: World,
+type ExtractFramesWithPipeline = (
+  worlds: readonly World[],
+  owner: number,
   a: AssetRegistry | null,
   p: { skinPaletteAllocator: SkinM2StubAllocator },
-) => ReturnType<typeof extractFrame>;
+) => ReturnType<typeof extractFrames>;
 
 {
   // --- m2-1: hasSkin happy path -> non-zero byteOffset ---
@@ -8683,7 +8691,7 @@ type ExtractFrameWithPipeline = (
       const errorSpy = vi.fn();
       world.setErrorHandler(errorSpy);
 
-      const frame = (extractFrames as unknown as ExtractFrameWithPipeline)(
+      const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
         [world],
         0,
         assets,
@@ -8721,7 +8729,7 @@ type ExtractFrameWithPipeline = (
 {
   // --- m2-2: assets===null equivalence to bind-pose (no error) ---
   describe('feat-20260612 M2 / m2-2: assets===null equiv bind-pose (no error)', () => {
-    it('skinned entity + extractFrame(world, null) -> no _routeError, no skin slice (m2-2)', () => {
+    it('skinned entity + prepared null assets -> no _routeError, no skin slice (m2-2)', () => {
       const world = new World();
       const _assets = makeSkinM2AssetRegistry();
       const meshHandle = registerSkinM2Mesh(world);
@@ -8741,7 +8749,7 @@ type ExtractFrameWithPipeline = (
       // Plan-strategy R-3: must NOT trigger skeleton-resolve-failed; the
       // hasSkin segment is skipped entirely (equivalent to bind-pose).
       expect(() =>
-        (extractFrame as unknown as ExtractFrameWithPipeline)(world, null, pipelineState),
+        (extractFrames as unknown as ExtractFramesWithPipeline)([world], 0, null, pipelineState),
       ).not.toThrow();
 
       expect(errorSpy).not.toHaveBeenCalled();
@@ -8780,8 +8788,9 @@ type ExtractFrameWithPipeline = (
       const errorSpy = vi.fn();
       world.setErrorHandler(errorSpy);
 
-      const frame = (extractFrame as unknown as ExtractFrameWithPipeline)(
-        world,
+      const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
+        [world],
+        0,
         assets,
         pipelineState,
       );
@@ -8823,8 +8832,9 @@ type ExtractFrameWithPipeline = (
       const errorSpy = vi.fn();
       world.setErrorHandler(errorSpy);
 
-      const frame = (extractFrame as unknown as ExtractFrameWithPipeline)(
-        world,
+      const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
+        [world],
+        0,
         assets,
         pipelineState,
       );
@@ -8864,8 +8874,9 @@ type ExtractFrameWithPipeline = (
       const errorSpy = vi.fn();
       world.setErrorHandler(errorSpy);
 
-      const frame = (extractFrame as unknown as ExtractFrameWithPipeline)(
-        world,
+      const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
+        [world],
+        0,
         assets,
         pipelineState,
       );
@@ -9034,7 +9045,10 @@ type ExtractFrameWithPipeline = (
       const world = new World();
       world.spawn({ component: Skylight, data: {} });
 
-      const frame = extractFrame(world, null as unknown as never) as unknown as {
+      const frame = extractFrame(
+        world,
+        prepareExtractContext(world, { assets: null }),
+      ) as unknown as {
         skylight?: { equirectHandle: number; color: readonly number[]; intensity: number };
         skylightCount: number;
       };
@@ -9053,7 +9067,10 @@ type ExtractFrameWithPipeline = (
         data: { color: [0.2, 0.4, 0.8], intensity: 0.5 },
       });
 
-      const frame = extractFrame(world, null as unknown as never) as unknown as {
+      const frame = extractFrame(
+        world,
+        prepareExtractContext(world, { assets: null }),
+      ) as unknown as {
         skylight?: { equirectHandle: number; color: readonly number[]; intensity: number };
       };
 

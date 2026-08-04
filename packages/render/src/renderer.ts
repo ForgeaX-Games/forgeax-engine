@@ -563,6 +563,11 @@ export interface Renderer {
    */
   readonly frustumStats: { readonly culled: number; readonly total: number };
   /**
+   * Per-frame candidate entities rejected by author visibility before resource
+   * parsing. Zero before the first draw or when no candidates are hidden.
+   */
+  readonly visibilityStats: { readonly explicitlyHidden: number };
+  /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
    * before the first `draw([world], { owner: 0 })` call; populated lazily when the

@@ -22,7 +22,12 @@
 
 import { World } from '@forgeax/engine-ecs';
 import type { ExtractedFrame } from '@forgeax/engine-render/internal';
-import { Camera, DirectionalLight, extractFrame } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  DirectionalLight,
+  extractFrame,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
@@ -65,7 +70,7 @@ function simulateExtractFramesWithErrorHandling(
       if ((world as unknown as Record<string, unknown>)._injectFailure === true) {
         throw new Error('Injected propagateTransforms failure');
       }
-      const frame = extractFrame(world as World);
+      const frame = extractFrame(world as World, prepareExtractContext(world as World));
       frames.push(frame);
     } catch (_err) {
       skippedWorlds.add(wi);

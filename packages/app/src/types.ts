@@ -393,8 +393,8 @@ export interface App {
    * Live `DebugRhiInstance` recorder proxy when `FORGEAX_ENGINE_RHI_DEBUG=1` is set;
    * `undefined` otherwise. Demo / e2e harness code calls `_debugRhi.arm(N)`
    * + later `_debugRhi.finalize()` directly. Production code should
-   * reach the same pipeline through the WS:5732 RPC `debug.captureFrame`
-   * method (which routes through `_debugAdapter`).
+   * reach the same pipeline through the WS:5732 eval `debugAdapter.captureFrames`
+   * surface (which routes through `_debugAdapter`).
    * Typed as `unknown` here to avoid pulling
    * `@forgeax/engine-rhi-debug` into the `@forgeax/engine-app` type
    * surface — host code that wants the typed shape imports

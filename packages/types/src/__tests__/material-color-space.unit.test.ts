@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  authoredColorToLinear,
   linearChannelToSrgb,
   materialValuesToLinearRuntime,
   srgbChannelToLinear,
 } from '../index.js';
+import { authoredColorToLinear } from '../material/color-space.js';
 
 describe('material color-space contract', () => {
   it('implements the IEC 61966-2-1 transfer-function breakpoints', () => {

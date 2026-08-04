@@ -31,6 +31,8 @@ export interface ParticleRenderFeatureFrameData {
 }
 
 export interface ParticleRenderFeature extends RenderFeature<ParticleRenderFeatureFrameData> {
+  /** Material shader modules required by particle prepared graphics before the first draw. */
+  readonly requiredMaterialShaders: readonly string[];
   diagnostics(): ParticleRenderDiagnostics;
   recover(
     context: RenderFeaturePrepareContext,

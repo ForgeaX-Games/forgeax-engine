@@ -9,12 +9,17 @@ import { defineConfig } from 'vite';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const dejavuFonts = resolve(monorepoRoot, 'forgeax-engine-assets', 'dejavu-fonts');
+const legacyFontRoots = [
+  resolve(dejavuFonts, 'DejaVuSansMono.atlas.png'),
+  resolve(dejavuFonts, 'DejaVuSansMono.atlas.png.meta.json'),
+  resolve(dejavuFonts, 'DejaVuSansMono.font.pack.json'),
+];
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     vitePluginRhiDebug(),
-    pluginPack({ roots: [dejavuFonts], importers: [imageImporter], refresh: reloadAssetHost() }),
+    pluginPack({ roots: legacyFontRoots, importers: [imageImporter], refresh: reloadAssetHost() }),
   ],
   server: { fs: { allow: [monorepoRoot] } },
   build: { target: 'esnext', rollupOptions: { input: { main: resolve(here, 'index.html') } } },

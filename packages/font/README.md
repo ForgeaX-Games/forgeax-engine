@@ -71,6 +71,8 @@ const font = (await engine.assets.loadByGuid<FontAsset>(fontGuid)).unwrap();
 
 `loadByGuid` fetches the font pack file, recursively resolves the atlas `TextureAsset` + `SamplerAsset` handles, constructs the `FontAsset` POD, and registers it (AC-05). The returned `Handle<'FontAsset','unmanaged'>` narrows to `FontAsset` under `assets.get(handle)` with no `as` cast (AC-17).
 
+The importer keeps the Pack v2 atlas artifact in raw RGBA8 form (`application/octet-stream`), matching the runtime texture loader's non-Basis artifact contract. The standalone CLI still writes a PNG for inspection or external tooling; that PNG is not silently treated as GPU pixel bytes by the Pack v2 runtime path.
+
 ## Layout (runtime)
 
 `glyphTextLayoutSystem` (in `@forgeax/engine-runtime`) runs once per frame before the render record:

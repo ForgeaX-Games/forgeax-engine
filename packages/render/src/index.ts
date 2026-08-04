@@ -2,7 +2,6 @@ export * from './components/camera';
 export * from './components/directional-light';
 export { Instances, type InstancesData } from './components/instances';
 export { Layer } from './components/layer';
-export * from './components/light-helpers';
 export * from './components/mesh-filter';
 export * from './components/mesh-renderer';
 export { PointLight } from './components/point-light';
@@ -22,8 +21,19 @@ export {
 export { Skylight } from './components/skylight';
 export { SortKey } from './components/sort-key';
 export { SpotLight } from './components/spot-light';
+export {
+  Visibility,
+  type VisibilityState,
+  VisibilityStateValue,
+  visibilityStateFromU32,
+} from './components/visibility';
 export * from './errors/index';
 export * from './errors/recover';
+export {
+  resolveVisibility,
+  type VisibilityResolution,
+  type VisibilitySnapshot,
+} from './extract/visibility';
 /**
  * Public producer seam: RenderFeature, its narrow stage contexts, structured
  * diagnostics, graph contribution vocabulary, and prepared graphics facade.

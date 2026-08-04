@@ -8,7 +8,7 @@ export {
   type PublishDdcEntryResult,
   type StagedDdcEntry,
 } from './entry-store.js';
-export { type SemanticDdcInput, semanticDdcKey } from './key.js';
+export { semanticDdcKey } from './key.js';
 export {
   type DdcCommitResult,
   type DdcHead,

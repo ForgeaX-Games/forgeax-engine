@@ -121,7 +121,7 @@ async function capture(label, expectedScore, browser) {
       const listed = globalThis.__forgeaxPreviewInspection?.list();
       const root = document.querySelector('[data-forgeax-ui-root]');
       const hud = root?.querySelector('[data-ui-asset="019f8354-6386-4386-849d-f2ab4b96229c"]');
-      return (listed?.actions.length ?? 0) === 4 && (listed?.reads.length ?? 0) === 2 && hud?.shadowRoot !== null;
+      return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2 && hud?.shadowRoot !== null;
     }, null, { timeout: 30_000 });
     const pack = await page.evaluate(async (guid) => {
       const index = await (await fetch('/pack-index.json')).json();

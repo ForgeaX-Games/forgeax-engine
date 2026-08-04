@@ -19,7 +19,12 @@
 
 import { World } from '@forgeax/engine-ecs';
 import type { CameraSnapshot, ExtractedFrame } from '@forgeax/engine-render/internal';
-import { Camera, extractFrame, PostProcessParams } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  extractFrame,
+  PostProcessParams,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
@@ -134,8 +139,8 @@ describe('postProcessParams <-> cameras same-origin constraint (m2-t4, R-6)', ()
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     // Verify both worlds have their own cameras and postProcessParams
     expect(frameA.cameras.length).toBeGreaterThanOrEqual(1);
@@ -212,8 +217,8 @@ describe('postProcessParams <-> cameras same-origin constraint (m2-t4, R-6)', ()
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMergeWithOwnerSelection([frameA, frameB], 0);
 
@@ -249,8 +254,8 @@ describe('postProcessParams <-> cameras same-origin constraint (m2-t4, R-6)', ()
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     // owner=0: worldA has no user PostProcessParams, but has a camera
     // so engine injects forgeax::tonemap
@@ -334,8 +339,8 @@ describe('postProcessParams <-> cameras same-origin constraint (m2-t4, R-6)', ()
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMergeWithOwnerSelection([frameA, frameB], 0);
 

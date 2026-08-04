@@ -9,8 +9,6 @@ import {
 } from '@forgeax/engine-ecs';
 
 export const TargetDisabling = defineComponent('GameDefaultTargetDisabling', {});
-const activeQuery = createQueryState({ with: [TargetDisabling, Entity] });
-const disabledQuery = createQueryState({ with: [TargetDisabling, Disabled, Entity] });
 
 export type TargetDisablingWitness = {
   readonly activeCount: number;
@@ -31,6 +29,11 @@ function count(world: World, query: ReturnType<typeof createQueryState>): number
 }
 
 export function installTargetDisabling(world: World, targets: readonly EntityHandle[]): TargetDisablingHandle {
+  // QueryState caches matched archetype ids and therefore belongs to one
+  // World. Preview may construct a staging World before the live World in the
+  // same module instance; module-global queries would reuse the staging cache.
+  const activeQuery = createQueryState({ with: [TargetDisabling, Entity] });
+  const disabledQuery = createQueryState({ with: [TargetDisabling, Disabled, Entity] });
   const targetSet = new Set(targets);
   for (const entity of targets) world.addComponent(entity, { component: TargetDisabling, data: {} }).unwrap();
   const state = { disableEvents: 0 };

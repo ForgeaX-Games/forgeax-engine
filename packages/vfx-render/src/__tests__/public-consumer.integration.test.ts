@@ -12,6 +12,22 @@ const manifest = `data:application/json,${encodeURIComponent(
       { hash: 'unlit000', wgsl: '/* unlit stub */', glsl: '', bindings: '' },
       { hash: 'tonemap0', wgsl: '/* tonemap stub */', glsl: '', bindings: '' },
     ],
+    materialShaders: [
+      {
+        identifier: 'forgeax::vfx-render.particles.billboard',
+        sourcePath: 'particles.billboard.wgsl',
+        composedWgsl: '/* particle billboard stub */',
+        paramSchema: '[]',
+        variants: [],
+      },
+      {
+        identifier: 'forgeax::vfx-render.particles.mesh',
+        sourcePath: 'particles.mesh.wgsl',
+        composedWgsl: '/* particle mesh stub */',
+        paramSchema: '[]',
+        variants: [],
+      },
+    ],
   }),
 )}`;
 

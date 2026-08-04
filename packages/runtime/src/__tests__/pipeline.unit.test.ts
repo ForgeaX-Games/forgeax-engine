@@ -96,6 +96,7 @@ import {
   type PipelineBuilderContext,
   type PipelineBuilderShaderModuleFactory,
   type PipelineSpec,
+  prepareExtractContext,
   sortDispatchByQueue,
   validateClusterGrid,
   viewZToZSlice,
@@ -3638,7 +3639,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world, { cull: 'none' }));
       expect(frame.renderables.length).toBe(1);
     });
 
@@ -3666,7 +3667,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world, { cull: 'none' }));
       expect(frame.renderables.length).toBe(1);
     });
   });
@@ -3704,7 +3705,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.renderables.length).toBe(1);
     });
 
@@ -3742,7 +3743,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           .unwrap();
       }
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.renderables.length).toBe(3);
     });
   });
@@ -3772,7 +3773,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       // No lights spawned - but unlit material should still produce renderables.
       expect(frame.lights.directional).toBeUndefined();
       expect(frame.lights.directionalCount).toBe(0);
@@ -3814,7 +3815,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.renderables.length).toBe(2);
       expect(frame.cameras.length).toBe(1);
     });

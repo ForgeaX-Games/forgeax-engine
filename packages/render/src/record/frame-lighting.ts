@@ -450,7 +450,10 @@ export function writePointSpotLightBuffers(
   pipelineState: PipelineState,
   lights: ExtractedLights,
 ): void {
-  const pointSlots = lights.point.slice(0, LIGHT_ARRAY_MAX_SLOTS);
+  const pointSlots =
+    lights.point.length <= LIGHT_ARRAY_MAX_SLOTS
+      ? lights.point
+      : lights.point.slice(0, LIGHT_ARRAY_MAX_SLOTS);
   const pointHeader = packLightArrayHeader(pointSlots.length);
   const pointHeaderUpload = internals.device.queue.writeBuffer(
     pipelineState.pointLightsBuffer,
@@ -470,7 +473,10 @@ export function writePointSpotLightBuffers(
     );
     if (!writeRes.ok) throw writeRes.error;
   }
-  const spotSlots = lights.spot.slice(0, LIGHT_ARRAY_MAX_SLOTS);
+  const spotSlots =
+    lights.spot.length <= LIGHT_ARRAY_MAX_SLOTS
+      ? lights.spot
+      : lights.spot.slice(0, LIGHT_ARRAY_MAX_SLOTS);
   const spotHeader = packLightArrayHeader(spotSlots.length);
   const spotHeaderUpload = internals.device.queue.writeBuffer(
     pipelineState.spotLightsBuffer,
@@ -544,11 +550,10 @@ export function writeShadowParamsBuffer(
  *
  * feat-20260520-skylight-ibl-cubemap M4 / t27 (AC-10): fires once per
  * RenderSystem lifetime when the 0-light three-condition conjunction holds — no
- * Skylight, 0 direct light (totalLightCount === 0), AND at least one lit
- * (standard / PBR) material (which renders black with no light). A lit material
- * carries a materialShaderId !== 'forgeax::default-unlit'; the default mid-grey
- * unlit fallback has no materialShaderId, so the conjunction excludes both unlit
- * and default materials. Suppressed under NODE_ENV=production.
+ * Skylight, 0 direct light (totalLightCount === 0), AND at least one builtin
+ * standard/PBR material (which renders black with no light). Custom shaders
+ * own their lighting contract and cannot be classified by this generic
+ * diagnostic. Suppressed under NODE_ENV=production.
  *
  * @internal
  */

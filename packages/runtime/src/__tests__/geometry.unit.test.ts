@@ -59,6 +59,7 @@ import {
   extractFrame,
   GpuResourceStore,
   isMeshSsboDevMode,
+  prepareExtractContext,
   setMeshSsboDevModeProbeForTests,
 } from '@forgeax/engine-render/internal';
 import { propagateTransforms } from '@forgeax/engine-scene';
@@ -439,7 +440,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(0);
     });
 
@@ -451,7 +452,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(0);
     });
 
@@ -463,7 +464,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(1);
     });
 
@@ -506,7 +507,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(1);
     });
 
@@ -540,7 +541,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(1);
     });
 
@@ -558,7 +559,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       // culling is unconditional, so entity behind camera is culled
       expect(frame.renderables).toHaveLength(0);
     });
@@ -573,7 +574,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(1);
     });
 
@@ -590,7 +591,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toHaveLength(1);
     });
 
@@ -605,7 +606,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       // The entity is in front of the camera → should be in renderables
       expect(frame.renderables).toHaveLength(1);
     });
@@ -620,7 +621,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       propagateTransforms(world);
 
-      const frame: ExtractedFrame = extractFrame(world, assets);
+      const frame: ExtractedFrame = extractFrame(world, prepareExtractContext(world, { assets }));
       // Entity at z=100 is behind camera at z=5 (looking -Z → behind means >5).
       // It's also behind camera at z=-5 (looking -Z → greater means behind).
       // With small AABB [-1,1], it should be outside both frusta.

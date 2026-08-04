@@ -1,11 +1,19 @@
 import { REMOTE_ERROR_CODE_TO_JSONRPC, type RemoteErrorCode } from './errors';
 
+export interface ComponentIntrospectionDescriptor {
+  readonly name: string;
+  readonly schema: Readonly<Record<string, string>>;
+  readonly fields: Readonly<Record<string, unknown>>;
+  readonly meta: Readonly<Record<string, unknown>>;
+}
+
 export interface RemoteRootValues {
   readonly world: unknown;
   readonly renderer: unknown;
   readonly assets: unknown;
   readonly debugAdapter?: unknown;
   readonly profiler?: unknown;
+  readonly introspection?: readonly ComponentIntrospectionDescriptor[];
 }
 
 type RootProjection = {
@@ -140,6 +148,9 @@ export function buildIntrospectDoc(host: string, port: number, roots: RemoteRoot
         description: 'A bounded ProfileCapture v1 artifact returned through eval.',
       };
     }
+  }
+  for (const descriptor of roots.introspection ?? []) {
+    schemas[descriptor.name] = descriptor;
   }
   return {
     openrpc: '1.3.2',

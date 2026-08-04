@@ -95,7 +95,12 @@ if (existsSync(releaseRoot)) {
 }
 
 const assetReadme = join(repoRoot, 'forgeax-engine-assets', 'README.md');
-if (existsSync(assetReadme)) {
+if (!existsSync(assetReadme)) {
+  throw new Error(
+    'asset authority is not materialized: forgeax-engine-assets/README.md is missing; ' +
+      'run `git submodule update --init --recursive forgeax-engine-assets` from the engine root',
+  );
+} else {
   const source = addSource(assetReadme, 'asset-authority');
   const assetRoot = dirname(assetReadme);
   const formats = new Set(extractAssetFormats(readFileSync(assetReadme, 'utf8')));

@@ -3,7 +3,7 @@
 // (feat-20260517-merge-mesh-renderer-material-renderer M3 / w8;
 // plan-strategy section 4 R-A6 / requirements AC-06 main signal).
 //
-// ts-morph AST traversal of `packages/runtime/src/render-system-extract.ts`
+// ts-morph AST traversal of `packages/render/src/render-system-extract.ts`
 // asserting that the file contains at most ONE call expression whose
 // `with` array references the `MeshRenderer` token. The auxiliary
 // `cameraQuery` (`with: [Transform, Camera]`) and `lightQuery`
@@ -45,7 +45,7 @@ import { Project, SyntaxKind } from 'ts-morph';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
-const TARGET = resolve(REPO_ROOT, 'packages/runtime/src/render-system-extract.ts');
+const TARGET = resolve(REPO_ROOT, 'packages/render/src/render-system-extract.ts');
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -56,7 +56,7 @@ if (args.includes('--help') || args.includes('-h')) {
       'Usage:',
       '  node scripts/forgeax/check-render-extract-single-query.mjs',
       '',
-      'Asserts that packages/runtime/src/render-system-extract.ts contains',
+      'Asserts that packages/render/src/render-system-extract.ts contains',
       'AT MOST ONE createQueryState / world.query call referencing the',
       'MeshRenderer token in its `with` array. Pairs with',
       'check-render-record-no-material-asset-get.mjs (record-side',

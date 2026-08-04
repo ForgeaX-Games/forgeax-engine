@@ -80,18 +80,9 @@ export {
   PACK_ARTIFACT_LOADERS,
   textureLoader,
 } from './loaders/pack-artifact';
-export {
-  type MaterialCachedArtifact,
-  MaterialGenerationCache,
-  type MaterialGenerationVector,
-  type MaterialStaleGenerationError,
-} from './material/generation-cache';
-export { inspectMaterialRuntime, type MaterialRuntimeInfo } from './material/inspection';
+export { MaterialGenerationCache } from './material/generation-cache';
 export {
   createMaterialLoader,
-  type MaterialLoadError,
-  type MaterialLoaderOptions,
-  type MaterialLoadRequest,
   type MaterialReady,
 } from './material/loader';
 // ─── Mesh binary container decode ───────────────────────────────────────────
@@ -109,7 +100,6 @@ export {
 export { type TilesetValidateOptions, validateTilesetPayload } from './payload-validate';
 export {
   createRuntimeAssetEvidenceAdapter,
-  type RuntimeAssetEvidenceAdapter,
   type RuntimeEvidenceSource,
 } from './registry/asset-evidence';
 export { CatalogReplica, type CatalogReplicaSnapshot } from './registry/catalog-state';

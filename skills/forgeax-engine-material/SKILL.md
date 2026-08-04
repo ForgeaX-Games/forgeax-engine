@@ -86,3 +86,25 @@ an engine resource.
 - Shader module and reflection: [`packages/shader/README.md`](../../packages/shader/README.md)
 - Runtime catalog: [`packages/assets-runtime/README.md`](../../packages/assets-runtime/README.md)
 - Migration: [`docs/material-asset-migration.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/material-asset-migration.md)
+
+## Visibility is a render boundary, not a material field
+
+Quick start: author `Visibility` through ECS, inspect its effective state from
+the render package, and leave `MaterialAsset` unchanged:
+
+```ts
+import { Visibility, VisibilityStateValue, resolveVisibility } from '@forgeax/engine-render';
+
+world.spawn({ component: Visibility, data: { state: VisibilityStateValue.hidden } }).unwrap();
+const snapshot = resolveVisibility(world);
+```
+
+| Question | Authority | Recovery |
+|:--|:--|:--|
+| Why is an entity hidden? | `Visibility` intent plus `resolveVisibility` | Inspect `source` and hierarchy diagnostics |
+| Why did a material fail? | Material/shader structured errors | Repair the cooked contract and retry |
+| Why is the count unexpected? | `renderer.visibilityStats` | Inspect the renderer candidate path |
+
+Do not replace a missing material, mesh, camera, or visibility path with a
+demo-side stand-in. Visibility does not own camera, picking, lifecycle, assets,
+or VFX shadow behavior. Those are out of scope for this material skill.

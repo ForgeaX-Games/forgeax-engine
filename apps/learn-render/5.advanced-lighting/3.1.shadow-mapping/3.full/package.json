@@ -36,6 +36,9 @@
         "enabled": false,
         "reason": "not a spike app; LearnOpenGL section-5.3 directional production shadow demo"
       }
+    },
+    "rhiDebug": {
+      "riskFamilies": ["lighting-shadows"]
     }
   },
   "dependencies": {

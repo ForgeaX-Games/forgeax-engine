@@ -1,13 +1,15 @@
 import { type ImportDiagnostic, ImportError } from '@forgeax/engine-types';
 import { parseCssAuthoring } from './css.js';
-import { hasBlockingDiagnostics, serializeDiagnostics } from './diagnostics.js';
+import { hasBlockingDiagnostics } from './diagnostics.js';
 import { parseHtmlAuthoring } from './html.js';
-import { pickClassification, UI_AUTHORING_PROFILE, type UiAuthoringCategory } from './profile.js';
+import { pickClassification, type UiAuthoringCategory } from './profile.js';
 
-export * from './css.js';
-export * from './diagnostics.js';
-export * from './html.js';
-export * from './profile.js';
+export { serializeDiagnostics } from './diagnostics.js';
+export {
+  UI_AUTHORING_PROFILE,
+  type UiAuthoringCategory,
+  type UiAuthoringProfile,
+} from './profile.js';
 
 export interface UiAuthoringInput {
   readonly sourcePath: string;
@@ -108,5 +110,3 @@ export async function validateUiAuthoring(input: UiAuthoringInput): Promise<UiAu
     },
   };
 }
-
-export { serializeDiagnostics, UI_AUTHORING_PROFILE };

@@ -6,11 +6,12 @@
 // demonstrating that the View UBO is engine-managed. No hand-written UBO code.
 //
 // View UBO anchor (research F-4, AC-04):
-//   The engine's View UBO lives at @group(0) @binding(0), 240 B std140 layout
-//   (common.wgsl:17-43 SSOT), per-view. Host side: allocated in createRenderer.ts,
-//   populated each frame in render-system-record.ts. The AI user spawns a Camera
+//   The engine's View UBO lives at @group(0) @binding(0), 784 B std140 layout
+//   (common.wgsl:17-128 SSOT), per-view. Host side: allocated in the renderer,
+//   populated each frame in render/view-ubo.ts. The AI user spawns a Camera
 //   + DirectionalLight; the engine auto-fills viewProj, lightDir, lightColor,
-//   cameraPos, lightSpaceMatrix, inverseViewProj — all 60 floats. Zero user-side
+//   cameraPos, four cascade matrices, split planes, shadow bias, and four spot
+//   matrices — all 196 floats. Zero user-side
 //   UBO code required (charter P4: uniform abstraction over manual binding).
 //
 // GREP anchors for AI users:
@@ -34,7 +35,7 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 
 // Three cubes in a row — minimal geometry, no textures, just standard PBR.
-// The View UBO (240B std140, @group(0)@binding(0)) carries camera + light
+// The View UBO (784B std140, @group(0)@binding(0)) carries camera + light
 // payload to every shader stage automatically (engine-managed; no user UBO code).
 const CUBE_POSITIONS: readonly [number, number, number][] = [
   [-1.5, 0, 0],
@@ -87,8 +88,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Three cubes — minimal scene proof that the View UBO is live.
   // No explicit UBO code: Camera + DirectionalLight spawns -> engine extracts
-  // viewProj/lightDir/lightColor/cameraPos/lightSpaceMatrix/inverseViewProj
-  // into the 240B std140 View struct at @group(0)@binding(0).
+  // viewProj/lightDir/lightColor/cameraPos, cascade/shadow data, and spot
+  // matrices into the 784B std140 View struct at @group(0)@binding(0).
   for (const [px, py, pz] of CUBE_POSITIONS) {
     world.spawn(
       {

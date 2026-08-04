@@ -387,6 +387,11 @@ const LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS = [
 ] as const;
 const STANDARD_PBR_TEXTURE_COORDINATE_OFFSET = 96;
 const STANDARD_PBR_TEXTURE_COORDINATE_STRIDE = 8;
+const DEFAULT_LEGACY_TEXTURE_SCALES = new Float32Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+const DEFAULT_STANDARD_TEXTURE_COORDINATES = new Float32Array([
+  0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0,
+  0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+]);
 
 /** Derives the logical-content UV scale for an uploaded material texture. */
 export function materialTextureUvScale(
@@ -411,11 +416,14 @@ function materialTextureForField(
  * from a bound texture asset to its shader sampling coordinates.
  */
 export function applyMaterialTextureUvScales(
-  payload: ArrayBuffer,
+  payload: ArrayBuffer | Uint8Array,
   material: MaterialSnapshot,
   world: World,
 ): void {
-  const f32 = new Float32Array(payload);
+  const f32 =
+    payload instanceof Uint8Array
+      ? new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)
+      : new Float32Array(payload);
   // Standard PBR grew two authored coat fields before the engine-owned UV
   // tail. Sprite, sprite-lit, unlit, and text keep their own 80-byte tail
   // position because their WGSL layouts do not carry clearcoat.
@@ -426,6 +434,22 @@ export function applyMaterialTextureUvScales(
       ? STANDARD_PBR_TEXTURE_SCALE_OFFSET
       : LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET;
   const isStandardPbr = textureScaleOffset === STANDARD_PBR_TEXTURE_SCALE_OFFSET;
+  const hasTextureMetadata =
+    material.textureCoordinates !== undefined ||
+    material.textureHandles !== undefined ||
+    material.videoTextureFields !== undefined ||
+    material.baseColorTexture !== undefined ||
+    material.metallicRoughnessTexture !== undefined ||
+    material.normalTexture !== undefined ||
+    material.emissiveTexture !== undefined ||
+    material.occlusionTexture !== undefined;
+  if (!hasTextureMetadata) {
+    f32.set(
+      isStandardPbr ? DEFAULT_STANDARD_TEXTURE_COORDINATES : DEFAULT_LEGACY_TEXTURE_SCALES,
+      textureScaleOffset / 4,
+    );
+    return;
+  }
   const fields = isStandardPbr
     ? MATERIAL_TEXTURE_SCALE_FIELDS
     : LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS;
@@ -543,9 +567,9 @@ export function detectNineSliceScaleTooSmall(
  * slot1 f32 roughness] mirroring the engine-shipped default-standard-pbr
  * Material struct.
  */
-export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuffer {
-  const buf = new ArrayBuffer(STANDARD_PBR_UBO_SIZE);
-  const f32 = new Float32Array(buf);
+export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Array {
+  const buf = new Uint8Array(STANDARD_PBR_UBO_SIZE);
+  const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
   // Layout (issue-1: channelMap split per D-8) -- byte-equivalent to the
   // post-split sidecar paramSchema for default-standard-pbr (12 numeric
   // entries packed std140 into one merged UBO at binding(0)).
@@ -665,7 +689,7 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuf
  * record.test.ts; not part of the package's public surface).
  */
 export function applyParamSnapshotToUbo(
-  payload: ArrayBuffer,
+  payload: ArrayBuffer | Uint8Array,
   paramSchema: readonly ParamSchemaEntry[] | undefined,
   paramSnapshot:
     | Readonly<Record<string, number | readonly number[] | string | undefined>>
@@ -673,7 +697,10 @@ export function applyParamSnapshotToUbo(
 ): void {
   if (paramSchema === undefined) return;
   if (paramSnapshot === undefined) return;
-  const f32 = new Float32Array(payload);
+  const f32 =
+    payload instanceof Uint8Array
+      ? new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)
+      : new Float32Array(payload);
   const { uboLayout } = derive(paramSchema);
   for (const entry of uboLayout.entries) {
     const value = paramSnapshot[entry.name];

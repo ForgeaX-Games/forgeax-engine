@@ -48,11 +48,16 @@ The effect is installed after DoF as an ordered URP post-effect, so the template
 multiple fullscreen passes without adding a second scene; `apps/bevy/fullscreen-material` remains
 the standalone chromatic-shader oracle.
 
-Hit feedback also demonstrates world-space MSDF text. `src/world-score-text.ts` loads the shared
-DejaVu `FontAsset` by GUID, allocates one pooled `GlyphText`, billboards it with the active camera,
-and resets it with the same gameplay owner; `apps/preview` includes the font pack in both dev and
-production asset roots. The DOM score popup remains the screen-space UI example, so the two text
-contracts are visible together without creating a second scene or score owner.
+Hit feedback also demonstrates world-space MSDF text. `src/world-score-text.ts` keeps one pooled
+`GlyphText`, loads the legacy baked DejaVu `FontAsset` by GUID, and can switch that same entity with
+`Y` to a second stable GUID produced from the licensed `DejaVuSansMono.ttf` by the public `font`
+importer/plugin. Preview registers `fontImporter`, delivers the TTF source through the Pack-v2
+catalog, and keeps the legacy pack as the comparison baseline; `R` returns the pooled label to the
+legacy source. This teaches source TTF → declared sub-asset GUIDs → MSDF bake/importer → runtime
+FontAsset without copying the hello-text gallery or adding another scene. The DOM score popup remains
+the screen-space UI example, so the two text contracts are visible together without creating a second
+score owner. `apps/hello/text` remains the pre-baked MSDF renderer oracle, while
+`apps/hello/m2-content-pipeline` remains the source-reimport/Worker recovery oracle.
 
 The Play shooting system also demonstrates the ECS `CommandBuffer` boundary: bullets are spawned and
 expired through deferred commands, while `commands.isDeferred` prevents same-system Transform writes
@@ -83,28 +88,77 @@ removes the marker from the original target identities before restoring health. 
 difference between structural disabling and merely hiding a mesh, while keeping the canonical
 `apps/bevy/entity-disabling` timeline as the isolated query oracle.
 
+The same target also demonstrates the render-owned `Visibility` component through
+`src/visibility-loop.ts`. Press `B` to toggle explicit `hidden`/`visible` intent; the target
+remains a physics body, pick candidate, scored target, and possible `Disabled` row, so this is
+not a second lifecycle path. `R` restores `inherited`, while the render-evidence and Preview
+snapshot report the author intent, resolved effective state, resolution source, and renderer's
+explicit-hidden count. `apps/hello/entity-visibility` remains the canonical hierarchy and
+shadow-participation oracle; game-default keeps only the gameplay-sized composition.
+
 The authored HDR sky follows the same asset path. Preview registers the image importer, while
 `src/asset-content-evidence.ts` provides an opt-in browser witness for GUID loading, skybox
 application, reload/reset churn, and structured missing-asset recovery:
 
 ```sh
 FORGEAX_ASSET_LOOP_DIR=<run>/artifacts \
-  pnpm --filter @forgeax/preview smoke:asset-loop
+pnpm --filter @forgeax/preview smoke:asset-loop
 ```
 
+`L` is the guided JPEG image lesson. Preview includes the exact `wood-container.jpg.meta.json`
+sidecar from `forgeax-engine-assets/demo-assets/hello-sprite`; `src/jpeg-texture-swap.ts` loads
+the cooked `TextureAsset` by GUID, clones the existing RedBox `MaterialAsset` slots with
+`baseColorTexture`, and keeps the authored mesh, line-list accent, collider, hit, score, and
+Visibility owners intact. The render-evidence and `game-default.snapshot` projections expose the
+source name, dimensions, format, color space, and swap count. `R` restores the authored material
+array, so the JPEG path teaches source → sidecar → image importer → pack-index → runtime material
+delivery without adding a second scene or a decoder in game code. `apps/hello/sprite` remains the
+deeper 2D texture/sort oracle.
+
+`M` is the guided runtime-video lesson. Preview serves the licensed
+`forgeax-engine-assets/demo-assets/hello-video-cutscene/cutscene.webm` from Vite's `publicDir`;
+`src/video-texture-panel.ts` catalogs a runtime-only `VideoAsset { kind: 'video', url }`, loads it
+through the default video loader, creates a `VideoPlayer` quad with a video-backed MaterialAsset,
+and registers a host-owned `VideoElementProvider`. The panel follows the existing scored target and
+faces the active camera, so the lesson composes with the same hit, input, inspection, App/World, and
+typed `R` reset owners. This is intentionally not a new WebM importer or Pack sidecar: the engine's
+video contract keeps bytes and DOM lifecycle at the host boundary. `game-default.toggle-video-texture`
+and `M` toggle the panel; `R` pauses, hides, and rewinds it, while Stop removes the provider and
+disposes the `<video>` element. The focused canonical upload and cutscene oracles remain
+`apps/hello/video-texture` and `apps/hello/video-cutscene`.
+
+`P` is the host-plugin lesson. `assets/target-profile.json` and its sidecar declare a
+`game-default-target-profile` GUID; `apps/preview/vite.config.ts` injects the matching importer,
+while `main.ts` registers the runtime loader and loads the profile through `AssetRegistry`. The
+profile applies a visible target tint and doubles the existing score value on the same RedBox;
+`game-default.toggle-target-profile` and `R` provide the reversible action/reset path. This is the
+complete custom source → sidecar/GUID → pluginPack importer → Pack v2 → loader → gameplay chain,
+adapted from `apps/hello/custom-importer` without importing its unrelated reel-machine scene.
+
+`N` is the first atlas-animation asset lesson. Preview adds the `hello-sprite-atlas` directory to
+the existing `pluginPack` roots, so `walk.atlas.png.meta.json` is handled by the standard image
+importer and its GUID resolves to a cooked `TextureAsset`. `src/sprite-atlas-loop.ts` projects the
+four regions from the companion `walk.atlas.json` build-time text channel into the public
+`SpriteAnimation` + `SpriteRegionOverride` components on the same fired projectile. The engine's
+`spriteAnimationTickSystem` advances frames; `game-default.toggle-sprite-atlas` (or `N`) turns the
+representation on for newly spawned shots, while `game-default.snapshot.spriteAtlas` proves the
+GUID, payload format, current frame, tracked entity count, and structured error state. Hit/score,
+physics, audio, and `R` reset remain the existing owners. `apps/hello/sprite-atlas` stays the
+10,000-entity fold/performance oracle; this template intentionally composes one animated shot
+instead of copying its gallery. If named atlas metadata becomes a runtime requirement, add a
+narrow host importer/plugin rather than parsing source JSON in the player.
+
 The fired projectile is also the custom-mesh lesson. `src/custom-projectile-mesh.ts` builds a
-24-vertex indexed cube with position/normal/UV/tangent attributes and uploads the authored
-`assets/compressed-projectile.png` through its sidecar GUID. `assets/generate-assets.mjs` makes the
-small source deterministic and license-safe while keeping generated binary out of git; Preview's
-pack plugin then demonstrates source -> image importer -> Basis/ETC1S payload -> pack-index ->
-`AssetRegistry.loadByGuid` -> renderer. `G` mutates the shared GPU mesh between the upper and lower
-atlas halves and `R` restores the mesh bytes and removes active projectiles. The explicit
-procedural checker fallback is for no-asset/unit hosts only, so a broken catalog cannot be hidden in
-the browser witness. The projectile keeps a capsule collider so rendering and physics are separate
-public contracts. `V` cycles the fired representation through that PBR mesh, an unlit
-`forgeax::sprite` quad, and `forgeax::sprite-lit` using the existing authored DirectionalLight and
-PointLight; the same input, physics, scoring, audio, inspection, and reset owners remain in play.
-The canonical standalone correctness matrix remains `apps/bevy/generate-custom-mesh`.
+24-vertex indexed cube with position/normal/UV/tangent attributes and uploads a deterministic
+procedural checker texture. `G` mutates the shared GPU mesh between the upper and lower atlas halves
+and `R` restores the mesh bytes and removes active projectiles. The projectile keeps a capsule
+collider so rendering and physics are separate public contracts. Authored image import and texture
+compression remain owned by their focused canonical apps rather than making every copied game
+depend on a generated, gitignored source asset. `V` cycles the fired representation through that PBR
+mesh, an unlit `forgeax::sprite` quad, and `forgeax::sprite-lit` using the existing authored
+DirectionalLight and PointLight; the same input, physics, scoring, audio, inspection, and reset owners
+remain in play. The canonical standalone custom-mesh correctness matrix remains
+`apps/bevy/generate-custom-mesh`.
 
 The authored `RedBox` is the multi-material/submesh lesson. Its separate
 `assets/multi-material-target.pack.json` carries one GUID-addressed 12F mesh with a filled
@@ -153,13 +207,16 @@ the same coordinate space. `game-default.snapshot` reports the root, skin entity
 placement, animation time, and hit pulses; the inspection smoke also requires a 72-byte skinned
 vertex layout and an indexed FBX draw.
 
-`K` is the guided GLB asset-format lesson. Preview scans the license-safe Khronos
-`khronos-gltf-samples/BoxTextured/BoxTextured.glb` sidecar with `gltfImporter`; `src/glb-mesh-swap.ts`
-loads the GLB mesh and its MaterialAsset by GUID, so the embedded Cesium texture dependency travels
-through the same dev import and production pack-index path. The imported one-submesh mesh/material
-pair replaces the same scored RedBox target, while its explicit physics, hit, score, inspection, and
-reset owners remain unchanged. `K` is mutually exclusive with the built-in sphere and FBX swaps, and
-`R` restores the authored RedBox mesh and its complete two-slot material array.
+`K` and `T` are the guided glTF asset-format lessons. Preview scans the license-safe Khronos
+`khronos-gltf-samples/BoxTextured/BoxTextured.glb` and
+`khronos-gltf-samples/BoxTextured/glTF/BoxTextured.gltf` sidecars with `gltfImporter`;
+`src/gltf-mesh-swap.ts` loads both mesh/material pairs by GUID. `K` demonstrates the binary GLB
+container and embedded Cesium texture; `T` demonstrates textual glTF source closure with the
+external `BoxTextured0.bin` buffer. Both variants replace the same scored RedBox target, while its
+explicit physics, hit, score, inspection, and reset owners remain unchanged. The variants are
+mutually exclusive with each other, the built-in sphere, and the FBX swap; `R` restores the authored
+RedBox mesh and its complete two-slot material array. The public render-evidence snapshot exposes
+`glbMeshSwap` and `gltfMeshSwap` independently so browser probes can falsify either delivery path.
 
 The same semantic `InputMap` accepts a standard gamepad without adding a second input owner:
 left-stick axes move, South jumps, R2 fires, Y toggles the projectile UV atlas, and East requests

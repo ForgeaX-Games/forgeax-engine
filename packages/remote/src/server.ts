@@ -14,7 +14,13 @@ import type { WebSocket } from 'ws';
 import { WebSocketServer } from 'ws';
 import { REMOTE_ERROR_CODE_TO_JSONRPC, RemoteError, type RemoteErrorCode } from './errors';
 import { executeScript } from './execute';
-import { buildIntrospectDoc, isProfilerRoot } from './introspect';
+import {
+  buildIntrospectDoc,
+  type ComponentIntrospectionDescriptor,
+  isProfilerRoot,
+} from './introspect';
+
+export type { ComponentIntrospectionDescriptor } from './introspect';
 
 const REMOTE_TO_JSONRPC = REMOTE_ERROR_CODE_TO_JSONRPC;
 
@@ -40,12 +46,15 @@ export type StartServerOptions = {
   readonly world: unknown;
   readonly renderer?: unknown;
   readonly assets?: unknown;
+  /** JSON-safe host reflection; the remote package does not know component owners. */
+  readonly introspection?: readonly ComponentIntrospectionDescriptor[];
   /** Explicit CPU profiler capability; omitted unless the host opts in. */
   readonly profiler?: unknown;
   /**
    * Live DebugRhiAdapter for eval-scope injection (plan-strategy D-4).
-   * When present, eval scripts can call debugAdapter.captureFrame({...})
-   * and debugAdapter.inspectAt({...}) — the 4th eval-scope live root.
+   * When present, eval scripts can call debugAdapter.captureFrames(frames, label?)
+   * and Dawn/Node debugAdapter.inspectAt(tapePath, drawIdx, fields?) — the 4th
+   * eval-scope live root.
    * Undefined when FORGEAX_ENGINE_RHI_DEBUG !== '1'.
    */
   readonly debugAdapter?: unknown;
@@ -113,6 +122,7 @@ async function handleEnvelope(
     renderer: unknown;
     assets: unknown;
     debugAdapter: unknown | undefined;
+    introspection: readonly ComponentIntrospectionDescriptor[];
     profiler: unknown | undefined;
     host: string;
     port: number;
@@ -141,6 +151,7 @@ async function handleEnvelope(
         assets: ctx.assets,
         ...(ctx.debugAdapter !== undefined ? { debugAdapter: ctx.debugAdapter } : {}),
         ...(ctx.profiler !== undefined ? { profiler: ctx.profiler } : {}),
+        ...(ctx.introspection.length > 0 ? { introspection: ctx.introspection } : {}),
       }),
     );
   } else if (parsed.method === 'eval') {
@@ -192,6 +203,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
     const renderer = opts.renderer ?? {};
     const assets = opts.assets ?? {};
     const debugAdapter = opts.debugAdapter;
+    const introspection = opts.introspection ?? [];
     const profiler = isProfilerRoot(opts.profiler) ? opts.profiler : undefined;
     let settled = false;
     let boundPort = opts.port;
@@ -225,6 +237,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
           renderer,
           assets,
           debugAdapter,
+          introspection,
           profiler,
           host,
           port: boundPort,

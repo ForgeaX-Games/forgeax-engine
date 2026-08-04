@@ -210,6 +210,20 @@ export function authoringCapabilityForAssetKind(kind: string): AssetAuthoringCap
           requiredSlots: 1,
         },
       };
+    case 'particle-effect':
+      return {
+        placement: { operation: 'spawnEntity' },
+        binding: {
+          operation: 'bindAssetRef',
+          target: {
+            component: 'ParticleEffectPlayer',
+            field: 'effect',
+            assetType: 'ParticleEffectAsset',
+            cardinality: 'single',
+          },
+          requiredSlots: 1,
+        },
+      };
     default:
       return {
         placement: {

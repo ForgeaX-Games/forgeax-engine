@@ -159,6 +159,9 @@ export const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
   'material',
   'skeleton',
   'clip',
+  // ParticleEffectPlayer.effect (shared<ParticleEffectAsset>) uses the same
+  // scene-pack refs[] index contract as every other scalar shared field.
+  'effect',
   // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w27:
   // Skylight.equirect + SkyboxBackground.equirect (shared<EquirectAsset>). The
   // generic extractSceneEntityHandleGuids path already covers shared< fields by

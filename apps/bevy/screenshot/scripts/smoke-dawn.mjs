@@ -211,4 +211,5 @@ mkdirSync(outputDir, { recursive: true });
 writeFileSync(resolve(outputDir, 'screenshot-scene.png'), writeReferencePng(initialPixels, WIDTH, HEIGHT));
 
 console.log(`[smoke] RESULT: ${passes}/${passes + fails} pass`);
+if (fails === 0) console.log('[smoke] PASS');
 process.exit(fails > 0 ? 1 : 0);

@@ -6,12 +6,18 @@ import { spawn } from 'node:child_process';
 // spec. It already drives coverage; this command writes that existing contract rather
 // than introducing a second ledger that every demo would need to synchronize.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { runnerResources, workspaceConcurrency } from './lib/runner-resources.mjs';
 
 const VALID_STATUS = new Set(['partial', 'implemented', 'shelved']);
+const STANDARD_SMOKE_COMMAND = 'node scripts/smoke-dawn.mjs';
+const SMOKE_PASS_MARKER = '[smoke] PASS';
+const SMOKE_LIFECYCLE_MODULE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'bevy-smoke-lifecycle.mjs',
+);
 
 function fail(code, expected, hint) {
   throw new Error(`[reason] ${code}: ${expected}\n[rerun]  pnpm bevy:validate\n[hint]   ${hint}`);
@@ -58,7 +64,33 @@ function validateSpec(value, label) {
       `got ${JSON.stringify(spec.title)}`,
     );
   }
-  const status = spec.status ?? 'partial';
+  const declaration = validateDeclaration(spec, label);
+  return { id: spec.id, ...declaration, title: spec.title };
+}
+
+function validateDeclaration(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail('bevy-demo-spec-invalid', `${label} is a JSON object`, `got ${JSON.stringify(value)}`);
+  }
+  const declaration = value;
+  if (
+    typeof declaration.name !== 'string' ||
+    !/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(declaration.name)
+  ) {
+    fail(
+      'bevy-demo-name-invalid',
+      `${label}.name is a Bevy example snake_case name`,
+      `got ${JSON.stringify(declaration.name)}`,
+    );
+  }
+  if (typeof declaration.category !== 'string' || declaration.category.trim() === '') {
+    fail(
+      'bevy-demo-category-invalid',
+      `${label}.category is a non-empty Bevy category`,
+      `got ${JSON.stringify(declaration.category)}`,
+    );
+  }
+  const status = declaration.status ?? 'partial';
   if (!VALID_STATUS.has(status)) {
     fail(
       'bevy-demo-status-invalid',
@@ -66,7 +98,7 @@ function validateSpec(value, label) {
       `got ${JSON.stringify(status)}`,
     );
   }
-  return { id: spec.id, name: spec.name, category: spec.category, title: spec.title, status };
+  return { name: declaration.name, category: declaration.category, status };
 }
 
 function appDir(root, id) {
@@ -96,7 +128,7 @@ function packageJson(spec) {
       typecheck: 'tsc --noEmit',
       build: 'vite build',
       preview: 'vite preview',
-      smoke: 'node scripts/smoke-dawn.mjs',
+      smoke: STANDARD_SMOKE_COMMAND,
     },
     forgeax: {
       bevyExample: { name: spec.name, category: spec.category, status: spec.status },
@@ -140,6 +172,31 @@ function packageJson(spec) {
       webgpu: '^0.4.0',
     },
   };
+}
+
+export function findAppPackageJsons(dir, acc = []) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return acc;
+  }
+  const pkgPath = join(dir, 'package.json');
+  if (existsSync(pkgPath)) {
+    acc.push(pkgPath);
+    return acc;
+  }
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name.startsWith('.'))
+      continue;
+    findAppPackageJsons(join(dir, entry.name), acc);
+  }
+  return acc;
+}
+
+function isDedicatedBevyApp(root, pkgPath) {
+  const parts = relative(resolve(root, 'apps'), dirname(pkgPath)).split(sep);
+  return parts.length === 2 && parts[0] === 'bevy';
 }
 
 function files(spec) {
@@ -220,61 +277,104 @@ function write(path, content) {
   writeFileSync(path, content);
 }
 
-export function validateDemoApps(root) {
-  const bevyRoot = resolve(root, 'apps', 'bevy');
-  if (!existsSync(bevyRoot)) return [];
+export function validateDemoApps(root, { includeNonDedicated = false } = {}) {
+  const appsRoot = resolve(root, 'apps');
+  if (!existsSync(appsRoot)) return [];
   const apps = [];
-  for (const entry of readdirSync(bevyRoot, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
-    if (!entry.isDirectory()) continue;
-    const pkgPath = join(bevyRoot, entry.name, 'package.json');
-    if (!existsSync(pkgPath)) continue;
+  for (const pkgPath of findAppPackageJsons(appsRoot)) {
+    const app = dirname(pkgPath);
     const pkg = readJson(pkgPath, 'package.json');
     const be = pkg?.forgeax?.bevyExample;
-    if (!be || typeof be !== 'object' || Array.isArray(be)) {
-      fail(
-        'bevy-demo-spec-missing',
-        `${relative(root, pkgPath)} has forgeax.bevyExample`,
-        'new Bevy apps must use pnpm bevy:new-demo',
-      );
+    const dedicated = isDedicatedBevyApp(root, pkgPath);
+    if (!dedicated && !includeNonDedicated) continue;
+    if (!be || typeof be !== 'object' || (dedicated && Array.isArray(be))) {
+      if (dedicated) {
+        fail(
+          'bevy-demo-spec-missing',
+          `${relative(root, pkgPath)} has forgeax.bevyExample`,
+          'new Bevy apps must use pnpm bevy:new-demo',
+        );
+      }
+      continue;
     }
-    const spec = validateSpec(
-      { id: entry.name, title: entry.name, ...be },
-      `${relative(root, pkgPath)}#forgeax.bevyExample`,
-    );
-    const expectedName = packageName(spec);
-    if (pkg.name !== expectedName) {
-      fail(
-        'bevy-demo-projection-stale',
-        `${relative(root, pkgPath)} has package name '${expectedName}'`,
-        `got ${JSON.stringify(pkg.name)}`,
-      );
+    const label = `${relative(root, pkgPath)}#forgeax.bevyExample`;
+    const declarations = Array.isArray(be)
+      ? be.map((value, index) => validateDeclaration(value, `${label}[${index}]`))
+      : [
+          dedicated
+            ? validateSpec(
+                { id: app.split(sep).at(-1), title: app.split(sep).at(-1), ...be },
+                label,
+              )
+            : validateDeclaration(be, label),
+        ];
+    if (dedicated) {
+      const spec = declarations[0];
+      const expectedName = packageName(spec);
+      if (pkg.name !== expectedName) {
+        fail(
+          'bevy-demo-projection-stale',
+          `${relative(root, pkgPath)} has package name '${expectedName}'`,
+          `got ${JSON.stringify(pkg.name)}`,
+        );
+      }
     }
-    if (
-      spec.status === 'implemented' &&
-      (typeof pkg.description !== 'string' || pkg.description.trim() === '')
-    ) {
+    const hasImplemented = declarations.some((declaration) => declaration.status === 'implemented');
+    if (hasImplemented && (typeof pkg.description !== 'string' || pkg.description.trim() === '')) {
       fail(
         'bevy-demo-description-missing',
         `${relative(root, pkgPath)} describes a real implemented reproduction`,
         'add a concise description before keeping status=implemented',
       );
     }
-    if (
-      spec.status === 'implemented' &&
-      /\b(?:scaffold|placeholder)\b/i.test(pkg.description ?? '')
-    ) {
+    if (hasImplemented && /\b(?:scaffold|placeholder)\b/i.test(pkg.description ?? '')) {
       fail(
         'bevy-demo-description-stale',
         `${relative(root, pkgPath)} describes a real implemented reproduction`,
         'replace scaffold/placeholder wording before keeping status=implemented',
       );
     }
-    const expectedSmoke = smokeInvocation(expectedName);
+    const dawnSmokePath = join(dirname(pkgPath), 'scripts', 'smoke-dawn.mjs');
+    const dawnSmokeSource = existsSync(dawnSmokePath)
+      ? readFileSync(dawnSmokePath, 'utf8')
+      : undefined;
+    if (hasImplemented && dawnSmokeSource?.includes('bevy-demo-scaffold-unimplemented')) {
+      fail(
+        'bevy-demo-smoke-stale',
+        `${relative(root, dawnSmokePath)} is a real implemented smoke front door`,
+        'replace the generated scaffold smoke with a real Dawn reproduction before keeping status=implemented',
+      );
+    }
+    const expectedSmoke = smokeInvocation(pkg.name);
     const smoke = pkg?.forgeax?.smokeInvocation;
     const gate = pkg?.forgeax?.metrics?.gate?.command;
-    if (spec.status === 'implemented') {
+    const smokeCommand =
+      typeof pkg?.scripts?.smoke === 'string' ? pkg.scripts.smoke.trim() : undefined;
+    if (hasImplemented) {
+      if (typeof pkg?.scripts?.smoke !== 'string' || pkg.scripts.smoke.trim() === '') {
+        fail(
+          'bevy-demo-smoke-script-missing',
+          `${relative(root, pkgPath)} exposes the smoke script invoked by the fleet`,
+          'add a package scripts.smoke command before keeping status=implemented',
+        );
+      }
+      if (smokeCommand === STANDARD_SMOKE_COMMAND && !existsSync(dawnSmokePath)) {
+        fail(
+          'bevy-demo-smoke-entry-missing',
+          `${relative(root, dawnSmokePath)} is the standard Dawn smoke entry point`,
+          'add scripts/smoke-dawn.mjs or use a non-standard smoke command',
+        );
+      }
+      if (
+        smokeCommand === STANDARD_SMOKE_COMMAND &&
+        !dawnSmokeSource?.includes(SMOKE_PASS_MARKER)
+      ) {
+        fail(
+          'bevy-demo-smoke-pass-missing',
+          `${relative(root, dawnSmokePath)} emits the standard smoke PASS marker`,
+          'print [smoke] PASS after all evidence assertions pass',
+        );
+      }
       if (smoke !== expectedSmoke || gate !== expectedSmoke) {
         fail(
           'bevy-demo-projection-stale',
@@ -289,7 +389,13 @@ export function validateDemoApps(root) {
         'only a front-door-verified implemented demo may declare smokeInvocation and a smoke gate',
       );
     }
-    apps.push({ dir: dirname(pkgPath), pkg, spec });
+    apps.push({
+      dir: app,
+      pkg,
+      spec: declarations[0],
+      declarations,
+      dedicated,
+    });
   }
   return apps;
 }
@@ -323,7 +429,7 @@ function commandNew(root, specPath) {
 }
 
 function commandValidate(root) {
-  const apps = validateDemoApps(root);
+  const apps = validateDemoApps(root, { includeNonDedicated: true });
   process.stdout.write(`[ok] ${apps.length} Bevy demo package specs are valid\n`);
 }
 
@@ -385,13 +491,13 @@ function runPnpm(root, args) {
   });
 }
 
-function runNodeSmoke(root, app) {
+export function runNodeSmoke(root, app) {
   const script = 'scripts/smoke-dawn.mjs';
   process.stdout.write(
     `[bevy-smoke] ${process.execPath} ${relative(root, join(app.dir, script))}\n`,
   );
   return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, [script], {
+    const child = spawn(process.execPath, ['--import', SMOKE_LIFECYCLE_MODULE, script], {
       cwd: app.dir,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -403,7 +509,7 @@ function runNodeSmoke(root, app) {
       stream.write(text);
       const searchable = outputTail + text;
       outputTail = searchable.slice(-128);
-      if (!passObserved && searchable.includes('[smoke] PASS')) {
+      if (!passObserved && searchable.includes(SMOKE_PASS_MARKER)) {
         passObserved = true;
         // A native WebGPU child can keep Node alive after its evidence gate.
         // Give stdout a brief flush window, then reap it at this process boundary.
@@ -416,7 +522,8 @@ function runNodeSmoke(root, app) {
     child.once('error', (error) => resolveRun({ status: null, error }));
     child.once('exit', (code, signal) => {
       if (forceExitTimer) clearTimeout(forceExitTimer);
-      resolveRun({ status: passObserved && signal === 'SIGKILL' ? 0 : code, signal });
+      const status = passObserved && signal === 'SIGKILL' ? 0 : code === 0 ? 1 : code;
+      resolveRun({ status, signal });
     });
   });
 }
@@ -439,7 +546,7 @@ async function runSmokePair(root, app) {
   // Standard Dawn smokes are already direct Node entry points. Running them
   // outside pnpm avoids a package-manager lifecycle wrapper retaining native
   // Dawn descendants after the smoke has emitted its PASS evidence.
-  if (pkg.scripts?.smoke === 'node scripts/smoke-dawn.mjs') {
+  if (pkg.scripts?.smoke?.trim() === STANDARD_SMOKE_COMMAND) {
     result = await runNodeSmoke(root, app);
   } else {
     process.stdout.write(`[bevy-smoke] pnpm ${smokeArgs.join(' ')}\n`);
@@ -453,7 +560,9 @@ async function runSmokePair(root, app) {
 }
 
 async function commandSmokes(root, dryRun, concurrency, group, groups) {
-  const allApps = validateDemoApps(root).filter((app) => app.spec.status === 'implemented');
+  const allApps = validateDemoApps(root).filter(
+    (app) => app.dedicated && app.spec.status === 'implemented',
+  );
   const apps = allApps.filter((_, index) => index % groups === group);
   if (dryRun) {
     for (const { pkg } of apps) {

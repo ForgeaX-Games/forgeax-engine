@@ -5,15 +5,11 @@ import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { gltfImporter } from '@forgeax/engine-gltf';
+import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { defineConfig } from 'vite';
-import { generateTemplateAssets } from '../../templates/game-default/assets/generate-assets.mjs';
-
-// The template keeps generated, license-safe PNG sources out of git. Generate
-// them before pluginPack scans roots so dev, build, and browser tests share one
-// authored sidecar -> importer contract.
-generateTemplateAssets();
+import { targetProfileImporter } from '../../templates/game-default/src/target-profile-importer';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
@@ -29,11 +25,37 @@ const submoduleSkyMetaPath = resolve(
   'template-game-default',
   'sky.hdr.meta.json',
 );
+const submoduleJpegMetaPath = resolve(
+  monorepoRoot,
+  'forgeax-engine-assets',
+  'demo-assets',
+  'hello-sprite',
+  'wood-container.jpg.meta.json',
+);
 const submoduleSfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
 const submoduleBgmMetaPath = resolve(monorepoRoot, 'forgeax-engine-assets', 'collectathon-audio', 'bgm-loop.wav.meta.json');
 const submoduleFbxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'vendor', 'fbx-test');
 const submoduleGlbDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'khronos-gltf-samples', 'BoxTextured');
-const submoduleDejavuFontsDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'dejavu-fonts');
+const submoduleDejavuFontMetaPath = resolve(
+  monorepoRoot,
+  'forgeax-engine-assets',
+  'dejavu-fonts',
+  'DejaVuSansMono.ttf.meta.json',
+);
+const submoduleDejavuLegacyAtlasMetaPath = resolve(
+  monorepoRoot,
+  'forgeax-engine-assets',
+  'dejavu-fonts',
+  'DejaVuSansMono.atlas.png.meta.json',
+);
+const submoduleDejavuLegacyPackPath = resolve(
+  monorepoRoot,
+  'forgeax-engine-assets',
+  'dejavu-fonts',
+  'DejaVuSansMono.font.pack.json',
+);
+const submoduleVideoDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-video-cutscene');
+const submoduleSpriteAtlasDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-sprite-atlas');
 
 export default defineConfig(({ command }) => ({
   define: command === 'build' ? { 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG': JSON.stringify('0') } : undefined,
@@ -60,13 +82,17 @@ export default defineConfig(({ command }) => ({
         // submodule holds binary demo assets.
         resolve(templatesDir, 'game-default/assets'),
         submoduleSkyMetaPath,
+        submoduleJpegMetaPath,
         submoduleSfxDir,
         submoduleBgmMetaPath,
         submoduleFbxDir,
         submoduleGlbDir,
-        submoduleDejavuFontsDir,
+        submoduleDejavuFontMetaPath,
+        submoduleDejavuLegacyAtlasMetaPath,
+        submoduleDejavuLegacyPackPath,
+        submoduleSpriteAtlasDir,
       ],
-      importers: [audioImporter, imageImporter, fbxImporter, gltfImporter],
+      importers: [audioImporter, imageImporter, fbxImporter, gltfImporter, fontImporter, targetProfileImporter()],
     }) as never,
   ],
   server: {
@@ -74,6 +100,9 @@ export default defineConfig(({ command }) => ({
       allow: [monorepoRoot],
     },
   },
+  // VideoAsset is intentionally a runtime-only URL descriptor. Serve the
+  // licensed WebM from the asset submodule without inventing a Pack importer.
+  publicDir: submoduleVideoDir,
   build: {
     target: 'esnext',
     rollupOptions: {

@@ -27,6 +27,7 @@ import {
   GpuResourceStore,
   MeshFilter,
   MeshRenderer,
+  prepareExtractContext,
 } from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
@@ -126,7 +127,10 @@ function spawnTexturedRenderable(world: World, assets: AssetRegistry): { texture
 
 function baseColorHandleFromFrame(world: World, assets: AssetRegistry): number | undefined {
   const gpuStore = new GpuResourceStore();
-  const frame = extractFrame(world, assets, null, gpuStore);
+  const frame = extractFrame(
+    world,
+    prepareExtractContext(world, { assets, pipelineState: null, gpuStore }),
+  );
   const renderable = frame.renderables.find(
     (r) => r.material.materialShaderId === 'forgeax::default-unlit',
   );

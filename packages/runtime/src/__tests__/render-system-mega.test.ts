@@ -14,6 +14,7 @@ import {
   Instances,
   MeshFilter,
   MeshRenderer,
+  prepareExtractContext,
 } from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import type { Handle } from '@forgeax/engine-types';
@@ -1405,7 +1406,7 @@ describe('RenderSystem Skylight extract phase (AC-11)', () => {
     //   { equirectHandle: Handle<EquirectAsset>, intensity: number }
     //
     // When t26 lands, this becomes:
-    //   const frame = extractFrame(world, assets);
+    //   const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     //   expect(frame.skylight).toBeDefined();
     //   expect(frame.skylight?.intensity).toBe(1.0);
     const extractCapturesSkylight = true;
@@ -1417,7 +1418,7 @@ describe('RenderSystem Skylight extract phase (AC-11)', () => {
     // return an ExtractedFrame with skylight = undefined.
     //
     // When t26 lands:
-    //   const frame = extractFrame(world, assets);
+    //   const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     //   expect(frame.skylight).toBeUndefined();
     const noSkylightUndefined = true;
     expect(noSkylightUndefined).toBe(true);
@@ -1634,7 +1635,7 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
       const { world, collected } = makeWorld();
       const transforms = new Float32Array(16);
       spawnInstancedEntity(world, transforms);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(collected.filter((c) => c.code === 'instance-transforms-stride-mismatch').length).toBe(
         0,
       );
@@ -1645,7 +1646,7 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
       const { world, collected } = makeWorld();
       const transforms = new Float32Array(32);
       spawnInstancedEntity(world, transforms);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(collected.filter((c) => c.code === 'instance-transforms-stride-mismatch').length).toBe(
         0,
       );
@@ -1656,7 +1657,7 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
       const { world, collected } = makeWorld();
       const transforms = new Float32Array(15);
       spawnInstancedEntity(world, transforms);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       const stride = collected.filter((c) => c.code === 'instance-transforms-stride-mismatch');
       expect(stride.length).toBe(1);
       const detail = stride[0]?.detail as { actualLength: number; expectedStride: 16 };
@@ -1669,7 +1670,7 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
       const { world, collected } = makeWorld();
       const transforms = new Float32Array(17);
       spawnInstancedEntity(world, transforms);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       const stride = collected.filter((c) => c.code === 'instance-transforms-stride-mismatch');
       expect(stride.length).toBe(1);
       const detail = stride[0]?.detail as { actualLength: number; expectedStride: 16 };

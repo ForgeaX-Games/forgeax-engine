@@ -400,6 +400,8 @@ export function recordFrame(
     const dispatchPlan = buildDispatchPlan(internals, validated, transparentDispatch, foldBuckets);
     const validatedOrdered = dispatchPlan.validatedOrdered;
     const foldDispatchPlan = dispatchPlan.foldDispatchPlan;
+    const materialSlotStart = dispatchPlan.materialSlotStart;
+    const materialSlotCount = dispatchPlan.materialSlotCount;
 
     // D-2 (bug-20260527): LDR sprite pass split, generalised feat-20260625
     // M2 / w7 via {@link computeSplitLdrSprite}; M3 w13 finalised by deleting
@@ -543,6 +545,8 @@ export function recordFrame(
       dispatch: transparentDispatch,
       hdrpClusterBindGroup,
       foldDispatchPlan,
+      materialSlotStart,
+      materialSlotCount,
     };
     // feat-20260601 M2 / w12 (D-B): the per-frame projected snapshot handed to
     // `buildGraph` as the second argument. Cross-frame-stable deps live on ctx;
@@ -776,13 +780,29 @@ function buildDispatchPlan(
   validated: readonly ValidatedRenderable[],
   transparentDispatch: readonly DispatchEntry[],
   foldBuckets: readonly FoldBucket[],
-): { validatedOrdered: ValidatedRenderable[]; foldDispatchPlan: FoldDispatchPlan | null } {
+): {
+  validatedOrdered: readonly ValidatedRenderable[];
+  foldDispatchPlan: FoldDispatchPlan | null;
+  materialSlotStart: readonly number[];
+  materialSlotCount: number;
+} {
   // M3 / w26: dispatch-ordered render. The dispatch list is pre-sorted
   // by queue (ascending, stable) by the extract stage per plan-strategy D-3.
   // Reorder validated renderables to follow the dispatch order, falling
   // back to extract order for renderables with no matching dispatch entry.
-  let validatedOrdered: ValidatedRenderable[] = [...validated];
-  if (transparentDispatch.length > 0) {
+  let dispatchOrderMatchesValidated = transparentDispatch.length === validated.length;
+  if (dispatchOrderMatchesValidated) {
+    for (let i = 0; i < validated.length; i++) {
+      if (transparentDispatch[i]?.renderableIndex !== validated[i]?.renderableIndex) {
+        dispatchOrderMatchesValidated = false;
+        break;
+      }
+    }
+  }
+  let validatedOrdered: readonly ValidatedRenderable[] = dispatchOrderMatchesValidated
+    ? validated
+    : [...validated];
+  if (transparentDispatch.length > 0 && !dispatchOrderMatchesValidated) {
     const validatedByRenderableIdx = new Map<number, ValidatedRenderable>();
     const seen = new Set<number>();
     for (const v of validated) {
@@ -804,6 +824,19 @@ function buildDispatchPlan(
       }
     }
     validatedOrdered = ordered;
+  }
+
+  const materialSlotStart: number[] = new Array(validatedOrdered.length);
+  let materialSlotCount = 0;
+  for (let i = 0; i < validatedOrdered.length; i++) {
+    materialSlotStart[i] = materialSlotCount;
+    const e = validatedOrdered[i];
+    if (e === undefined) continue;
+    materialSlotCount +=
+      e.source.material.materialShaderId === 'forgeax::sprite' ||
+      e.source.material.materialShaderId === 'forgeax::sprite-lit'
+        ? 1
+        : e.source.materials.length;
   }
 
   // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M3 / T-M3-04:
@@ -828,19 +861,12 @@ function buildDispatchPlan(
   //
   // feat-20260624 M1' / t7: sprite-lit treated identically to sprite
   // for material-slot accounting (paramSchema mirror, t4).
-  let neededMaterialSlots = 0;
-  for (const e of validatedOrdered) {
-    if (e === undefined) continue;
-    neededMaterialSlots +=
-      e.source.material.materialShaderId === 'forgeax::sprite' ||
-      e.source.material.materialShaderId === 'forgeax::sprite-lit'
-        ? 1
-        : e.source.materials.length;
-  }
-  const neededSlots = Math.max(validatedOrdered.length, neededMaterialSlots);
+  const neededSlots = Math.max(validatedOrdered.length, materialSlotCount);
   const meshSsboCapResult = ensureMeshSsboCapacity(internals, neededSlots);
   if (!meshSsboCapResult.ok) {
     // Graceful degradation: truncate to pre-grow capacity, render the subset.
+    materialSlotCount = materialSlotStart[meshSsboCapResult.degradedToSlotCount] ?? 0;
+    materialSlotStart.length = meshSsboCapResult.degradedToSlotCount;
     validatedOrdered = validatedOrdered.slice(0, meshSsboCapResult.degradedToSlotCount);
   }
 
@@ -933,7 +959,7 @@ function buildDispatchPlan(
     incrementFoldedDrawsMetric(foldDispatchPlan, internals.metrics);
   }
 
-  return { validatedOrdered, foldDispatchPlan };
+  return { validatedOrdered, foldDispatchPlan, materialSlotStart, materialSlotCount };
 }
 
 /**

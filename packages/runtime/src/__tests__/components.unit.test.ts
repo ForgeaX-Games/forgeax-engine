@@ -62,6 +62,7 @@ import {
   MeshRenderer,
   orthographic,
   perspective,
+  prepareExtractContext,
   SKYBOX_MODE_CUBEMAP,
   SkyboxBackground,
   type SkyboxMode,
@@ -2489,7 +2490,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // The renderable may be empty (material resolves to 0 passes with mock
       // ShaderRegistry) but the key assertion: no crash and count-mismatch
       // error is NOT triggered.
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables).toBeDefined();
     });
 
@@ -2527,7 +2528,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // -- count-mismatch only applies to non-empty materials whose length
       // disagrees with submeshes.length. Backward-compat preserved for legacy
       // `data: {}` spawn shape (charter P5 consistent abstraction).
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables.length).toBe(1);
     });
 
@@ -2565,7 +2566,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         { component: MeshRenderer, data: { materials: [matHandle, matHandle] } },
       );
 
-      const frame = extractFrame(world, assets);
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
       expect(frame.renderables.length).toBe(0);
     });
   });

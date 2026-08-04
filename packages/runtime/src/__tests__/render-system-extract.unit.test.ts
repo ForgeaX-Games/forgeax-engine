@@ -45,6 +45,7 @@ import {
   Instances,
   MeshFilter,
   MeshRenderer,
+  prepareExtractContext,
 } from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
@@ -190,7 +191,7 @@ describe('render-system-extract SpriteInstances validation (w8, AC-03 + Edge Cas
         { component: SpriteInstances, data: { transforms, regions } },
       )
       .unwrap();
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     const fired = collected.filter(
       (c) => c.code === 'sprite-instances-mutually-exclusive-with-instances',
     );
@@ -214,7 +215,7 @@ describe('render-system-extract SpriteInstances validation (w8, AC-03 + Edge Cas
         { component: SpriteInstances, data: { transforms, regions } },
       )
       .unwrap();
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     const fired = collected.filter((c) => c.code === 'sprite-instances-requires-sprite-shader');
     expect(fired.length).toBe(1);
     const detail = fired[0]?.detail as { entityId: number; observedMaterialShaderId: string };
@@ -240,7 +241,7 @@ describe('render-system-extract SpriteInstances validation (w8, AC-03 + Edge Cas
         { component: SpriteInstances, data: { transforms, regions } },
       )
       .unwrap();
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     const fired = collected.filter((c) => c.code === 'sprite-instances-count-mismatch');
     expect(fired.length).toBe(1);
     const detail = fired[0]?.detail as {
@@ -270,7 +271,7 @@ describe('render-system-extract SpriteInstances validation (w8, AC-03 + Edge Cas
         { component: SpriteInstances, data: { transforms, regions } },
       )
       .unwrap();
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     // No sprite-instances error fires. (Note: the count-mismatch path must
     // NOT fire for 0/0 — `0/16 === 0/4 === 0` is the equality the validator
     // honours; the count-mismatch fire requires unequal derived counts.)
@@ -299,7 +300,7 @@ describe('render-system-extract material color boundary', () => {
       )
       .unwrap();
 
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
     const runtime = frame.renderables[0]?.material;
     // MaterialSnapshot stores baseColor in f32 engine vectors.
     expect(runtime?.baseColor[0]).toBeCloseTo(0.2140411405, 6);
@@ -330,7 +331,8 @@ describe('render-system-extract material color boundary', () => {
       )
       .unwrap();
 
-    const runtime = extractFrame(world, assets).renderables[0]?.material;
+    const runtime = extractFrame(world, prepareExtractContext(world, { assets })).renderables[0]
+      ?.material;
     expect(Array.from(runtime?.baseColor ?? [])).toEqual([0.5, 0.25, 0.75]);
     expect(runtime?.paramSnapshot?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
   });

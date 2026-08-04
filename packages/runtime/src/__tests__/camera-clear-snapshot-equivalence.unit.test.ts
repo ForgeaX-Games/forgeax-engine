@@ -18,6 +18,7 @@ import {
   Camera,
   extractFrame,
   makeZeroCameraFallbackSnapshot,
+  prepareExtractContext,
   ZERO_CAMERA_CLEAR_FALLBACK,
 } from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
@@ -41,7 +42,7 @@ describe('w13 -- CameraSnapshot.clearColor equivalence + fallback (AC-11 / D-3)'
     const world = new World();
     spawnCameraWithClear(world, authored);
     propagateTransforms(world);
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     expect(frame.cameras.length).toBe(1);
     const cam = frame.cameras[0];
     expect(cam).toBeDefined();
@@ -60,7 +61,7 @@ describe('w13 -- CameraSnapshot.clearColor equivalence + fallback (AC-11 / D-3)'
       )
       .unwrap();
     propagateTransforms(world);
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
     const cam = frame.cameras[0];
     expect(cam).toBeDefined();
     if (!cam) return;

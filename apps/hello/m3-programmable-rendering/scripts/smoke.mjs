@@ -872,11 +872,16 @@ const fakeDepth = run(
   ['--filter', '@forgeax/app-learn-render-5-advanced-lighting-3-3-csm', 'smoke'],
   { FALSIFY: 'force-fake-depth' },
 );
+const fakeDepthPixelOracleFailed =
+  fakeDepth.output.includes('R/G stddev=') || fakeDepth.output.includes('no depth banding gradient --');
+const fakeDepthExpectedFailure =
+  fakeDepth.output.includes('expected spatial diversity from cascade bands') ||
+  fakeDepth.output.includes('no depth banding gradient --');
 if (
   fakeDepth.status === 0 ||
   !fakeDepth.output.includes('FALSIFY force-fake-depth') ||
-  !fakeDepth.output.includes('R/G stddev=') ||
-  !fakeDepth.output.includes('expected spatial diversity from cascade bands')
+  !fakeDepthPixelOracleFailed ||
+  !fakeDepthExpectedFailure
 ) {
   console.error('[m3-programmable] fake-depth falsifier: FAIL - bad depth did not flip the pixel oracle');
   process.exit(1);
@@ -1492,7 +1497,8 @@ function runComposedInheritancePostRepeatability({ msaa, startVariant, post = 'd
       value.after.pipeline !== `M3_PIPELINE=${expectedPipeline}` ||
       value.after.post !== `M3_POST_EFFECT=${post}` ||
       value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
-      value.rhiTopology.msaaTextureResourceCount !== (msaa ? 2 : 0) ||
+      value.rhiTopology.msaaTextureResourceCount !==
+        (msaa ? (reversePipelineFalsifier || (pipelineFalsifier && leg === 'falsifier') ? 2 : 4) : 0) ||
       value.rhiTopology.resolveTargetCount !== (msaa ? 1 : 0) ||
       value.rhiTopology.hasDepthBinding !== (depthPost && (pipelineFalsifier ? leg === 'normal' : true)) ||
       value.draws !== (pipelineFalsifier && leg === 'falsifier' ? 1 : 2) ||

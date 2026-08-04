@@ -1,6 +1,6 @@
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, Transform } from '../index';
+import { ChildOf, propagateTransforms, Transform } from '../index';
 import { registerPropagateTransforms } from '../systems';
 
 describe('scene propagation', () => {
@@ -29,5 +29,18 @@ describe('scene propagation', () => {
     const result = world.update(1 / 60);
     expect(result.ok).toBe(true);
     expect(world.get(child, Transform).ok).toBe(false);
+  });
+
+  it('keeps equal entity handles isolated across Worlds', () => {
+    const first = new World();
+    const second = new World();
+    const firstRoot = first.spawn({ component: Transform, data: { pos: [3, 0, 0] } }).unwrap();
+    const secondRoot = second.spawn({ component: Transform, data: { pos: [7, 0, 0] } }).unwrap();
+
+    expect(firstRoot).toBe(secondRoot);
+    expect(propagateTransforms(first).ok).toBe(true);
+    expect(propagateTransforms(second).ok).toBe(true);
+    expect(first.get(firstRoot, Transform).unwrap().world[12]).toBeCloseTo(3);
+    expect(second.get(secondRoot, Transform).unwrap().world[12]).toBeCloseTo(7);
   });
 });

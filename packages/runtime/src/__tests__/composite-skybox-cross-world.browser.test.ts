@@ -216,10 +216,9 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
   let canvas: HTMLCanvasElement | undefined;
 
   afterEach(() => {
-    if (renderer !== undefined) {
-      renderer.dispose?.();
-      renderer = undefined;
-    }
+    // Browser Mode files share Chromium's GPU process. Do not dispose the
+    // renderer here: that destroys the shared device for the next file.
+    renderer = undefined;
     if (canvas !== undefined && canvas.parentElement !== null) {
       canvas.parentElement.removeChild(canvas);
       canvas = undefined;

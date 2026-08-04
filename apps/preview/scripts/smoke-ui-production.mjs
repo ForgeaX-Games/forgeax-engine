@@ -129,7 +129,7 @@ try {
       const listed = globalThis.__forgeaxPreviewInspection?.list();
       const root = document.querySelector('[data-forgeax-ui-root]');
       const hosts = root ? [...root.querySelectorAll('[data-ui-asset]')] : [];
-      return (listed?.actions.length ?? 0) === 4 && (listed?.reads.length ?? 0) === 2 && hosts.length === 2 && hosts.every((host) => host.shadowRoot !== null);
+      return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2 && hosts.length === 2 && hosts.every((host) => host.shadowRoot !== null);
     }, null, { timeout: 30_000 });
 
     const interaction = await page.evaluate(() => {

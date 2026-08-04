@@ -35,6 +35,7 @@ import {
   extractFrame,
   extractFrames,
   PostProcessParams,
+  prepareExtractContext,
   SkyboxBackground,
   Skylight,
   SpotLight,
@@ -276,8 +277,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithCamera();
     const worldB = makeWorldWithDirectionalLight();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -328,8 +329,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -372,8 +373,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -419,8 +420,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -436,8 +437,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithSkylight();
     const worldB = new World(); // no skylight
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     // owner=0 (worldA)
     const merged = simulateMerge([frameA, frameB], 0);
@@ -454,8 +455,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithSkybox();
     const worldB = new World();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
     expect(merged.skybox).toBeDefined();
@@ -482,8 +483,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
       )
       .unwrap();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -498,8 +499,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithCamera();
     const worldB = makeWorldWithCamera(); // has its own camera
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     expect(frameA.cameras.length).toBeGreaterThanOrEqual(1);
     expect(frameB.cameras.length).toBeGreaterThanOrEqual(1);
@@ -521,8 +522,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithCamera();
     const worldB = makeWorldWithDirectionalLight();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -539,8 +540,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithCamera();
     const worldB = makeWorldWithDirectionalLight();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -558,8 +559,8 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = makeWorldWithCamera();
     const worldB = makeWorldWithCamera();
 
-    const frameA = extractFrame(worldA as World);
-    const frameB = extractFrame(worldB as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
+    const frameB = extractFrame(worldB as World, prepareExtractContext(worldB as World));
 
     const merged = simulateMerge([frameA, frameB], 0);
 
@@ -573,7 +574,7 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
 
   it('single world merge is identity: worldId=0 for all renderables', () => {
     const worldA = makeWorldWithCamera();
-    const frameA = extractFrame(worldA as World);
+    const frameA = extractFrame(worldA as World, prepareExtractContext(worldA as World));
     const merged = simulateMerge([frameA], 0);
 
     // All renderables have worldId=0

@@ -474,15 +474,22 @@ ECS inspection and mutation route through `@forgeax/engine-remote`'s single `eva
 
 ```ts
 // Inside eval scope (via in-process client.eval or WS JSON-RPC 2.0):
-const { createQueryState, queryRun, Entity, Transform } = await _import('@forgeax/engine-ecs');
-const state = createQueryState({ with: [Entity, Transform] });
+const ecs = await _import('@forgeax/engine-ecs');
+const scene = await _import('@forgeax/engine-scene');
+const { createQueryState, queryRun, Entity } = ecs;
+const state = createQueryState({ with: [Entity, scene.Transform] });
 queryRun(state, world, (bundle) => {
   for (let i = 0; i < bundle.Entity.self.length; i++) {
     const h = bundle.Entity.self[i];
-    const px = bundle.Transform.position.x[i]; // non-optional read
+    const pos = bundle.Transform.pos;
+    const px = pos[i * 3]; // non-optional read
   }
 });
 ```
+
+Fixed-array fields are exposed as flat typed-array columns: row `i` starts at
+`i * arity` (`Transform.pos` has arity 3). There are no `.x` / `.y` / `.z`
+sub-fields on a query bundle.
 
 Spawning, setting components, and despawning execute directly through `world.spawn` / `world.set` / `world.despawn` — no `ECS_MUTATING_METHODS` blacklist. See [`@forgeax/engine-remote` README](../remote/README.md) for the full eval API, live roots, and security model.
 
@@ -755,14 +762,16 @@ const Marker = defineComponent('Marker', { key: 'u32' }, {
 **`queryCombinations(state, world, k, callback)` visits every unordered K-combination of the matched entities**, invoking `callback` once per combination with a K-tuple of `EntityHandle`s. It is the combinatorial counterpart of `queryRun` (single entities) — the canonical use is **pairwise interaction**: N-body gravity, collision broadphase, flocking, where each unordered PAIR is processed exactly once.
 
 ```ts
-const { createQueryState, queryCombinations, Entity, Transform } = await _import('@forgeax/engine-ecs');
+const ecs = await _import('@forgeax/engine-ecs');
+const scene = await _import('@forgeax/engine-scene');
+const { createQueryState, queryCombinations, Entity } = ecs;
 const Body = defineComponent('Body', { mass: 'f32' });
-const state = createQueryState({ with: [Body, Transform, Entity] });
+const state = createQueryState({ with: [Body, scene.Transform, Entity] });
 
 // Apply each pair's mutual gravitational force once (Bevy's interact_bodies):
 queryCombinations(state, world, 2, (pair) => {
-  const ta = world.get(pair[0], Transform);
-  const tb = world.get(pair[1], Transform);
+  const ta = world.get(pair[0], scene.Transform);
+  const tb = world.get(pair[1], scene.Transform);
   if (!ta.ok || !tb.ok) return;
   // ... compute force from (tb.pos - ta.pos), accumulate into both via world.set
 });
@@ -1174,3 +1183,29 @@ Self-help affordances for stale refs:
 `BufferPool` (the backing store for `buffer<N>` schema-vocab fields) follows an operational-not-persistent contract, with one tightening: **the slot `id` returned by `pool.alloc(byteLength)` never escapes the ECS internals.** There is no public `Handle<Buffer>` surface today; archetype columns store the `id` as u32 and `world.get(e, C).<bufferField>` rebinds the live `Uint8Array` view through `pool.view(id)` at the point of access (no caller-facing caching).
 
 Because of that, `BufferPool` carries no generation tag and `BufferPool.prototype.release` is typed `Result<void, never>` — there is no error arm and the type contract is locked at compile time by `packages/ecs/src/__tests__/buffer-pool.test-d.ts`. If a future feature adds a public `Handle<Buffer>` surface, it should adopt the same packed-generation codec the unique/shared stores now use (`@forgeax/engine-types`) so slot re-use fails fast rather than mis-resolving.
+
+## Visibility inspection contract
+
+Quick start from an eval script:
+
+```ts
+const ecs = await _import('@forgeax/engine-ecs');
+const render = await _import('@forgeax/engine-render');
+const query = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
+ecs.queryRun(query, world, bundle => console.log(bundle.Visibility.state));
+```
+
+| Fact | ECS authority | Not implied |
+|:--|:--|:--|
+| Current intent | `queryRun` reads the registered `Visibility` field | It is not the final render decision |
+| Effective state | `resolveVisibility(world).effective(entity)` | ECS does not own cameras or picking |
+| Recovery | `world.set` returns a structured `Result` with `code`, `expected`, `hint`, and `detail` | Do not patch a demo with a replacement component |
+
+Diagnostics are read-only observations: query the current field, then ask the
+render package for effective visibility. If a write is rejected, switch on the
+returned error code, follow its hint, and retry the same `world.set` path with
+the enum label exposed by the reflected schema. The app registry projects
+component reflection into remote `introspect`; ECS remains the component owner.
+
+Out of scope: renderer culling, camera frusta, picking, app lifecycle, asset
+loading, and VFX shadow policy. Use the owning package contract for each.

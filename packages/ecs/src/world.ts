@@ -36,6 +36,7 @@ import type {
   ArrayPopEmptyError,
   CardinalityExceededError,
   ComponentAlreadyPresentError,
+  ComponentFieldInvalidValueError,
   ComponentNotDefinedError,
   ComponentNotPresentError,
   FixedArrayOverflowError,
@@ -158,6 +159,7 @@ export type EcsError =
   | StaleEntityError
   | ComponentNotPresentError
   | ComponentAlreadyPresentError
+  | ComponentFieldInvalidValueError
   | UniqueRefReleasedError
   | UniqueRefDoubleReleaseError
   | ManagedBufferOutOfBoundsError

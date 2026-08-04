@@ -17,4 +17,4 @@
 // register-plugin-inspector / discoverPlugins) deleted; eval is the sole
 // command channel.
 
-export * from './errors';
+export { RemoteError, type RemoteErrorCode } from './errors';

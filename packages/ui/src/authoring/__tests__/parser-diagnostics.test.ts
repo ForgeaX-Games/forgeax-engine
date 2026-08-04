@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import {
-  parseCssAuthoring,
-  parseHtmlAuthoring,
-  serializeDiagnostics,
-  validateUiAuthoring,
-} from '../index.js';
+import { parseCssAuthoring } from '../css.js';
+import { serializeDiagnostics } from '../diagnostics.js';
+import { parseHtmlAuthoring } from '../html.js';
+import { validateUiAuthoring } from '../index.js';
 
 describe('authoring parser diagnostics', () => {
   it('recovers malformed HTML with a non-empty source range', () => {

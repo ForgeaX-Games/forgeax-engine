@@ -4,7 +4,7 @@
 // captured in that cascade's depth map (classic "missing caster" CSM bug).
 //
 // This test drives the REAL extract cascade-fit path (NOT a local copy): it
-// builds a World, calls extractFrame(world), and reads the actual per-cascade
+// builds a World, prepares its fresh context, calls extractFrame, and reads the actual per-cascade
 // lightViewProj matrix the engine produced at render-system-extract.ts:1581.
 // It then projects a world-space caster point offset toward the light source
 // through that matrix and asserts the resulting clip-space z is inside the
@@ -23,7 +23,12 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
-import { Camera, DirectionalLight, extractFrame } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  DirectionalLight,
+  extractFrame,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
@@ -45,7 +50,7 @@ function setupWorld(cascadeCount: number): World {
     },
   });
   world.spawn(
-    { component: Transform, data: { pos: [0, 5, 10] } },
+    { component: Transform, data: { pos: [0, 0, 0] } },
     { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
   );
 
@@ -81,7 +86,8 @@ describe('CSM ortho-Z reaches toward the light (real extract fit, AC-05)', () =>
   // N=4 is the primary RED case: the thin near slice gives a tight ortho Z, so a
   // toward-light occluder over near-cascade ground is clipped (z < 0).
   it('N=4: the cascade covering the ground also captures a toward-light caster (z in [0,1])', () => {
-    const frame = extractFrame(setupWorld(4));
+    const world = setupWorld(4);
+    const frame = extractFrame(world, prepareExtractContext(world));
     const lvp = frame.lights.lightViewProj;
     expect(lvp).toBeDefined();
     if (lvp === undefined) return;
@@ -113,7 +119,8 @@ describe('CSM ortho-Z reaches toward the light (real extract fit, AC-05)', () =>
   });
 
   it('N=4: near cascade (0) covers the ground and must admit the toward-light caster', () => {
-    const frame = extractFrame(setupWorld(4));
+    const world = setupWorld(4);
+    const frame = extractFrame(world, prepareExtractContext(world));
     const lvp = frame.lights.lightViewProj;
     expect(lvp).toBeDefined();
     if (lvp === undefined) return;

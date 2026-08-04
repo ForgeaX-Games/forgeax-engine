@@ -1,4 +1,21 @@
 export * from './asset.js';
-export * from './color-space.js';
-export * from './errors.js';
-export * from './resolve.js';
+export {
+  linearChannelToSrgb,
+  type MaterialColorParameterSchema,
+  type MaterialColorSpace,
+  materialValuesToLinearRuntime,
+  srgbChannelToLinear,
+} from './color-space.js';
+export {
+  createMaterialError,
+  type GltfMaterialUvSetMissingDetail,
+  type MaterialError,
+  type MaterialErrorCode,
+  type MaterialErrorFor,
+} from './errors.js';
+export {
+  type MaterialTable,
+  materialGuidText,
+  type ResolvedMaterial,
+  resolveMaterialAsset,
+} from './resolve.js';

@@ -39,3 +39,9 @@ export {
   type TileLayerData,
 } from './tile-layer';
 export { Tilemap } from './tilemap';
+export {
+  Visibility,
+  type VisibilityState,
+  VisibilityStateValue,
+  visibilityStateFromU32,
+} from './visibility';

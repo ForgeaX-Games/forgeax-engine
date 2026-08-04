@@ -87,7 +87,7 @@ function compile(script: string): FunctionConstructor['prototype'] {
  * expression is auto-returned, and top-level `await` / `return` are legal.
  *   - _import is available as a parameter for dynamic ESM imports.
  *   - debugAdapter is available as a 4th eval-scope root for rhi-debug
- *     CLI commands (captureFrame / inspectAt; plan-strategy D-4).
+ *     CLI commands (captureFrames / inspectAt; plan-strategy D-4).
  *   - No sandbox — full access reads and writes.
  *   - No timeout — host realm eval cannot be interrupted (see R6).
  */

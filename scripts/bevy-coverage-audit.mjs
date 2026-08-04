@@ -26,10 +26,10 @@
 //                                        [--roadmap <markdownPath>] [--json]
 //                                        [--category <name>] [--strict-routes]
 //                                        [--strict-authority]
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
-import { validateDemoApps } from './bevy-demo.mjs';
+import { findAppPackageJsons, validateDemoApps } from './bevy-demo.mjs';
 
 const argv = process.argv.slice(2);
 const args = { json: false, strictRoutes: false, strictAuthority: false };
@@ -114,26 +114,8 @@ function readRoadmapAuthorityConflicts(declarations, shelvedNames) {
 }
 
 // --- 1. Enumerate apps + read self-declared forgeax.bevyExample ------------
-// Recursive walk of apps/ (globs nest: apps/*, apps/hello/*, apps/learn-render/*/*).
-// An app = a dir with a package.json; we stop descending once one is found.
-function findAppPackageJsons(dir, acc = []) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return acc;
-  }
-  const pkgPath = join(dir, 'package.json');
-  if (existsSync(pkgPath) && dir !== resolve(root, 'apps')) {
-    acc.push(pkgPath);
-    return acc; // don't descend into an app's own subdirs (node_modules etc.)
-  }
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name === 'node_modules' || e.name.startsWith('.')) continue;
-    findAppPackageJsons(join(dir, e.name), acc);
-  }
-  return acc;
-}
+// Discovery is shared with bevy-demo.mjs so validation and coverage cannot walk
+// different app trees.
 
 validateDemoApps(root);
 

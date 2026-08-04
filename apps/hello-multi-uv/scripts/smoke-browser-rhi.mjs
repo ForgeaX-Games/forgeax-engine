@@ -65,7 +65,7 @@ async function waitForVite(proc) {
   return url;
 }
 
-async function bootstrapDawn() {
+async function bootstrapDawn(recordedCaps) {
   const { create, globals } = await import('webgpu');
   Object.assign(globalThis, globals);
   if (globalThis.navigator === undefined) {
@@ -77,7 +77,16 @@ async function bootstrapDawn() {
   const rhiWebgpu = await import('@forgeax/engine-rhi-webgpu');
   const adapter = await rhiWebgpu.rhi.requestAdapter();
   if (!adapter.ok) throw new Error(`Dawn requestAdapter failed: ${adapter.error.code}`);
+  const requiredFeatures = [
+    [recordedCaps.textureCompressionBc, 'texture-compression-bc'],
+    [recordedCaps.textureCompressionEtc2, 'texture-compression-etc2'],
+    [recordedCaps.textureCompressionAstc, 'texture-compression-astc'],
+  ]
+    .filter(([recorded]) => recorded)
+    .map(([, feature]) => feature)
+    .filter((feature) => adapter.value.features.has(feature));
   const device = await adapter.value.requestDevice({
+    requiredFeatures,
     requiredLimits: { maxUniformBufferBindingSize: 262144 },
   });
   if (!device.ok) throw new Error(`Dawn requestDevice failed: ${device.error.code}`);
@@ -282,7 +291,7 @@ try {
   if (drawCount < minimumDraws) {
     throw new Error(`pipeline tape has only ${drawCount} draw calls; expected at least ${minimumDraws}`);
   }
-  const { device, rhiWebgpu } = await bootstrapDawn();
+  const { device, rhiWebgpu } = await bootstrapDawn(parsedTape.rhiCapsRecorded);
   const replayResult = createReplay(parsedTape, device, rhiWebgpu.createShaderModule);
   if (!replayResult.ok) throw new Error(`createReplay failed: ${replayResult.error.code}`);
   const replay = replayResult.value;

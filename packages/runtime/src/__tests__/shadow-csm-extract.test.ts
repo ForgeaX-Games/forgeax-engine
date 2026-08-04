@@ -12,7 +12,12 @@
 // castShadow: true; lightViewProj won't populate.
 
 import { World } from '@forgeax/engine-ecs';
-import { Camera, DirectionalLight, extractFrame } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  DirectionalLight,
+  extractFrame,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
@@ -42,7 +47,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
   describe('castShadow=true (default): CSM path runs', () => {
     it('lightViewProj is an array of 4 Float32Array mat4s', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       const { lightViewProj } = frame.lights;
       expect(lightViewProj).toBeDefined();
       if (lightViewProj === undefined) return;
@@ -57,7 +62,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
 
     it('splitPlanes is a Float32Array of length 4', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       const { splitPlanes } = frame.lights;
       expect(splitPlanes).toBeDefined();
       if (splitPlanes === undefined) return;
@@ -72,7 +77,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
 
     it('cascadeCount and cascadeBlend scalars match component defaults', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.cascadeCount).toBe(4);
       expect(frame.lights.cascadeBlend).toBeCloseTo(0.2, 5);
     });
@@ -81,13 +86,13 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
   describe('castShadow=false: CSM path skipped', () => {
     it('lightViewProj is undefined when castShadow=false', () => {
       const world = makeWorld(false);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.lightViewProj).toBeUndefined();
     });
 
     it('splitPlanes, cascadeCount, cascadeBlend are undefined', () => {
       const world = makeWorld(false);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.splitPlanes).toBeUndefined();
       expect(frame.lights.cascadeCount).toBeUndefined();
       expect(frame.lights.cascadeBlend).toBeUndefined();
@@ -97,25 +102,25 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
   describe('ExtractedLights carries bias/PCF from merged DirectionalLight', () => {
     it('depthBias populated when castShadow=true', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.depthBias).toBeCloseTo(0.01, 5);
     });
 
     it('normalBias populated when castShadow=true', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.normalBias).toBeCloseTo(0.08, 5);
     });
 
     it('pcfKernelSize populated when castShadow=true', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.pcfKernelSize).toBe(5);
     });
 
     it('depthBias, normalBias, pcfKernelSize are undefined when castShadow=false', () => {
       const world = makeWorld(false);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.depthBias).toBeUndefined();
       expect(frame.lights.normalBias).toBeUndefined();
       expect(frame.lights.pcfKernelSize).toBeUndefined();
@@ -138,7 +143,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
         { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
       );
 
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       const { lightViewProj, cascadeCount } = frame.lights;
       expect(cascadeCount).toBe(1);
       expect(lightViewProj).toBeDefined();
@@ -168,7 +173,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
   describe('lightSpaceMatrix deleted', () => {
     it('ExtractedLights does not have lightSpaceMatrix property', () => {
       const world = makeWorld(true);
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect('lightSpaceMatrix' in frame.lights).toBe(false);
     });
   });
@@ -201,17 +206,20 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
     }
 
     it('reads pcfKernelSize=1 from the merged component', () => {
-      const frame = extractFrame(setupWorldWithPcf(1));
+      const world = setupWorldWithPcf(1);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.pcfKernelSize).toBe(1);
     });
 
     it('reads pcfKernelSize=3 from the merged component', () => {
-      const frame = extractFrame(setupWorldWithPcf(3));
+      const world = setupWorldWithPcf(3);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.pcfKernelSize).toBe(3);
     });
 
     it('reads pcfKernelSize=5 from the merged component', () => {
-      const frame = extractFrame(setupWorldWithPcf(5));
+      const world = setupWorldWithPcf(5);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.pcfKernelSize).toBe(5);
     });
 
@@ -225,7 +233,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
         { component: Transform, data: {} },
         { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
       );
-      const frame = extractFrame(world);
+      const frame = extractFrame(world, prepareExtractContext(world));
       expect(frame.lights.pcfKernelSize).toBe(3);
     });
   });

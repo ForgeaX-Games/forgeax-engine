@@ -47,9 +47,10 @@ describe('font asset-local artifacts', () => {
     const body = atlasAsset.artifacts.atlas;
     expect(body).toBeDefined();
     if (body === undefined) return;
-    expect(body.mediaType).toBe('image/png');
-    expect(body.assetCodec).toEqual({ name: 'msdf' });
+    expect(body.mediaType).toBe('application/octet-stream');
+    expect(body).not.toHaveProperty('assetCodec');
     expect(body.bytes).toBeInstanceOf(Uint8Array);
+    expect(body.bytes).toEqual(atlas.texture.data);
     expect(body).not.toHaveProperty('path');
     expect(body).not.toHaveProperty('integrity');
     expect(fontAsset?.refs.map((ref) => ref.guid)).toEqual([ATLAS_GUID]);

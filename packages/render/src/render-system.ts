@@ -308,6 +308,8 @@ export interface RenderSystem {
    * Updated by `draw([world], { owner: 0 })` on every call from the Extract stage.
    */
   readonly frustumStats: { culled: number; total: number };
+  /** Per-frame candidate entities rejected by author visibility. */
+  readonly visibilityStats: { explicitlyHidden: number };
   /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
@@ -1731,9 +1733,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   };
   let preparedViewBindGroup: import('@forgeax/engine-rhi').BindGroup | null = null;
   const preparedPipelineIds = new WeakMap<object, string>();
+  const preparedMaterialPipelineShaders = new WeakMap<object, string>();
   const preparedGroup0Pipelines = new WeakSet<object>();
   const preparedColorOnlyPipelines = new WeakSet<object>();
   const lastFrustumStats: { culled: number; total: number } = { culled: 0, total: 0 };
+  const lastVisibilityStats: { explicitlyHidden: number } = { explicitlyHidden: 0 };
   const preparedResolverFactory = (
     input: RenderFeaturePreparedGraphicsResolverInput,
   ): PreparedGraphicsResolver =>
@@ -1788,6 +1792,9 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           (descriptor.depthFormat === undefined
             ? null
             : (internals.getPipelineState()?.unlitPipeline ?? null));
+        if (pipeline !== null) {
+          preparedMaterialPipelineShaders.set(pipeline as object, descriptor.shader);
+        }
         if (pipeline !== null && descriptor.depthFormat === undefined) {
           preparedColorOnlyPipelines.add(pipeline as object);
           if (internals.getMaterialShaderBindingContract?.(descriptor.shader) === 'group-0') {
@@ -1800,11 +1807,16 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       },
       resolveBindings: (descriptor, pipeline) => {
         if (preparedGroup0Pipelines.has(pipeline as object)) {
-          const layout = (
-            pipeline as RenderPipeline & {
-              getBindGroupLayout?: (index: number) => BindGroupLayout;
-            }
-          ).getBindGroupLayout?.(0);
+          const materialShaderId = preparedMaterialPipelineShaders.get(pipeline as object);
+          const layout =
+            (materialShaderId === undefined
+              ? undefined
+              : internals.getMaterialBindGroupLayout?.(materialShaderId)) ??
+            (
+              pipeline as RenderPipeline & {
+                getBindGroupLayout?: (index: number) => BindGroupLayout;
+              }
+            ).getBindGroupLayout?.(0);
           return layout === undefined
             ? err(new Error('prepared group-0 pipeline bind group layout is unavailable'))
             : internals.device.createBindGroup({ layout, entries: [] });
@@ -1817,11 +1829,17 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           return ok(preparedViewBindGroup);
         }
         const group = descriptor.values.group;
-        const layout = (
-          pipeline as RenderPipeline & {
-            getBindGroupLayout?: (index: number) => BindGroupLayout;
-          }
-        ).getBindGroupLayout?.(group === 1 ? 1 : 0);
+        const materialShaderId = preparedMaterialPipelineShaders.get(pipeline as object);
+        const layout =
+          (group === 0 && materialShaderId !== undefined
+            ? (internals.getMaterialBindGroupLayout?.(materialShaderId) ??
+              internals.getPipelineState()?.materialBindGroupLayout)
+            : undefined) ??
+          (
+            pipeline as RenderPipeline & {
+              getBindGroupLayout?: (index: number) => BindGroupLayout;
+            }
+          ).getBindGroupLayout?.(group === 1 ? 1 : 0);
         return layout === undefined
           ? err(new Error('prepared pipeline bind group layout is unavailable'))
           : internals.device.createBindGroup({
@@ -1938,6 +1956,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           skybox,
           skyboxCount,
           frustumStats,
+          visibilityStats,
           postProcessParams,
         } = frame;
 
@@ -1973,12 +1992,15 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
+        lastVisibilityStats.explicitlyHidden = visibilityStats.explicitlyHidden;
         const preparedResourceBatches = runProfiledRenderPhase(profileSession, 'features', () => {
           if (internals.featureHost === undefined) return [];
           const featureFrame = runRenderFeatureFrame(internals.featureHost, {
             worlds,
             owner: resourceOwner,
             frameNumber: frameState.frameNumber,
+            visibilitySnapshots: frame.featureVisibilitySnapshots,
+            hiddenEntityReports: frame.hiddenEntityReports,
             generation: 0,
             caps: internals.device.caps,
             createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
@@ -1990,6 +2012,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
               ),
             createPreparedGraphicsResolver: preparedResolverFactory,
           });
+          lastVisibilityStats.explicitlyHidden = featureFrame.hiddenEntityReports.length;
           for (const featureError of featureFrame.errors) {
             internals.errorRegistry.fire(featureError);
           }
@@ -2105,6 +2128,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     pipelineDispatchCounts: dispatchCounts,
     bindGroupCounts: bindGroupCounts,
     frustumStats: lastFrustumStats,
+    visibilityStats: lastVisibilityStats,
     get perFramePassNames(): readonly string[] {
       return frameState.perFrameGraph?.listPasses().map((p: { name: string }) => p.name) ?? [];
     },

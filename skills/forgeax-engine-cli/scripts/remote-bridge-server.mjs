@@ -17,8 +17,9 @@
 //   • the CLI POSTs code to            http://127.0.0.1:5733/eval  (shell dials the relay)
 // The relay forwards {id, code} to the page, awaits {id, result}, and answers
 // the CLI's still-open HTTP request with that JSON. One in-memory pending-map
-// correlates request↔reply by id. No persistence, no new dependency (reuses the
-// `ws` package @forgeax/engine-remote already vendors), 127.0.0.1-only, DEV-only.
+// correlates request↔reply by id. No persistence, 127.0.0.1-only, DEV-only. The
+// root dev tool declares its direct `ws` dependency; it is not inherited from a
+// workspace package's nested node_modules.
 //
 // This is the engine-side mirror of the editor's gateway-bridge-server.mjs.
 //

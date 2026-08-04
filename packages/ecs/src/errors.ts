@@ -30,9 +30,11 @@ export {
 } from './errors/sprite-and-shared-errors';
 export {
   CardinalityExceededError,
+  ComponentFieldInvalidValueError,
   ResourceInvalidValueError,
   SpawnLightInvalidBoundsError,
   SpriteAnimationInvalidError,
+  validateEnumFieldValues,
 } from './errors/validation-errors';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1190,7 +1192,9 @@ export type EcsErrorCode =
   // error code. Surfaced from world.addSystems / world.configureSets when a
   // token fails identity validation (brand bypass + registry identity check).
   // Minor evolution +1 per AGENTS.md §Error model evolution contract.
-  | 'system-set-not-registered';
+  | 'system-set-not-registered'
+  // Closed enum field writes fail before archetype or column mutation.
+  | 'component-field-invalid-value';
 
 /**
  * Discriminated `.detail` payload per `.code`.
@@ -1440,6 +1444,14 @@ export type EcsErrorDetail =
       readonly code: 'system-set-not-registered';
       readonly name: string;
       readonly registered: readonly string[];
+    }
+  | {
+      readonly code: 'component-field-invalid-value';
+      readonly entity: number | undefined;
+      readonly component: string;
+      readonly field: string;
+      readonly received: unknown;
+      readonly allowedValues: Readonly<Record<string, number>>;
     }
   // feat-20260714-bevy-style-system-sets M2 / w12 — structured cyclic-dependency
   // detail. `.detail.cycle` is the ordered cycle path array; consumers read

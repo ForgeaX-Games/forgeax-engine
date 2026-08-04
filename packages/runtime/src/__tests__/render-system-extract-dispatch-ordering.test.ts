@@ -56,6 +56,7 @@ import {
   Instances,
   MeshFilter,
   MeshRenderer,
+  prepareExtractContext,
 } from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
@@ -171,7 +172,7 @@ describe('render-system-extract M2.5 dispatch/renderable slot pairing (AC-06)', 
       .unwrap();
 
     expect(propagateTransforms(world).ok).toBe(true);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(frame.renderables).toHaveLength(1);
     // One matched Forward pass per surviving entity — pre-M2.5 this would be 2
@@ -211,7 +212,7 @@ describe('render-system-extract M2.5 dispatch/renderable slot pairing (AC-06)', 
       .unwrap();
 
     expect(propagateTransforms(world).ok).toBe(true);
-    const frame = extractFrame(world);
+    const frame = extractFrame(world, prepareExtractContext(world));
 
     expect(frame.renderables).toHaveLength(1);
     // Two entries per surviving entity (shadow-caster + forward) — pre-M2.5
@@ -268,7 +269,7 @@ describe('render-system-extract M2.5 dispatch/renderable slot pairing (AC-06)', 
       .unwrap();
 
     expect(propagateTransforms(world).ok).toBe(true);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(frame.renderables).toHaveLength(1);
     expect(frame.renderables[0]?.instances).toBeDefined();
@@ -300,7 +301,7 @@ describe('render-system-extract M2.5 dispatch/renderable slot pairing (AC-06)', 
     }
 
     expect(propagateTransforms(world).ok).toBe(true);
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(frame.renderables).toHaveLength(0);
     expect(frame.dispatch).toHaveLength(0);

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 
 const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
+const benchWorkflow = readFileSync(resolve('.github/workflows/bench.yml'), 'utf8');
 const vitestConfig = readFileSync(resolve('vitest.config.ts'), 'utf8');
 const uploadWithRetry = readFileSync(
   resolve('.github/actions/upload-artifact-with-retry/action.yml'),
@@ -72,6 +73,14 @@ test('self-hosted setup-node steps do not transfer the pnpm store archive', () =
   const disabledStoreCaches = workflow.match(/^\s+package-manager-cache: false$/gm) ?? [];
   assert.equal(disabledStoreCaches.length, setupNodeSteps.length);
   assert.doesNotMatch(workflow, /package-manager-cache:\s*true/);
+});
+
+test('the self-hosted bench setup-node also avoids the pnpm store archive', () => {
+  const setupNodeSteps = benchWorkflow.match(/uses: actions\/setup-node@v5/g) ?? [];
+  const disabledStoreCaches = benchWorkflow.match(/^\s+package-manager-cache: false$/gm) ?? [];
+  assert.equal(setupNodeSteps.length, 1);
+  assert.equal(disabledStoreCaches.length, setupNodeSteps.length);
+  assert.doesNotMatch(benchWorkflow, /package-manager-cache:\s*true/);
 });
 
 test('Mesa installation supports root self-hosted runners without sudo', () => {

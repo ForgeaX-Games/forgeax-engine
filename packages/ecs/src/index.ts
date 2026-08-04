@@ -502,6 +502,7 @@ export {
  * by all three World write entries (spawn / addComponent / set).
  */
 export { validateSharedFieldValues } from './component-value-validate';
+export { validateEnumFieldValues } from './errors/validation-errors';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Column / storage internals (for advanced use: custom archetype tooling)
@@ -556,6 +557,7 @@ export {
   BuiltinSlotNotOwnedError,
   CardinalityExceededError,
   ComponentAlreadyPresentError,
+  ComponentFieldInvalidValueError,
   ComponentNotDefinedError,
   ComponentNotPresentError,
   CyclicDependencyError,

@@ -1,3 +1,4 @@
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
@@ -35,10 +36,13 @@ import type {
   RenderFeatureCleanupFailure,
   RenderFeatureDiagnostics,
   RenderFeatureErrorDescriptor,
+  RenderFeatureExtractContext,
+  RenderFeatureHiddenEntityReport,
   RenderFeaturePrepareContext,
   RenderFeatureRecoverInput,
   RenderFeatureResourceHandle,
   RenderFeatureStatus,
+  RenderFeatureWorldVisibilitySnapshot,
 } from './types';
 
 export interface RenderFeatureStageEvent {
@@ -51,6 +55,8 @@ export interface RenderFeatureFrameInput {
   readonly worlds: readonly import('@forgeax/engine-ecs').World[];
   readonly owner: number;
   readonly frameNumber: number;
+  readonly visibilitySnapshots?: readonly RenderFeatureWorldVisibilitySnapshot[];
+  readonly hiddenEntityReports?: readonly RenderFeatureHiddenEntityReport[];
   readonly generation?: number;
   readonly caps: Readonly<RhiCaps>;
   readonly createContributionStaging?: (
@@ -80,6 +86,7 @@ export interface RenderFeatureFrameResult {
   readonly errors: readonly RenderError[];
   readonly contributions: readonly RenderFeatureGraphContribution[];
   readonly preparedResourceBatches: readonly RenderFeaturePreparedResourceBatch[];
+  readonly hiddenEntityReports: readonly RenderFeatureHiddenEntityReport[];
 }
 
 export interface RenderFeatureOwnedResource {
@@ -693,6 +700,9 @@ export function runRenderFeatureFrame(
   const errors: RenderError[] = [];
   const contributions: RenderFeatureGraphContribution[] = [];
   const preparedResourceBatches: RenderFeaturePreparedResourceBatch[] = [];
+  const hiddenEntityReports: RenderFeatureHiddenEntityReport[] = [
+    ...(input.hiddenEntityReports ?? []),
+  ];
 
   const diagnostics = host.diagnostics();
   for (const [order, feature] of host.features.entries()) {
@@ -728,15 +738,20 @@ export function runRenderFeatureFrame(
       missingCapability(feature, input.caps) === undefined,
     );
     let staging!: RenderFeatureContributionStaging & RenderFeatureGraphicsContributionStaging;
+    const featureHiddenEntityReports: RenderFeatureHiddenEntityReport[] = [];
+    const extractContext = {
+      worlds: input.worlds,
+      owner: input.owner,
+      frameNumber: input.frameNumber,
+      reportHiddenEntity: (report) => featureHiddenEntityReports.push(report),
+      ...(input.visibilitySnapshots === undefined
+        ? {}
+        : { visibilitySnapshots: input.visibilitySnapshots }),
+    } satisfies RenderFeatureExtractContext;
     const extracted = invokeStage(
       slot,
       'extract',
-      () =>
-        slot.feature.extract({
-          worlds: input.worlds,
-          owner: input.owner,
-          frameNumber: input.frameNumber,
-        }),
+      () => slot.feature.extract(extractContext),
       events,
       stageEvents,
       errors,
@@ -850,10 +865,36 @@ export function runRenderFeatureFrame(
         contributions.push(committed.value);
       }
     }
+    hiddenEntityReports.push(...featureHiddenEntityReports);
     host.setStatus(identity, 'active');
   }
 
-  return { events, stageEvents, errors, contributions, preparedResourceBatches };
+  return {
+    events,
+    stageEvents,
+    errors,
+    contributions,
+    preparedResourceBatches,
+    hiddenEntityReports: mergeHiddenEntityReports(hiddenEntityReports),
+  };
+}
+
+function mergeHiddenEntityReports(
+  reports: readonly RenderFeatureHiddenEntityReport[],
+): readonly RenderFeatureHiddenEntityReport[] {
+  const entitiesByWorld = new WeakMap<object, Set<EntityHandle>>();
+  const merged: RenderFeatureHiddenEntityReport[] = [];
+  for (const report of reports) {
+    let entities = entitiesByWorld.get(report.world);
+    if (entities === undefined) {
+      entities = new Set<EntityHandle>();
+      entitiesByWorld.set(report.world, entities);
+    }
+    if (entities.has(report.entity)) continue;
+    entities.add(report.entity);
+    merged.push(report);
+  }
+  return Object.freeze(merged);
 }
 
 /**

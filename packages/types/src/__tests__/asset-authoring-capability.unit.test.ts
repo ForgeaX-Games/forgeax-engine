@@ -25,6 +25,36 @@ describe('producer-owned asset authoring capability', () => {
     });
   });
 
+  it('publishes the producer-owned particle effect binding contract', () => {
+    expect(authoringCapabilityForAssetKind('particle-effect')).toEqual({
+      placement: { operation: 'spawnEntity' },
+      binding: {
+        operation: 'bindAssetRef',
+        target: {
+          component: 'ParticleEffectPlayer',
+          field: 'effect',
+          assetType: 'ParticleEffectAsset',
+          cardinality: 'single',
+        },
+        requiredSlots: 1,
+      },
+    });
+
+    expect(authoringCapabilityForAssetKind('mesh').binding).toMatchObject({
+      target: { assetType: 'MeshAsset' },
+    });
+    expect(authoringCapabilityForAssetKind('material').binding).toMatchObject({
+      target: { assetType: 'MaterialAsset' },
+    });
+    expect(authoringCapabilityForAssetKind('audio').binding).toEqual({
+      operation: 'unavailable',
+      reason: {
+        code: 'unsupported-asset-kind',
+        hint: expect.stringContaining('binding capability'),
+      },
+    });
+  });
+
   it('fails closed with a structured reason for a new kind without a producer fact', () => {
     const capability = authoringCapabilityForAssetKind('host/new-kind');
     expect(capability.placement).toEqual({

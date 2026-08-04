@@ -23,7 +23,13 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type Handle, Severity, World } from '@forgeax/engine-ecs';
-import { Camera, extractFrame, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  extractFrame,
+  MeshFilter,
+  MeshRenderer,
+  prepareExtractContext,
+} from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import { Skin } from '@forgeax/engine-skinning';
@@ -229,7 +235,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     const errorSpy = vi.fn();
     world.setErrorHandler(errorSpy);
 
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const [errArg, ctxArg] = errorSpy.mock.calls[0] ?? [];
@@ -255,7 +261,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     const errorSpy = vi.fn();
     world.setErrorHandler(errorSpy);
 
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const [errArg] = errorSpy.mock.calls[0] ?? [];
@@ -280,7 +286,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     const errorSpy = vi.fn();
     world.setErrorHandler(errorSpy);
 
-    extractFrame(world, assets);
+    extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(errorSpy).not.toHaveBeenCalled();
   });
@@ -302,7 +308,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     const errorSpy = vi.fn();
     world.setErrorHandler(errorSpy);
 
-    const frame = extractFrame(world, assets);
+    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     // exactly one mismatch error (the bad-skin entity), and the sibling
     // emerges as a renderable -- proving `continue` did not turn into

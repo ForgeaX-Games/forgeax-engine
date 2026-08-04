@@ -1,8 +1,9 @@
 /** Public RenderFeature lifecycle, diagnostics, and host-context declarations. */
-import type { World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { RhiCaps } from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
 import type { RenderError } from '../errors/render';
+import type { VisibilitySnapshot } from '../extract/visibility';
 import type { RenderFeatureContributionStaging } from './graph-contribution';
 import type {
   PreparedKind,
@@ -203,10 +204,26 @@ export interface RenderFeatureErrorSink {
   report(error: RenderError): void;
 }
 
+/** One World-local visibility snapshot prepared for the current frame batch. */
+export interface RenderFeatureWorldVisibilitySnapshot {
+  readonly world: World;
+  readonly snapshot: VisibilitySnapshot;
+}
+
+/** A producer's structured report for one hidden render candidate. */
+export interface RenderFeatureHiddenEntityReport {
+  readonly world: World;
+  readonly entity: EntityHandle;
+}
+
 export interface RenderFeatureExtractContext {
   readonly worlds: readonly World[];
   readonly owner: number;
   readonly frameNumber: number;
+  /** Same-batch World snapshots; absent for synthetic direct feature probes. */
+  readonly visibilitySnapshots?: readonly RenderFeatureWorldVisibilitySnapshot[];
+  /** Host-owned report sink; feature code never owns the merged diagnostic. */
+  readonly reportHiddenEntity?: (report: RenderFeatureHiddenEntityReport) => void;
 }
 
 /**
@@ -252,6 +269,12 @@ export interface RenderFeatureContributeContext extends RenderFeaturePrepareCont
 export interface RenderFeature<FrameData> {
   readonly identity: string;
   readonly requiredCapabilities?: readonly RenderFeatureCapabilityKey[];
+  /**
+   * Material shader identifiers whose modules must be ready before the first
+   * frame. The renderer resolves these against the loaded manifest and seeds
+   * the same lazy module cache used by prepared graphics.
+   */
+  readonly requiredMaterialShaders?: readonly string[];
   extract(context: RenderFeatureExtractContext): Result<FrameData, RenderError>;
   prepare(data: FrameData, context: RenderFeaturePrepareContext): Result<void, RenderError>;
   contribute(data: FrameData, context: RenderFeatureContributeContext): Result<void, RenderError>;

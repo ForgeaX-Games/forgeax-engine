@@ -20,7 +20,20 @@
 import { ensureReady } from '@forgeax/engine-wgpu-wasm';
 import { err, ok, type Result, type ShaderError, wrapShaderError } from './errors.js';
 
-export * from './errors.js';
+export {
+  compileFailed,
+  err,
+  initFailed,
+  manifestMalformed,
+  ok,
+  type Result,
+  type ResultErr,
+  type ResultOk,
+  ShaderError,
+  type ShaderErrorCode,
+  type ShaderErrorDetail,
+  shaderNotFound,
+} from './errors.js';
 
 // === Opaque handle types ============================================================
 

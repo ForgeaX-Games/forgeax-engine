@@ -24,6 +24,8 @@ export const PARTICLE_SHADER_IDENTIFIERS = Object.freeze({
   mesh: 'forgeax::vfx-render.particles.mesh',
 });
 
+const PARTICLE_MATERIAL_SHADERS = Object.freeze(Object.values(PARTICLE_SHADER_IDENTIFIERS));
+
 interface ParticlePreparedRefs {
   readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
   readonly bindings: RenderFeaturePreparedRef<'bindings'>;
@@ -307,6 +309,7 @@ function featureBase(
   const identity = 'forgeax.vfx-render.particles';
   return {
     identity,
+    requiredMaterialShaders: PARTICLE_MATERIAL_SHADERS,
     diagnostics: () => state.diagnostics,
     extract: (context) => {
       const world = context.worlds[context.owner];
@@ -333,7 +336,14 @@ function featureBase(
         );
         return err(new RenderFeatureStageFailedError(identity, -1, 'extract', 'next-frame'));
       }
-      const observations = options.observations.read(world);
+      const visibility = context.visibilitySnapshots?.find(
+        (entry) => entry.world === world,
+      )?.snapshot;
+      const observations = options.observations.read(world).filter((observation) => {
+        if (visibility?.effective(observation.player) !== 'hidden') return true;
+        context.reportHiddenEntity?.({ world, entity: observation.player });
+        return false;
+      });
       const bucketCount = observations.reduce(
         (total, observation) => total + observation.batches.batches.length,
         0,

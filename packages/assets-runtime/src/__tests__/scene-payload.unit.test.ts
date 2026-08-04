@@ -32,6 +32,22 @@ describe('parseScenePayload without refs', () => {
 });
 
 describe('parseScenePayload with refs', () => {
+  it('resolves ParticleEffectPlayer.effect through the scalar refs contract', () => {
+    const out = parseScenePayload(
+      {
+        entities: [
+          { localId: 0, components: { ParticleEffectPlayer: { effect: 1, seed: 424242 } } },
+        ],
+      },
+      ['scene-guid', 'particle-effect-guid'],
+    );
+    expect(out).toMatchObject({
+      entities: [
+        { components: { ParticleEffectPlayer: { effect: 'particle-effect-guid', seed: 424242 } } },
+      ],
+    });
+  });
+
   const refs = ['guid-a', 'guid-b', 'guid-c'];
 
   it('resolves a scalar handle field index to its GUID string', () => {

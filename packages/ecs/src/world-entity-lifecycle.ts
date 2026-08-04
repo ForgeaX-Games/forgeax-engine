@@ -28,6 +28,7 @@ import {
   RelationshipDetachMismatchError,
   RelationshipSelfCycleError,
   StaleEntityError,
+  validateEnumFieldValues,
 } from './errors';
 import type { ComponentData, EcsError, World } from './world';
 
@@ -49,6 +50,8 @@ export function spawnCore(
     const sharedErr = validateSharedFieldValues(cd.component, cd.data as Record<string, unknown>);
     if (sharedErr !== null) return err(sharedErr as unknown as EcsError);
     const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
+    const enumErr = validateEnumFieldValues(cd.component, filled);
+    if (enumErr !== null) return err(enumErr as unknown as EcsError);
     filledData.push(filled as Record<string, unknown>);
     if (cd.component.validate !== undefined) {
       const validationError = cd.component.validate(filled as Record<string, unknown>);

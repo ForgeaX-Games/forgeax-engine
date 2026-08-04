@@ -20,6 +20,8 @@ import {
 import { recordSpritePass } from './main-pass-sprite-draws';
 import { buildMatchedRenderableIndices } from './shadow-pass';
 
+const ZERO_SKYLIGHT_PAYLOAD = new Float32Array([0, 0, 0, 0, 0, 0, 0, 1]);
+
 /**
  * feat-20260529-rendergraph-pass-abstraction M4 / w13b: main forward
  * (geometry) pass recording, extracted verbatim from recordFrame. Uses the
@@ -50,6 +52,8 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     geometryColorResolveView,
     dispatch,
     hdrpClusterBindGroup,
+    materialSlotStart,
+    materialSlotCount,
   } = c;
   // bug-20260615 M3 / m3-1: sampleCount is threaded through every
   // getMaterialShaderPipeline call site so the cache key / builder
@@ -229,15 +233,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // colorB, rotation quaternion]. Default to all-zero so a transition from "has Skylight" ->
     // "no Skylight" does not leak the prior frame's ambient (intensity 0
     // muzzles everything, including the white fallback irradiance cube).
-    {
-      const zeroPayload = new Float32Array([0, 0, 0, 0, 0, 0, 0, 1]);
-      runtime.device.queue.writeBuffer(
-        // biome-ignore lint/suspicious/noExplicitAny: opaque Buffer handle
-        skylightFallback.intensityBuffer as any,
-        0,
-        zeroPayload,
-      );
-    }
+    runtime.device.queue.writeBuffer(
+      // biome-ignore lint/suspicious/noExplicitAny: opaque Buffer handle
+      skylightFallback.intensityBuffer as any,
+      0,
+      ZERO_SKYLIGHT_PAYLOAD,
+    );
     if (skylight !== undefined && skylightCount >= 1) {
       // A Skylight exists. Write its intensity + color regardless of whether
       // a cubemap is bound: with a cubemap the IBL views below light the
@@ -317,27 +318,6 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // Sprite entities and the legacy single-material path collapse to one
     // slot (length=1), preserving the byte-stable single-material layout
     // that render-system-record-pbr-ubo-stable.test.ts pins.
-    const materialSlotStart: number[] = new Array(validatedOrdered.length);
-    let materialSlotCount = 0;
-    {
-      let cursor = 0;
-      for (let i = 0; i < validatedOrdered.length; i++) {
-        materialSlotStart[i] = cursor;
-        const e = validatedOrdered[i];
-        if (e === undefined) continue;
-        // Sprite path stays single-slot regardless of materials.length
-        // (sprite per-submesh is OOS-1; plan-strategy D-10: judgement key
-        // migrated to materialShaderId post-feat-20260625 M3 / w13).
-        // feat-20260624 M1' / t7: sprite-lit shares the single-slot rule.
-        const slotsForEntity =
-          e.source.material.materialShaderId === 'forgeax::sprite' ||
-          e.source.material.materialShaderId === 'forgeax::sprite-lit'
-            ? 1
-            : e.source.materials.length;
-        cursor += slotsForEntity;
-      }
-      materialSlotCount = cursor;
-    }
     const materialUboPayload = new Uint8Array(materialSlotCount * MATERIAL_PER_ENTITY_STRIDE);
     // feat-city-glb Bug 5 (per-submesh transparency): shared per-submesh
     // material bind-group assembly, called by BOTH the geometry pass and the
@@ -470,10 +450,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           }
         }
 
-        materialUboPayload.set(
-          new Uint8Array(slotPayload),
-          (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE,
-        );
+        materialUboPayload.set(slotPayload, (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE);
       }
     }
 

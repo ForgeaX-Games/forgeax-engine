@@ -13,6 +13,7 @@ import {
   extractFrame,
   MeshFilter,
   MeshRenderer,
+  prepareExtractContext,
 } from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
@@ -861,7 +862,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   function extract(world: World, assets: AssetRegistry): ExtractedFrame {
-    return extractFrame(world, assets);
+    return extractFrame(world, prepareExtractContext(world, { assets }));
   }
 
   describe('w1 — entityKey cross-frame stability', () => {

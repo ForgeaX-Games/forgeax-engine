@@ -207,6 +207,7 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'time-config-invalid':
         case 'schedule-scope-mismatch':
         case 'resource-protected':
+        case 'component-field-invalid-value':
           return code;
       }
     };

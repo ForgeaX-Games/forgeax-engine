@@ -329,15 +329,10 @@ describe('prepared graphics browser contract', () => {
   let renderer: Awaited<ReturnType<typeof Engine.create>> | undefined;
   let canvas: HTMLCanvasElement | undefined;
 
-  afterEach(async () => {
-    const activeRenderer = renderer;
+  afterEach(() => {
+    // Browser Mode files share Chromium's GPU process. Do not dispose the
+    // renderer here: that destroys the shared device for the next file.
     renderer = undefined;
-    if (activeRenderer !== undefined) {
-      // Wait while the device is still alive so RenderSystem can retire buffers
-      // before unconfigure tears down the browser's external WebGPU instance.
-      await waitForQueueCompletionSafely(activeRenderer.device);
-      activeRenderer.dispose();
-    }
     canvas?.remove();
     canvas = undefined;
   });

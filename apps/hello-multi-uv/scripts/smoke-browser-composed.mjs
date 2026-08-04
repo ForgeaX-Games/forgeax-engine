@@ -416,7 +416,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
     return {
       before,
       after,
-      delta: changedPixels(before, after, inheritanceDepthPost ? 0 : 12),
+      delta: changedPixels(before, after, liveMaterialScenario ? 0 : 12),
       beforeEvidence,
       afterEvidence,
       rhi,

@@ -48,6 +48,7 @@ import {
   ManagedBufferOutOfBoundsError,
   RemoveEssentialComponentError,
   StaleEntityError,
+  validateEnumFieldValues,
 } from './errors';
 import type { ErrorContext } from './schedule';
 import { Severity } from './schedule';
@@ -395,6 +396,15 @@ export class WorldComponentAccess {
     const sharedErr = validateSharedFieldValues(component, value as Record<string, unknown>);
     if (sharedErr !== null) {
       return err(sharedErr as unknown as EcsError);
+    }
+    const currentValue = this.storage.readRow(arch, component, rec.row) as Record<string, unknown>;
+    const enumErr = validateEnumFieldValues(
+      component,
+      { ...currentValue, ...(value as Record<string, unknown>) },
+      entity as number,
+    );
+    if (enumErr !== null) {
+      return err(enumErr as unknown as EcsError);
     }
     const onDiscard = (component as Component).onDiscard;
     const onInsert = (component as Component).onInsert;
@@ -1012,6 +1022,14 @@ export class WorldComponentAccess {
     if (sharedErr !== null) {
       return err(sharedErr as unknown as EcsError);
     }
+    const filled = fillComponentDefaults(
+      componentData.component,
+      componentData.data as Record<string, unknown>,
+    );
+    const enumErr = validateEnumFieldValues(componentData.component, filled, entity as number);
+    if (enumErr !== null) {
+      return err(enumErr as unknown as EcsError);
+    }
 
     // Check if entity already has this component (using World-local ID).
     const localId = componentData.component.id;
@@ -1063,10 +1081,6 @@ export class WorldComponentAccess {
     // as spawn / SceneAsset.instantiate (feat-20260517 / M2 / AC-04
     // research §F4 auto-symmetry; ComponentData<S>['data'] is the
     // physical bridge).
-    const filled = fillComponentDefaults(
-      componentData.component,
-      componentData.data as Record<string, unknown>,
-    );
     this.storage.writeRow(targetArch, componentData.component, rec.row, filled as ShapeOf<S>);
     const onAdd = (componentData.component as Component).onAdd;
     if (onAdd) onAdd(entity, filled as Record<string, unknown>);

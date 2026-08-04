@@ -38,6 +38,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createApp, inputPlugin } from '../src/index';
 import type { App, AppError } from '../src/types';
 
+// Browser Mode files share Chromium's GPU process. Keep the canvas-form
+// renderer rooted after its lifecycle assertion so releasing the last app
+// reference cannot report a shared-device loss to the next file.
+const retainedCanvasApps: Array<{ readonly app: App; readonly canvas: HTMLCanvasElement }> = [];
+
 // -------- helpers ----------------------------------------------------
 
 interface FakeRendererState {
@@ -288,11 +293,13 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
       canvas.width = 64;
       canvas.height = 64;
       document.body.appendChild(canvas);
+      let retainCanvas = false;
       try {
         const result = await createApp(canvas);
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
+        const disposeSpy = vi.spyOn(app.renderer, 'dispose').mockImplementation(() => {});
         // Replace renderer's onError with a controllable one before start
         // is not possible here -- the real renderer is wired. Instead, we
         // assert the canvas-form path engages cleanup on stop; the
@@ -303,11 +310,15 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         const stopResult = app.stop();
         expect(stopResult.ok).toBe(true);
+        expect(disposeSpy).toHaveBeenCalledTimes(1);
         // cleanup funnel reached removeSystem at least once with the
         // scan system name (R-4 cleanup proxy).
         expect(removeSpy).toHaveBeenCalledWith(Update, FRAME_START_SCAN_SYSTEM_NAME);
+        disposeSpy.mockRestore();
+        retainedCanvasApps.push({ app, canvas });
+        retainCanvas = true;
       } finally {
-        canvas.remove();
+        if (!retainCanvas) canvas.remove();
       }
     } finally {
       removeSpy.mockRestore();

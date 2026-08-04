@@ -1105,6 +1105,11 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const featureHostResult = createRenderFeatureHost(internals.options?.features ?? []);
   if (!featureHostResult.ok) throw featureHostResult.error;
   internals.featureHost = featureHostResult.value;
+  const requiredMaterialShaders = Object.freeze([
+    ...new Set(
+      featureHostResult.value.features.flatMap((feature) => feature.requiredMaterialShaders ?? []),
+    ),
+  ]);
   // Lazy ShaderRegistry instance (plan-strategy section S-10 / D-R10 / OQ-5
   // close): constructed on first access; subsequent accesses return the
   // same instance.
@@ -1324,7 +1329,10 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // because the prewarm step runs strictly before the first frame's
   // `getMaterialShaderPipeline` lookup that would consume it).
   const materialShaderPipelineCache = new Map<string, RenderPipeline>();
-  let group0MaterialLayout: { pipelineLayout: PipelineLayout } | null = null;
+  let group0MaterialLayout: {
+    materialBgl: BindGroupLayout;
+    pipelineLayout: PipelineLayout;
+  } | null = null;
   // feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): per-shader material
   // BGL + pipeline layout cache. A custom material shader declaring >3
   // user-region textures (e.g. parallax `heightTexture`) needs a material BGL
@@ -1337,7 +1345,10 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     string,
     { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout }
   >();
-  const getOrBuildGroup0MaterialLayout = (): { pipelineLayout: PipelineLayout } | null => {
+  const getOrBuildGroup0MaterialLayout = (): {
+    materialBgl: BindGroupLayout;
+    pipelineLayout: PipelineLayout;
+  } | null => {
     if (group0MaterialLayout !== null) return group0MaterialLayout;
     if (pipelineState === null) return null;
     const bglRes = internals.device.createBindGroupLayout({ entries: [] });
@@ -1353,7 +1364,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       internals.errorRegistry.fire(plRes.error);
       return null;
     }
-    group0MaterialLayout = { pipelineLayout: plRes.value };
+    group0MaterialLayout = { materialBgl: bglRes.value, pipelineLayout: plRes.value };
     return group0MaterialLayout;
   };
   // Returns the per-shader { materialBgl, pipelineLayout } for a custom shader
@@ -1423,6 +1434,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       gpuStore,
       internals.pack.createShaderModule,
       internals.errorRegistry,
+      requiredMaterialShaders,
       // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 /
       // T-M2-05 + M3 / T-M3-04: callback set by buildReadyWebGPU once
       // meshSsboController is wired. Both the grow hook AND the read-only
@@ -2093,11 +2105,17 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   };
   // feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): expose the per-shader
   // material BGL so the record stage creates the material bind group against
-  // the matching layout (wider for >3-texture custom shaders). Returns
-  // undefined for 3-texture / unregistered shaders -> record falls back to the
-  // shared built-in materialBindGroupLayout.
-  const getMaterialBindGroupLayout = (materialShaderId: string): BindGroupLayout | undefined =>
-    getOrBuildPerShaderMaterialLayout(materialShaderId)?.materialBgl ?? undefined;
+  // the matching layout (empty for group-0 shaders, wider for >3-texture
+  // custom shaders). Returns undefined for the ordinary 3-texture path so the
+  // record stage falls back to the shared built-in materialBindGroupLayout.
+  const getMaterialBindGroupLayout = (materialShaderId: string): BindGroupLayout | undefined => {
+    const lookup = getShader().findMaterialArtifact(materialShaderId);
+    if (!lookup.ok) return undefined;
+    if (resolveMaterialShaderBindingContract(lookup.value.source) === 'group-0') {
+      return getOrBuildGroup0MaterialLayout()?.materialBgl;
+    }
+    return getOrBuildPerShaderMaterialLayout(materialShaderId)?.materialBgl ?? undefined;
+  };
   // feat-20260609 M4 / T-10-a: post-process pipeline factory backing
   // RenderSystemRuntime.getPostProcessPipeline. Solves M1 CONCERN-1: previously
   // the dispatcher in render-graph-primitives.ts passed `pipeline=null` to
@@ -2268,6 +2286,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     ready,
     get frustumStats() {
       return renderSystem.frustumStats;
+    },
+    get visibilityStats() {
+      return renderSystem.visibilityStats;
     },
     get perFramePassNames() {
       return renderSystem.perFramePassNames;
@@ -4184,6 +4205,12 @@ async function buildReadyWebGPU(
       ) => Promise<Result<ShaderModule, RhiError>>)
     | undefined,
   errorRegistry: RhiErrorListenerRegistry,
+  /**
+   * Material shader modules declared by producer features. These are compiled
+   * during Renderer.ready so prepared graphics do not fail on their first
+   * frame while the shared async shader adapter is still warming up.
+   */
+  requiredMaterialShaders: readonly string[],
   // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 /
   // T-M2-05 + M3 / T-M3-04: surface for setting `internals.growMeshSsbo`
   // + `internals.meshSsboState` so the record stage's
@@ -4621,6 +4648,33 @@ async function buildReadyWebGPU(
         brdfLut: iblBrdfLutEntry.wgsl,
       });
     }
+    // Producer-declared material shader modules use the same source and module
+    // label as getMaterialShaderPipeline. Prewarming them here keeps the
+    // renderer.ready barrier meaningful for prepared graphics: the first draw
+    // resolves a pipeline instead of publishing a transient preparation error.
+    for (const materialShaderId of requiredMaterialShaders) {
+      const lookup = registry.findMaterialArtifact(materialShaderId);
+      if (!lookup.ok) {
+        throw new RhiError({
+          code: 'shader-compile-failed',
+          expected: `declared render feature material shader '${materialShaderId}' is present in the loaded manifest`,
+          hint: `add material shader '${materialShaderId}' to the shader manifest or remove it from the feature declaration`,
+        });
+      }
+      const label = `module-${materialShaderId}`;
+      const shaderResult = await runShimStep(
+        () =>
+          asyncCreateShaderModule
+            ? asyncCreateShaderModule(rhiDevice, { code: lookup.value.source, label })
+            : invokeDeviceCreateShaderModule(rhiDevice, { code: lookup.value.source, label }),
+        'shader-compile-failed',
+        `declared render feature material shader '${materialShaderId}' compiled`,
+        `inspect the composed WGSL for '${materialShaderId}' and check device.features`,
+      );
+      if (!shaderResult.ok) throw shaderResult.error;
+      seedShaderModule(label, shaderResult.value);
+    }
+
     const pbrShaderResult = await runShimStep(
       () =>
         asyncCreateShaderModule
