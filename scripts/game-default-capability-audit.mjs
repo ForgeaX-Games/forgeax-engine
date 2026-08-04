@@ -24,6 +24,7 @@ const adoptionPath = resolve(
 );
 const templateRoot = join(repoRoot, 'templates', 'game-default');
 const harnessRoot = join(repoRoot, '.forgeax-harness');
+const ignoredMissingEvidence = [];
 
 const sources = [];
 const candidates = [];
@@ -389,9 +390,25 @@ function validateAdoptionShape(value, label) {
 
 function validateEvidencePaths(value, label) {
   for (const evidence of value.evidence ?? []) {
-    if (evidence.includes('/') && !existsSync(join(repoRoot, evidence))) {
+    if (!evidence.includes('/') || existsSync(join(repoRoot, evidence))) continue;
+    if (isIgnoredPath(evidence)) {
+      ignoredMissingEvidence.push({ label, path: evidence });
+      continue;
+    }
+    if (evidence.includes('/')) {
       throw new Error(`${label} evidence path does not exist: ${evidence}`);
     }
+  }
+}
+
+function isIgnoredPath(path) {
+  try {
+    execFileSync('git', ['-C', repoRoot, 'check-ignore', '--no-index', '--quiet', '--', path], {
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -443,6 +460,7 @@ function adoptionSummary(adoption, candidates) {
     declaredCount: declared.length,
     missingCandidateIds: missing.map((candidate) => candidate.id).sort(),
     detected: missing.length > 0,
+    ignoredMissingEvidence,
   };
 }
 

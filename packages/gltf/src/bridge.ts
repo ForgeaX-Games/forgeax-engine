@@ -816,6 +816,7 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
 
   return {
     kind: 'material',
+    colorSpace: 'linear',
     ...(ctx?.standardRootGuid === undefined ? {} : { parent: ctx.standardRootGuid }),
     passes: [pass],
     values,

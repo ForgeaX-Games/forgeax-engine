@@ -20,6 +20,7 @@
   "scripts": { "build": "tsup", "test": "vitest run" },
   "dependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-debug-draw": "workspace:*",

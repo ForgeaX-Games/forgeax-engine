@@ -7,6 +7,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import { createProfiler } from '@forgeax/engine-profiler';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { RemoteError } from '../errors';
@@ -72,6 +73,7 @@ import { type ConsoleHandle, startServer } from '../server';
       world?: unknown;
       renderer?: unknown;
       assets?: unknown;
+      profiler?: unknown;
     } = {},
   ): Promise<void> {
     const startResult = await startServer({
@@ -80,6 +82,7 @@ import { type ConsoleHandle, startServer } from '../server';
       world: opts.world ?? {},
       renderer: opts.renderer,
       assets: opts.assets,
+      profiler: opts.profiler,
     });
     if (!startResult.ok) {
       throw startResult.error;
@@ -205,6 +208,82 @@ import { type ConsoleHandle, startServer } from '../server';
         expect(errCodes.has(-32004)).toBe(true);
         ws.close();
       });
+    });
+
+    it('projects the opted-in profiler root and bounded capture capability', async () => {
+      const profiler = createProfiler();
+      await withServer(
+        async (handle) => {
+          const ws = await connect(handle.port);
+          const introspection = await send(ws, { jsonrpc: '2.0', method: 'introspect', id: 13 });
+          const doc = introspection.result as {
+            roots: Record<string, { available: boolean; capability?: string }>;
+            capabilities: { profiler: { enabled: boolean; limits: Record<string, unknown> } };
+          };
+          expect(doc.roots.profiler).toMatchObject({
+            available: true,
+            capability: 'cpu-profile-v1',
+          });
+          expect(doc.capabilities.profiler).toMatchObject({
+            enabled: true,
+            limits: { frameLimit: 'positive-safe-integer', eventLimit: 'positive-safe-integer' },
+          });
+
+          const started = await send(ws, {
+            jsonrpc: '2.0',
+            method: 'eval',
+            params: { script: 'profiler.startCapture({ frameLimit: 1, eventLimit: 8 })' },
+            id: 14,
+          });
+          expect(started.result).toMatchObject({ ok: true, value: { captureId: 'capture-0001' } });
+          ws.close();
+        },
+        { profiler },
+      );
+    });
+
+    it('omits an unconfigured profiler root and publishes an enablement hint', async () => {
+      await withServer(async (handle) => {
+        const ws = await connect(handle.port);
+        const response = await send(ws, { jsonrpc: '2.0', method: 'introspect', id: 15 });
+        const doc = response.result as {
+          roots: Record<string, unknown>;
+          capabilities: { profiler: { enabled: boolean; code: string; hint: string } };
+        };
+        expect(doc.roots.profiler).toBeUndefined();
+        expect(doc.capabilities.profiler).toMatchObject({
+          enabled: false,
+          code: 'profiler-not-enabled',
+        });
+        expect(doc.capabilities.profiler.hint).toContain('profiler');
+        ws.close();
+      });
+    });
+
+    it('returns the profiler-owned structured not-enabled result through eval', async () => {
+      const profiler = createProfiler({ enabled: false });
+      await withServer(
+        async (handle) => {
+          const ws = await connect(handle.port);
+          const response = await send(ws, {
+            jsonrpc: '2.0',
+            method: 'eval',
+            params: { script: 'profiler.startCapture({ frameLimit: 1, eventLimit: 8 })' },
+            id: 16,
+          });
+          expect(response.result).toMatchObject({
+            ok: false,
+            error: {
+              code: 'profiler-not-enabled',
+              expected: expect.any(String),
+              hint: expect.any(String),
+              detail: { enabled: false },
+            },
+          });
+          ws.close();
+        },
+        { profiler },
+      );
     });
   });
 

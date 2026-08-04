@@ -30,7 +30,12 @@ import { createAssetChangedEvent, emitAssetChanged } from './dev/asset-change-ev
 import { publishImportPublication } from './dev/import-publication.js';
 import { createPackageRoutes } from './dev/package-routes.js';
 import { createUiDependencyIndex } from './dev/ui-dependency-index.js';
-import { buildGuidToMetaMap, buildUrlToAbsolute, watchDevRoots } from './dev/watcher.js';
+import {
+  buildGuidToMetaMap,
+  buildUrlToAbsolute,
+  type WatchBatch,
+  watchDevRoots,
+} from './dev/watcher.js';
 import {
   productAssetByGuid,
   productAssetsByGuid,
@@ -73,6 +78,35 @@ export {
 // `import { PackIndexEntry } from '@forgeax/engine-vite-plugin-pack'` paths
 // working without a same-PR API break.
 export type { PackIndexEntry };
+
+/** Preserve the published Catalog LKG while a source is invalidated. */
+export function preserveInvalidatedCatalogLkg(
+  previousCatalog: readonly PackIndexEntry[],
+  nextCatalog: readonly PackIndexEntry[],
+  invalidatedGuids: ReadonlySet<string>,
+): PackIndexEntry[] {
+  const previousByGuid = new Map(previousCatalog.map((row) => [row.guid.toLowerCase(), row]));
+  return nextCatalog.map((row) => {
+    const previous = previousByGuid.get(row.guid.toLowerCase());
+    const previousLkg = previous?.projection?.lastKnownGood?.packageUrl;
+    if (
+      row.projection === undefined ||
+      (!invalidatedGuids.has(row.guid.toLowerCase()) && previousLkg === undefined)
+    ) {
+      return row;
+    }
+    const lastKnownGood =
+      previousLkg ?? (previous?.lifecycle === 'current' ? previous.packageUrl : undefined);
+    if (lastKnownGood === undefined) return row;
+    return {
+      ...row,
+      projection: {
+        ...row.projection,
+        lastKnownGood: { packageUrl: lastKnownGood },
+      },
+    };
+  });
+}
 
 const COOKED_CURRENT_PROJECTION = {
   ...currentProjectionFor('imported-output', 'cooked'),
@@ -563,7 +597,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     if (already !== undefined) return [already];
     const raw = catalog.find((e) => e.guid.toLowerCase() === guidLower);
     if (raw === undefined) return [];
-    const imported = await importTextureEntry(raw, { cwd: process.cwd() });
+    const imported = await importTextureEntry(raw, {
+      cwd: process.cwd(),
+      metaPath: guidToMeta.get(guidLower),
+    });
     if ('skipped' in imported) {
       // Fail-fast (architecture-principles §5), mirroring the per-meta path's
       // `throw runResult.error`: a REAL cook failure (source read / decode /
@@ -665,6 +702,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // imported bytes live in the DDC (binAbs), keyed into urlToAbs below by the
       // `.bin` packageUrl.
       sourcePath: raw.sourcePath,
+      // Preserve the producer-owned display name across the lazy-import
+      // projection. The raw catalog already derives this from the authored
+      // source (`sky.hdr` for a single-asset HDR); dropping it here makes the
+      // runtime identity fall back to the generated DDC package filename.
+      ...(raw.name !== undefined ? { name: raw.name } : {}),
       ...COOKED_CURRENT_PROJECTION,
     };
     importedRows.set(guidLower, importedRow);
@@ -876,6 +918,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // baseColors). Mirrors the generateBundle build-mode arm.
         const importedAsset = productAssetByGuid(runResult.value.product, guidLower);
         const importedRow: PackIndexEntry = {
+          ...raw,
           guid: raw.guid,
           packageUrl: packUrl ?? raw.packageUrl,
           kind: raw.kind,
@@ -914,6 +957,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         const importedRow: PackIndexEntry =
           packUrl !== undefined
             ? {
+                ...raw,
                 guid: raw.guid,
                 packageUrl: packUrl,
                 kind: raw.kind,
@@ -972,6 +1016,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         pack,
         previousCatalog,
         nextCatalog: catalog,
+        publishedGuids: allEntries.map((entry) => entry.guid),
         onDelta: (delta) => publishCatalogDelta?.(delta),
       });
       if (!publication.ok) {
@@ -986,6 +1031,18 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           detail: { reason: publication.error.detail },
         });
       }
+      catalog = [...publication.catalog];
+      catalogProjection = { ...catalogProjection, entries: catalog };
+      const publishedRows = new Map(
+        publication.catalog.map((entry) => [entry.guid.toLowerCase(), entry]),
+      );
+      for (let index = 0; index < allEntries.length; index += 1) {
+        const current = allEntries[index];
+        if (current === undefined) continue;
+        const projected = publishedRows.get(current.guid.toLowerCase());
+        if (projected !== undefined) allEntries[index] = projected;
+      }
+      for (const entry of allEntries) importedRows.set(entry.guid.toLowerCase(), entry);
     }
 
     return allEntries;
@@ -1165,6 +1222,25 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     };
     // Async startup: scan roots to build the initial catalog.
     const { roots } = resolvePackBuildInputs(opts);
+    // Install the watcher before the async initial scan. A host can edit an
+    // asset as soon as the dev server exists; delaying watch registration until
+    // the scan resolves loses that first mutation (and its refresh signal).
+    let resolveStartupReady!: () => void;
+    const startupReady = new Promise<void>((resolve) => {
+      resolveStartupReady = resolve;
+    });
+    let applyWatchBatch: ((batch: WatchBatch) => Promise<void>) | undefined;
+    let serialBatches = Promise.resolve();
+    watchDevRoots({
+      roots,
+      onBatch: (batch) => {
+        serialBatches = serialBatches.then(async () => {
+          await startupReady;
+          await applyWatchBatch?.(batch);
+        });
+        return serialBatches;
+      },
+    });
     Promise.all([
       buildCatalogProjection(roots, opts.base, registeredImporterKeys),
       buildGuidToMetaMap(roots),
@@ -1188,99 +1264,107 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         });
         catalogReady = true;
 
-        watchDevRoots({
-          roots,
-          onBatch: async ({ sidecars, sources }) => {
-            let catalogChanged = false;
-            // A source edit invalidates the dev DDC overlay for rows whose
-            // declaring source changed. Without this, the full-reload signal
-            // reaches the browser but POST /__import returns the stale
-            // imported row from `importedRows` before the importer runs again.
-            // Resolve both watcher-relative filenames and catalog-relative
-            // source paths against their owning roots/cwd so this remains
-            // correct for roots outside the Vite project directory.
-            const changedSourcePaths = new Set<string>();
-            for (const info of sources) {
-              changedSourcePaths.add(resolve(info.filename));
-              for (const root of roots) changedSourcePaths.add(resolve(root, info.filename));
-            }
-            const invalidatedPackUrls = new Set<string>();
-            for (const [guid, row] of importedRows) {
-              if (!changedSourcePaths.has(resolve(process.cwd(), row.sourcePath))) continue;
-              invalidatedPackUrls.add(row.packageUrl);
-              importedRows.delete(guid);
-            }
-            for (const packageUrl of invalidatedPackUrls) metaPackBodies.delete(packageUrl);
-            const importedRowsInvalidated = invalidatedPackUrls.size > 0;
+        applyWatchBatch = async ({ sidecars, sources }) => {
+          let catalogChanged = false;
+          // A source edit invalidates the dev DDC overlay for rows whose
+          // declaring source changed. Without this, the full-reload signal
+          // reaches the browser but POST /__import returns the stale
+          // imported row from `importedRows` before the importer runs again.
+          // Resolve both watcher-relative filenames and catalog-relative
+          // source paths against their owning roots/cwd so this remains
+          // correct for roots outside the Vite project directory.
+          const changedSourcePaths = new Set<string>();
+          for (const info of sources) {
+            changedSourcePaths.add(resolve(info.filename));
+            for (const root of roots) changedSourcePaths.add(resolve(root, info.filename));
+          }
+          const invalidatedPackUrls = new Set<string>();
+          const invalidatedGuids = new Set<string>();
+          for (const [guid, row] of importedRows) {
+            if (!changedSourcePaths.has(resolve(process.cwd(), row.sourcePath))) continue;
+            invalidatedPackUrls.add(row.packageUrl);
+            invalidatedGuids.add(guid);
+            importedRows.delete(guid);
+          }
+          for (const packageUrl of invalidatedPackUrls) metaPackBodies.delete(packageUrl);
+          const importedRowsInvalidated = invalidatedPackUrls.size > 0;
 
-            if (sidecars.length > 0 || importedRowsInvalidated) {
-              const previousCatalog = catalog;
-              try {
-                const [rawProjection2, g2m2] = await Promise.all([
-                  buildCatalogProjection(roots, opts.base, registeredImporterKeys),
-                  buildGuidToMetaMap(roots),
-                ]);
-                installCatalogProjection({
-                  ...rawProjection2,
-                  entries: await publishAuthoredDevPacks(rawProjection2.entries),
-                });
-                guidToMeta = g2m2;
-                urlToAbs = buildUrlToAbsolute(catalog, {
-                  cwd: process.cwd(),
-                  ddcPath: (guid) => ddcPath(process.cwd(), guid),
-                });
-                const delta = calculateCatalogDelta(previousCatalog, catalog);
-                if (delta !== undefined) {
-                  catalogChanged = true;
-                  server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: delta });
-                }
-              } catch (err: unknown) {
-                console.warn('[forgeax-pack] rebuild catalog error:', err);
+          // Rebuild on every source event, even after the failed import has
+          // already removed importedRows. The recovery upload still needs to
+          // carry the previous Catalog LKG into the fresh missing row.
+          if (sidecars.length > 0 || sources.length > 0 || importedRowsInvalidated) {
+            const previousCatalog = catalog;
+            try {
+              const [rawProjection2, g2m2] = await Promise.all([
+                buildCatalogProjection(roots, opts.base, registeredImporterKeys),
+                buildGuidToMetaMap(roots),
+              ]);
+              installCatalogProjection({
+                ...rawProjection2,
+                entries: preserveInvalidatedCatalogLkg(
+                  previousCatalog,
+                  await publishAuthoredDevPacks(rawProjection2.entries),
+                  invalidatedGuids,
+                ),
+              });
+              guidToMeta = g2m2;
+              urlToAbs = buildUrlToAbsolute(catalog, {
+                cwd: process.cwd(),
+                ddcPath: (guid) => ddcPath(process.cwd(), guid),
+              });
+              const delta = calculateCatalogDelta(previousCatalog, catalog);
+              if (delta !== undefined) {
+                catalogChanged = true;
+                server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: delta });
               }
+            } catch (err: unknown) {
+              console.warn('[forgeax-pack] rebuild catalog error:', err);
             }
-            if (opts.refresh !== undefined) opts.refresh(server);
-            else {
-              const hasCatalogSidecar = sidecars.some(
-                (info) =>
-                  info.filename.endsWith('.meta.json') || info.filename.endsWith('.pack.json'),
-              );
-              if (!catalogChanged && !hasCatalogSidecar) server.ws?.send({ type: 'full-reload' });
-            }
-            const revision = Date.now();
-            for (const info of sidecars) {
-              emitAssetChanged(server, info.filename, info.eventType, 'sidecar');
-              const event = createAssetChangedEvent({
-                file: info.filename,
-                event: info.eventType,
-                kind: 'sidecar',
-                sourcePath: info.filename,
-                revision,
-                guids: uiDependencies.guidsForSource(info.filename),
-              });
-              if (event !== undefined) server.ws?.send(event);
-            }
-            for (const info of sources) {
-              emitAssetChanged(server, info.filename, info.eventType, 'source');
-              const event = createAssetChangedEvent({
-                file: info.filename,
-                event: info.eventType,
-                kind: 'source',
-                sourcePath: info.filename,
-                revision,
-                guids: uiDependencies.guidsForSource(info.filename),
-              });
-              if (event !== undefined) server.ws?.send(event);
-            }
-            const parts: string[] = [];
-            if (sidecars.length > 0) parts.push(`${sidecars.length} sidecar`);
-            if (sources.length > 0) parts.push(`${sources.length} source`);
-            console.warn(`[forgeax-pack] assets changed: ${parts.join(', ')} (reloaded)`);
-          },
-        });
+          }
+          if (opts.refresh !== undefined) opts.refresh(server);
+          else {
+            const hasCatalogSidecar = sidecars.some(
+              (info) =>
+                info.filename.endsWith('.meta.json') || info.filename.endsWith('.pack.json'),
+            );
+            if (!catalogChanged && !hasCatalogSidecar) server.ws?.send({ type: 'full-reload' });
+          }
+          const revision = Date.now();
+          for (const info of sidecars) {
+            emitAssetChanged(server, info.filename, info.eventType, 'sidecar');
+            const event = createAssetChangedEvent({
+              file: info.filename,
+              event: info.eventType,
+              kind: 'sidecar',
+              sourcePath: info.filename,
+              revision,
+              guids: uiDependencies.guidsForSource(info.filename),
+            });
+            if (event !== undefined) server.ws?.send(event);
+          }
+          for (const info of sources) {
+            emitAssetChanged(server, info.filename, info.eventType, 'source');
+            const event = createAssetChangedEvent({
+              file: info.filename,
+              event: info.eventType,
+              kind: 'source',
+              sourcePath: info.filename,
+              revision,
+              guids: uiDependencies.guidsForSource(info.filename),
+            });
+            if (event !== undefined) server.ws?.send(event);
+          }
+          const parts: string[] = [];
+          if (sidecars.length > 0) parts.push(`${sidecars.length} sidecar`);
+          if (sources.length > 0) parts.push(`${sources.length} source`);
+          console.warn(`[forgeax-pack] assets changed: ${parts.join(', ')} (reloaded)`);
+        };
+        resolveStartupReady();
       })
       .catch((err: unknown) => {
         console.warn('[forgeax-pack] startup scan error:', err);
         catalogReady = true;
+        resolveStartupReady();
       });
 
     // Register connect middleware for /__pack/* routes + the
@@ -1757,7 +1841,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // `{ skipped }` for any row that is not an importable image / .hdr
       // (non-texture kind, missing metadata, unknown extension, importer
       // throw, or absent produced asset) -- pass those through unchanged.
-      const imported = await importTextureEntry(entry, { cwd });
+      const imported = await importTextureEntry(entry, {
+        cwd,
+        metaPath: guidToMetaBuild.get(entry.guid.toLowerCase()),
+      });
       if ('skipped' in imported) {
         // Surface real import failures as a warning; silent pass-through for
         // benign non-importable rows (non-texture / unknown extension). The
@@ -1860,10 +1947,15 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       });
       const texturePackageUrl = texturePackage.packageUrl;
       importedEntries.push({
-        guid: entry.guid,
+        // Keep the catalog's producer-owned identity/projection facts when the
+        // package URL moves from authored source to the shipped DDC package.
+        // Rebuilding this row from only four fields made production builds
+        // lose `name`, `sourcePath`, and imported-output lifecycle evidence;
+        // runtime then fell back to the generated GUID pack filename even
+        // though the authored source was still `sky.hdr`.
+        ...entry,
         packageUrl: texturePackageUrl,
-        kind: entry.kind,
-        sourcePath: entry.sourcePath,
+        ...COOKED_CURRENT_PROJECTION,
       });
     }
 

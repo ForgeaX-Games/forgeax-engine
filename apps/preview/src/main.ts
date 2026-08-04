@@ -21,7 +21,9 @@ import {
   loadGame,
 } from '@forgeax/engine-app';
 import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { physicsPlugin } from '@forgeax/engine-physics';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createPreviewInspection } from './preview-inspection';
 import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -35,7 +37,7 @@ const previewRun = createPreviewUiRun(canvas.parentElement ?? document.body);
 // Absent transport => any DDC miss fails fast with 'asset-not-imported'.
 const app = await createApp(
   canvas,
-  { uiRoot: previewRun.uiRoot, plugins: [audioPlugin()] },
+  { uiRoot: previewRun.uiRoot, plugins: [audioPlugin(), physicsPlugin('rapier-3d')] },
   {
     ...forgeaxBundlerAdapter(),
     importTransport: createDevImportTransport(),
@@ -51,6 +53,7 @@ if (!app.ok) {
 async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   const assets = app.renderer.assets;
   assets.configurePackIndex('/pack-index.json');
+  const previewInspection = createPreviewInspection(app, previewRun.registerCleanup);
 
   const ctx: BootstrapContext = {
     assets,
@@ -63,6 +66,7 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
     setPointerLockAllowed: (allowed: boolean) => app.input?.setPointerLockAllowed?.(allowed),
     uiRoot: previewRun.uiRoot,
     registerCleanup: previewRun.registerCleanup,
+    gameProjection: previewInspection.registrar,
   };
 
   const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
@@ -96,6 +100,7 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   // Graceful GPU shutdown: dispose before reload. Without this, rapid reloads
   // leak GPU contexts -> STATUS_ACCESS_VIOLATION.
   let disposed = false;
+  const reportedAppErrorCodes = new Set<string>();
   const gracefulDispose = (): void => {
     if (disposed) return;
     disposed = true;
@@ -110,6 +115,11 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   });
   window.addEventListener('pagehide', gracefulDispose);
   app.onError((err: { code?: string }) => {
+    const code = err.code ?? 'unknown';
+    if (!reportedAppErrorCodes.has(code)) {
+      reportedAppErrorCodes.add(code);
+      console.error(`[preview] app error: ${JSON.stringify(err)}`);
+    }
     if (err.code === 'device-lost') {
       window.parent?.postMessage({ type: 'VAG_DEVICE_LOST' }, '*');
     }

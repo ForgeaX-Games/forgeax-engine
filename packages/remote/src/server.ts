@@ -14,6 +14,7 @@ import type { WebSocket } from 'ws';
 import { WebSocketServer } from 'ws';
 import { REMOTE_ERROR_CODE_TO_JSONRPC, RemoteError, type RemoteErrorCode } from './errors';
 import { executeScript } from './execute';
+import { buildIntrospectDoc, isProfilerRoot } from './introspect';
 
 const REMOTE_TO_JSONRPC = REMOTE_ERROR_CODE_TO_JSONRPC;
 
@@ -39,6 +40,8 @@ export type StartServerOptions = {
   readonly world: unknown;
   readonly renderer?: unknown;
   readonly assets?: unknown;
+  /** Explicit CPU profiler capability; omitted unless the host opts in. */
+  readonly profiler?: unknown;
   /**
    * Live DebugRhiAdapter for eval-scope injection (plan-strategy D-4).
    * When present, eval scripts can call debugAdapter.captureFrame({...})
@@ -65,51 +68,6 @@ type JsonRpcResponse = {
   jsonrpc: '2.0';
   id: number | string | null;
 } & ({ result: unknown } | { error: JsonRpcError });
-
-function buildIntrospectDoc(host: string, port: number): unknown {
-  const errors: Record<string, { code: number; message: string }> = {};
-  for (const [code, num] of Object.entries(REMOTE_TO_JSONRPC) as Array<[RemoteErrorCode, number]>) {
-    errors[code] = { code: num, message: REMOTE_CODE_MESSAGE[code] };
-  }
-  return {
-    openrpc: '1.3.2',
-    info: {
-      title: '@forgeax/engine-remote remote eval',
-      version: '0.0.0',
-      description:
-        'Remote eval server. Methods: eval / introspect. Errors map to JSON-RPC -32001..-32006.',
-    },
-    servers: [{ name: 'in-process', url: `ws://${host}:${port}/inspector` }],
-    methods: [
-      {
-        name: 'eval',
-        summary: 'Evaluate a JavaScript script against world / renderer / assets.',
-        params: [
-          {
-            name: 'script',
-            required: true,
-            schema: { type: 'string' },
-          },
-        ],
-        result: { name: 'value', schema: { type: 'object' } },
-      },
-      {
-        name: 'introspect',
-        summary: 'Return this OpenRPC L2 subset document.',
-        params: [],
-        result: { name: 'document', schema: { type: 'object' } },
-      },
-    ],
-    components: {
-      schemas: {
-        World: { type: 'object', description: 'The host World instance.' },
-        Renderer: { type: 'object', description: 'The host Renderer instance.' },
-        Assets: { type: 'object', description: 'The host AssetRegistry instance.' },
-      },
-      errors,
-    },
-  };
-}
 
 function inspectorErrorToJsonRpc(e: RemoteError): JsonRpcError {
   const detail = (e as unknown as { detail?: unknown }).detail;
@@ -155,6 +113,7 @@ async function handleEnvelope(
     renderer: unknown;
     assets: unknown;
     debugAdapter: unknown | undefined;
+    profiler: unknown | undefined;
     host: string;
     port: number;
   },
@@ -174,7 +133,16 @@ async function handleEnvelope(
 
   let response: JsonRpcResponse;
   if (parsed.method === 'introspect') {
-    response = respondOk(id, buildIntrospectDoc(ctx.host, ctx.port));
+    response = respondOk(
+      id,
+      buildIntrospectDoc(ctx.host, ctx.port, {
+        world: ctx.world,
+        renderer: ctx.renderer,
+        assets: ctx.assets,
+        ...(ctx.debugAdapter !== undefined ? { debugAdapter: ctx.debugAdapter } : {}),
+        ...(ctx.profiler !== undefined ? { profiler: ctx.profiler } : {}),
+      }),
+    );
   } else if (parsed.method === 'eval') {
     const params = parsed.params as { script?: unknown } | undefined;
     const script = params?.script;
@@ -186,6 +154,7 @@ async function handleEnvelope(
         renderer: ctx.renderer,
         assets: ctx.assets,
         debugAdapter: ctx.debugAdapter,
+        profiler: ctx.profiler,
       });
       if (result.ok) {
         response = respondOk(id, result.value);
@@ -223,6 +192,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
     const renderer = opts.renderer ?? {};
     const assets = opts.assets ?? {};
     const debugAdapter = opts.debugAdapter;
+    const profiler = isProfilerRoot(opts.profiler) ? opts.profiler : undefined;
     let settled = false;
     let boundPort = opts.port;
 
@@ -255,6 +225,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
           renderer,
           assets,
           debugAdapter,
+          profiler,
           host,
           port: boundPort,
         })

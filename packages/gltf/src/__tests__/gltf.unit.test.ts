@@ -2380,6 +2380,24 @@ import {
         expect(animEntries[0]?.sourceIndex).toBe(0);
       });
 
+      it('uses animation names for stable source keys', () => {
+        const doc = makeFixtureDoc();
+        const clip = doc.animationClips[0];
+        expect(clip).toBeDefined();
+        if (clip === undefined) return;
+        const named = {
+          ...doc,
+          animationClips: [
+            { ...clip, name: 'Walk' },
+            { ...clip, name: 'Run' },
+          ],
+        };
+        const { subAssets } = toAssetPack(named, undefined, 'test.gltf');
+        expect(
+          subAssets.filter((s) => s.kind === 'animation-clip').map((s) => s.sourceKey),
+        ).toEqual(['animation-clip:Walk', 'animation-clip:Run']);
+      });
+
       it('reimport with same content produces identical GUIDs', () => {
         const doc = makeFixtureDoc();
         const first = toAssetPack(doc, undefined, 'test.gltf');

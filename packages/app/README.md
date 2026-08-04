@@ -29,6 +29,36 @@ app.start().unwrap();
 
 The canvas form creates a World, renderer, default plugins, browser input backend, and rAF loop. Handle the `Result` before calling `start`.
 
+## Renderer feature passthrough
+
+`CreateAppOptions.features` is the transparent app seam for producer-owned
+renderer features. The array is forwarded to the existing renderer options
+without reordering, copying, or adding an App-level VFX branch. A feature host
+therefore remains the owner of its feature and lifecycle:
+
+```ts
+import { createApp } from '@forgeax/engine-app';
+import { createParticleRuntimeHost } from '@forgeax/engine-vfx-render';
+
+declare const canvas: HTMLCanvasElement;
+declare const camera: import('@forgeax/engine-vfx-render').ParticleRenderFeatureOptions['camera'];
+declare const bundler: import('@forgeax/engine-app').BundlerOptions;
+
+const vfxHost = createParticleRuntimeHost({ camera });
+const result = await createApp(canvas, { features: [vfxHost.feature] }, bundler);
+if (!result.ok) {
+  console.error(result.error.code, result.error.hint);
+  throw result.error;
+}
+result.value.start().unwrap();
+```
+
+The app does not attach a VFX World or registry. Call
+`vfxHost.attachWorld({ world, assets })` before the first update and
+`vfxHost.detachWorld({ world })` during teardown. Inspect structured Result
+errors by `code`, `expected`, `actual`, and `hint`; do not treat a successful App
+construction as proof that a particle asset is ready or visible.
+
 ## Frame-loop responsibility
 
 Every frame follows one host-owned sequence:
@@ -52,24 +82,45 @@ if (!started.ok) console.error(started.error.code, started.error.hint);
 // Later: unlisten(); app.stop();
 ```
 
-## Opt-in frame phase diagnostics
-
-Performance tooling may pass a `FramePhaseObserver` through the canvas or assemble options. The
-engine emits boundaries for `frame-total`, `world-update-primary`, `draw-source`,
-`world-update-injected`, and `renderer-draw`, with a monotonically increasing `frameSeq` for each
-frame. The observer is default-off, receives no engine timing policy, and is isolated so an observer
-failure cannot alter the frame loop. A browser host may translate these events into User Timing or
-another diagnostic format; production callers should omit the option.
+Hosts that discover additional Worlds during bootstrap can update the routing pull
+without creating a second frame loop:
 
 ```ts
-const result = await createApp(canvas, {
-  framePhaseObserver: {
-    onEvent: (event) => performance.mark(
-      `forgeax.frame.${event.frameSeq}.${event.phase}.${event.boundary}`,
-    ),
-  },
-});
+app.setDrawSource(() => ({
+  worlds: [app.world, overlayWorld],
+  cameraOwner: 0,
+  resourceOwner: 0,
+}));
+// `app.setDrawSource(undefined)` restores the single-world path.
 ```
+
+The injected Worlds are updated by the same frame loop before the renderer draw;
+the setter changes only draw routing, while each World retains its own time policy.
+
+## Opt-in CPU profiling
+
+Performance tooling passes one `Profiler` capability through the canvas or assemble options. App
+and Render write bounded records into that capability only while a capture is active; default App
+construction has no profiler work and no capture artifact.
+
+```ts
+import { createProfiler } from '@forgeax/engine-profiler';
+
+const profiler = createProfiler();
+const result = await createApp({ renderer, world, profiler });
+if (!result.ok) throw result.error;
+
+const started = profiler.startCapture({ frameLimit: 120, eventLimit: 1024 });
+if (!started.ok) throw started.error;
+// Run the App for the requested frames, then finish the bounded session.
+const capture = started.value.finish();
+if (!capture.ok) throw capture.error;
+```
+
+Read `profiler.phaseCatalog` for the owner-declared App and Render relation. Use
+`validateProfileCapture(capture.value)` before persisting or passing an artifact to the CLI. The
+profiler is a CPU diagnostic capability; it does not replace ECS schedules, GPU timestamps, or a
+browser UI.
 
 ## Time policy
 
@@ -167,9 +218,11 @@ owns its renderer, World, input backend, and explicit plugin source list.
 | `createApp(canvas, options?, bundler?)` | `Promise<Result<App, CanvasAppError>>` | Creates the canvas-form World, renderer, plugins, input, and frame loop. |
 | `createApp({ renderer, world, plugins?, ... })` | `Promise<Result<App, AssembleAppError>>` | Assembles host-owned renderer and World without replacing their policy. |
 | `CreateAppOptions.time` | `TimePolicy` | Policy used only for the newly created canvas-form World. |
+| `CreateAppOptions.features` | `readonly RenderFeature<unknown>[]` | Existing renderer feature seam, forwarded by reference and order. |
 | `App.start()` | `Result<void, AppError>` | Arms the rAF loop. |
 | `App.stop()` / `pause()` / `resume()` | `Result<void, AppError>` | Controls the rAF lifecycle. |
 | `App.onError(callback)` | `() => void` | Subscribes to structured World and renderer failures. |
+| `App.setDrawSource(drawSource)` | `void` | Replaces per-frame multi-world routing; `undefined` restores the single-world path. |
 | `App.world` / `App.renderer` | readonly | Exposes the assembled ECS and renderer instances. |
 
 ## Boundaries

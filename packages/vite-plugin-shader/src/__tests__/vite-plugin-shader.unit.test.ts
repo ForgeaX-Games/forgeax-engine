@@ -22,6 +22,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
 import { compileFailed, compileShader } from '@forgeax/engine-shader-compiler';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadEngineImportsMap } from '../engine-imports-map.js';
@@ -1037,12 +1038,16 @@ import { toRollupLog } from '../wrap.js';
         );
       }
 
-      // Most built-ins keep their parameter contract on MaterialAsset values;
-      // MSDF is the exception because its WGSL UBO shape is not the standard
-      // PBR layout and must be reflected into the runtime BGL.
+      // Standard PBR and skinned PBR share the engine shader contract; MSDF
+      // has its own WGSL UBO shape and must be reflected into the runtime BGL.
       for (const ms of manifest.materialShaders) {
         const parsed = JSON.parse(ms.paramSchema) as Array<{ name: string; type: string }>;
-        if (ms.identifier === 'forgeax::msdf-text') {
+        if (
+          ms.identifier === 'forgeax::default-standard-pbr' ||
+          ms.identifier === 'forgeax::pbr-skin'
+        ) {
+          expect(parsed).toEqual(DEFAULT_STANDARD_PBR_PARAM_SCHEMA);
+        } else if (ms.identifier === 'forgeax::msdf-text') {
           expect(parsed).toEqual([
             { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
             { name: 'distanceRange', type: 'vec4', default: [4, 512, 512, 0] },

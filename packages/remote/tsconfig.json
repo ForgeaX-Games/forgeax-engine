@@ -10,6 +10,7 @@
   },
   "include": ["src/**/*"],
   "references": [
+    { "path": "../profiler" },
     { "path": "../types" },
     { "path": "../ecs" },
     { "path": "../rhi-debug" },

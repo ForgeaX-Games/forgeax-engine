@@ -15,6 +15,7 @@ import {
   type AssetErrorCode,
   type AssetErrorDetail,
   type AssetRef,
+  type CatalogSubject,
   derive,
   type ImageError,
   type ImageMetadata,
@@ -367,14 +368,31 @@ export async function resolveCatalogEntry(
  */
 export function registerPackagesFromIndex(
   registry: AssetRegistry,
-  catalog: Map<string, { packageUrl: string; name?: string }>,
+  catalog: Map<
+    string,
+    {
+      packageUrl: string;
+      name?: string;
+      sourcePath?: string;
+      subject?: CatalogSubject;
+    }
+  >,
 ): void {
   const byPath = new Map<string, { guids: string[]; names: Map<string, string> }>();
   for (const [guidKey, entry] of catalog) {
-    let group = byPath.get(entry.packageUrl);
+    // Imported outputs are published under generated DDC/package URLs, but
+    // their stable package identity is the authored source. Keeping that
+    // source path here preserves `sky.hdr` (and equivalent source names) for
+    // single-asset lazy imports; authored internal packages retain their
+    // package URL semantics.
+    const packagePath =
+      entry.subject === 'imported-output' && entry.sourcePath !== undefined
+        ? entry.sourcePath
+        : entry.packageUrl;
+    let group = byPath.get(packagePath);
     if (group === undefined) {
       group = { guids: [], names: new Map() };
-      byPath.set(entry.packageUrl, group);
+      byPath.set(packagePath, group);
     }
     group.guids.push(guidKey);
     if (entry.name !== undefined) group.names.set(guidKey, entry.name);

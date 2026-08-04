@@ -210,6 +210,28 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(world.sharedRefs._liveCount()).toBe(size1);
       });
 
+      it('(b3) empty first bake -> dirty text refreshes mesh payload bounds and draw range', () => {
+        const assets = makeRegistry();
+        const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
+        const e = spawnLabel(world, fontId, '');
+
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
+        const meshHandle = mf.assetHandle as unknown as Handle<'MeshAsset', 'shared'>;
+        expect(resolveAssetHandle<MeshAsset>(world, meshHandle).unwrap().vertices.length).toBe(0);
+
+        world.set(e, GlyphText, { text: 'Hi' }).unwrap();
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+
+        const mesh = resolveAssetHandle<MeshAsset>(world, meshHandle).unwrap();
+        expect(mesh.vertices.length).toBeGreaterThan(0);
+        expect(mesh.indices?.length).toBe(12);
+        expect(mesh.submeshes[0]?.indexCount).toBe(12);
+        expect(mesh.submeshes[0]?.vertexCount).toBe(8);
+        expect(mesh.aabb?.[3]).toBeGreaterThan(0);
+      });
+
       it('(c) baked mesh AABB is the conservative anchor-centered cube (non-degenerate)', () => {
         const assets = makeRegistry();
         const world = new World();

@@ -3,7 +3,8 @@ name: forgeax-engine-cli
 description: >-
   forgeax-engine 远程求值：对运行中引擎活实例执行 eval(script) + kubectl 式 plugin bin。
   Use when eval'ing code against a running engine, discovering entities via
-  queryRun, capturing frames, or calling CLI bin tools on live/offline data.
+  queryRun, capturing frames, querying the opt-in CPU profiler, or calling CLI bin tools on
+  live/offline data.
 ---
 
 # forgeax-engine-cli
@@ -20,6 +21,7 @@ description: >-
 | `renderer` | `Renderer` | 渲染器控制：创建/销毁 RT、读 backbuffer |
 | `assets` | `AssetRegistry` | 资产查询：loadByGuid / resolveName / rename |
 | `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI 帧抓取：`captureFrame({...})` / `inspectAt({...})`。**仅当 createApp 运行在 `FORGEAX_ENGINE_RHI_DEBUG=1` 时注入**，否则 `undefined`（用前先 guard）。world / renderer / assets 三根恒在场。 |
+| `profiler` | `Profiler \| undefined` | Bounded CPU capture through `startCapture({ frameLimit, eventLimit })`; injected only when the host opts in. |
 
 脚本内通过 `_import(specifier)` 按需引入引擎包（如 `const ecs = await _import('@forgeax/engine-ecs')`），拿到 `createQueryState` / `queryRun` / `Entity` 等。`_import` 是 eval 作用域注入的 import 函数——脚本内**无**裸 `import` 关键字。
 
@@ -150,6 +152,31 @@ const draw = await debugAdapter.inspectAt({ tape, drawIdx: 3 });
 ```
 
 离线子命令（`inspect-offline` / `summary` / `trigger-browser`）是纯本地工具，不连 WS，不受 eval 收编影响。详见 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)。
+
+## Profiler artifact path
+
+When the host passes the public `profiler` capability to `createApp`, use the existing `eval`
+method to start a bounded capture. This adds no RPC method and does not change the remote transport.
+
+```js
+if (profiler === undefined) return { ok: false, error: { code: 'profiler-not-enabled' } };
+const started = profiler.startCapture({ frameLimit: 120, eventLimit: 1024 });
+if (!started.ok) return started;
+// Drive the live App, then finish and persist the returned ProfileCapture.
+return started.value.finish();
+```
+
+For offline analysis, use the package bin on the captured JSON:
+
+```bash
+forgeax-engine-profiler summary --file profile-capture.json
+forgeax-engine-profiler frame --file profile-capture.json --frame-id 12
+forgeax-engine-profiler phase --file profile-capture.json --source render --phase record
+```
+
+Read `validateProfileCapture` and `buildProfileModel` from the profiler package for schema and
+semantic recovery. The profiler covers bounded App/Render CPU evidence only; it is not an ECS span,
+GPU timestamp, UI, or external trace path.
 
 ## createApp 默认在场
 

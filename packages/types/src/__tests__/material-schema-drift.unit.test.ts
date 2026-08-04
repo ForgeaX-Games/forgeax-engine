@@ -20,11 +20,15 @@ describe('material schema vocabulary', () => {
     const passFields = Object.keys(schema.$defs?.pass?.properties ?? {}).sort();
     const programFields = Object.keys(schema.$defs?.program?.properties ?? {}).sort();
 
-    expect(rootFields).toEqual(['kind', 'parameters', 'parent', 'passes', 'values']);
+    expect(rootFields).toEqual(['colorSpace', 'kind', 'parameters', 'parent', 'passes', 'values']);
     expect(passFields).toEqual(['name', 'program', 'renderState']);
     expect(programFields).toEqual(['fragmentEntry', 'module', 'moduleSlots', 'vertexEntry']);
     expect(passFields).not.toContain('shader');
     expect(schema.properties?.kind).toEqual({ const: 'material' });
+    expect(schema.properties?.colorSpace).toMatchObject({
+      enum: ['srgb', 'linear'],
+      default: 'srgb',
+    });
     expect(schema.$defs?.valueOrNull).toBeDefined();
   });
 });

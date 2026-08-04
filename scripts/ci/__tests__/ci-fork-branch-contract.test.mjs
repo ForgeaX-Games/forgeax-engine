@@ -28,7 +28,7 @@ test('private-repository CI has one trusted runner/control path', () => {
   assert.doesNotMatch(workflow, /fork PR/i);
   assert.match(
     jobSection('coverage-pnpm'),
-    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64"\]'\) \}\}/,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "standard"\]'\) \}\}/,
   );
   assert.doesNotMatch(jobSection('coverage-pnpm'), /github\.event\.pull_request/);
 });
@@ -51,10 +51,20 @@ test('required-checks retains PR-head validation as an input, not a fork guard',
 });
 
 test('collectathon browser boot uses the trusted Linux WebGPU capability', () => {
+  assert.doesNotMatch(
+    workflow,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "ubuntu"\]'\) \}\}/,
+    'CI must not require the dedicated ubuntu runner label',
+  );
+  assert.doesNotMatch(
+    workflow,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64"\]'\) \}\}/,
+    'CI must require an explicit capacity label',
+  );
   const collectathon = jobSection('collectathon-boot-e2e');
   assert.match(
     collectathon,
-    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "ubuntu"\]'\) \}\}/,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
   );
   assert.doesNotMatch(collectathon, /macos-latest/);
   assert.match(collectathon, /install-mesa-vulkan-drivers/);
@@ -66,6 +76,28 @@ test('collectathon browser boot uses the trusted Linux WebGPU capability', () =>
   assert.match(collectathonSmoke, /device\.createTexture/);
   assert.match(collectathonSmoke, /--use-vulkan=swiftshader/);
   assert.match(collectathonSmoke, /--disable-vulkan-surface/);
+});
+
+test('resource-intensive WebGPU/browser gates use the heavy capacity pool', () => {
+  const heavySelector =
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/;
+  for (const name of [
+    'vitest-browser',
+    'shared-inputs-browser',
+    'smoke-fleet',
+    'bevy-smoke-fleet',
+    'vitest-dawn',
+    'webkit-fallback',
+    'metrics-validate',
+    'collectathon-boot-e2e',
+  ]) {
+    assert.match(jobSection(name), heavySelector, `${name} must use the heavy pool`);
+  }
+  assert.match(
+    jobSection('shared-inputs-browser'),
+    /playwright install chromium/,
+    'shared-inputs-browser must provision the default Chromium launcher used by the UI authoring probe',
+  );
 });
 
 test('CI preserves main evidence while PR runs may be superseded', () => {

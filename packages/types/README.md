@@ -148,6 +148,23 @@ package. `ParticleEffectAsset` and `Handle<'ParticleEffectAsset', 'shared'>`
 remain the cross-package SSOT; `ParticleEffectPlayer` remains author intent;
 the VFX package derives transient observations from those inputs.
 
+### Host and renderer handoff
+
+The shared asset identity crosses the runtime boundary through the same
+`AssetRegistry` and World supplied to
+`createParticleRuntimeHost` from
+`@forgeax/engine-vfx-render`. The host consumes the public
+`ParticleSimulation.readAll()` snapshot and forwards its feature through
+`CreateAppOptions.features` from `@forgeax/engine-app`. This package still owns
+only POD identity and schema types: it does not define a second particle
+handle, simulation resource, renderer feature, or registry.
+
+For an AI consumer, the recovery order is explicit: resolve a cooked
+`ParticleEffectAsset` by GUID, allocate one shared handle, attach the host to
+the active World, inspect simulation and render diagnostics, then retry the
+same World after readiness repair. A missing or stale asset is not equivalent
+to an empty observation.
+
 ## Handle
 
 > Cross-package `Handle<T,M>` single physical SSOT (feat-20260517-handle-type-unify). This section is the AI user's mid-level detail reference; top proposition at [`AGENTS.md` Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-18 row; bottom-level fallback at [`src/handle.ts`](./src/handle.ts) IDE hover JSDoc.

@@ -7,7 +7,10 @@
   "description": "Minimal Vite host that loads a GameEntry template and renders it in-browser (createApp + loadGame). Local smoke host for templates/game-default.",
   "scripts": {
     "dev": "vite",
-    "test:catalog-refresh": "pnpm --filter @forgeax/engine-physics build && node scripts/catalog-host-refresh.browser.mjs",
+    "test:catalog-refresh": "pnpm --dir ../.. build:app preview && node scripts/catalog-host-refresh.browser.mjs",
+    "smoke:production-material-edit": "pnpm --dir ../.. build:app preview && node scripts/smoke-production-material-edit.mjs",
+    "smoke:ui-production": "pnpm --dir ../.. build:app preview && node scripts/smoke-ui-production.mjs",
+    "smoke:production-ui-edit": "pnpm --dir ../.. build:app preview && node scripts/smoke-production-ui-edit.mjs",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
@@ -15,10 +18,21 @@
     "smoke:custom-mesh": "node scripts/smoke-custom-mesh.mjs",
     "smoke:mesh-handle-swap": "node scripts/smoke-mesh-handle-swap.mjs",
     "smoke:gamepad": "node scripts/smoke-gamepad.mjs",
+    "smoke:character-controller": "node scripts/smoke-character-controller.mjs",
     "smoke:render-evidence": "node scripts/smoke-render-evidence.mjs",
+    "smoke:render-evidence-production": "pnpm --dir ../.. build:app preview && FORGEAX_RENDER_EVIDENCE_MODE=production node scripts/smoke-render-evidence.mjs",
     "smoke:depth-of-field": "node scripts/smoke-depth-of-field.mjs",
     "smoke:fixed-state": "node scripts/smoke-fixed-state.mjs",
-    "smoke:asset-loop": "node scripts/smoke-asset-loop.mjs"
+    "smoke:asset-loop": "node scripts/smoke-asset-loop.mjs",
+    "smoke:asset-loop-production": "pnpm --dir ../.. build:app preview && FORGEAX_ASSET_LOOP_MODE=production node scripts/smoke-asset-loop.mjs",
+    "smoke:inspection-recovery": "node scripts/smoke-inspection-recovery.mjs",
+    "smoke:device-loss-reentry": "node scripts/smoke-device-loss-reentry.mjs",
+    "smoke:device-loss-reentry-production": "pnpm --dir ../.. build:app preview && FORGEAX_DEVICE_LOSS_MODE=production node scripts/smoke-device-loss-reentry.mjs",
+    "smoke:clean-copy-reentry": "node scripts/smoke-clean-copy-reentry.mjs",
+    "smoke:clean-copy-production": "pnpm --dir ../.. build:app preview && FORGEAX_CLEAN_COPY_MODE=production node scripts/smoke-clean-copy-reentry.mjs",
+    "smoke:cross-backend-replay": "node scripts/smoke-cross-backend-replay.mjs",
+    "smoke:webgl2-material": "node scripts/smoke-webgl2-material.mjs",
+    "smoke:webgl2-production": "pnpm --dir ../.. build:app preview && FORGEAX_WEBGL2_MODE=production node scripts/smoke-webgl2-material.mjs"
   },
   "forgeax": {
     "metrics": {
@@ -42,21 +56,33 @@
         "enabled": false,
         "reason": "not a spike app"
       }
-    }
+    },
+    "assetRoots": [
+      "../../templates/game-default/assets",
+      "../../forgeax-engine-assets/demo-assets/template-game-default/sky.hdr.meta.json",
+      "../../forgeax-engine-assets/sfx",
+      "../../forgeax-engine-assets/collectathon-audio/bgm-loop.wav.meta.json",
+      "../../forgeax-engine-assets/vendor/fbx-test",
+      "../../forgeax-engine-assets/dejavu-fonts"
+    ]
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
+    "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",

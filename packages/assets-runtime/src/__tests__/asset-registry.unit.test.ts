@@ -264,6 +264,29 @@ describe('invalidate / invalidateAll', () => {
   });
 });
 
+describe('imported-output package identity', () => {
+  it('uses the authored source path for a single-asset DDC output', () => {
+    const reg = makeRegistry();
+    registerPackagesFromIndex(
+      reg,
+      new Map([
+        [
+          GUID_A,
+          {
+            packageUrl: `/__forgeax-ddc/${GUID_A}.pack.json`,
+            sourcePath: 'demo-assets/template-game-default/sky.hdr',
+            subject: 'imported-output',
+          },
+        ],
+      ]),
+    );
+    reg.catalog(GUID_A, meshPayload());
+
+    expect(reg.resolveName(GUID_A)).toBe('sky.hdr');
+    expect(reg.packageOf(GUID_A)?.path).toBe('demo-assets/template-game-default/sky.hdr');
+  });
+});
+
 describe('inspect / listCatalog', () => {
   it('returns an empty readonly catalog before a registry is bound', () => {
     const reg = makeRegistry();

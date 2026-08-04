@@ -25,6 +25,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
 import {
   buildMaterialSourceCatalog,
   checkBindGroupOverflow,
@@ -71,6 +72,18 @@ const MSDF_TEXT_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
 ];
+
+function engineMaterialParamSchema(identifier: string): readonly ParamSchemaEntry[] {
+  switch (identifier) {
+    case 'forgeax::default-standard-pbr':
+    case 'forgeax::pbr-skin':
+      return DEFAULT_STANDARD_PBR_PARAM_SCHEMA;
+    case 'forgeax::msdf-text':
+      return MSDF_TEXT_PARAM_SCHEMA;
+    default:
+      return [];
+  }
+}
 
 /**
  * Build a `shaders/manifest.json`-shaped payload by compiling the engine's
@@ -217,9 +230,7 @@ export async function buildEngineShaderManifest(): Promise<{
       uvSetCount: engineUvSetCount,
     });
     if (file.reservedIdentifier !== undefined) {
-      const paramSchemaJson = JSON.stringify(
-        file.reservedIdentifier === 'forgeax::msdf-text' ? MSDF_TEXT_PARAM_SCHEMA : [],
-      );
+      const paramSchemaJson = JSON.stringify(engineMaterialParamSchema(file.reservedIdentifier));
       materialShaders.push({
         identifier: file.reservedIdentifier,
         sourcePath: file.id,
@@ -1669,9 +1680,7 @@ async function compileEngineEntry(
   // Material parameter declarations are part of the authored MaterialAsset
   // contract. Runtime shader compilation no longer reads a WGSL sidecar.
   const baseIdentifier = file.reservedIdentifier ?? extractDefineImportPath(file.source) ?? file.id;
-  const paramSchemaJson = JSON.stringify(
-    baseIdentifier === 'forgeax::msdf-text' ? MSDF_TEXT_PARAM_SCHEMA : [],
-  );
+  const paramSchemaJson = JSON.stringify(engineMaterialParamSchema(baseIdentifier));
   const variantAxes = scanVariantAxes(file.source);
   const axisCombos = variantAxes.length > 0 ? cartesianDefines(variantAxes) : [{}];
 

@@ -35,6 +35,24 @@ if (ready.ok) renderer.draw([world], { owner: 0 });
 
 The stable surface is [`src/index.ts`](src/index.ts). `RenderError` is closed and carries actionable detail. Runtime alone owns host assembly and its `EngineEnvironmentError` rejection contract; render's construction seam is internal to that dependency path.
 
+## Optional CPU profiling
+
+Render accepts the host-owned `Profiler` capability through App assembly. It writes bounded CPU
+phase evidence only while a capture is active; it does not add GPU timestamps, ECS spans, a UI, or
+a remote method. The artifact and its owner-declared catalog are documented by
+[`@forgeax/engine-profiler`](../profiler/README.md).
+
+```ts
+import { createProfiler, type Profiler } from '@forgeax/engine-profiler';
+import { createRenderer } from '@forgeax/engine-runtime';
+
+const profiler: Profiler = createProfiler();
+const renderer = await createRenderer(canvas, { profiler });
+```
+
+Use the package's `validateProfileCapture` and `buildProfileModel` entries for offline analysis.
+The render package remains the owner of render vocabulary and extract/prepare/record execution.
+
 ## RenderFeature: the producer seam
 
 Register one producer-owned feature at the renderer assembly boundary. The

@@ -281,3 +281,57 @@ describe('render-system-extract SpriteInstances validation (w8, AC-03 + Edge Cas
     expect(frame.renderables.length).toBe(1);
   });
 });
+
+describe('render-system-extract material color boundary', () => {
+  it('decodes default-sRGB asset colors exactly once into the runtime snapshot', () => {
+    const { world, assets, mesh } = makeScene();
+    const authored = [0.5, 0.25, 0.75, 0.4] as const;
+    const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      passes: [UNLIT_PASS],
+      values: { baseColor: authored },
+    });
+    world
+      .spawn(
+        { component: Transform, data: identityTransform() },
+        { component: MeshFilter, data: { assetHandle: mesh } },
+        { component: MeshRenderer, data: { materials: [material] } },
+      )
+      .unwrap();
+
+    const frame = extractFrame(world, assets);
+    const runtime = frame.renderables[0]?.material;
+    // MaterialSnapshot stores baseColor in f32 engine vectors.
+    expect(runtime?.baseColor[0]).toBeCloseTo(0.2140411405, 6);
+    expect(runtime?.baseColor[1]).toBeCloseTo(0.0508760882, 6);
+    expect(runtime?.baseColor[2]).toBeCloseTo(0.5225215539, 6);
+    expect(runtime?.paramSnapshot?.baseColor).toEqual([
+      expect.closeTo(0.2140411405, 9),
+      expect.closeTo(0.0508760882, 9),
+      expect.closeTo(0.5225215539, 9),
+      0.4,
+    ]);
+    expect(authored).toEqual([0.5, 0.25, 0.75, 0.4]);
+  });
+
+  it('passes explicitly-linear asset colors through unchanged', () => {
+    const { world, assets, mesh } = makeScene();
+    const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      colorSpace: 'linear',
+      passes: [UNLIT_PASS],
+      values: { baseColor: [0.5, 0.25, 0.75, 0.4] },
+    });
+    world
+      .spawn(
+        { component: Transform, data: identityTransform() },
+        { component: MeshFilter, data: { assetHandle: mesh } },
+        { component: MeshRenderer, data: { materials: [material] } },
+      )
+      .unwrap();
+
+    const runtime = extractFrame(world, assets).renderables[0]?.material;
+    expect(Array.from(runtime?.baseColor ?? [])).toEqual([0.5, 0.25, 0.75]);
+    expect(runtime?.paramSnapshot?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
+  });
+});

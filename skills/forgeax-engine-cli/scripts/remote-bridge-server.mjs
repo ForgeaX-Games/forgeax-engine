@@ -123,7 +123,7 @@ wss.on('connection', (ws) => {
     clearTimeout(entry.timer);
     pending.delete(msg.id);
     // msg.payload is the {ok, value|error} envelope the page produced.
-    sendJson(entry.res, 200, msg.payload ?? { ok: false, error: { code: 'EMPTY_RESULT', hint: 'page returned no payload' } });
+    sendJson(entry.res, 200, normalizePayload(msg.payload));
   });
   ws.on('close', () => {
     if (pageSocket === ws) pageSocket = null;
@@ -146,6 +146,10 @@ function sendJson(res, status, obj) {
   const s = JSON.stringify(obj);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(s) });
   res.end(s);
+}
+function normalizePayload(payload) {
+  if (payload !== null && typeof payload === 'object' && 'ok' in payload) return payload;
+  return { ok: false, error: { code: 'EMPTY_RESULT', hint: 'page returned no payload' } };
 }
 function log(m) {
   console.log(`[remote-bridge] ${m}`);

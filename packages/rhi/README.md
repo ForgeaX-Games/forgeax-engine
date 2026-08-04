@@ -84,7 +84,7 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 ## Error model — 23-member closed `RhiErrorCode`
 
 > [!NOTE]
-> **ROLE: RHI 包契约 SSOT**——this section is the closed-union contract source. The sibling table in [`packages/engine/README.md` §错误处理](../engine/README.md) (`'rhi-not-available'` row) mirrors the same trigger/consumption wording for the engine-entry quickstart audience; descriptions are kept byte-for-byte aligned with [`packages/rhi/src/errors.ts`](./src/errors.ts) JSDoc to prevent drift (decision D-7 双源 ROLE 不合并 / 架构原则 #1 双源 ROLE 区分).
+> **RHI contract SSOT** — this section is the closed-union contract source. The sibling table in [`packages/engine/README.md`](../engine/README.md) mirrors the `rhi-not-available` trigger for the engine-entry quickstart audience. The executable union, detail types, and factories remain owned by [`packages/rhi/src/errors.ts`](./src/errors.ts); this table is the AI-facing deep index.
 
 | code | trigger | spec anchor |
 |:--|:--|:--|

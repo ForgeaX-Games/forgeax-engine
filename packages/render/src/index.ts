@@ -54,10 +54,8 @@ export type {
   RendererLostListener,
   RendererOptions,
   RenderPhase,
-  RenderPhaseEvent,
-  RenderPhaseObserver,
   RenderPhaseSkipReason,
   RenderResult,
 } from './renderer';
-export { resolveDrawOwners } from './renderer';
+export { RENDER_PHASE_CATALOG, resolveDrawOwners } from './renderer';
 export * from './surface-format';

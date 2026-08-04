@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // game-default asset loop smoke: GUID -> importer -> pack -> runtime -> IBL.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -16,55 +16,90 @@ const ARTIFACT_DIR = resolve(
 const PORT = Number.parseInt(process.env.FORGEAX_ASSET_LOOP_PORT ?? '5194', 10);
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
+const production = process.env.FORGEAX_ASSET_LOOP_MODE === 'production';
 const server = spawn(
   'pnpm',
-  ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'],
-  { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
+  production
+    ? ['--filter', '@forgeax/preview', 'preview', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort']
+    : ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'],
+  { cwd: ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
 );
 let serverOutput = '';
 server.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
 server.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
-
-const browser = await chromium.launch({
-  headless: true,
-  channel: 'chrome',
-  args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
-});
-const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
+let browser;
+let page;
 const pageErrors = [];
 const consoleErrors = [];
 const badResponses = [];
-page.on('pageerror', (error) => pageErrors.push(error.message));
-page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-page.on('response', (response) => {
-  if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) badResponses.push(`${response.status()} ${response.url()}`);
-});
 
 async function snapshot(name) {
   const path = resolve(ARTIFACT_DIR, `${name}.png`);
-  await page.screenshot({ path });
-  const png = PNG.sync.read(readFileSync(path));
-  return { path, width: png.width, height: png.height, data: png.data };
+  let previous;
+  let stableFrames = 0;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const buffer = await page.screenshot();
+    const png = PNG.sync.read(buffer);
+    const changed = previous === undefined
+      ? Number.POSITIVE_INFINITY
+      : pixelmatch(previous.data, png.data, undefined, png.width, png.height, { threshold: 0.1 });
+    stableFrames = changed <= 8 ? stableFrames + 1 : 0;
+    if (stableFrames >= 2) {
+      writeFileSync(path, buffer);
+      return { path, width: png.width, height: png.height, data: png.data };
+    }
+    previous = png;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+  }
+  throw new Error(`render did not stabilize before ${name}`);
 }
 
 try {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
+  const serverDeadline = Date.now() + 30_000;
+  while (Date.now() < serverDeadline) {
     try {
-      await page.goto(`http://127.0.0.1:${PORT}/?game=game-default&asset-evidence=1`, { waitUntil: 'networkidle', timeout: 2_000 });
-      break;
-    } catch (error) {
-      if (Date.now() >= deadline) throw new Error(`preview did not boot: ${serverOutput}\n${String(error)}`);
-      await sleep(250);
+      const response = await fetch(`http://127.0.0.1:${PORT}/`);
+      if (response.ok) break;
+    } catch {
+      // Vite is still starting.
     }
+    await sleep(250);
   }
+  if (Date.now() >= serverDeadline) throw new Error(`Preview server did not start: ${serverOutput}`);
+
+  browser = await chromium.launch({
+    headless: true,
+    channel: 'chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
+  });
+  page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+  page.on('response', (response) => {
+    if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) badResponses.push(`${response.status()} ${response.url()}`);
+  });
+
+  await page.goto(`http://127.0.0.1:${PORT}/?game=game-default&asset-evidence=1`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 10_000,
+  });
+  await page.waitForFunction(
+    () => globalThis.__forgeaxGameDefaultAssetEvidence !== undefined,
+    null,
+    { timeout: 30_000, polling: 100 },
+  );
+  await page.waitForFunction(
+    () => globalThis.__forgeaxGameDefaultAssetEvidence?.snapshot().passNames.includes('skybox') ?? false,
+    null,
+    { timeout: 30_000, polling: 100 },
+  );
   const read = () => page.evaluate(async () => {
     const evidence = globalThis.__forgeaxGameDefaultAssetEvidence;
     if (!evidence) throw new Error('asset evidence handle was not installed');
     await evidence.ready;
     return evidence.snapshot();
   });
-  await page.waitForTimeout(1_500);
   const baselineState = await read();
   const baseline = await snapshot('baseline');
 
@@ -73,7 +108,6 @@ try {
     evidence.setIntensity(1.4);
     return evidence.snapshot();
   });
-  await page.waitForTimeout(250);
   const bright = await snapshot('bright-environment');
 
   const reloadState = await page.evaluate(async () => {
@@ -82,7 +116,6 @@ try {
     const missing = await evidence.probeMissing();
     return { reloaded, missing, snapshot: evidence.snapshot() };
   });
-  await page.waitForTimeout(250);
   const reloaded = await snapshot('reloaded-environment');
 
   const resetState = await page.evaluate(() => {
@@ -90,7 +123,6 @@ try {
     evidence.reset();
     return evidence.snapshot();
   });
-  await page.waitForTimeout(250);
   const reset = await snapshot('reset-environment');
 
   const changedPixels = (a, b) => pixelmatch(a.data, b.data, undefined, a.width, a.height, { threshold: 0.1 });
@@ -113,6 +145,7 @@ try {
       resetDelta: changedPixels(baseline, reset),
     },
     rhi: { passNames: baselineState.passNames },
+    mode: production ? 'production' : 'dev',
     pageErrors,
     consoleErrors: unexpectedConsoleErrors,
     badResponses: unexpectedBadResponses,
@@ -129,10 +162,16 @@ try {
   if (reloadState.missing.ok || typeof reloadState.missing.code !== 'string') throw new Error(`missing-asset recovery failed: ${JSON.stringify(reloadState)}`);
   if (report.pixel.brightDelta < 20) throw new Error(`environment intensity changed only ${report.pixel.brightDelta} pixels`);
   if (report.pixel.resetDelta > 500) throw new Error(`reset drifted ${report.pixel.resetDelta} pixels from baseline`);
-  console.log(`[asset-loop] PASS brightDelta=${report.pixel.brightDelta} reloadDelta=${report.pixel.reloadDelta} resetDelta=${report.pixel.resetDelta} missing=${reloadState.missing.code}`);
+  console.log(`[asset-loop] PASS mode=${production ? 'production' : 'dev'} brightDelta=${report.pixel.brightDelta} reloadDelta=${report.pixel.reloadDelta} resetDelta=${report.pixel.resetDelta} missing=${reloadState.missing.code}`);
   console.log(`[asset-loop] artifacts=${ARTIFACT_DIR}`);
 } finally {
-  await browser.close();
-  server.kill('SIGTERM');
+  await browser?.close();
+  if (server.pid !== undefined) {
+    try {
+      process.kill(-server.pid, 'SIGTERM');
+    } catch {
+      server.kill('SIGTERM');
+    }
+  }
   await sleep(300);
 }

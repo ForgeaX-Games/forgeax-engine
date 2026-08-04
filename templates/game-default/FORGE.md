@@ -12,7 +12,9 @@ pnpm --filter @forgeax/preview dev
 ```
 
 Open `http://localhost:5173/?game=game-default` in a WebGPU browser. Start with
-`assets/scene.pack.json` for persistent world content. Start with `src/scene-runtime.ts` for scene
+`assets/scene.pack.json` and `assets/multi-material-target.pack.json` for persistent world content.
+The `RedBox` mesh uses two positional material slots, so its triangle-list body and line-list accent
+are the first multi-primitive asset recipe in the template. Start with `src/scene-runtime.ts` for scene
 loading, fallback, and physics attachment. `main.ts` composes those boundaries with input, camera,
 and gameplay systems (top-down, fixed-radius orbit, FPS/free-flight, and bounded orthographic Map); `src/camera-orbit.ts`, `src/camera-zoom.ts`, and `src/free-camera.ts` own the
 canonical spherical pose math; `src/gameplay-input.ts` owns the InputSnapshot-to-intent systems;
@@ -46,11 +48,27 @@ The effect is installed after DoF as an ordered URP post-effect, so the template
 multiple fullscreen passes without adding a second scene; `apps/bevy/fullscreen-material` remains
 the standalone chromatic-shader oracle.
 
+Hit feedback also demonstrates world-space MSDF text. `src/world-score-text.ts` loads the shared
+DejaVu `FontAsset` by GUID, allocates one pooled `GlyphText`, billboards it with the active camera,
+and resets it with the same gameplay owner; `apps/preview` includes the font pack in both dev and
+production asset roots. The DOM score popup remains the screen-space UI example, so the two text
+contracts are visible together without creating a second scene or score owner.
+
 The Play shooting system also demonstrates the ECS `CommandBuffer` boundary: bullets are spawned and
 expired through deferred commands, while `commands.isDeferred` prevents same-system Transform writes
 against pending handles. The synchronous `R` reset remains the gameplay owner's cleanup boundary, and
 the render-evidence smoke records the deferred spawn count after a deterministic canvas shot (manual
 play still uses `F`).
+
+For the shipped path, run `pnpm --filter @forgeax/preview smoke:render-evidence-production`. It builds
+Preview and runs the same render-evidence owner from `dist/`/`vite preview`, covering the authored
+FBX/compressed-texture/material/post-process/camera/hit-reset/recovery composition without a second
+gameplay owner.
+
+For shipped GPU recovery, run `pnpm --filter @forgeax/preview smoke:device-loss-reentry-production`.
+It builds `dist/`, crashes Chrome's GPU process, calls public `Renderer.recover()`, and checks the
+same `Play` projection, advancing fixed ticks, visible frame, and zero unexpected errors after
+`alive → device-lost → alive`.
 
 Target health is the template's dense ECS example: `src/target-health.ts` attaches one
 `GameDefaultTargetHealth` component to each authored target, runs its writable `current/max/Entity`
@@ -75,17 +93,76 @@ FORGEAX_ASSET_LOOP_DIR=<run>/artifacts \
 ```
 
 The fired projectile is also the custom-mesh lesson. `src/custom-projectile-mesh.ts` builds a
-24-vertex indexed cube with position/normal/UV/tangent attributes, uploads a procedural checker
-texture, and exposes `G` to mutate the shared GPU mesh between the upper and lower atlas halves.
-The projectile keeps a capsule collider so rendering and physics are separate public contracts;
-`R` restores the mesh bytes and removes active projectiles. The canonical standalone correctness
-matrix remains `apps/bevy/generate-custom-mesh`.
+24-vertex indexed cube with position/normal/UV/tangent attributes and uploads the authored
+`assets/compressed-projectile.png` through its sidecar GUID. `assets/generate-assets.mjs` makes the
+small source deterministic and license-safe while keeping generated binary out of git; Preview's
+pack plugin then demonstrates source -> image importer -> Basis/ETC1S payload -> pack-index ->
+`AssetRegistry.loadByGuid` -> renderer. `G` mutates the shared GPU mesh between the upper and lower
+atlas halves and `R` restores the mesh bytes and removes active projectiles. The explicit
+procedural checker fallback is for no-asset/unit hosts only, so a broken catalog cannot be hidden in
+the browser witness. The projectile keeps a capsule collider so rendering and physics are separate
+public contracts. The canonical standalone correctness matrix remains
+`apps/bevy/generate-custom-mesh`.
+
+The authored `RedBox` is the multi-material/submesh lesson. Its separate
+`assets/multi-material-target.pack.json` carries one GUID-addressed 12F mesh with a filled
+triangle-list submesh and a line-list accent, plus red/cyan `MaterialAsset` rows. The scene binds
+`materials[0..1]` to `submeshes[0..1]`; `triggerFlash()` changes only slot 0 so the cyan accent remains
+visible, and the same `R` owner restores the complete material array. The browser render-evidence
+snapshot reports the material/submesh counts and topologies before, during, and after reset. The
+isolated positional/mixed-topology oracle remains `apps/hello/multi-material`.
+
+The template also composes a secondary ECS World without creating a second
+renderer or requestAnimationFrame loop. `src/multi-world-overlay.ts` creates
+two small beacons with their own material handles; `App.setDrawSource` routes
+`[primaryWorld, overlayWorld]` through the existing camera and lights. The
+inspection action `game-default.toggle-multi-world` is a safe falsifier: turning
+it off must remove both beacons while leaving the primary gameplay scene alive,
+`R` restores the documented two-world baseline, and Stop removes the routing.
+
+```mermaid
+flowchart LR
+  P["Primary World: camera + lights + gameplay"] --> A["App frame loop"]
+  O["Secondary World: two beacons"] --> A
+  A --> R["renderer.draw worlds, owners 0/0"]
+  R --> F["One composited frame"]
+```
+
+This is the classic host-composition pattern: each World keeps its own ECS
+state and time policy, while the App owns one measured delta and one lifecycle.
+Do not add a template-local `requestAnimationFrame`; change the App seam if a
+future composition needs another routing policy.
+
+`J` is the guided FBX asset-format lesson. Preview registers the FBX importer and scans the hydrated
+`forgeax-engine-assets/vendor/fbx-test/cube.fbx` sidecar; `src/fbx-mesh-swap.ts` loads the emitted mesh
+sub-asset by GUID and swaps it onto the same authored scoring target. The existing material, collider,
+hit/score, input, render-evidence, and `R` reset owners stay in place, so this is a format delivery
+change rather than a second scene. `H` remains the built-in sphere comparison and `J` is the FBX
+comparison; both return to the authored mesh on reset.
+
+The imported `humanoid.fbx` is the guided skeletal-animation lesson. `src/fbx-skinned-target.ts`
+loads the scene and its `run` clip by stable GUID, instantiates the `Skin`/`AnimationPlayer` payload,
+and joins the existing Play, hit, and reset lifecycle. The authored placement is written to the
+imported scene root (`scale: [0.03, 0.03, 0.03]`) rather than only to the mesh node: skin palettes
+are derived from the joint hierarchy, so root placement keeps the rendered mesh and its joints in
+the same coordinate space. `game-default.snapshot` reports the root, skin entity, clip, joint count,
+placement, animation time, and hit pulses; the inspection smoke also requires a 72-byte skinned
+vertex layout and an indexed FBX draw.
 
 The same semantic `InputMap` accepts a standard gamepad without adding a second input owner:
 left-stick axes move, South jumps, R2 fires, Y toggles the projectile UV atlas, and East requests
 reset. `InputSnapshot.gamepad(0)` is frozen at the frame-start scan, so browser evidence can inspect
 the exact button/trigger/axis state while normal gameplay systems consume the same actions. Run the
 focused proof with `pnpm --filter @forgeax/preview smoke:gamepad`.
+
+The authored `Player` is also the guided CharacterController example. `src/scene-runtime.ts`
+attaches a kinematic capsule and `CharacterController`; `main.ts` computes movement intent and jump
+gravity, calls `PhysicsWorld.moveAndSlide`, and reads back the resolved `Transform` plus
+`grounded`. The scene's static colliders own obstacle behavior, so the template has no duplicate
+manual blocker list. FPS free-flight explicitly teleports the same body because KCC owns kinematic
+movement in the other views.
+
+Run the focused semantic proof with `pnpm --filter @forgeax/preview smoke:character-controller`.
 
 After a change, run the browser smoke and the derived capability audit from the engine root:
 
@@ -104,3 +181,12 @@ shim.
 # UI consumer boundary
 
 The default template consumes HUD and settings UiAssets from `assets/ui/*.pack.json`. Their stable markup and style live directly in the pack payloads; use `src/hud.ts` or `src/settings.ts` only for dynamic values, event ownership, modal focus, and cleanup. UI screenshots are auxiliary evidence; DOM assertions and lifecycle behavior remain the acceptance source of truth.
+
+For a shipped-path check, run `pnpm --filter @forgeax/preview smoke:ui-production`. This builds
+Preview and proves the two GUID rows, Pack v2 payloads, ShadowRoot interaction, and three clean
+Stop/boot cycles from the production `dist/`; `smoke:ui-authoring` is the separate authoring-host
+contract.
+
+For an authored HUD change, run `pnpm --filter @forgeax/preview smoke:production-ui-edit`. It edits
+the source pack, proves a new production package URL and live score text, and restores the pack after
+the baseline/changed/restored cache legs.

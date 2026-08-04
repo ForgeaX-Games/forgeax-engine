@@ -12,6 +12,12 @@ const templateAssets = join(previewRoot, '..', '..', 'templates', 'game-default'
 const sourceMaterial = join(templateAssets, 'base-material.pack.json');
 const probeMaterial = join(templateAssets, 'catalog-host-refresh-probe.pack.json');
 
+async function loadPreviewConfig(): Promise<NonNullable<Parameters<typeof createServer>[0]>> {
+  return await (typeof previewConfig === 'function'
+    ? previewConfig({ command: 'serve', mode: 'test', isSsrBuild: false, isPreview: false })
+    : previewConfig);
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -28,8 +34,9 @@ describe('preview host catalog refresh', () => {
   it('observes a watched preview asset mutation and requests the configured host reload', async () => {
     const baseline = await readFile(sourceMaterial, 'utf8');
     await writeFile(probeMaterial, baseline);
+    const previewInlineConfig = await loadPreviewConfig();
     const server = await createServer({
-      ...previewConfig,
+      ...previewInlineConfig,
       configFile: false,
       root: previewRoot,
       logLevel: 'error',
@@ -53,7 +60,10 @@ describe('preview host catalog refresh', () => {
     } finally {
       await server.close();
     }
-  });
+  // Cold Preview startup scans the full template/submodule asset roots before
+  // the watcher can observe the probe mutation; keep the test's budget above
+  // the 10 s assertion wait without weakening that assertion.
+  }, 20_000);
 
   it('falsifies the host-refresh assertion when the preview watcher has no policy', async () => {
     const baseline = await readFile(sourceMaterial, 'utf8');

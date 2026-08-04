@@ -208,19 +208,29 @@ describe('materialLoader', () => {
     expect(out.values.roughness).toBe(5); // non-texture int untouched
   });
 
-  it('resolves nested MaterialTextureValue texture ref-indices to GUIDs', () => {
+  it('resolves nested texture and sampler ref-indices while preserving authored fields', () => {
     const ctx = {
       getMaterialShaderTextureFieldNames: () => new Set(['baseColorTexture']),
     } as unknown as LoadContext;
     const out = materialLoader.load(
       {
         passes: [{ name: 'm', program: { module: 'forgeax::pbr' } }],
-        values: { baseColorTexture: { texture: 0 } },
+        values: {
+          baseColorTexture: {
+            texture: 0,
+            sampler: 1,
+            coordinates: { set: 1, transform: { scale: [2, 3] } },
+          },
+        },
       },
-      ['tex-guid'],
+      ['tex-guid', 'sampler-guid'],
       ctx,
     ) as { values: Record<string, unknown> };
-    expect(out.values.baseColorTexture).toEqual({ texture: 'tex-guid' });
+    expect(out.values.baseColorTexture).toEqual({
+      texture: 'tex-guid',
+      sampler: 'sampler-guid',
+      coordinates: { set: 1, transform: { scale: [2, 3] } },
+    });
   });
 
   it('resolves nested texture values when the shader schema is present but empty', () => {

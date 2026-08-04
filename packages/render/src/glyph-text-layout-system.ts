@@ -40,12 +40,13 @@ import {
 } from '@forgeax/engine-ecs';
 import {
   bakeGlyphMesh,
+  conservativeCubeAabb,
   layoutGlyphText,
   resetFontConcurrency,
   trackFontConcurrency,
 } from '@forgeax/engine-graphics-extras';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { FontAsset, Handle } from '@forgeax/engine-types';
+import type { FontAsset, Handle, MeshAsset, Submesh } from '@forgeax/engine-types';
 import { TextError } from '@forgeax/engine-types';
 import { MeshFilter, MeshRenderer } from './components';
 import { GlyphText } from './components/glyph-text';
@@ -216,7 +217,33 @@ function processEntity(
     // frame's `ensureResident` pull; the dirty re-layout overwrites those
     // buffers in place (a no-op if not yet resident -- the next render's
     // ensureResident then uploads the latest registered POD).
-    gpuStore.updateMesh(asMeshHandle(cached.meshHandleId), layout.vertices, layout.indices);
+    const meshHandle = asMeshHandle(cached.meshHandleId);
+    const submeshes = [
+      {
+        indexOffset: 0,
+        indexCount: layout.indices.length,
+        vertexCount: layout.vertices.length / 12,
+        topology: 'triangle-list',
+      },
+    ] satisfies readonly Submesh[];
+    // A dynamic label can begin empty, so its first bake has a degenerate AABB.
+    // Keep the shared MeshAsset's culling/picking bounds in lockstep with the
+    // dirty layout; otherwise the GPU buffers update but the render walk still
+    // rejects the label as an empty mesh.
+    const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(meshHandle);
+    if (mesh.ok) {
+      const aabb = conservativeCubeAabb(layout.radius);
+      // Keep both sides of the pull boundary coherent. A zero-glyph first
+      // bake may have no resident GPU buffers yet, so updating only the GPU
+      // store would lose the new text on the next ensureResident pull.
+      Object.assign(mesh.value, {
+        vertices: layout.vertices,
+        indices: layout.indices,
+        submeshes,
+        aabb,
+      });
+    }
+    gpuStore.updateMesh(meshHandle, layout.vertices, layout.indices, 0, submeshes);
     // A color change re-keys the per-(font, tint) material; re-resolve and
     // re-bind it in place so the tint follows the authoring edit (the mesh
     // handle stays stable, only MeshRenderer.material is overwritten).

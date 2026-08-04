@@ -42,6 +42,7 @@ import { resolve, dirname } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 // apps/hello/skin/scripts -> apps/hello/skin -> apps/hello -> apps -> repo root.
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
+const BROWSER_WAIT_MS = Number.parseInt(process.env.SMOKE_BROWSER_WAIT_MS ?? '8000', 10);
 
 const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-skin', 'dev'], {
   cwd: REPO_ROOT,
@@ -133,6 +134,7 @@ page.on('response', async (resp) => {
 // 16B skinWeight = 72B stride).
 await page.addInitScript(() => {
   if (navigator.gpu == null) return;
+  const origReqAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
   globalThis.__forgeaxPipelines = [];
   globalThis.__forgeaxDeviceErrors = [];
   globalThis.__forgeaxVertexBuffers = [];
@@ -142,9 +144,9 @@ await page.addInitScript(() => {
   // `skin-palette` (the per-frame palette storage buffer the new
   // SkinPaletteAllocator from M1 m1-2 owns). For each write we record an
   // FNV-1a-32 hash of the full payload bytes (AC-01 full-mat4-region
-  // distinctness) plus a focused FNV-1a-32 hash of the FIRST mat4 (bytes
-  // [0..64], 16-float column-major, i.e. the root joint M_0 = joint_world *
-  // IBM) for AC-02 root-joint-Transform.world distinctness. Cursor rewinds
+  // distinctness) plus one hash per complete joint mat4 for AC-02 pose-
+  // Transform.world distinctness. The root joint is intentionally static in
+  // the Khronos clips, so hashing only M_0 would be a false negative. Cursor rewinds
   // per frame so byteOffset=0 entries should appear once per frame per
   // skinned entity; across ~8s of rendering (= hundreds of frames) we
   // expect >>10 entries with ≥2 distinct hash values once advanceAnimation
@@ -251,7 +253,7 @@ await page.addInitScript(() => {
           const pIdx = paletteIndex.get(buffer);
           if (pIdx !== undefined) {
             // Capture the payload bytes for hash (AC-01 full + AC-02
-            // first-mat4 root-joint slice). data may be a TypedArray or a
+            // animated child-joint slice). data may be a TypedArray or a
             // plain ArrayBuffer; normalise to Uint8Array view.
             const u8 =
               data instanceof Uint8Array
@@ -264,16 +266,24 @@ await page.addInitScript(() => {
             if (u8 !== null) {
               const totalLen = u8.byteLength;
               const fullHash = fnv1a32(u8, 0, totalLen);
-              // First mat4 = 64 bytes = bytes [0..64]; clamp on shorter
-              // payloads (e.g. partial slice writes) so the slice still has
-              // a stable identity.
-              const headEnd = Math.min(64, totalLen);
-              const firstMat4Hash = fnv1a32(u8, 0, headEnd);
+              // Fox's root joint is static, and the animated child is not a
+              // contractually fixed joint index across imported assets. Keep
+              // one hash per complete mat4 so AC-02 can select the first
+              // non-root matrix that actually changes while retaining a
+              // stable diagnostic for the common Fox payload.
+              const matrixCount = Math.floor(totalLen / 64);
+              const poseMat4Hashes = [];
+              for (let matrixIndex = 0; matrixIndex < matrixCount; matrixIndex++) {
+                const matrixStart = matrixIndex * 64;
+                poseMat4Hashes.push(fnv1a32(u8, matrixStart, matrixStart + 64));
+              }
+              const poseMat4Hash = poseMat4Hashes[1] ?? poseMat4Hashes[0] ?? fnv1a32(u8, 0, totalLen);
               globalThis.__forgeaxSkinPaletteWrites.push({
                 offset,
                 byteLength: totalLen,
                 fullHash,
-                firstMat4Hash,
+                poseMat4Hash,
+                poseMat4Hashes,
               });
             }
           }
@@ -329,7 +339,7 @@ await page.addInitScript(() => {
 });
 
 await page.goto(portUrl, { waitUntil: 'networkidle', timeout: 30000 });
-await page.waitForTimeout(8000);
+await page.waitForTimeout(BROWSER_WAIT_MS);
 
 const captured = await page.evaluate(() => ({
   pipelines: globalThis.__forgeaxPipelines ?? [],
@@ -565,14 +575,14 @@ const skinPaletteFullHashSet = new Set(skinPaletteFullHashes);
 console.log('\n=== AC-01 skin-palette buffer writes ===');
 skinPaletteWrites.slice(0, 12).forEach((w, i) =>
   console.log(
-    `[#${i}] offset=${w.offset} byteLength=${w.byteLength} fullHash=${w.fullHash} firstMat4Hash=${w.firstMat4Hash}`,
+    `[#${i}] offset=${w.offset} byteLength=${w.byteLength} fullHash=${w.fullHash} poseMat4Hash=${w.poseMat4Hash}`,
   ),
 );
 if (skinPaletteWrites.length > 12) {
   console.log(`(...${skinPaletteWrites.length - 12} more entries elided)`);
 }
 console.log(
-  `=== AC-01 summary: hits=${skinPaletteHits} distinctFullHash=${skinPaletteFullHashSet.size} distinctFirstMat4Hash=${new Set(skinPaletteWrites.map((w) => w.firstMat4Hash)).size} ===`,
+  `=== AC-01 summary: hits=${skinPaletteHits} distinctFullHash=${skinPaletteFullHashSet.size} distinctPoseMat4Hash=${new Set(skinPaletteWrites.map((w) => w.poseMat4Hash)).size} ===`,
 );
 if (skinPaletteHits < 3) {
   console.error(
@@ -597,27 +607,37 @@ console.log(
     `${skinPaletteFullHashSet.size} distinct fullHash values (palette is alive across frames).`,
 );
 
-// feat-20260612-skin-palette-per-frame-upload M4 / m4-2: AC-02 root-joint
+// feat-20260612-skin-palette-per-frame-upload M4 / m4-2: AC-02 animated-pose
 // Transform.world distinctness probe. Reuses skinPaletteWrites from the
-// same queue.writeBuffer hook but focuses on the FIRST mat4 of each
-// payload (bytes [0..64], 16-float column-major). For a Skin whose
-// SkinAsset.jointPaths[0] points at the skeleton root, that mat4 is
-// M_0 = root_joint_world * IBM_0 -- and IBM_0 is a constant determined by
-// SkeletonAsset.inverseBindMatrices, so any change in firstMat4Hash maps
-// 1:1 to a change in root_joint Transform.world. Distinctness across
-// ≥10 sample writes proves advanceAnimationPlayer is mutating the joint
-// hierarchy each frame and propagateTransforms is rewriting Transform.world
-// before the record stage's writeJointPalette pulls the view. FALSIFY
-// anchor: short-circuit advanceAnimationPlayer to skip its world.set
-// emissions -> Transform.world stays at the bind pose value -> firstMat4
-// payload bytes collapse to a single hash -> probe red. The 10-sample
+// same queue.writeBuffer hook and looks for any complete joint mat4 after the
+// root that changes across the sample window. Imported assets may order their
+// animated joints differently, so hard-coding one child index would make this
+// positive gate a false negative.
+// Distinctness across ≥10 sample writes proves advanceAnimationPlayer is
+// mutating the joint hierarchy each frame and propagateTransforms is rewriting
+// Transform.world before the record stage's writeJointPalette pulls the view.
+// FALSIFY anchor: short-circuit advanceAnimationPlayer to skip its world.set
+// emissions -> the animated child-joint mat4 stays at the bind pose ->
+// poseMat4Hash collapses to a single value -> probe red. The 10-sample
 // minimum is the plan-strategy §5.3 sample-window for AC-02 (vs AC-01's
 // 3 samples) and is the load-bearing falsify divergence between the two
 // probes when only one half of the chain breaks; on a fully-broken upstream
 // (M1 m1-2 regression making smoke 0-frames) both probes red identically.
-const skinPaletteFirstMat4Set = new Set(skinPaletteWrites.map((w) => w.firstMat4Hash));
+const matrixDistinctCounts = [];
+for (const write of skinPaletteWrites) {
+  for (let matrixIndex = 0; matrixIndex < write.poseMat4Hashes.length; matrixIndex++) {
+    const hash = write.poseMat4Hashes[matrixIndex];
+    if (matrixDistinctCounts[matrixIndex] == null) matrixDistinctCounts[matrixIndex] = new Set();
+    matrixDistinctCounts[matrixIndex].add(hash);
+  }
+}
+const skinPalettePoseMat4Set = new Set(skinPaletteWrites.map((w) => w.poseMat4Hash));
+const animatedJointIndex = matrixDistinctCounts.findIndex(
+  (hashes, matrixIndex) => matrixIndex > 0 && hashes.size >= 2,
+);
+const animatedJointDistinct = animatedJointIndex >= 0 ? matrixDistinctCounts[animatedJointIndex].size : 0;
 console.log(
-  `=== AC-02 summary: hits=${skinPaletteHits} distinctFirstMat4=${skinPaletteFirstMat4Set.size} (sample window >=10 writes, first-mat4 = root joint M_0) ===`,
+  `=== AC-02 summary: hits=${skinPaletteHits} animatedJointIndex=${animatedJointIndex} distinctPoseMat4=${animatedJointDistinct} (sample window >=10 writes) ===`,
 );
 if (skinPaletteHits < 10) {
   console.error(
@@ -628,10 +648,10 @@ if (skinPaletteHits < 10) {
   );
   process.exit(1);
 }
-if (skinPaletteFirstMat4Set.size < 2) {
+if (animatedJointIndex < 0) {
   console.error(
-    `\n[smoke-browser] AC-02 RED -- ${skinPaletteHits} palette writes recorded but first-mat4 ` +
-      `(root joint M_0) collapsed to a single hash across all of them. Suspect: advanceAnimationPlayer ` +
+    `\n[smoke-browser] AC-02 RED -- ${skinPaletteHits} palette writes recorded but no non-root joint ` +
+      `mat4 changed across the sample window. Suspect: advanceAnimationPlayer ` +
       'short-circuited (no world.set), propagateTransforms not rewriting Transform.world, or the ' +
       'joint hierarchy is sourced from a stale view that never refreshes.',
   );
@@ -639,24 +659,19 @@ if (skinPaletteFirstMat4Set.size < 2) {
 }
 console.log(
   `\n[smoke-browser] AC-02 GREEN -- ${skinPaletteHits} palette writes, ` +
-    `${skinPaletteFirstMat4Set.size} distinct first-mat4 hashes (root joint world matrix is alive).`,
+    `joint ${animatedJointIndex} has ${animatedJointDistinct} distinct animated-pose mat4 hashes (joint world matrix is alive).`,
 );
 
 // feat-20260612-skin-palette-per-frame-upload M4 / m4-3: AC-03 dyn-offset
 // distinctness probe. record-stage M3 m3-2 wires dynamicOffsets[1] of
 // every setBindGroup(2, mesh-array-bg, ...) call to the per-entity
-// SkinPaletteSlice.byteOffset that was allocated upstream (M2 m2-6).
-// Three Fox.glb instances with 24 joints each carve three distinct
-// allocator slices (cursor at 0, 24*64=1536, 2*24*64=3072) so within any
-// single frame we expect dynamicOffsets[1] in {0, 1536, 3072} -- a set of
-// >=2 distinct values is the load-bearing assertion. FALSIFY anchor:
-// hardcode dynamicOffsets[1]=0 in render-system-record.ts -> set
-// distinctness collapses to {0} -> probe red. Note: only setBindGroup(2)
-// calls on the skin pass should emit groupIndex===2 with the mesh-array
-// dyn-offset shape; non-skin paths (shadow, sprite) also hit
-// setBindGroup(2) but with their own mesh-bgl byteOffset semantics, which
-// is fine because they too should produce >=2 distinct values per frame
-// across multiple draws.
+// SkinPaletteSlice.byteOffset that was allocated upstream (M2 m2-6). This
+// demo owns one Fox entity, so zero is a valid first slice and distinctness
+// across entities is not an invariant here; multi-entity adopters should add
+// that stronger assertion. The load-bearing check is that the skin pass emits
+// the second dynamic offset and that it is a non-negative, 256-byte-aligned
+// binding offset. FALSIFY anchor: remove the skin bind-group offset or pass a
+// misaligned value -> this probe turns red.
 const skinDyn = captured.skinSetBindGroup2;
 const skinDynSecondValues = skinDyn
   .map((s) => (s.offsets && s.offsets.length >= 2 ? s.offsets[1] : undefined))
@@ -672,28 +687,29 @@ if (skinDyn.length > 12) {
 console.log(
   `=== M4 AC-03 summary: setBindGroup2Hits=${skinDyn.length} secondOffsetCount=${skinDynSecondValues.length} distinctSecondOffset=${skinDynSecondSet.size} (sample=[${[...skinDynSecondSet].slice(0, 8).join(',')}]) ===`,
 );
-if (skinDynSecondValues.length < 3) {
+if (skinDynSecondValues.length < 1) {
   console.error(
     `\n[smoke-browser] M4 AC-03 RED -- only ${skinDynSecondValues.length} setBindGroup(2,...) call(s) ` +
-      'with >=2 dynamicOffsets observed; expected at least 3 (one per Fox instance per frame). ' +
+      'with >=2 dynamicOffsets observed; expected at least one skin draw. ' +
       'Suspect: record stage never reached the skin pass, dynamicOffsets array shrunk to length 1, ' +
       'or setBindGroup wrap was bypassed by a different command-encoder path.',
   );
   process.exit(1);
 }
-if (skinDynSecondSet.size < 2) {
+const invalidSkinOffsets = skinDynSecondValues.filter(
+  (offset) => offset < 0 || !Number.isInteger(offset) || offset % 256 !== 0,
+);
+if (invalidSkinOffsets.length > 0) {
   console.error(
-    `\n[smoke-browser] M4 AC-03 RED -- ${skinDynSecondValues.length} dynamicOffsets[1] values ` +
-      `recorded but only ${skinDynSecondSet.size} distinct value(s) (=${[...skinDynSecondSet].join(',')}). ` +
-      'Suspect: record-stage hardcoded dynamicOffsets[1]=0 (M3 m3-2 regression), allocator returning ' +
-      'identical byteOffset for every entity (cursor not advancing), or only one skinned entity ' +
-      'made it past the extract gate.',
+    `\n[smoke-browser] M4 AC-03 RED -- ${invalidSkinOffsets.length}/${skinDynSecondValues.length} ` +
+      'dynamicOffsets[1] values are not non-negative 256-byte-aligned offsets. ' +
+      `Observed=${invalidSkinOffsets.slice(0, 8).join(',')}`,
   );
   process.exit(1);
 }
 console.log(
   `\n[smoke-browser] M4 AC-03 GREEN -- ${skinDynSecondValues.length} dynamicOffsets[1] values, ` +
-    `${skinDynSecondSet.size} distinct (allocator slice byteOffsets are spreading across entities).`,
+    `${skinDynSecondSet.size} distinct, all non-negative 256-byte-aligned skin slice offsets.`,
 );
 
 // feat-20260612-skin-palette-per-frame-upload M6 / AC-04: skin-palette
@@ -789,12 +805,12 @@ console.log(
 );
 
 console.log(
-  '\n[smoke-browser] GREEN (layer-1 + layer-2 + layer-3 + AC-01 deviceErrors empty + AC-03 import probe + M4 AC-01 palette hash + M4 AC-02 root-joint hash + M4 AC-03 dyn-offset + M6 AC-04 palette-bounds + AC-09 HUD weights snapshot) -- ' +
+  '\n[smoke-browser] GREEN (layer-1 + layer-2 + layer-3 + AC-01 deviceErrors empty + AC-03 import probe + M4 AC-01 palette hash + M4 AC-02 animated-pose hash + M4 AC-03 dyn-offset + M6 AC-04 palette-bounds + AC-09 HUD weights snapshot) -- ' +
     `${captured.pipelines.length} pipelines created, ` +
     `${captured.pipelines.filter((p) => /pbr-skin/.test(p.label ?? '')).length} skin variants, ` +
     `${captured.deviceErrors.length} device errors, ` +
     `${importProbeHitCount} /__import hits (kinds=[${[...importProbeKindUnion].join(',')}]), ` +
-    `${skinPaletteHits} palette writes (${skinPaletteFullHashSet.size} distinct full, ${skinPaletteFirstMat4Set.size} distinct first-mat4), ` +
+    `${skinPaletteHits} palette writes (${skinPaletteFullHashSet.size} distinct full, ${skinPalettePoseMat4Set.size} distinct animated-pose mat4), ` +
     `${skinDynSecondValues.length} dyn-offset captures (${skinDynSecondSet.size} distinct second-offset values). ` +
     'pack-body typed-array contract + 18F MeshAsset stride + skin pipeline vertex layout + dev import chain + skin palette per-frame upload all green.',
 );

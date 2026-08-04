@@ -2179,7 +2179,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const renderSystem: RenderSystem = createRenderSystem({
     canvas: internals.canvas,
     featureHost: internals.featureHost,
-    renderPhaseObserver: internals.options?.renderPhaseObserver,
+    profiler: internals.options?.profiler,
     // feat-20260622-s5 M3 / w17: device + context read live off `internals` via
     // getters so the recover() rebuild (which swaps internals.device /
     // internals.context for a freshly-acquired pair) is observed by the record
@@ -2576,14 +2576,26 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // POD caches (AssetRegistry catalog/payload, pack cache) are NOT touched
       // (A-AC-12) — only the GpuResourceStore + canvas context are torn down.
       gpuStore.destroyAll();
+      // The shader adapter owns a per-device module cache. Reusing it after a
+      // loss would hand PSO construction opaque ShaderModule handles minted by
+      // the dead device, which can invalidate the first post-recovery command
+      // buffer (or crash the browser GPU process). Keep the ShaderRegistry's
+      // CPU material/source catalogue, but rebuild this device-bound adapter.
+      clearIblCacheForDevice(internals.device);
+      sharedShaderModuleAdapter = null;
+      // The fullscreen post-process builder keeps one empty group-0 layout
+      // outside RenderSystem's frame cache. It is also device-bound, so retain
+      // the source/registration but force the next post-process pass to derive
+      // a layout from the replacement device.
+      emptyPostProcessBgl = null;
       internals.context.unconfigure();
 
       // Step (b) / B-2 / B-AC-02: shed device-bound RenderSystem state minted by
       // the lost device — the render-graph pendingDestroy queue (its PooledTextures
       // belong to the lost device; the clear skips device.destroyTexture, mirroring
-      // the null-device fast path) plus the post-process registry + param UBOs (so
-      // the rebuild's buildReadyWebGPU re-registers the tonemap without a
-      // `post-process-already-registered` collision).
+      // the null-device fast path) plus device-bound post-process resources.
+      // RenderSystem snapshots the CPU declarations, clears old UBOs, and
+      // replays them after the replacement device is live.
       renderSystem.resetForRecover();
 
       // Step (c): re-acquire device through the SAME backend pack (the
@@ -2654,6 +2666,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           materialShaderUvSetCounts,
         );
         pipelineState = await buildPipeline();
+        renderSystem.restorePostProcessResources();
       } catch {
         // Pipeline rebuild failed against the new device. Treat as a device
         // unavailability (the device was acquired but is not usable); health

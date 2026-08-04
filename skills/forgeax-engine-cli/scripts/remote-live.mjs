@@ -8,8 +8,9 @@
 // @forgeax/engine-remote/execute in YOUR open window. Same in-memory world; a
 // world.set shows up on screen immediately, no rebuild/refresh.
 //
-// The eval scope carries the four live roots (world / renderer / assets /
-// debugAdapter) + _import(specifier) — identical to the WS-server eval channel.
+// The eval scope carries the five live roots (world / renderer / assets /
+// debugAdapter / profiler) + _import(specifier) — identical to the WS-server
+// eval channel. Profiler is present only when the page opted in.
 // Handle discovery uses the real queryRun callback form:
 //   let r; const {createQueryState,queryRun,Entity}=await _import('@forgeax/engine-ecs');
 //   const st=createQueryState({with:[Entity]}); queryRun(st,world,b=>{r=Array.from(b.Entity.self)}); r
@@ -22,6 +23,8 @@
 //   node remote-live.mjs "world.inspect().entityCount"
 //   node remote-live.mjs --file snippet.js
 //   node remote-live.mjs --health
+//   node remote-live.mjs --introspect
+//   node remote-live.mjs --profile-latest
 //   FORGEAX_ENGINE_BRIDGE_PORT=5733 node remote-live.mjs "<code>"
 
 import { parseArgs, readSnippet, printResult } from './remote-cli-common.mjs';
@@ -46,11 +49,23 @@ if (process.argv.slice(2).includes('--health')) {
 // Strict spec-driven parse (shared SSOT). Live accepts ONLY --file (and the
 // special-cased --health above) — so a stray flag fails loudly instead of
 // leaking its bare value into the code string.
-const { code: posCode, flags } = parseArgs(process.argv, { value: ['file'] });
-const code = readSnippet(
-  { code: posCode, file: flags.file },
-  'usage: remote-live.mjs "<js code>" | --file <path> | --health',
-);
+const { code: posCode, flags } = parseArgs(process.argv, {
+  boolean: ['introspect', 'profile-latest'],
+  value: ['file'],
+});
+const introspectCode =
+  "const m = await _import('@forgeax/engine-remote/introspect'); return m.buildIntrospectDoc('127.0.0.1', 0, { world, renderer, assets, ...(debugAdapter !== undefined ? { debugAdapter } : {}), ...(profiler !== undefined ? { profiler } : {}) });";
+const latestProfileCode =
+  "if (profiler === undefined) return { ok: false, error: { code: 'profiler-not-enabled', expected: 'an opted-in profiler root', hint: 'Pass profiler to createApp and retry after a host frame boundary.', detail: { enabled: false } } }; return profiler.latestCapture();";
+let code;
+if (flags.introspect) code = introspectCode;
+else if (flags['profile-latest']) code = latestProfileCode;
+else {
+  code = readSnippet(
+    { code: posCode, file: flags.file },
+    'usage: remote-live.mjs "<js code>" | --file <path> | --introspect | --profile-latest | --health',
+  );
+}
 
 let out;
 try {

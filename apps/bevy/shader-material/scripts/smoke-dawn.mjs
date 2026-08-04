@@ -131,21 +131,25 @@ const pngPath = process.env.SMOKE_PNG_OUT ?? resolve(root, 'artifacts', 'smoke-f
 mkdirSync(dirname(pngPath), { recursive: true });
 writeFileSync(pngPath, writeReferencePng(framePixels, WIDTH, HEIGHT));
 let visiblePixels = 0;
-let brightPixels = 0;
+let chromaticPixels = 0;
 const colors = new Set();
 for (let i = 0; i < framePixels.length; i += 4) {
   const r = framePixels[i] ?? 0;
   const g = framePixels[i + 1] ?? 0;
   const b = framePixels[i + 2] ?? 0;
   if (r + g + b > 30) visiblePixels += 1;
-  if (r + g + b > 300) brightPixels += 1;
+  // The custom texture is deliberately saturated. Validate that its color
+  // survives the material path without coupling the smoke to an obsolete
+  // linear-authoring brightness threshold; authored baseColor is sRGB and is
+  // correctly darker after decode to linear runtime values.
+  if (r + g + b > 30 && Math.max(r, g, b) - Math.min(r, g, b) > 12) chromaticPixels += 1;
   colors.add(`${r >> 4}:${g >> 4}:${b >> 4}`);
 }
-console.log(`[smoke] frames=${FRAMES} visiblePixels=${visiblePixels} brightPixels=${brightPixels} colorBins=${colors.size} errors=${errors.length} png=${pngPath}`);
+console.log(`[smoke] frames=${FRAMES} visiblePixels=${visiblePixels} chromaticPixels=${chromaticPixels} colorBins=${colors.size} errors=${errors.length} png=${pngPath}`);
 const failures = [];
 if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
 if (visiblePixels < 500) failures.push(`visiblePixels=${visiblePixels} < 500`);
-if (brightPixels < 20) failures.push(`brightPixels=${brightPixels} < 20`);
+if (chromaticPixels < 500) failures.push(`chromaticPixels=${chromaticPixels} < 500`);
 if (colors.size < 8) failures.push(`colorBins=${colors.size} < 8 (texture/color path is not visible)`);
 if (errors.length > 0) failures.push(`Renderer.onError=${errors.map((error) => error.code).join(',')}`);
 if (failures.length > 0) {

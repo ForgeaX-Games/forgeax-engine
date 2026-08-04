@@ -19,6 +19,7 @@ export function registerCaptureHmrListener(
   debugInst: CaptureBrowserRecorder,
 ): void {
   hot.on('forgeax-debug:capture', (payload: { frames?: number; label?: string }) => {
+    if (import.meta.env?.DEV !== true) return;
     import('@forgeax/engine-rhi-debug/capture-browser').then((m) =>
       m.captureAndUpload(debugInst, payload.frames ?? 1, payload.label),
     );

@@ -43,7 +43,7 @@ while (Date.now() < deadline) {
 await page.waitForTimeout(2_000);
 
 const before = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence?.snapshot());
-if (!before?.customProjectileMesh?.available || before.customProjectileMesh.uvMode !== 'upper') {
+if (!before?.customProjectileMesh?.available || before.customProjectileMesh.uvMode !== 'upper' || before.customProjectileMesh.textureSource !== 'authored-compressed' || typeof before.customProjectileMesh.textureFormat !== 'string' || before.customProjectileMesh.textureFormat.length === 0) {
   throw new Error(`custom projectile mesh unavailable: ${JSON.stringify(before?.customProjectileMesh)}`);
 }
 await page.evaluate(() => {

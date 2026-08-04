@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "feat-20260615-fbx-importer-via-sdk M5 convergence app — skinned FBX via FBX SDK native binding. Loads JointHierarchy.fbx (skeleton-only, no mesh skin) as a static-cube placeholder; full skinned animation path deferred to a future feat with a skinned .fbx fixture.",
+  "description": "FBX source/import/GUID/skin/animation convergence app. Loads the humanoid.fbx fixture, instantiates three skinned scene copies, and drives distinct animation clips through AnimationPlayer.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

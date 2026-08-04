@@ -120,6 +120,7 @@ describe('create-app-stop.test.ts', () => {
 
 function makeFrameLoopStub(): FrameLoopHandle {
   return {
+    setDrawSource() {},
     start() {
       return ok(undefined);
     },

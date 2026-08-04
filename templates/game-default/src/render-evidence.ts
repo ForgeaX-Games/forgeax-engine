@@ -9,8 +9,24 @@ import type { TargetHealthWitness } from './target-health';
 import type { TargetDisablingWitness } from './target-disabling';
 import type { DepthOfFieldHandle, DepthOfFieldSnapshot } from './depth-of-field';
 import type { ChromaticAberrationHandle, ChromaticAberrationSnapshot } from './chromatic-aberration';
+import type { FbxSkinnedTargetSnapshot } from './fbx-skinned-target';
+import type { WorldScoreTextSnapshot } from './world-score-text';
+import type { MultiWorldOverlaySnapshot } from './multi-world-overlay';
 
 export const GAME_DEFAULT_RENDER_EVIDENCE_KEY = '__forgeaxGameDefaultRenderEvidence';
+
+export type CharacterControllerEvidence = {
+  readonly grounded: boolean;
+  readonly position: readonly [number, number, number];
+};
+
+export type MultiMaterialEvidence = {
+  readonly available: boolean;
+  readonly materialCount: number;
+  readonly submeshCount: number;
+  readonly topologies: readonly string[];
+  readonly slotsAligned: boolean;
+};
 
 export type GameDefaultRenderEvidence = {
   readonly renderer: Renderer;
@@ -28,7 +44,9 @@ export type GameDefaultRenderEvidence = {
   readonly chromaticAberration: () => ChromaticAberrationSnapshot;
   readonly toggleCustomProjectileMesh?: () => void;
   readonly toggleMeshHandleSwap?: () => void;
+  readonly toggleFbxMeshSwap?: () => void;
   readonly gamepad: () => GamepadEvidence;
+  readonly characterController?: () => CharacterControllerEvidence;
   readonly setViewMode: (mode: 'topdown' | 'orbit' | 'fps' | 'pan') => void;
   readonly reset: () => void;
   readonly state?: Pick<GameplayStateHandle, 'requestReset' | 'requestInvalid'>;
@@ -48,11 +66,23 @@ export type GameDefaultRenderEvidence = {
     readonly animatedShaderTime: number;
     readonly clearcoatMaterial: { readonly enabled: boolean; readonly strength: number; readonly roughness: number } | null;
     readonly deferredCommands: { readonly spawned: number; readonly despawned: number };
-    readonly customProjectileMesh: { readonly available: boolean; readonly uvMode: 'upper' | 'lower'; readonly toggles: number };
+    readonly customProjectileMesh: {
+      readonly available: boolean;
+      readonly uvMode: 'upper' | 'lower';
+      readonly toggles: number;
+      readonly textureSource: 'authored-compressed' | 'procedural-fallback';
+      readonly textureFormat: string;
+    };
     readonly meshHandleSwap: { readonly available: boolean; readonly active: 'original' | 'alternate'; readonly swaps: number };
+    readonly fbxMeshSwap: { readonly available: boolean; readonly active: 'original' | 'fbx'; readonly swaps: number };
+    readonly fbxSkinnedTarget: FbxSkinnedTargetSnapshot;
     readonly gamepad: GamepadEvidence;
+    readonly characterController: CharacterControllerEvidence | null;
     readonly targetHealth: TargetHealthWitness;
     readonly targetDisabling: TargetDisablingWitness;
+    readonly worldScoreText: WorldScoreTextSnapshot;
+    readonly multiMaterial: MultiMaterialEvidence;
+    readonly multiWorld: MultiWorldOverlaySnapshot;
     readonly materialShaderIdentifiers: readonly string[];
     readonly state?: GameplayStateWitness;
     readonly changeDetection?: GameplayChangeDetectionWitness;
@@ -93,11 +123,21 @@ type RenderEvidenceArgs = {
   readonly toggleBloom: () => void;
   readonly depthOfField?: DepthOfFieldHandle;
   readonly chromaticAberration?: ChromaticAberrationHandle;
-  readonly customProjectileMesh?: () => { readonly available: boolean; readonly uvMode: 'upper' | 'lower'; readonly toggles: number };
+  readonly customProjectileMesh?: () => {
+    readonly available: boolean;
+    readonly uvMode: 'upper' | 'lower';
+    readonly toggles: number;
+    readonly textureSource: 'authored-compressed' | 'procedural-fallback';
+    readonly textureFormat: string;
+  };
   readonly toggleCustomProjectileMesh?: () => void;
   readonly meshHandleSwap?: () => { readonly active: 'original' | 'alternate'; readonly swaps: number };
   readonly toggleMeshHandleSwap?: () => void;
+  readonly fbxMeshSwap?: () => { readonly active: 'original' | 'fbx'; readonly swaps: number };
+  readonly fbxSkinnedTarget?: () => FbxSkinnedTargetSnapshot;
+  readonly toggleFbxMeshSwap?: () => void;
   readonly input?: () => InputSnapshot;
+  readonly characterController?: () => CharacterControllerEvidence;
   readonly viewMode: () => 'topdown' | 'orbit' | 'fps' | 'pan';
   readonly setViewMode: (mode: 'topdown' | 'orbit' | 'fps' | 'pan') => void;
   readonly cameraProjection: () => 'perspective' | 'orthographic';
@@ -110,6 +150,9 @@ type RenderEvidenceArgs = {
   readonly deferredCommands?: () => { readonly spawned: number; readonly despawned: number };
   readonly targetHealth?: () => TargetHealthWitness;
   readonly targetDisabling?: () => TargetDisablingWitness;
+  readonly worldScoreText?: () => WorldScoreTextSnapshot;
+  readonly multiMaterial?: () => MultiMaterialEvidence;
+  readonly multiWorld?: () => MultiWorldOverlaySnapshot;
   readonly isFlashed: (entity: EntityHandle) => boolean;
   readonly reset: () => void;
   readonly state?: GameplayStateHandle;
@@ -138,7 +181,9 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
     chromaticAberration: () => args.chromaticAberration?.snapshot() ?? { active: false, intensity: 0, effect: 'unavailable' },
     ...(args.toggleCustomProjectileMesh ? { toggleCustomProjectileMesh: args.toggleCustomProjectileMesh } : {}),
     ...(args.toggleMeshHandleSwap ? { toggleMeshHandleSwap: args.toggleMeshHandleSwap } : {}),
+    ...(args.toggleFbxMeshSwap ? { toggleFbxMeshSwap: args.toggleFbxMeshSwap } : {}),
     gamepad: () => readGamepadEvidence(args.input),
+    ...(args.characterController ? { characterController: args.characterController } : {}),
     setViewMode: args.setViewMode,
     reset: args.reset,
     ...(args.state ? { state: { requestReset: args.state.requestReset, requestInvalid: args.state.requestInvalid } } : {}),
@@ -158,13 +203,27 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
       animatedShaderTime: animatedShaderTime(args.animatedMaterial),
       clearcoatMaterial: args.clearcoatMaterial?.() ?? null,
       deferredCommands: args.deferredCommands?.() ?? { spawned: 0, despawned: 0 },
-      customProjectileMesh: args.customProjectileMesh?.() ?? { available: false, uvMode: 'upper', toggles: 0 },
+      customProjectileMesh: args.customProjectileMesh?.() ?? {
+        available: false,
+        uvMode: 'upper',
+        toggles: 0,
+        textureSource: 'procedural-fallback',
+        textureFormat: 'rgba8unorm-srgb',
+      },
       meshHandleSwap: args.meshHandleSwap?.() === undefined
         ? { available: false, active: 'original', swaps: 0 }
         : { available: true, ...args.meshHandleSwap()! },
+      fbxMeshSwap: args.fbxMeshSwap?.() === undefined
+        ? { available: false, active: 'original', swaps: 0 }
+        : { available: true, ...args.fbxMeshSwap()! },
+      fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
       gamepad: readGamepadEvidence(args.input),
+      characterController: args.characterController?.() ?? null,
       targetHealth: args.targetHealth?.() ?? { contiguousSupported: false, contiguousCalls: 0, rows: 0, lengthsEqual: true, totalCurrent: 0, totalMax: 0, damageEvents: 0 },
       targetDisabling: args.targetDisabling?.() ?? { activeCount: 0, disabledCount: 0, disableEvents: 0 },
+      worldScoreText: args.worldScoreText?.() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0] },
+      multiMaterial: args.multiMaterial?.() ?? { available: false, materialCount: 0, submeshCount: 0, topologies: [], slotsAligned: false },
+      multiWorld: args.multiWorld?.() ?? { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 },
       materialShaderIdentifiers: [...args.renderer!.shader.materialShaderIdentifiers()],
       ...(args.state ? { state: args.state.snapshot() } : {}),
       ...(args.changeDetection ? { changeDetection: args.changeDetection.snapshot() } : {}),

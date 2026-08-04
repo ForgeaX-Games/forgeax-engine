@@ -1,0 +1,196 @@
+import { World } from '@forgeax/engine-ecs';
+import { createProfiler, type ProfileCapture } from '@forgeax/engine-profiler';
+import type { DrawOwnerOptions, Renderer } from '@forgeax/engine-render';
+import { describe, expect, it } from 'vitest';
+
+import { createFrameLoop } from '../internal/frame-loop';
+
+const APP_PHASES = [
+  'frame-total',
+  'world-update-primary',
+  'draw-source',
+  'world-update-injected',
+  'renderer-draw',
+] as const;
+
+function makeScheduler() {
+  let callback: ((timestamp: number) => void) | undefined;
+  return {
+    raf(next: (timestamp: number) => void): number {
+      callback = next;
+      return 1;
+    },
+    caf(): void {
+      callback = undefined;
+    },
+    tick(timestamp: number): void {
+      const next = callback;
+      callback = undefined;
+      next?.(timestamp);
+    },
+  };
+}
+
+function makeRenderer(onDraw: (options: unknown) => void = () => {}): Renderer {
+  return {
+    backend: 'webgpu',
+    ready: Promise.resolve({ ok: true, value: undefined }),
+    draw: (_worlds: World[], options: DrawOwnerOptions) => {
+      onDraw(options);
+      return { ok: true, value: undefined };
+    },
+    onError: () => () => {},
+    onLost: () => () => {},
+    dispose: () => {},
+  } as unknown as Renderer;
+}
+
+function startSession(profiler: ReturnType<typeof createProfiler>, frameLimit = 2) {
+  const result = profiler.startCapture({ frameLimit, eventLimit: 64 });
+  if (!result.ok) throw new Error(result.error.code);
+  return result.value;
+}
+
+function finish(profiler: ReturnType<typeof createProfiler>): ProfileCapture {
+  const session = profiler.activeSession();
+  if (session === undefined) {
+    const latest = profiler.latestCapture();
+    expect(latest).toBeDefined();
+    if (latest === undefined) throw new Error('capture did not publish');
+    return latest;
+  }
+  const result = session?.finish();
+  expect(result?.ok).toBe(true);
+  if (result === undefined || !result.ok) throw new Error('capture did not finish');
+  return result.value;
+}
+
+describe('App profiler frame token', () => {
+  it('records five App phases with one token per logical frame', () => {
+    const profiler = createProfiler();
+    expect(startSession(profiler).captureId).toBe('capture-0001');
+    const scheduler = makeScheduler();
+    const drawOptions: unknown[] = [];
+    const loop = createFrameLoop({
+      world: new World(),
+      renderer: makeRenderer((options) => drawOptions.push(options)),
+      now: (() => {
+        const values = [1000, 1016, 1032];
+        return () => values.shift() ?? 1032;
+      })(),
+      raf: scheduler.raf,
+      caf: scheduler.caf,
+      profiler,
+    });
+
+    loop.start().unwrap();
+    scheduler.tick(1016);
+    scheduler.tick(1032);
+    loop.stop().unwrap();
+
+    const capture = finish(profiler);
+    expect(capture.phaseCatalog.app).toEqual(APP_PHASES);
+    expect(capture.captureId).toBe('capture-0001');
+    expect(capture.records.filter((record) => record.source === 'app')).toHaveLength(10);
+    expect(
+      capture.records
+        .filter((record) => record.source === 'app' && record.kind === 'phase')
+        .map((record) => record.phase),
+    ).toEqual(expect.arrayContaining([...APP_PHASES]));
+    expect(
+      new Set(
+        capture.records
+          .filter((record) => record.source === 'app' && record.kind === 'phase')
+          .map((record) => record.phase),
+      ),
+    ).toEqual(new Set(APP_PHASES));
+    expect(
+      new Set(
+        capture.records.filter((record) => record.source === 'app').map((record) => record.frameId),
+      ),
+    ).toEqual(new Set([1, 2]));
+    expect(drawOptions).toHaveLength(2);
+    expect(drawOptions[0]).toMatchObject({
+      profileFrame: { captureId: 'capture-0001', frameId: 1 },
+    });
+    expect(drawOptions[1]).toMatchObject({
+      profileFrame: { captureId: 'capture-0001', frameId: 2 },
+    });
+  });
+
+  it('does not reuse capture identity and isolates observer and sink failures', () => {
+    const profiler = createProfiler({
+      sink: {
+        write: () => {
+          throw new Error('sink failure');
+        },
+      },
+    });
+    const session = startSession(profiler, 1);
+    const scheduler = makeScheduler();
+    let draws = 0;
+    const loop = createFrameLoop({
+      world: new World(),
+      renderer: makeRenderer(() => {
+        draws += 1;
+      }),
+      now: () => 1000,
+      raf: scheduler.raf,
+      caf: scheduler.caf,
+      profiler,
+    });
+
+    loop.start().unwrap();
+    scheduler.tick(1000);
+    loop.stop().unwrap();
+    expect(draws).toBe(1);
+    expect(session.finish().ok).toBe(false);
+
+    const secondSession = startSession(profiler, 1);
+    expect(secondSession.captureId).not.toBe(session.captureId);
+  });
+
+  it('publishes a partial artifact when the host stops before its frame boundary', () => {
+    const profiler = createProfiler();
+    startSession(profiler, 2);
+    const scheduler = makeScheduler();
+    const loop = createFrameLoop({
+      world: new World(),
+      renderer: makeRenderer(),
+      now: () => 1000,
+      raf: scheduler.raf,
+      caf: scheduler.caf,
+      profiler,
+    });
+
+    loop.start().unwrap();
+    scheduler.tick(1000);
+    loop.stop().unwrap();
+
+    expect(profiler.latestCapture()?.completeness).toMatchObject({
+      status: 'partial',
+      incompleteReason: 'stopped-before-frame',
+    });
+    expect(profiler.activeCaptureId()).toBeUndefined();
+  });
+
+  it('keeps the default-off path free of profiler records', () => {
+    const scheduler = makeScheduler();
+    let draws = 0;
+    const loop = createFrameLoop({
+      world: new World(),
+      renderer: makeRenderer(() => {
+        draws += 1;
+      }),
+      now: () => 1000,
+      raf: scheduler.raf,
+      caf: scheduler.caf,
+    });
+
+    loop.start().unwrap();
+    scheduler.tick(1000);
+    loop.stop().unwrap();
+
+    expect(draws).toBe(1);
+  });
+});

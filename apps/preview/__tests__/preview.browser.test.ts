@@ -29,7 +29,8 @@ import { AudioSource } from '@forgeax/engine-audio';
 import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
 import type { InputBackend, InputSnapshot } from '@forgeax/engine-input';
-import { Camera } from '@forgeax/engine-render';
+import { physicsPlugin } from '@forgeax/engine-physics';
+import { Camera, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -89,7 +90,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     };
     const appRes = await createApp(
       canvas,
-      { input: inputBackend, plugins: [audioPlugin()] },
+      { input: inputBackend, plugins: [audioPlugin(), physicsPlugin('rapier-3d')] },
       { importTransport: createDevImportTransport() },
     );
     expect(appRes.ok).toBe(true);
@@ -184,6 +185,10 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     heldKeys.delete('d');
     heldKeys.delete('D');
     tickWorld();
+    // Rapier 3D builds the authored Player body on the first physics sync;
+    // warm a few host ticks before asserting movement so the KCC readiness
+    // boundary is observed rather than racing async WASM setup.
+    for (let i = 0; i < 5; i++) tickWorld();
     heldKeys.add('d');
     tickWorld();
     const movementSnapshot = app.world.getResource<InputSnapshot>('InputSnapshot');
@@ -236,6 +241,27 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
       entityCount,
       `only ${entityCount} entities -- scene pack failed to instantiate (fallback path)`,
     ).toBeGreaterThanOrEqual(21);
+
+    // The authored scene also mounts the reusable NestedTarget prefab into
+    // localId 24. Verify the mount window and its field override survived the
+    // public loadByGuid -> instantiate path, rather than only counting entities.
+    const sceneRoots: number[] = [];
+    queryRun(createQueryState({ with: [SceneInstance, Entity] }), app.world, (bundle) => {
+      sceneRoots.push(...bundle.Entity.self);
+    });
+    expect(sceneRoots.length, 'default scene must expose a SceneInstance root').toBeGreaterThan(0);
+    const sceneInstance = app.world.get(sceneRoots[0]!, SceneInstance);
+    expect(sceneInstance.ok).toBe(true);
+    if (sceneInstance.ok) {
+      const nestedEntity = sceneInstance.value.mapping[24];
+      expect(nestedEntity, 'nested prefab member localId 24 must be live').not.toBe(0xffffffff);
+      if (nestedEntity !== undefined && nestedEntity !== 0xffffffff) {
+        expect(app.world.get(nestedEntity, MeshRenderer).ok).toBe(true);
+        const nestedTransform = app.world.get(nestedEntity, Transform);
+        expect(nestedTransform.ok).toBe(true);
+        expect(nestedTransform.ok && nestedTransform.value.scale[0]).toBeCloseTo(0.7, 5);
+      }
+    }
 
     // The headline gate: a full createApp -> entry -> N-frame run with no
     // SUT-attributable renderer error. We filter to SUT_ATTRIBUTABLE_CODES

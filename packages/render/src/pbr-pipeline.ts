@@ -32,7 +32,7 @@ import type {
   Sampler,
   TextureView,
 } from '@forgeax/engine-rhi';
-
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
 import { derive, type ParamSchemaEntry } from '@forgeax/engine-types';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
 
@@ -110,30 +110,9 @@ export interface PbrPipelineLayoutBundle {
  * (the caps-driven `buildPbrPipelineLayouts` seam). Declares the 3 standard
  * user-region textures + a numeric UBO run; `derive()` collapses the numerics
  * into binding 0 and emits sampler/texture pairs at 1..6 — byte-equivalent to
- * the legacy fixed base-7. Kept here (not imported from the shader package) so
- * `buildPbrPipelineLayouts` has no shader-registry dependency.
+ * the legacy fixed base-7. The shared PBR parameter contract comes from the
+ * shader package; this module only derives the GPU layout.
  */
-const DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA: readonly ParamSchemaEntry[] = [
-  { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
-  { name: 'metallic', type: 'f32', default: 0 },
-  { name: 'roughness', type: 'f32', default: 0.5 },
-  { name: 'metallicChannel', type: 'f32', default: 2 },
-  { name: 'roughnessChannel', type: 'f32', default: 1 },
-  { name: 'aoChannel', type: 'f32', default: 0 },
-  { name: 'extraChannel', type: 'f32', default: 0 },
-  { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
-  { name: 'emissiveIntensity', type: 'f32', default: 0 },
-  { name: 'occlusionStrength', type: 'f32', default: 1 },
-  { name: 'alphaCutoff', type: 'f32', default: 0 },
-  { name: 'clearcoat', type: 'f32', default: 0 },
-  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
-  { name: 'specularTint', type: 'vec3', default: [1, 1, 1] },
-  { name: 'baseColorTexture', type: 'texture2d' },
-  { name: 'metallicRoughnessTexture', type: 'texture2d' },
-  { name: 'normalTexture', type: 'texture2d' },
-  { name: 'specularTintTexture', type: 'texture2d' },
-];
-
 /**
  * Build the PBR material BGL **user-region** from a paramSchema via the
  * `derive()` SSOT (D-1). The user-region is binding 0 (the run-merged material
@@ -159,7 +138,7 @@ const DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA: readonly ParamSchemaEntry[] = [
  *   built-in standard-PBR shape when omitted, for the caps-driven seam).
  */
 export function buildPbrMaterialUserRegionEntries(
-  paramSchema: readonly ParamSchemaEntry[] = DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA,
+  paramSchema: readonly ParamSchemaEntry[] = DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
 ): GPUBindGroupLayoutEntry[] {
   const derived = derive(paramSchema);
   // derive() returns the engine BindGroupLayoutEntry (exactOptionalPropertyTypes

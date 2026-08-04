@@ -106,6 +106,29 @@ describe('Materials.standard multi-pass (w14)', () => {
   });
 
   describe('PBR properties preserved', () => {
+    it('keeps authored sRGB numbers unchanged and makes sRGB the schema default', () => {
+      const mat = Materials.standard({ baseColor: [0.5, 0.25, 0.75, 0.4] });
+      expect(mat.values?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
+      expect(mat.colorSpace).toBeUndefined();
+      expect(mat.parameters?.find((parameter) => parameter.name === 'baseColor')).toEqual({
+        name: 'baseColor',
+        type: 'color',
+      });
+      expect(mat.parameters?.find((parameter) => parameter.name === 'emissive')).toMatchObject({
+        name: 'emissive',
+        colorSpace: 'srgb',
+      });
+    });
+
+    it('persists an explicit linear override without changing numeric values', () => {
+      const mat = Materials.standard({
+        baseColor: [0.5, 0.25, 0.75, 0.4],
+        colorSpace: 'linear',
+      });
+      expect(mat.values?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
+      expect(mat.colorSpace).toBe('linear');
+    });
+
     it('values includes metallic and roughness defaults', () => {
       const mat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
       expect(mat.values?.metallic).toBe(0);

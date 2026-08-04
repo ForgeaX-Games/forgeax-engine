@@ -21,6 +21,9 @@
         "../../../../forgeax-engine-assets/learn-opengl/meshes"
       ]
     },
+    "rhiDebug": {
+      "riskFamilies": ["materials-textures"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

@@ -34,7 +34,7 @@ try {
       await sleep(250);
     }
   }
-  await page.waitForTimeout(1_500);
+  await page.waitForFunction(() => Boolean(globalThis.__forgeaxGameDefaultRenderEvidence?.state), undefined, { timeout: 10_000 });
   const read = () => page.evaluate(() => {
     const evidence = globalThis.__forgeaxGameDefaultRenderEvidence;
     if (!evidence?.state) throw new Error('state evidence handle was not installed');

@@ -146,11 +146,12 @@
         ]
        },
        "MeshFilter": {
-        "assetHandle": 0
+        "assetHandle": 14
        },
        "MeshRenderer": {
         "materials": [
-         6
+         15,
+         16
         ]
        }
       }
@@ -178,7 +179,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         7
+         6
         ]
        }
       }
@@ -206,7 +207,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         8
+         7
         ]
        }
       }
@@ -234,7 +235,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        }
       }
@@ -262,7 +263,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        }
       }
@@ -290,7 +291,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        }
       }
@@ -318,7 +319,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        }
       }
@@ -346,7 +347,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        }
       }
@@ -374,7 +375,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        }
       }
@@ -402,7 +403,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -450,7 +451,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         10
+         9
         ]
        },
        "ChildOf": {
@@ -481,7 +482,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         9
+         8
         ]
        },
        "ChildOf": {
@@ -512,7 +513,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         9
+         8
         ]
        },
        "ChildOf": {
@@ -543,7 +544,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         9
+         8
         ]
        },
        "ChildOf": {
@@ -574,7 +575,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         11
+         10
         ]
        },
        "ChildOf": {
@@ -605,7 +606,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         11
+         10
         ]
        },
        "ChildOf": {
@@ -620,7 +621,7 @@
         "value": "Skylight"
        },
        "Skylight": {
-        "equirect": 14,
+        "equirect": 13,
         "color": [
          1,
          1,
@@ -637,10 +638,30 @@
         "value": "Skybox"
        },
        "SkyboxBackground": {
-        "equirect": 14,
+        "equirect": 13,
         "mode": 0
        }
       }
+     }
+    ],
+    "mounts": [
+     {
+      "localId": 23,
+      "source": 17,
+      "memberFirst": 24,
+      "memberCount": 1,
+      "overrides": [
+       {
+        "localId": 24,
+        "comp": "Transform",
+        "field": "scale",
+        "value": [
+         0.7,
+         0.7,
+         0.7
+        ]
+       }
+      ]
      }
     ]
    },
@@ -651,7 +672,6 @@
     "423f2ea4-a8f2-504f-a1b5-323e3adf94d1",
     "95730fd2-9846-5f84-8658-0b3c971eb263",
     "4b077814-3cc4-51b5-8e76-e3d273dad53b",
-    "f6205ca9-71c6-54b2-946c-45b3154931a4",
     "7d718b8e-9fac-5301-b5cb-e0bc940bae67",
     "65a4a1d4-2abf-535b-923e-bd066a9ab475",
     "a1b2c3d4-0001-5000-8000-000000000001",
@@ -659,7 +679,52 @@
     "a1b2c3d4-0003-5000-8000-000000000003",
     "c0a7e000-0001-5000-8000-0000000000c1",
     "c0a7e000-0002-5000-8000-0000000000c2",
-    "81eec382-392f-5a93-8998-0ecf11ef7990"
+    "81eec382-392f-5a93-8998-0ecf11ef7990",
+    "d9f2a000-0001-5000-8000-000000000001",
+    "d9f2a000-0002-5000-8000-000000000002",
+    "d9f2a000-0003-5000-8000-000000000003",
+    "0f20e111-5b2f-5a77-9a02-2f5d1e9c7a11"
+   ],
+   "artifacts": {}
+  },
+  {
+   "guid": "0f20e111-5b2f-5a77-9a02-2f5d1e9c7a11",
+   "kind": "scene",
+   "payload": {
+    "entities": [
+     {
+      "localId": 0,
+      "components": {
+       "Name": {
+        "value": "NestedTarget"
+       },
+       "Transform": {
+        "pos": [
+         6.5,
+         0.75,
+         -2.5
+        ],
+        "scale": [
+         0.8,
+         0.8,
+         0.8
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 0
+       },
+       "MeshRenderer": {
+        "materials": [
+         1
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "refs": [
+    "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
+    "d9f2a000-0002-5000-8000-000000000002"
    ],
    "artifacts": {}
   },
@@ -787,49 +852,6 @@
      ],
      "metallic": 0,
      "roughness": 0.85
-    }
-   },
-   "refs": [],
-   "artifacts": {}
-  },
-  {
-   "guid": "f6205ca9-71c6-54b2-946c-45b3154931a4",
-   "kind": "material",
-   "payload": {
-    "passes": [
-     {
-      "name": "Forward",
-      "program": {
-       "module": "forgeax::default-standard-pbr"
-      },
-      "renderState": {
-       "tags": {
-        "LightMode": "Forward"
-       },
-       "queue": 2000
-      }
-     },
-     {
-      "name": "ShadowCaster",
-      "program": {
-       "module": "forgeax::default-shadow-caster"
-      },
-      "renderState": {
-       "tags": {
-        "LightMode": "ShadowCaster"
-       }
-      }
-     }
-    ],
-    "values": {
-     "baseColor": [
-      0.9058823529411765,
-      0.43529411764705883,
-      0.3176470588235294,
-      1
-     ],
-     "metallic": 0,
-     "roughness": 0.7
     }
    },
    "refs": [],

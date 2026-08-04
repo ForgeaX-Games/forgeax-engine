@@ -30,7 +30,7 @@ import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
  * and sprite-lit materials" is provably the only delta required.
  */
 const defaultSpriteLitParamSchema: readonly ParamSchemaEntry[] = [
-  { name: 'colorTint', type: 'vec4', default: [1.0, 1.0, 1.0, 1.0] },
+  { name: 'colorTint', type: 'vec4', colorSpace: 'srgb', default: [1.0, 1.0, 1.0, 1.0] },
   { name: 'region', type: 'vec4', default: [0.0, 0.0, 1.0, 1.0] },
   { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1.0, 1.0] },
   { name: 'slicesAndMode', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },

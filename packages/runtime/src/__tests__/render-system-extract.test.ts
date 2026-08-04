@@ -23,6 +23,7 @@ import {
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
+import { srgbChannelToLinear } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -716,9 +717,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const snap = frame.renderables[0]?.material;
       expect(snap).toBeDefined();
       expect(snap?.materialShaderId).toBe('forgeax::default-unlit');
-      expect(snap?.baseColor[0]).toBeCloseTo(0.2);
-      expect(snap?.baseColor[1]).toBeCloseTo(0.3);
-      expect(snap?.baseColor[2]).toBeCloseTo(0.4);
+      expect(snap?.baseColor[0]).toBeCloseTo(srgbChannelToLinear(0.2));
+      expect(snap?.baseColor[1]).toBeCloseTo(srgbChannelToLinear(0.3));
+      expect(snap?.baseColor[2]).toBeCloseTo(srgbChannelToLinear(0.4));
     });
   });
 }

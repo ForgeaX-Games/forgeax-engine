@@ -1,6 +1,6 @@
 # @forgeax/engine-remote
 
-> **Single capability — `eval` a live engine.** Send a JavaScript snippet to a running engine instance, have it executed against the live World / Renderer / AssetRegistry, and receive a structured result. Aligned with [Bevy BRP](https://github.com/bevyengine/bevy/discussions/15323) and [Unreal Remote Control](https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-control-api-http-reference-for-unreal-engine) — "evaluate code against a live instance" rather than "attach a debugger UI panel." Four live roots injected into eval scope (`world`, `renderer`, `assets`, `debugAdapter`); `_import(specifier)` for dynamic ESM imports. No Registry, no pre-built commands, no read-only sandbox. A `switch` over the 4-member `RemoteErrorCode` closed union is the only error vocabulary.
+> **Single capability — `eval` a live engine.** Send a JavaScript snippet to a running engine instance, have it executed against the live World / Renderer / AssetRegistry, and receive a structured result. Aligned with [Bevy BRP](https://github.com/bevyengine/bevy/discussions/15323) and [Unreal Remote Control](https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-control-api-http-reference-for-unreal-engine) — "evaluate code against a live instance" rather than "attach a debugger UI panel." Four required roots plus the optional `profiler` root are injected into eval scope; `_import(specifier)` enables dynamic ESM imports. No Registry, no pre-built commands, no read-only sandbox. A `switch` over the closed `RemoteErrorCode` union is the only error vocabulary.
 
 ```mermaid
 flowchart LR
@@ -57,7 +57,7 @@ is no longer necessary. If a returned value is a Promise it is awaited before be
 
 ### Prerequisites
 
-Four live roots are always present in eval scope:
+Four live roots are always present in eval scope. The fifth root is opt-in:
 
 | Root | Type | Purpose |
 |:--|:--|:--|
@@ -65,11 +65,12 @@ Four live roots are always present in eval scope:
 | `renderer` | `Renderer` | Renderer control: create/destroy render targets, read backbuffer |
 | `assets` | `AssetRegistry` | Asset queries: `loadByGuid`, `resolveName`, `rename` |
 | `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrame({...})`, `inspectAt({...})`. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). |
+| `profiler` | `Profiler \| undefined` | Bounded CPU capture: `startCapture({ frameLimit, eventLimit })`. **Only defined when the host passes `profiler` to `createApp` or `startServer`.** |
 
 A fifth injection — `_import(specifier)` — enables dynamic ESM imports inside eval scope. **Plain `import` keyword is NOT available**; scripts use `await _import('@forgeax/engine-ecs')` to pull in engine packages.
 
 > [!NOTE]
-> `debugAdapter` is conditional: it is injected only when `createApp` ran under `FORGEAX_ENGINE_RHI_DEBUG=1` (the rhi-debug recorder path). Without that flag it is `undefined`, so frame-capture scripts must `if (debugAdapter) { ... }` or check for the flag first. The other three roots (`world` / `renderer` / `assets`) are always present.
+> `debugAdapter` and `profiler` are conditional capabilities. Guard each root before use. The other three roots (`world` / `renderer` / `assets`) are always present.
 
 ### Handle Discovery
 
@@ -156,6 +157,24 @@ const draw = await debugAdapter.inspectAt({ tape, drawIdx: 3 });
 ```
 
 Offline CLI subcommands (`inspect-offline`, `summary`, `trigger-browser`) do not connect over WebSocket and are not routed through eval. See `@forgeax/engine-rhi-debug` README for the full capture/inspect/summary workflow.
+
+### CPU profiling via profiler
+
+When the host opts in, use the existing `eval` method to start and finish a bounded CPU capture.
+There is no profiler-specific JSON-RPC method and no new transport:
+
+```js
+if (profiler === undefined) {
+  return { ok: false, error: { code: 'profiler-not-enabled' } };
+}
+const started = profiler.startCapture({ frameLimit: 120, eventLimit: 1024 });
+if (!started.ok) return started;
+const finished = started.value.finish();
+return finished;
+```
+
+The returned `ProfileCapture` is suitable for `@forgeax/engine-profiler` validation and offline
+CLI analysis. The root does not add ECS, GPU, UI, or network-trace behavior to the remote package.
 
 ## RemoteErrorCode
 

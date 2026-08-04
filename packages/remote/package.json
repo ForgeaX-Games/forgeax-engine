@@ -22,6 +22,10 @@
       "types": "./dist/execute.d.ts",
       "import": "./dist/execute.mjs"
     },
+    "./introspect": {
+      "types": "./dist/introspect.d.ts",
+      "import": "./dist/introspect.mjs"
+    },
     "./errors": {
       "types": "./dist/errors.d.ts",
       "import": "./dist/errors.mjs"
@@ -41,6 +45,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "ws": "^8.20.0"
   },

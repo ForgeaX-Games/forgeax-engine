@@ -157,4 +157,27 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
 
     loop.stop();
   });
+
+  it('setDrawSource switches routing without creating a second frame loop', () => {
+    const world = new World();
+    const overlay = new World();
+    const { renderer, calls } = makeSpyRenderer();
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf });
+
+    expect(loop.start().ok).toBe(true);
+    pump(1);
+    loop.setDrawSource(() => ({ worlds: [world, overlay], cameraOwner: 0, resourceOwner: 0 }));
+    pump(1);
+    loop.setDrawSource(undefined);
+    pump(1);
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.options).toEqual({ owner: 0 });
+    expect(calls[1]?.worlds).toEqual([world, overlay]);
+    expect(calls[1]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
+    expect(calls[2]?.worlds).toEqual([world]);
+    expect(calls[2]?.options).toEqual({ owner: 0 });
+    loop.stop();
+  });
 });

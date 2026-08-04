@@ -29,10 +29,39 @@ function emptySkin(): SkinPod {
 // subAssets[]. These tests declare a mesh + scene pair (and the single-scene
 // variant) so toAssetPack resolves the declared GUID per (kind, sourceIndex).
 const MESH_SUB = { guid: 'guid-mesh-0', kind: 'mesh', sourceIndex: 0 };
+const MATERIAL_SUB = { guid: 'guid-material-0', kind: 'material', sourceIndex: 0 };
 const SCENE_SUB = { guid: 'guid-scene-0', kind: 'scene', sourceIndex: 0 };
 const CLIP_SUB = { guid: 'guid-clip-0', kind: 'animation-clip', sourceIndex: 0 };
 
 describe('toAssetPack name plumbing (AC-10)', () => {
+  it('marks imported linear-space material factors explicitly', () => {
+    const scene: ScenePod = {
+      entities: [{ transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }, meshIndex: null }],
+    };
+    const assets = toAssetPack({
+      meshes: [],
+      scene,
+      materials: [{
+        sourceIndex: 0,
+        baseColorFactor: [0.5, 0.25, 0.75, 1],
+        metallicFactor: 0,
+        roughnessFactor: 0.5,
+      }],
+      textures: [],
+      skeleton: emptySkeleton(),
+      skin: emptySkin(),
+      animationClips: [],
+      subAssets: [MATERIAL_SUB, SCENE_SUB],
+    });
+
+    const material = assets.find((asset) => asset.kind === 'material');
+    expect(material?.payload).toMatchObject({
+      kind: 'material',
+      colorSpace: 'linear',
+      values: { baseColor: [0.5, 0.25, 0.75, 1] },
+    });
+  });
+
   it('multi-asset FBX: mesh name from MeshPod.name', () => {
     const mesh: MeshPod = {
       name: 'MyMesh',
@@ -130,7 +159,6 @@ describe('toAssetPack name plumbing (AC-10)', () => {
     expect(meshAsset).toBeDefined();
     expect(meshAsset?.name).toBeUndefined();
   });
-
   it('writes the same targetId into Scene and animation clip payloads', () => {
     const targetId = 'ab65f0305fc1868ca96d3361a86bd9ba' as AnimationTargetIdValue;
     const scene: ScenePod = {

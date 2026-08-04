@@ -37,6 +37,7 @@
     "@forgeax/engine-physics-rapier2d": "workspace:*",
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-plugin": "workspace:*",
+    "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",

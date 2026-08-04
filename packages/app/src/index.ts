@@ -115,8 +115,6 @@ export type {
   CreateAppOptions,
   DrawSource,
   DrawSourceResult,
-  FramePhase,
-  FramePhaseEvent,
-  FramePhaseObserver,
 } from './types';
+export { APP_PHASE_CATALOG } from './types';
 export { isLoadGameError, LOAD_GAME_ERROR_HINTS, LOAD_GAME_EXPECTED, LoadGameError };

@@ -12,7 +12,8 @@
 //   - plan-strategy D-1 / D-2: paramSchema is the single source of truth
 //   - R-10: paramSchema reuses default-standard-pbr schema (same params)
 
-import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
+import type { ShaderRegistry } from './index.js';
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from './material-schemas.js';
 
 /**
  * paramSchema for forgeax::pbr-skin — mirrors default-standard-pbr 8 fields.
@@ -20,29 +21,6 @@ import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
  * the .schema.json file has been deleted (feat-20260528-material-shader-registration-unification M1/w4).
  * The SSOT is default-standard-pbr.material.json paramSchema[].
  */
-const defaultStandardPbrParamSchema: readonly ParamSchemaEntry[] = [
-  { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-  { name: 'metallic', type: 'f32', default: 0.0 },
-  { name: 'roughness', type: 'f32', default: 0.5 },
-  // feat-20260613 fix-issue-1 (D-8): channelMap split into 4 independent f32
-  // selectors; mirrors default-standard-pbr-skin.material.json paramSchema.
-  { name: 'metallicChannel', type: 'f32', default: 2.0 },
-  { name: 'roughnessChannel', type: 'f32', default: 1.0 },
-  { name: 'aoChannel', type: 'f32', default: 0.0 },
-  { name: 'extraChannel', type: 'f32', default: 0.0 },
-  { name: 'emissive', type: 'vec3', default: [0.0, 0.0, 0.0] },
-  { name: 'emissiveIntensity', type: 'f32', default: 0.0 },
-  { name: 'occlusionStrength', type: 'f32', default: 1.0 },
-  { name: 'alphaCutoff', type: 'f32', default: 0.0 },
-  { name: 'clearcoat', type: 'f32', default: 0.0 },
-  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
-  { name: 'specularTint', type: 'vec3', default: [1.0, 1.0, 1.0] },
-  { name: 'baseColorTexture', type: 'texture2d' },
-  { name: 'metallicRoughnessTexture', type: 'texture2d' },
-  { name: 'normalTexture', type: 'texture2d' },
-  { name: 'specularTintTexture', type: 'texture2d' },
-];
-
 const RESERVED_ID = 'forgeax::pbr-skin' as const;
 
 /**
@@ -91,6 +69,6 @@ export function registerDefaultStandardPbrSkin(
   void caps;
   registry.installMaterialArtifact(RESERVED_ID, {
     source: composedWgsl,
-    paramSchema: defaultStandardPbrParamSchema,
+    paramSchema: DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
   });
 }

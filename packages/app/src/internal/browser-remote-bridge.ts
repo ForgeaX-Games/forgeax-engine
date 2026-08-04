@@ -32,6 +32,7 @@ type ExecuteModule = {
       renderer: unknown;
       assets: unknown;
       debugAdapter?: unknown;
+      profiler?: unknown;
       importModule?: (specifier: string) => Promise<unknown>;
     },
   ) => Promise<ExecuteResult>;
@@ -72,6 +73,8 @@ export interface BrowserRemoteBridgeDeps {
   /** The host's already-loaded runtime namespace; preserves component-token identity. */
   readonly runtimeModule: unknown;
   readonly debugAdapter?: unknown;
+  /** The host's explicit CPU profiler capability, when opted in. */
+  readonly profiler?: unknown;
   /** Relay port. */
   readonly port: string;
 }
@@ -111,7 +114,7 @@ function serializeError(error: unknown): Record<string, unknown> {
 export async function installBrowserRemoteBridge(
   deps: BrowserRemoteBridgeDeps,
 ): Promise<() => void> {
-  const { world, renderer, assets, debugAdapter, port } = deps;
+  const { world, renderer, assets, debugAdapter, profiler, port } = deps;
 
   // The ws-free eval core. Dynamic import keeps @forgeax/engine-app free of a
   // static @forgeax/engine-remote dependency (@vite-ignore mirrors the
@@ -126,7 +129,9 @@ export async function installBrowserRemoteBridge(
     if (specifier === '@forgeax/engine-runtime')
       return Promise.resolve(canonicalRuntimeModule(deps.runtimeModule, world));
     const browserSpecifier = specifier.startsWith('@') ? `/@id/${specifier}` : specifier;
-    return import(/* @vite-ignore */ browserSpecifier);
+    return import(/* @vite-ignore */ browserSpecifier).then((moduleValue) =>
+      canonicalRuntimeModule(moduleValue, world),
+    );
   };
 
   let ws: WebSocket | null = null;
@@ -162,6 +167,7 @@ export async function installBrowserRemoteBridge(
             renderer,
             assets,
             debugAdapter,
+            profiler: profiler,
             importModule,
           });
         } catch (e) {

@@ -8,10 +8,7 @@ export type {
   StateTokenName,
   StateTokenVariant,
 } from './define-state';
-export {
-  defineState,
-  getRegisteredTokens,
-} from './define-state';
+export { defineState } from './define-state';
 export type {
   InvalidVariantDetail,
   StateAlreadyDefinedDetail,
@@ -33,11 +30,6 @@ export {
 } from './on-enter-on-exit';
 export { statePlugin } from './plugin-factory';
 export { registerStatesPlugin, StateSet } from './register-plugin';
-export {
-  nextStateResourceKey,
-  previousStateResourceKey,
-  stateResourceKey,
-} from './resources';
 export {
   countScopedEntitiesByVariant,
   despawnOnEnter,

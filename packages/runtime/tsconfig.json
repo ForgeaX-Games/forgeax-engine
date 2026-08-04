@@ -30,6 +30,7 @@
     { "path": "../shader" },
     { "path": "../render-graph" },
     { "path": "../pack" },
+    { "path": "../profiler" },
     { "path": "../plugin" },
     { "path": "../state" },
     { "path": "../vfx" },

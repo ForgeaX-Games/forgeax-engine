@@ -42,6 +42,7 @@
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:^",
+    "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-render-graph": "workspace:*",
     "@forgeax/engine-render": "workspace:*",

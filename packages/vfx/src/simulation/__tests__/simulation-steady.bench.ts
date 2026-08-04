@@ -1,18 +1,24 @@
+import { type EntityHandle, FixedTime, FixedUpdate, World } from '@forgeax/engine-ecs';
 import { bench, describe, expect } from 'vitest';
+import { ParticleEffectPlayer } from '../../player.js';
 import type { ParticleRuntimeProgram } from '../../runtime-program.js';
 import { ParticleCpuExecutorRegistry } from '../cpu-executor-registry.js';
+import { ParticleSimulation } from '../resource.js';
 import {
   createParticleSimulationOwner,
   resetParticleSimulationOwner,
   simulateParticleOwner,
 } from '../simulate.js';
-import type { ParticleSimulationOwner } from '../types.js';
+import type { ParticleSimulationOwner, ParticleSimulationPlayerInput } from '../types.js';
 
 const FIXED_DELTA = 1 / 60;
 const WARMUP_TICKS = 120;
 const MEASURE_TICKS = 300;
 const PLAYER = 1;
 const FIXED_CAPACITY = 256;
+const OBSERVATION_PLAYERS = 500;
+const BENCH_OPTIONS = { iterations: 100 } as const;
+const P95_SAMPLE_COUNT = 100;
 
 const EMPTY_PROGRAM = (capacity: number, rate: number): ParticleRuntimeProgram => ({
   format: 'forgeax-vfx-program-1',
@@ -97,7 +103,80 @@ function runEnvelope(owner: ParticleSimulationOwner, liveCount: number): number 
   return checksum;
 }
 
+function createObservationBench(): {
+  readonly simulation: ParticleSimulation;
+  readonly world: World;
+  readonly inputs: readonly ParticleSimulationPlayerInput[];
+} {
+  const world = new World({ time: { fixedDeltaSeconds: FIXED_DELTA, maxDeltaSeconds: 1 } });
+  const effect = {
+    kind: 'particle-effect' as const,
+    schemaVersion: 1 as const,
+    emitters: [],
+    program: { format: 'forgeax-vfx-program-1' as const, emitters: [] },
+  };
+  const effectHandle = world.allocSharedRef('ParticleEffectAsset', effect);
+  const players = new Array<EntityHandle>(OBSERVATION_PLAYERS);
+  for (let index = 0; index < OBSERVATION_PLAYERS; index += 1) {
+    players[index] = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: effectHandle, playing: true, seed: index, timeScale: 1 },
+      })
+      .unwrap();
+  }
+  const simulation = new ParticleSimulation(
+    { lookup: () => undefined },
+    new ParticleCpuExecutorRegistry(),
+  );
+  const inputs = players.map((player, seed) => ({
+    player,
+    effect: effectHandle,
+    playing: true,
+    seed,
+    timeScale: 1,
+  }));
+  world
+    .addSystem(FixedUpdate, {
+      name: 'read-all-bench-fixed-tick',
+      queries: [],
+      fn: () => undefined,
+    })
+    .unwrap();
+  world.update(FIXED_DELTA).unwrap();
+  simulation.advance(world, inputs);
+  expect(simulation.readAll()).toHaveLength(OBSERVATION_PLAYERS);
+  expect(world.getResource(FixedTime).tick).toBe(1);
+  return { simulation, world, inputs };
+}
+
+function percentile(samples: readonly number[], quantile: number): number {
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1);
+  return sorted[index] ?? 0;
+}
+
+function recordP95Sample(samples: number[], startedAt: number): boolean {
+  if (samples.length >= P95_SAMPLE_COUNT) return false;
+  samples.push(performance.now() - startedAt);
+  return samples.length === P95_SAMPLE_COUNT;
+}
+
+function reportP95(steadySamples: readonly number[], rebuildSamples: readonly number[]): void {
+  if (steadySamples.length < P95_SAMPLE_COUNT || rebuildSamples.length < P95_SAMPLE_COUNT) return;
+  // biome-ignore lint/suspicious/noConsole: p95 is the acceptance evidence.
+  console.info(
+    `[readAll bench] steady_p95_ms=${percentile(steadySamples, 0.95).toFixed(4)} rebuild_p95_ms=${percentile(rebuildSamples, 0.95).toFixed(4)} live_players=${OBSERVATION_PLAYERS} repeated_read_allocation=0 snapshot_rebuilds_per_tick=1`,
+  );
+}
+
 describe('VFX steady simulation allocation and complexity envelope', () => {
+  const observationBench = createObservationBench();
+  const steadyP95Samples: number[] = [];
+  const rebuildP95Samples: number[] = [];
+  let observationSink = 0;
+  let p95Reported = false;
+
   bench(
     'one player, capacity 256, dt 1/60, warmup 120, measure 300',
     () => {
@@ -128,4 +207,46 @@ describe('VFX steady simulation allocation and complexity envelope', () => {
     },
     { iterations: 1 },
   );
+
+  bench(
+    'readAll steady snapshot, 500 live players, repeated reads',
+    () => {
+      const { simulation } = observationBench;
+      const startedAt = performance.now();
+      const snapshot = simulation.readAll();
+      for (let read = 0; read < 32; read += 1) {
+        expect(simulation.readAll()).toBe(snapshot);
+      }
+      recordP95Sample(steadyP95Samples, startedAt);
+      observationSink ^= snapshot.length;
+    },
+    BENCH_OPTIONS,
+  );
+
+  bench(
+    'readAll snapshot rebuild, 500 live players, one fixed tick',
+    () => {
+      const { simulation, world, inputs } = observationBench;
+      const startedAt = performance.now();
+      const prior = simulation.readAll();
+      world.update(FIXED_DELTA).unwrap();
+      simulation.advance(world, inputs);
+      const next = simulation.readAll();
+      expect(next).toHaveLength(OBSERVATION_PLAYERS);
+      expect(next).not.toBe(prior);
+      recordP95Sample(rebuildP95Samples, startedAt);
+      if (
+        !p95Reported &&
+        steadyP95Samples.length >= P95_SAMPLE_COUNT &&
+        rebuildP95Samples.length >= P95_SAMPLE_COUNT
+      ) {
+        reportP95(steadyP95Samples, rebuildP95Samples);
+        p95Reported = true;
+      }
+      observationSink ^= next[0]?.player ?? 0;
+    },
+    BENCH_OPTIONS,
+  );
+
+  void observationSink;
 });

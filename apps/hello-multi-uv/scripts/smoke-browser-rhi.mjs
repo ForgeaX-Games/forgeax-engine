@@ -25,6 +25,7 @@ const switchVariantAfterPipeline = process.env.FORGEAX_M3_SWITCH_VARIANT === '1'
 const switchPostAfterPipeline = process.env.FORGEAX_M3_SWITCH_POST === '1';
 const resizeChurn = process.env.FORGEAX_M3_RESIZE_CHURN === '1';
 const doubleResizeChurn = process.env.FORGEAX_M3_DOUBLE_RESIZE_CHURN === '1';
+const vitePort = process.env.FORGEAX_M3_RHI_PORT ?? '0';
 const expectedVariant = switchVariantAfterPipeline
   ? selectedVariant === 'true'
     ? 'false'
@@ -88,7 +89,7 @@ const viteProc = spawn(process.execPath, [
   '--host',
   '127.0.0.1',
   '--port',
-  '5198',
+  vitePort,
 ], {
   cwd: APP_ROOT,
   env: { ...process.env, FORGEAX_ENGINE_RHI_DEBUG: '1' },

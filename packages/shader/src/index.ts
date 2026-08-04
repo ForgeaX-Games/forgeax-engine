@@ -48,6 +48,7 @@ export {
   isMaterialShaderArtifact,
   type MaterialShaderArtifact,
 } from './material/artifact-types.js';
+export { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from './material-schemas.js';
 export {
   registerDefaultSpriteLit,
   type SpriteLitCaps,
@@ -84,7 +85,7 @@ const BUILTIN_PARAMETERS: Readonly<Record<BuiltinMaterialKind, readonly Material
     { name: 'roughness', type: 'f32' },
   ],
   unlit: [{ name: 'baseColor', type: 'color' }],
-  sprite: [{ name: 'colorTint', type: 'vec4' }],
+  sprite: [{ name: 'colorTint', type: 'vec4', colorSpace: 'srgb' }],
 };
 
 const BUILTIN_VALUES: Readonly<

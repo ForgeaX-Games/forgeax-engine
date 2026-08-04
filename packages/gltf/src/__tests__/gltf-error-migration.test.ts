@@ -41,22 +41,22 @@ function grepCount(pattern: string, file: string): number {
 
 function grepCountImportGltfErrorFromTypes(): number {
   try {
+    // Search tracked source paths so coverage runs do not recursively walk
+    // generated or ignored trees on a busy CI runner. The migration contract
+    // is about repository source, which is exactly the tracked worktree set.
     const out = execFileSync(
-      'rg',
+      'git',
       [
-        '--files-with-matches',
-        '--glob',
-        '*.ts',
-        '--glob',
-        '!**/node_modules/**',
-        '--glob',
-        '!**/dist/**',
-        '--glob',
-        '!**/gltf-error-migration.test.ts',
-        '--regexp',
+        'grep',
+        '--no-color',
+        '-E',
+        '-l',
+        '-e',
         'import.*GltfError.*from.*@forgeax/engine-types',
-        resolve(REPO_ROOT, 'packages'),
-        resolve(REPO_ROOT, 'apps'),
+        '--',
+        'packages',
+        'apps',
+        ':(exclude)packages/gltf/src/__tests__/gltf-error-migration.test.ts',
       ],
       { encoding: 'utf-8' },
     );
@@ -66,29 +66,57 @@ function grepCountImportGltfErrorFromTypes(): number {
     if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
       try {
         const out = execFileSync(
-          'grep',
+          'rg',
           [
-            '-R',
-            '-l',
-            '-E',
-            '--include=*.ts',
-            '--exclude-dir=node_modules',
-            '--exclude-dir=dist',
+            '--files-with-matches',
+            '--glob',
+            '*.ts',
+            '--glob',
+            '!**/node_modules/**',
+            '--glob',
+            '!**/dist/**',
+            '--glob',
+            '!**/gltf-error-migration.test.ts',
+            '--regexp',
             'import.*GltfError.*from.*@forgeax/engine-types',
             resolve(REPO_ROOT, 'packages'),
             resolve(REPO_ROOT, 'apps'),
           ],
           { encoding: 'utf-8' },
         );
-        return out
-          .trim()
-          .split('\n')
-          .filter(
-            (file) =>
-              file && !file.endsWith('/packages/gltf/src/__tests__/gltf-error-migration.test.ts'),
-          ).length;
+        return out.trim().split('\n').filter(Boolean).length;
       } catch (fallbackCause: unknown) {
         if ((fallbackCause as { status?: number }).status === 1) return 0;
+        if ((fallbackCause as NodeJS.ErrnoException).code === 'ENOENT') {
+          try {
+            const out = execFileSync(
+              'grep',
+              [
+                '-R',
+                '-l',
+                '-E',
+                '--include=*.ts',
+                '--exclude-dir=node_modules',
+                '--exclude-dir=dist',
+                'import.*GltfError.*from.*@forgeax/engine-types',
+                resolve(REPO_ROOT, 'packages'),
+                resolve(REPO_ROOT, 'apps'),
+              ],
+              { encoding: 'utf-8' },
+            );
+            return out
+              .trim()
+              .split('\n')
+              .filter(
+                (file) =>
+                  file &&
+                  !file.endsWith('/packages/gltf/src/__tests__/gltf-error-migration.test.ts'),
+              ).length;
+          } catch (grepCause: unknown) {
+            if ((grepCause as { status?: number }).status === 1) return 0;
+            throw grepCause;
+          }
+        }
         throw fallbackCause;
       }
     }

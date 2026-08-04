@@ -9,6 +9,11 @@
     "kind": {
       "const": "material"
     },
+    "colorSpace": {
+      "enum": ["srgb", "linear"],
+      "default": "srgb",
+      "description": "Transfer function for authored material colors. Omitted values are sRGB; runtime shader values are linear."
+    },
     "parent": {
       "type": "string",
       "minLength": 1
@@ -88,6 +93,10 @@
         },
         "type": {
           "enum": ["bool", "f32", "i32", "u32", "vec2", "vec3", "vec4", "color", "texture"]
+        },
+        "colorSpace": {
+          "enum": ["srgb", "linear"],
+          "description": "Schema-level transfer function for an authored color. A MaterialAsset colorSpace overrides it; parameters of type color ultimately default to sRGB and runtime shader values are linear."
         },
         "default": {
           "$ref": "#/$defs/value"

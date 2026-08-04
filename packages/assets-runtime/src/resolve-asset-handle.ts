@@ -112,7 +112,8 @@ export function walkMaterialPassesOverSharedRefs(
   {
     passes: MaterialPass[];
     parameters: MaterialAsset['parameters'];
-    values: Record<string, unknown>;
+    values: NonNullable<MaterialAsset['values']>;
+    colorSpace: MaterialAsset['colorSpace'];
   },
   AssetErrorType | MaterialError | SharedRefStaleError | UniqueRefStaleError
 > {
@@ -144,5 +145,6 @@ export function walkMaterialPassesOverSharedRefs(
     passes: [...(resolved.value.asset.passes ?? [])],
     parameters: resolved.value.asset.parameters ?? [],
     values: { ...(resolved.value.asset.values ?? {}) },
+    colorSpace: resolved.value.asset.colorSpace,
   });
 }

@@ -7,6 +7,8 @@ import { ImporterRegistry, type RunImportMeta, runImport } from '@forgeax/engine
 import type { Asset, CatalogDelta, ImportContext, ImportedAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type SemanticDdcInput, semanticDdcKey } from '../ddc-cache.js';
+import { projectPublishedCatalog } from '../dev/import-publication.js';
+import { preserveInvalidatedCatalogLkg } from '../index.js';
 
 const GUID = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
@@ -175,5 +177,77 @@ describe('source override Engine consumer chain', () => {
     await expect(replica.reconcile()).resolves.toMatchObject({ ok: true });
     expect(replica.snapshot().stale).toBe(false);
     expect(replica.snapshot().entries[0]?.packageUrl).toContain(desiredKey);
+  });
+
+  it('preserves the published package as LKG on source invalidation', () => {
+    const oldPackageUrl = '/__forgeax-ddc/old.pack.json';
+    const previous = {
+      guid: GUID,
+      packageUrl: oldPackageUrl,
+      kind: 'mesh',
+      sourcePath: 'fixture.source',
+      sourceKey: 'mesh/main',
+      lifecycle: 'current' as const,
+      projection: {
+        subject: 'imported-output' as const,
+        execution: 'cooked' as const,
+        lifecycle: 'current' as const,
+        operations: {} as never,
+        lastKnownGood: { packageUrl: oldPackageUrl },
+      },
+    };
+    const missing = {
+      ...previous,
+      packageUrl: 'fixture.source.meta.json',
+      lifecycle: 'missing' as const,
+      projection: {
+        subject: previous.projection.subject,
+        execution: previous.projection.execution,
+        lifecycle: 'missing' as const,
+        operations: previous.projection.operations,
+      },
+    };
+
+    const invalidated = preserveInvalidatedCatalogLkg([previous], [missing], new Set([GUID]));
+    expect(invalidated[0]).toMatchObject({
+      lifecycle: 'missing',
+      packageUrl: 'fixture.source.meta.json',
+      projection: { lifecycle: 'missing', lastKnownGood: { packageUrl: oldPackageUrl } },
+    });
+
+    const restored = preserveInvalidatedCatalogLkg(
+      invalidated,
+      [{ ...previous, packageUrl: '/__forgeax-ddc/restored.pack.json' }],
+      new Set(),
+    );
+    expect(restored[0]).toMatchObject({
+      lifecycle: 'current',
+      packageUrl: '/__forgeax-ddc/restored.pack.json',
+      projection: { lastKnownGood: { packageUrl: oldPackageUrl } },
+    });
+
+    const published = projectPublishedCatalog(
+      {
+        root: '/tmp/fixture',
+        guid: GUID,
+        desiredKey: 'new-key',
+        pack: {},
+        previousCatalog: invalidated,
+        nextCatalog: [{ ...previous, packageUrl: '/__forgeax-ddc/new.pack.json' }],
+        publishedGuids: [GUID],
+      },
+      {
+        guid: GUID,
+        desiredKey: 'new-key',
+        state: 'current',
+        currentKey: 'new-key',
+        lastKnownGoodKey: undefined,
+      },
+      1,
+    );
+    expect(published.catalog[0]).toMatchObject({
+      packageUrl: '/__forgeax-ddc/new.pack.json',
+      projection: { lastKnownGood: { packageUrl: oldPackageUrl } },
+    });
   });
 });

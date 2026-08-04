@@ -60,6 +60,7 @@ import {
   type ImageError,
   type ImageErrorDetail,
   type PrimitiveTopology,
+  type Submesh,
   type TextureAsset,
   type MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
@@ -1482,7 +1483,12 @@ export class GpuResourceStore {
    * Update an existing mesh's GPU buffer data in-place (or expand). The handle
    * must already be resident. Mirrors the pre-extraction `updateMeshById`.
    */
-  private updateMeshById(id: number, newVertices: Float32Array, newIndices: Uint16Array): void {
+  private updateMeshById(
+    id: number,
+    newVertices: Float32Array,
+    newIndices: Uint16Array,
+    submeshes?: readonly Submesh[],
+  ): void {
     const device = this.gpuDevice as MipmapBlitDeviceWithBuffer | undefined;
     if (device === undefined) return;
     const entry = this.meshGpuHandles.get(id);
@@ -1514,6 +1520,7 @@ export class GpuResourceStore {
     // for a `.size` property -- the RHI Buffer interface is spec-aligned and
     // does NOT expose `.size`; the prior code was reading through `any`.
     const existingIbo = entry.indexBuffer;
+    const nextSubmeshes = submeshes ?? entry.submeshes;
     if (
       existingIbo !== null &&
       newVertexBytes <= entry.vboBytes &&
@@ -1539,7 +1546,7 @@ export class GpuResourceStore {
         vertexCount: newVertices.length / 12,
         indexed: true,
         topology: entry.topology,
-        submeshes: entry.submeshes,
+        submeshes: nextSubmeshes,
       });
       return;
     }
@@ -1581,7 +1588,7 @@ export class GpuResourceStore {
       vertexCount: newVertices.length / 12,
       indexed: true,
       topology: entry.topology,
-      submeshes: entry.submeshes,
+      submeshes: nextSubmeshes,
     });
 
     // M-3 / w11: replace the legacy `(buf as any).destroy()` sneak path with
@@ -1603,9 +1610,10 @@ export class GpuResourceStore {
     newVertices: Float32Array,
     newIndices: Uint16Array,
     worldId: number = 0,
+    submeshes?: readonly Submesh[],
   ): void {
     const id = this.worldKey(handleSlot(handle), worldId);
-    this.updateMeshById(id, newVertices, newIndices);
+    this.updateMeshById(id, newVertices, newIndices, submeshes);
   }
 }
 

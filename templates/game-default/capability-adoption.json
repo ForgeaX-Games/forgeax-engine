@@ -167,6 +167,19 @@
       "betterConsumer": "templates/game-default"
     },
     {
+      "id": "app:bevy/animated-transform",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/animated-transform/package.json",
+        "apps/bevy/animated-transform/src/animated-transform.ts",
+        "apps/bevy/animated-transform/scripts/smoke-dawn.mjs",
+        "apps/bevy/animated-transform/scripts/smoke-browser.mjs"
+      ],
+      "reason": "The candidate is a strong AnimationGraph/AnimationPlayer named-Transform oracle, but it is a static code-spawned planet/orbit/satellite gallery with an inline AnimationClip and no authored scene or animation GUID, input/settings owner, gameplay outcome, typed reset/re-entry, or recovery path. game-default already teaches authored hierarchy, Play-only motion, time-driven material animation, and one typed reset boundary; adding this second inline scene would duplicate a showcase. Revisit only with a license-safe authored animation asset composed into a real gameplay/reset outcome.",
+      "betterConsumer": "apps/bevy/animated-transform"
+    },
+    {
       "id": "app:bevy/animate-shader",
       "classification": "guided",
       "frontDoors": [
@@ -216,6 +229,23 @@
         "apps/hello/custom-shader/src/index.ts",
         "apps/preview/vite.config.ts"
       ]
+    },
+    {
+      "id": "app:bevy/shader-material-2d",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/shader-material-2d/package.json",
+        "apps/bevy/shader-material-2d/src/main.ts",
+        "apps/bevy/shader-material-2d/src/scene.ts",
+        "templates/game-default/src/hit-flash-material.ts",
+        "templates/game-default/src/hit-flash.wgsl",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a static single-world 2D material and alpha-mask presentation with no authored asset identity, input, gameplay consequence, reset/re-entry owner, or state lifecycle. game-default already teaches custom WGSL/material behavior through its resettable 3D hit loop; importing a parallel 2D camera and scene would duplicate rather than compose. Its public material/alpha-mask contract remains canonical in the focused app.",
+      "betterConsumer": "apps/bevy/shader-material-2d"
     },
     {
       "id": "app:bevy/move-sprite",
@@ -837,6 +867,45 @@
       "betterConsumer": "templates/game-default"
     },
     {
+      "id": "app:bevy/physics-fixed-loop",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/physics-fixed-loop/package.json",
+        "apps/bevy/physics-fixed-loop/src/main.ts",
+        "apps/bevy/physics-fixed-loop/src/physics-fixed-loop.ts",
+        "templates/game-default/src/gameplay-state.ts",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone code-spawned movement scene with hand-rolled physical/previous translation components. Its fixed-step/interpolation lesson overlaps game-default's existing guided fixed-timestep state witness, while it bypasses the engine PhysicsWorld, authored scene/GUID boundary, typed Play/Reset lifecycle, and hit consequence; importing it wholesale would create a second movement owner. Keep the focused app as the canonical fixed-loop interpolation oracle.",
+      "betterConsumer": "apps/bevy/physics-fixed-loop"
+    },
+    {
+      "id": "app:bevy/text2d",
+      "classification": "guided",
+      "frontDoors": [
+        "preview"
+      ],
+      "evidence": [
+        "apps/bevy/text2d/src/text2d.ts",
+        "apps/bevy/text2d/src/main.ts",
+        "apps/preview/vite.config.ts",
+        "apps/preview/package.json",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "templates/game-default/src/world-score-text.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "packages/render/src/glyph-text-layout-system.ts",
+        "packages/render/src/gpu-resource-store.ts",
+        "packages/runtime/src/__tests__/text.unit.test.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate's public FontAsset -> shared handle -> GlyphText path is now a reusable world-space hit-feedback slice in the authored game-default scene: Preview packages the shared DejaVu font, the pooled label follows the active camera, resets with Play/Reset, and is semantically asserted by render-evidence while the DOM HUD remains the screen-space contract. Dogfooding exposed and fixed the engine's empty-first-bake dynamic mesh bug by keeping CPU payload, GPU submesh draw range, and AABB coherent. Keep the focused app's four-label gallery as the canonical text2d feature oracle; teach the classic gameplay composition in game-default.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
       "id": "app:bevy/fog",
       "classification": "not-template-fit",
       "frontDoors": [
@@ -1080,6 +1149,24 @@
       "betterConsumer": "apps/bevy/mouse-input"
     },
     {
+      "id": "app:hello/picking",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/hello/picking/package.json",
+        "apps/hello/picking/src/main.ts",
+        "apps/hello/picking/scripts/smoke-dawn.mjs",
+        "apps/hello/picking/scripts/smoke-browser.mjs",
+        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-060802-classify-hello-picking-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the low-level pick(world, camera, x, y, w, h) ray-to-AABB contract with a single code-spawned cube, DOM click conversion, local material highlight, and a corner miss. It has no authored asset, gameplay consequence, typed reset/re-entry owner, or recovery path. game-default already consumes the same pick primitive inside its normalized InputSnapshot game-pick-shoot system, composes target hit feedback/projectiles/audio/score across top/orbit/FPS/Map views, and clears the loop through one typed Reset owner; adding a second click-to-highlight scene would duplicate interaction policy rather than teach a new feature-loop behavior. Keep hello-picking as the focused contract oracle until an authored selection mechanic needs persistent state.",
+      "betterConsumer": "apps/hello/picking"
+    },
+    {
       "id": "app:bevy/parallax-mapping",
       "classification": "not-template-fit",
       "frontDoors": [
@@ -1250,7 +1337,6 @@
       "evidence": [
         "apps/bevy/shader-defs/src/main.ts",
         "apps/bevy/shader-defs/src/shader-defs.wgsl",
-        "apps/bevy/shader-defs/src/shader-defs.wgsl.meta.json",
         "apps/bevy/shader-defs/scripts/smoke-dawn.mjs",
         "apps/bevy/shader-defs/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-230845-classify-shader-defs-candidate/REPORT.md"
@@ -1268,7 +1354,6 @@
         "apps/bevy/shader-material/src/main.ts",
         "apps/bevy/shader-material/src/scene.ts",
         "apps/bevy/shader-material/src/shader-material.wgsl",
-        "apps/bevy/shader-material/src/shader-material.wgsl.meta.json",
         "apps/bevy/shader-material/scripts/smoke-dawn.mjs",
         "apps/bevy/shader-material/artifacts/smoke-frame.png",
         ".forgeax-harness/solo/game-default/experiments/20260730-235009-classify-shader-material-candidate/REPORT.md"
@@ -1704,18 +1789,727 @@
       "betterConsumer": "apps/bevy/window-resizing"
     },
     {
-      "id": "app:bevy/animated-transform",
-      "classification": "guided",
-      "frontDoors": [
-        "game-default:audit"
-      ],
+      "id": "app:hello/2d-flashlight",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
       "evidence": [
-        "packages/animation/README.md",
-        "apps/bevy/animated-transform/src/animated-transform.ts",
-        "apps/bevy/animated-transform/scripts/smoke-dawn.mjs"
+        "apps/hello/2d-flashlight/package.json",
+        "apps/hello/2d-flashlight/src/main.ts",
+        "apps/hello/2d-flashlight/scripts/smoke-dawn.mjs",
+        "apps/hello/2d-flashlight/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-123938-classify-hello-2d-flashlight/REPORT.md"
       ],
-      "reason": "The canonical app is the focused ordinary-Transform target, direct/graph, control, and instance-isolation proof. game-default can adopt the public AnimationTargetId and explicit batch-binding flow when it gains authored clips; adding a second synthetic animation scene now would not compose with its current target-range assets.",
-      "betterConsumer": "apps/bevy/animated-transform"
+      "reason": "The canonical app proves sprite-lit SpotLight/PointLight behavior and a zero-intensity falsifier, but remains a static orthographic 2D gallery with no authored asset/GUID, normalized input, gameplay consequence, reset/re-entry, or recovery owner. game-default already owns the single 3D camera/input/gameplay/reset boundary; adding a parallel 2D game would duplicate concepts.",
+      "betterConsumer": "apps/hello/2d-flashlight"
+    },
+    {
+      "id": "app:hello/animation-graph",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/animation-graph/package.json",
+        "apps/hello/animation-graph/src/main.ts",
+        "apps/hello/animation-graph/src/hud.ts",
+        "apps/hello/animation-graph/scripts/smoke-dawn.mjs",
+        "apps/hello/animation-graph/scripts/smoke-falsify.mjs",
+        "apps/hello/animation-graph/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-124632-classify-hello-animation-graph/REPORT.md"
+      ],
+      "reason": "The canonical app proves GUID-addressed Fox.glb scene, skin, and three animation clips through Blend/Add evaluation, numerical falsifiers, normalized input, overlay control, pause, and browser evidence. It has no gameplay outcome, reset/re-entry owner, or recovery path; keep it as the focused AnimationGraph/AnimationPlayer consumer until animation drives an existing game-default target through typed state/reset.",
+      "betterConsumer": "apps/hello/animation-graph"
+    },
+    {
+      "id": "app:hello/app",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/app/package.json",
+        "apps/hello/app/README.md",
+        "apps/hello/app/src/main.ts",
+        "apps/hello/app/scripts/smoke.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-133003-classify-hello-app-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the one-screen createApp(canvas) bootstrap, structured error union, clearColor frame loop, and browser canvas. Preview already owns createApp plus loadGame, BootstrapContext, run-scoped UI cleanup, dev import transport, and failure reporting; copying this static cube host would create a parallel entry point without authored assets, gameplay, reset/re-entry, or recovery.",
+      "betterConsumer": "apps/hello/app"
+    },
+    {
+      "id": "app:hello/cube",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/cube/package.json",
+        "apps/hello/cube/README.md",
+        "apps/hello/cube/src/main.ts",
+        "apps/hello/cube/scripts/smoke-dawn.mjs",
+        "apps/hello/cube/scripts/smoke-browser.mjs",
+        "apps/hello/cube/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-153556-classify-hello-cube-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-153556-classify-hello-cube-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-153556-classify-hello-cube-candidate/artifacts/browser-smoke-fixed.txt"
+      ],
+      "reason": "The canonical app proves the minimal createApp/World/Renderer binding, built-in cube, Name schema round trip, Dawn pixel/error gate, and RHI-debug capture/replay. Preview already owns the public createApp host, while game-default already teaches authored scene loading, camera, input, ECS systems, rendering, reset, UI, physics, and evidence; copying this static code-spawned cube would create a parallel entry point and bypass the template's source-to-sidecar-to-GUID boundary.",
+      "betterConsumer": "apps/hello/cube"
+    },
+    {
+      "id": "app:hello/asi-world",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/asi-world/package.json",
+        "apps/hello/asi-world/README.md",
+        "apps/hello/asi-world/src/main.ts",
+        "apps/hello/asi-world/src/world-build.ts",
+        "apps/hello/asi-world/scripts/smoke-dawn.mjs",
+        "apps/hello/asi-world/scripts/smoke-browser.mjs",
+        "apps/hello/asi-world/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-133739-classify-hello-asi-world-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves a real 605x56 ASI World with terrain/object atlases, multi-atlas TilesetAsset/TileLayer composition, collision-derived WASD movement, and browser frustum evidence. It nevertheless fetches raw public JSON/PNG files instead of a GUID/pack/importer chain, owns app-local collision/animation, has no typed reset/re-entry/recovery owner, and is a second standalone 2D game. Moving it into game-default would require a cross-cutting authored 2D asset/state contract rather than a thin guided slice; keep it as the Tilemap/object-layer oracle.",
+      "betterConsumer": "apps/hello/asi-world"
+    },
+    {
+      "id": "app:hello/bloom",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/bloom/package.json",
+        "apps/hello/bloom/README.md",
+        "apps/hello/bloom/src/main.ts",
+        "apps/hello/bloom/scripts/smoke-dawn.mjs",
+        "apps/hello/bloom/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-134501-classify-hello-bloom-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the declarative four-pass Bloom graph, HDR bright-pass, runtime toggle, and resize survival, but game-default already owns an emissive gameplay bullet, Camera.bloom, settings UiAsset, render-evidence toggle, and typed reset. The isolated sphere/cube gallery has no new authored asset/GUID or gameplay outcome; adding another toggle would duplicate the post-process owner.",
+      "betterConsumer": "apps/hello/bloom"
+    },
+    {
+      "id": "app:hello/physics",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "apps/hello/physics/src/main.ts",
+        "apps/hello/physics/scripts/smoke.mjs",
+        "apps/hello/physics/package.json",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "apps/preview/src/main.ts",
+        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-physics-candidate/REPORT.md"
+      ],
+      "reason": "The canonical app proves the minimal createApp + Rapier 3D plugin contract with a dynamic sphere, static ground, 300-frame gravity smoke, PhysicsWorld readiness, and zero app errors. game-default already absorbs the reusable lesson through its authored scene physics attachment, dynamic targets, kinematic Player/CharacterController, fixed-step gameplay, typed reset, and Preview plugin host; do not copy the standalone cube scene. Keep the candidate as the minimal physics bootstrap oracle while Preview remains the guided consumer.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:hello/character",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "apps/preview/src/main.ts",
+        "apps/preview/scripts/smoke-character-controller.mjs",
+        "apps/hello/character/src/main.ts",
+        "apps/hello/character/scripts/smoke.mjs",
+        "apps/hello/character/scripts/falsify-motion-freeze.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-135317-classify-hello-character-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-135317-classify-hello-character-candidate/artifacts/browser-probe.json"
+      ],
+      "reason": "The canonical app proves the public Kinematic CharacterController contract with Rapier 3D, grounded readback, jump/gravity, obstacle response, Dawn smoke, a motion-freeze falsifier, and browser input evidence. game-default adopts the concept as a thin guided slice: its authored Player keeps the existing InputMap, typed reset, scene colliders, camera modes, and gameplay loop while PhysicsWorld.moveAndSlide replaces the duplicate manual walk-blocker/parabolic movement path. Preview now explicitly loads the Rapier plugin, and FPS free-flight documents the required teleport boundary for KCC bodies.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:hello/compressed-texture",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/assets/compressed-projectile.png.meta.json",
+        "templates/game-default/assets/generate-assets.mjs",
+        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-custom-mesh.mjs",
+        "apps/hello/compressed-texture/package.json",
+        "apps/hello/compressed-texture/src/main.ts",
+        "apps/hello/compressed-texture/scripts/smoke-browser.mjs",
+        "apps/hello/compressed-texture/scripts/parity.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260731-144013-classify-hello-compressed-texture-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-144013-classify-hello-compressed-texture-candidate/artifacts/candidate-gates.txt"
+      ],
+      "reason": "The canonical app proves the image importer, GUID-addressed texture catalog, Basis/ETC1S compressed upload, uncompressed falsifier, browser dual-scene smoke, and CPU/GPU parity witness. game-default adopts the concept as a thin guided slice on the existing projectile owner: a generated, license-safe authored PNG is scanned by the Preview pack plugin, loaded by GUID, uploaded into the projectile material, and observed through the same G toggle and R reset path. The procedural checker remains only for no-asset/unit hosts, so the browser smoke fails if the authored source path regresses.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:hello/culling",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/culling/package.json",
+        "apps/hello/culling/src/main.ts",
+        "apps/hello/culling/scripts/smoke-dawn.mjs",
+        "apps/hello/culling/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154409-classify-hello-culling-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154409-classify-hello-culling-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154409-classify-hello-culling-candidate/artifacts/browser-eval.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154409-classify-hello-culling-candidate/artifacts/browser-console.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154409-classify-hello-culling-candidate/artifacts/browser-requests.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154409-classify-hello-culling-candidate/artifacts/browser.png"
+      ],
+      "reason": "The canonical app proves frustum culling over a 2,116-cube stress grid, non-black Dawn rendering, and renderer-owned frustumStats with a zero-error ceiling. It remains a static code-spawned gallery using a direct renderer/camera host: there is no authored asset/GUID delivery, normalized input, gameplay consequence, typed reset/re-entry, or recovery owner. game-default already owns the coherent scene, camera, input, gameplay, reset, and evidence loop; copying the grid would create a second renderer showcase rather than teach a new feature combination.",
+      "betterConsumer": "apps/hello/culling"
+    },
+    {
+      "id": "app:hello/custom-importer",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/custom-importer/package.json",
+        "apps/hello/custom-importer/src/reel-game-blob-importer.ts",
+        "apps/hello/custom-importer/src/reel-game-blob-loader.ts",
+        "apps/hello/custom-importer/src/main.ts",
+        "apps/hello/custom-importer/scripts/smoke-dawn.mjs",
+        "apps/hello/custom-importer/scripts/smoke-browser.mjs",
+        "apps/hello/custom-importer/index.html",
+        "apps/hello/custom-importer/assets/level-1.reel.json.meta.json",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/browser-smoke.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/before-hmr.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/after-hmr.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/browser-requests-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-154852-classify-hello-custom-importer-candidate/artifacts/browser-fixed.png"
+      ],
+      "reason": "The canonical app proves the host-defined custom-kind contract end to end: sidecar declaration, injected importer, Pack v2 fold, host loader registration, loadByGuid, visible use, HMR content reload, malformed-GUID recovery, and catalog-miss recovery. Its reel/slot-machine semantics and static cube-per-reel scene are intentionally host-owned and do not compose with game-default's authored target, input, gameplay, typed reset/re-entry, or recovery owners. Adapting it into an invented wave asset would duplicate content ownership without a real first-user goal; keep this app as the custom-importer oracle.",
+      "betterConsumer": "apps/hello/custom-importer"
+    },
+    {
+      "id": "app:hello/debug-draw",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/debug-draw/package.json",
+        "apps/hello/debug-draw/src/main.ts",
+        "apps/hello/debug-draw/scripts/smoke-dawn.mjs",
+        "apps/hello/debug-draw/scripts/smoke-browser.mjs",
+        "apps/hello/debug-draw/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-160100-classify-hello-debug-draw-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-160100-classify-hello-debug-draw-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-160100-classify-hello-debug-draw-candidate/artifacts/browser-smoke.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-160100-classify-hello-debug-draw-candidate/artifacts/runtime-1.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-160100-classify-hello-debug-draw-candidate/artifacts/runtime-1-roll.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-160100-classify-hello-debug-draw-candidate/artifacts/runtime-falsified-1.png"
+      ],
+      "reason": "The canonical app proves low-level line/sphere/AABB/frustum staging, empty flush, depth-aware dual overlays, HDRP-tonemap placement, createApp auto-attachment, camera mutation, resize survival, and a zero-foreground falsifier. game-default already has the single gameplay-facing debug owner: a query-gated app.debugDraw.axes overlay on authored scoring targets with reset evidence. Copying the five URL modes or second camera would duplicate that owner and teach no new gameplay fact; retain the app as the primitive/lifecycle oracle.",
+      "betterConsumer": "apps/hello/debug-draw"
+    },
+    {
+      "id": "app:hello/fbx-cube",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "apps/preview/vite.config.ts",
+        "apps/preview/package.json",
+        "apps/preview/scripts/smoke-mesh-handle-swap.mjs",
+        "forgeax-engine-assets/vendor/fbx-test/cube.fbx.meta.json",
+        "templates/game-default/src/fbx-mesh-swap.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/hello/fbx-cube/src/main.ts",
+        "apps/hello/fbx-cube/scripts/smoke-dawn.mjs",
+        "apps/hello/fbx-cube/scripts/smoke-browser.mjs",
+        "apps/hello/fbx-cube/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/artifacts/browser-smoke.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/artifacts/browser-requests-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/artifacts/browser-fixed.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-161530-classify-hello-fbx-cube-candidate/artifacts/preview-mesh-handle-fbx/report.json"
+      ],
+      "reason": "The canonical app proves the FBX source/sidecar → fbxImporter → Pack v2 → loadByGuid<SceneAsset> → instantiate path, 432-vertex mesh upload, Dawn rendering, typed-array browser survival, and zero-error scene instantiation. game-default adopts the smaller guided boundary: Preview registers fbxImporter and scans the vendor fixture; J loads the FBX mesh sub-asset by GUID and swaps it onto the existing authored scoring target, while its material, collider, hit/score, input, render evidence, and R reset owners remain unchanged. H remains the built-in sphere comparison; the canonical app remains the full FBX SceneAsset oracle.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:hello/fbx-skin",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/fbx-skin/package.json",
+        "apps/hello/fbx-skin/src/main.ts",
+        "apps/hello/fbx-skin/vite.config.ts",
+        "apps/hello/fbx-skin/scripts/smoke-dawn.mjs",
+        "apps/hello/fbx-skin/scripts/smoke-browser.mjs",
+        "apps/hello/fbx-skin/index.html",
+        "forgeax-engine-assets/vendor/fbx-test/humanoid.fbx.meta.json",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/artifacts/falsify-static.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/artifacts/browser-smoke.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/artifacts/browser-eval-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/artifacts/browser-requests-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163000-classify-hello-fbx-skin-candidate/artifacts/browser-fixed.png"
+      ],
+      "reason": "The canonical app proves FBX source/sidecar → fbxImporter → Pack v2 → loadByGuid<SceneAsset> → instantiate, Skin joint resolution, three distinct instances, three GUID-loaded animation clips, 300-frame palette motion, a static-pose falsifier, and browser typed-array delivery. It remains a standalone humanoid gallery with its own camera/light, direct digit/Space polling, no authored game-default gameplay consequence, no typed R reset/re-entry or cleanup owner, and expected non-skin Camera/Light channel warnings. game-default has no existing skinned visual owner to replace without adding a second scene hierarchy and animation lifecycle; keep this app as the FBX skinning/animation oracle until a real Player composition boundary is designed.",
+      "betterConsumer": "apps/hello/fbx-skin"
+    },
+    {
+      "id": "app:hello/fxaa",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/fxaa/package.json",
+        "apps/hello/fxaa/src/main.ts",
+        "apps/hello/fxaa/scripts/smoke-dawn.mjs",
+        "apps/hello/fxaa/vite.config.ts",
+        "apps/hello/fxaa/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/engine-build-rerun.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/browser-console-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/browser-requests-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/browser-eval-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/browser-clean.png",
+        ".forgeax-harness/solo/game-default/experiments/20260731-163414-classify-hello-fxaa-candidate/artifacts/browser-on.png"
+      ],
+      "reason": "The canonical app proves the public Camera.antialias path with a real dual-pass None→FXAA pixel falsifier: both frames are non-black, diffCount=1069 exceeds threshold=480, and zero renderer errors; fresh Chromium also proves Space toggles the HUD ON/OFF with zero page/console/request errors after candidate-local favicon hygiene. game-default already owns the same None/MSAA/FXAA contract through its typed settings, public Camera mutation, render-evidence witness, and R reset. Copying this static four-shape gallery would duplicate the presentation owner without a new gameplay or asset boundary; retain the app as the FXAA renderer oracle.",
+      "betterConsumer": "apps/hello/fxaa"
+    },
+    {
+      "id": "app:hello/gltf",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/gltf/package.json",
+        "apps/hello/gltf/README.md",
+        "apps/hello/gltf/src/main.ts",
+        "apps/hello/gltf/scripts/smoke-dawn.mjs",
+        "apps/hello/gltf/vite.config.ts",
+        "apps/hello/gltf/index.html",
+        "apps/hello/gltf/assets/box.gltf",
+        "apps/hello/gltf/assets/box.gltf.meta.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/artifacts/engine-build.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/artifacts/browser-console-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/artifacts/browser-requests-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/artifacts/browser-eval-fixed.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-104939-classify-hello-gltf-candidate/artifacts/browser-fixed.png"
+      ],
+      "reason": "The canonical app proves a Tier-B .gltf + .meta.json source/sidecar → parseGltf IR → POD bridge → GUID catalog → loadByGuid<MeshAsset|MaterialAsset|SceneAsset> → instantiate path; Dawn renders 300 frames with three meshed sample sites above threshold and zero RHI errors, and fresh Chromium renders the imported Box with zero page/console errors after candidate-local favicon hygiene. It remains an app-local parser/catalog bridge for a static Box and explicitly defers textures, PBR, extensions, skin, animation, and build-time cooking. game-default already owns a GUID-loaded authored SceneAsset, recursive asset loading, mesh/material content, the guided FBX asset-format swap, gameplay/reset/re-entry, and browser evidence; copying this Box would duplicate scene ownership without a new feature-loop boundary. The rebase also exposed a separate mainline pack-host defect: procedural cube-mesh.stub metadata declares importer=gltf while several learn-render hosts register no glTF importer; retain that strict failure as an engine/host follow-up rather than hiding it with raw fallback.",
+      "betterConsumer": "apps/hello/gltf"
+    },
+    {
+      "id": "app:bevy/custom-skinned-mesh",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/custom-skinned-mesh/package.json",
+        "apps/bevy/custom-skinned-mesh/src/main.ts",
+        "apps/bevy/custom-skinned-mesh/scripts/smoke-dawn.mjs",
+        "apps/bevy/custom-skinned-mesh/scripts/smoke-browser.mjs",
+        "apps/bevy/custom-skinned-mesh/index.html",
+        ".forgeax-harness/solo/bevy-examples/experiments/20260731-131235-custom-skinned-mesh/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/artifacts/browser-smoke.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/artifacts/browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/artifacts/frame-early.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-110509-classify-bevy-custom-skinned-mesh-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical app proves the public code-authored MeshAsset skinIndex/skinWeight → SkeletonAsset → Skin.joints → Update joint-transform path: 300-frame Dawn has two-joint animation, motionMeanDelta=39.0930, and zero RHI errors, while fresh Chromium proves jointChanged=true with an inspected six-ribbon capture. It is nevertheless a static six-ribbon code gallery with no pack/GUID asset provenance, input, gameplay consequence, typed reset/re-entry, cleanup, or recovery owner. game-default already owns authored hierarchy, a guided FBX mesh-format swap, and the FBX/glTF skinning/animation oracles; copying another persistent skinned scene would violate the template's pack-vs-runtime boundary. Revisit only when the direct skin path becomes a transient gameplay-owned effect or a license-safe authored asset that composes with the existing target/reset loop. The rebase's strict learn-render pack-host failure remains a separate engine/host follow-up.",
+      "betterConsumer": "apps/bevy/custom-skinned-mesh"
+    },
+    {
+      "id": "app:bevy/eased-motion",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/eased-motion/package.json",
+        "apps/bevy/eased-motion/src/main.ts",
+        "apps/bevy/eased-motion/src/eased-motion.ts",
+        "apps/bevy/eased-motion/scripts/smoke-dawn.mjs",
+        "apps/bevy/eased-motion/index.html",
+        ".forgeax-harness/solo/bevy-examples/experiments/20260731-115823-eased-motion/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/typecheck-retry.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/browser-smoke-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/browser-clean.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/frame-early.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/frame-late.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-111618-classify-bevy-eased-motion-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical app proves the public easing.cubicInOut/elasticInOut → AnimationClip channels → AnimationGraph → AnimationPlayer path: after declaration hydration, typecheck/build pass, Dawn runs 300 frames with translation and rotation witnesses, motionMeanDelta=3.0884, and zero RHI errors, and fresh Chromium proves ready=true, changed=true, zero page errors, and zero failed requests after candidate-local favicon hygiene. It is nevertheless a static code-spawned orange cube with no authored pack/GUID provenance, input, gameplay consequence, typed reset/re-entry, cleanup, or recovery owner. game-default already owns time-driven target rotation, animated material, camera damping, reset-safe Play state, and separate FBX/glTF/animation-graph oracles; copying the cube would create a second animation owner. Revisit only when an AnimationPlayer clip drives an existing gameplay target's resettable outcome without fighting its physics owner. The stale generated math declaration and rebase strict pack-host failures remain separate environment/engine follow-ups.",
+      "betterConsumer": "apps/bevy/eased-motion"
+    },
+    {
+      "id": "app:hello/boss-lightning",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/boss-lightning/package.json",
+        "apps/hello/boss-lightning/src/main.ts",
+        "apps/hello/boss-lightning/src/scene.ts",
+        "apps/hello/boss-lightning/assets/boss-lightning.pack.json",
+        "apps/hello/boss-lightning/assets/boss-lightning-materials.pack.json",
+        "apps/hello/boss-lightning/scripts/smoke-dawn.mjs",
+        "apps/hello/boss-lightning/scripts/smoke-browser.mjs",
+        "apps/hello/boss-lightning/scripts/smoke-falsify.mjs",
+        "apps/hello/boss-lightning/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/typecheck-retry.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/browser-smoke-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/browser-ready.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/browser-eval-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/browser-falsifier-matrix.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/dawn-strike-only.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-112217-classify-hello-boss-lightning-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical VFX app proves authored Pack v2 particle-effect → GUID load → ParticleEffectPlayer → CPU FixedUpdate simulation → scene-space resolver → billboard and mesh RenderFeature output, including seed/readiness/recovery diagnostics and non-black Dawn pixels; fresh Chromium reaches readiness=ready with two buckets and zero runtime validation errors after candidate-local favicon hygiene. It is nevertheless a static code-spawned boss scene with no InputMap action, hit/score gameplay owner, typed reset/re-entry, or effect lifecycle owner, and its falsifier aggregate has the wrong polarity (two modes are unwired while the zero-output modes pass). game-default already owns authored scene, projectile/hit/reset, camera, material, audio, and post-process composition; copying the boss would add a parallel persistent scene. Revisit only as a license-safe transient effect on the existing hit path after the host exposes a public late RenderFeature installation seam.",
+      "betterConsumer": "apps/hello/boss-lightning"
+    },
+    {
+      "id": "app:hello/gltf-instancing",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/gltf-instancing/package.json",
+        "apps/hello/gltf-instancing/src/main.ts",
+        "apps/hello/gltf-instancing/src/__tests__/instanced-drawcall.dawn.test.ts",
+        "apps/hello/gltf-instancing/assets/instanced-box.gltf",
+        "apps/hello/gltf-instancing/assets/instanced-box.gltf.meta.json",
+        "apps/hello/gltf-instancing/scripts/smoke-dawn.mjs",
+        "apps/hello/gltf-instancing/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260803-113620-classify-hello-gltf-instancing-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-113620-classify-hello-gltf-instancing-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-113620-classify-hello-gltf-instancing-candidate/artifacts/browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-113620-classify-hello-gltf-instancing-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical app proves the Tier-B EXT_mesh_gpu_instancing -> Instances.transforms -> Name -> SceneAsset -> GUID catalog/loadByGuid -> instantiate path: typecheck/build pass, Dawn runs 300 WebGPU frames with Instances.transforms.length=64, three meshed sites at 1.1126 distance, and zero RHI errors; fresh Chromium loads the glTF and shader manifest with HTTP 200 and renders the inspected tan capture. The four translations are adjacent unit boxes, so the browser image is one rectangle and has no independent instance-count witness. It is nevertheless a static direct host with no input, gameplay consequence, typed reset/re-entry, cleanup, recovery, or cooked custom mesh upload; game-default already owns the authored SceneAsset, GUID loading, mesh/material, format boundaries, gameplay/reset, and browser evidence. Copying it would add a second persistent scene owner while still deferring textures, PBR, skin, animation, and build-time cooking. Revisit only when instancing becomes a transient gameplay-owned collection with typed count/reset and cooked GUID delivery. The rebased strict learn-render pack-host failure remains a separate engine follow-up.",
+      "betterConsumer": "apps/hello/gltf-instancing"
+    },
+    {
+      "id": "app:hello/hdrp-lighting",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/hdrp-lighting/package.json",
+        "apps/hello/hdrp-lighting/README.md",
+        "apps/hello/hdrp-lighting/src/main.ts",
+        "apps/hello/hdrp-lighting/scripts/smoke-dawn.mjs",
+        "apps/hello/hdrp-lighting/index.html",
+        "apps/parity/urp-vs-hdrp/README.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-114431-classify-hello-hdrp-lighting-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-114431-classify-hello-hdrp-lighting-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-114431-classify-hello-hdrp-lighting-candidate/artifacts/falsify-force-urp.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-114431-classify-hello-hdrp-lighting-candidate/artifacts/falsify-cluster-grid-zero.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-114431-classify-hello-hdrp-lighting-candidate/artifacts/browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-114431-classify-hello-hdrp-lighting-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical app proves the public HDRP opt-in and high-light-count path: createApp -> HDRP_PIPELINE_ID RenderPipelineAsset -> installPipeline -> 200 PointLight + 56 SpotLight extraction, CPU cluster binning/upload, per-frame orbit, and tonemapped output. Typecheck/build/Dawn pass with backend=webgpu, 332 frames, hdrpInstalled=true, empty onError histogram, and console.error=0; force-urp and cluster-grid-zero falsifiers change 7052 pixels with maxDelta=0.8824 and 0.9098. Fresh Chromium reaches a 1280x720 canvas, shader manifest HTTP 200, zero page errors, and an inspected lit slab/cube HUD capture. It is nevertheless a direct-spawn stress gallery with no authored pack/GUID asset, input, gameplay consequence, typed reset/re-entry, cleanup, recovery, or independent browser light-count witness. game-default already owns authored PBR/light content, tonemap/bloom/FXAA/DoF settings, hit feedback, input, and reset; copying 256 lights would add a parallel scene/lighting owner. Keep this app as the HDRP stress oracle and apps/parity/urp-vs-hdrp as parity consumer; revisit only as a typed quality-mode composition after their stale contracts are reconciled. The rebased strict learn-render pack-host failure remains a separate engine follow-up.",
+      "betterConsumer": "apps/hello/hdrp-lighting"
+    },
+    {
+      "id": "app:hello/level-switch",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/level-switch/package.json",
+        "apps/hello/level-switch/src/index.ts",
+        "apps/hello/level-switch/scripts/smoke-dawn.mjs",
+        "apps/hello/level-switch/scripts/smoke-browser.mjs",
+        "apps/hello/level-switch/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115155-classify-hello-level-switch-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115155-classify-hello-level-switch-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115155-classify-hello-level-switch-candidate/artifacts/browser-smoke.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115155-classify-hello-level-switch-candidate/artifacts/tutorial.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115155-classify-hello-level-switch-candidate/artifacts/street-a.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115155-classify-hello-level-switch-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical app proves defineState -> addOnEnter -> assets.instantiate -> despawnOnExit with a cross-state player: typecheck/build/Dawn pass, ten switches keep playerCount=1 and meshEntityCount=2, draw count=47, and the falsification check detects scope leaks; Chromium switches tutorial/street-a/main-menu with rendered frames differing by colorDelta=84.75. It is nevertheless an inline catalog/direct DOM-key demo, not a production authored level route; the handler bypasses InputSnapshot/InputMap, and adding LevelId beside game-default's existing typed GameState.Play/Reset owner would create parallel state vocabulary without a gameplay target composition. game-default already owns reset cleanup, fixed/variable state scheduling, normalized input, authored SceneAsset packs, physics/audio/UI lifecycle, and browser render evidence. Keep this app as the state/churn oracle; revisit only as a dedicated multi-level feature-loop milestone with one state-ownership design and authored level assets. The rebased strict learn-render pack-host failure remains a separate engine follow-up.",
+      "betterConsumer": "apps/hello/level-switch"
+    },
+    {
+      "id": "app:hello/m1-composition",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m1-composition/package.json",
+        "apps/hello/m1-composition/src/main.ts",
+        "apps/hello/m1-composition/scripts/smoke.mjs",
+        "apps/hello/m1-composition/scripts/smoke-live.mjs",
+        "apps/hello/m1-composition/index.html",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115841-classify-hello-m1-composition-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115841-classify-hello-m1-composition-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115841-classify-hello-m1-composition-candidate/artifacts/live-gate.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-115841-classify-hello-m1-composition-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical M1 composition oracle proves schedule reflection/order (update-before-fixed -> fixed -> fixed -> update-after-fixed), deferred mutation, state enter/exit cleanup, frozen InputSnapshot identity and rising edge, hierarchy traversal, pure math, plugin registry, multi-world drawSource, App error fan-out, and same-process recovery. Typecheck/build and semantic smoke pass; the live Vite/Chromium/remote gate reports phase=play, frames=74, fixed=12, plugin=true, entities=5, children=1, remote mutation after=0.5, and time-delta-invalid recovery with entities=5 and no page errors. It is nevertheless a synthetic renderer/multi-world/headless acceptance harness with m1Live probe resources, no authored pack/GUID asset, player-facing gameplay consequence, reset/re-entry owner, or persistent UI lifecycle. game-default already owns the user-facing forms of schedule, state, input, hierarchy, math, and host recovery; transplanting M1 would add test scaffolding rather than a coherent game feature. Keep it as the composition and remote-live oracle; revisit only when a new gameplay slice composes these public contracts with authored content and resettable evidence. The rebased strict learn-render pack-host failure remains a separate engine follow-up.",
+      "betterConsumer": "apps/hello/m1-composition"
+    },
+    {
+      "id": "app:hello/m2-content-pipeline",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m2-content-pipeline/package.json",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "apps/hello/m2-content-pipeline/scripts/source-reimport.mjs",
+        "apps/hello/m2-content-pipeline/scripts/real-fixtures.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke-browser-font.mjs",
+        "apps/hello/m2-content-pipeline/font-worker-probe.html",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/artifacts/before-hmr.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/artifacts/after-hmr.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/artifacts/font-worker-bake.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/artifacts/node-font-sidecar.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120336-classify-hello-m2-content-pipeline-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical M2 content gauntlet proves project manifest validation, 13 sidecar entries across fbx/gltf/image/reel-game-blob, host importer pack-index delivery, browser HMR content mutation (`changedPixels=21394`), stable GUIDs with changed semantic digests for image/glTF/FBX source edits, FBX sub-asset GUID preservation, pre-baked 95-glyph font delivery, browser Worker MSDF baking (`340712`-byte TTF, 256x256 atlas), plain Node font bake plus structured unsupported-font-format recovery, and zstd round-trip (4096 -> 19 -> 4096). It is nevertheless a build-time/content acceptance harness composed from nested hello consumers with no standalone authored gameplay loop, player outcome, reset/re-entry owner, or persistent UI lifecycle. game-default already owns the authored SceneAsset/GUID route, compressed image, FBX format swap, HDR/image evidence, UI lifecycle, and guided consumer rows; transplanting M2 roots/fixtures would duplicate build authority and increase concept count. Keep it as the content provenance/importer/recovery oracle and revisit only when a new format is integrated into an existing gameplay owner. The root-Vite virtual bundler warning, child exit-143 wrapper, and rebased strict pack-host failure remain separate host follow-ups.",
+      "betterConsumer": "apps/hello/m2-content-pipeline"
+    },
+    {
+      "id": "app:hello/m4-interactive-simulation",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m4-interactive-simulation/package.json",
+        "apps/hello/m4-interactive-simulation/scripts/smoke.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120815-classify-hello-m4-interactive-simulation-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120815-classify-hello-m4-interactive-simulation-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120815-classify-hello-m4-interactive-simulation-candidate/artifacts/before-gesture.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120815-classify-hello-m4-interactive-simulation-candidate/artifacts/after-gesture-and-pan.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-120815-classify-hello-m4-interactive-simulation-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical M4 orchestrator proves physics gravity/readiness (`300` frames, y `5 -> -1.2512753`), character fixed-step/collision (`300` driven and grounded frames, x `0 -> 14.9996700`), AudioEngine readiness, fresh Chrome AudioContext gesture + spatial pan (`C -> R`) + collision SFX + despawn cleanup (`changedPixels=53117`), Rapier 2D/3D lifecycle suites (`22`/`30` tests), and WebAudio lifecycle (`42` tests). It is nevertheless only an orchestrator over independent hello/package consumers with no authored scene, game state, gameplay/input owner, reset/re-entry owner, or standalone UI. game-default already owns authored Player physics/KCC, FixedUpdate gameplay, normalized input, spatial hit SFX/music buses, and typed Reset cleanup; transplanting M4 actors would split lifecycle ownership. Keep it as the simulation/audio/cleanup oracle; reuse public contracts inside a future existing gameplay mechanic, with replay remaining an explicit deferred requirement. Vite/Vitest warnings and the rebased strict pack-host failure remain separate host follow-ups.",
+      "betterConsumer": "apps/hello/m4-interactive-simulation"
+    },
+    {
+      "id": "app:hello/m5-interaction-media",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m5-interaction-media/package.json",
+        "apps/hello/m5-interaction-media/scripts/smoke.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/picking-before.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/picking-hit.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/picking-miss.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/debug-draw-normal.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/debug-draw-falsified.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/cutscene-before.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/cutscene-during.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/cutscene-after.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121201-classify-hello-m5-interaction-media-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical M5 interaction/media matrix proves picking Dawn/browser hit+miss (`distance=3.400`, `changedPixels=40000`), debug-draw low/empty/runtime/depth/HDRP modes plus camera/resize browser roll (`normalForeground=1809`, falsified=0) and a zero-geometry falsifier, package contracts (`74`/`57` tests), text Dawn (`7442` visible pixels), tilemap Dawn (two derived cells), live video texture frame advance with a provider-skipped RED control, and video cutscene overlay lifecycle (`colorDelta=374.59`). It is nevertheless an orchestrator over independent consumers with no standalone authored gameplay loop; game-default already owns picking feedback, query-gated debug axes, authored text/UI, reset/re-entry, and host cleanup. The normal video texture path also logs an initial copyExternalImageToTexture back-resource error/404 while its pixel gate passes; route that readiness telemetry separately rather than hiding it. Keep M5 as the interaction/media oracle; do not transplant parallel scenes or fixtures into the template.",
+      "betterConsumer": "apps/hello/m5-interaction-media"
+    },
+    {
+      "id": "app:hello/m6-inspection-forensics",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m6-inspection-forensics/package.json",
+        "apps/hello/m6-inspection-forensics/scripts/smoke.mjs",
+        "apps/remote-demo/scripts/e2e-motion.mjs",
+        "packages/app/src/internal/browser-remote-bridge.ts",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/live-before.tape.bin",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/live-after.tape.bin",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/live-before.report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/live-after.report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/live-before-rt.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/live-after-rt.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-121729-classify-hello-m6-inspection-forensics-candidate/artifacts/engine-build-rebase.txt"
+      ],
+      "reason": "The canonical M6 inspection/forensics gauntlet proves browser remote-live capture and semantic mutation (`Transform.pos.x 0 -> 1.25`, probe resource `7`), remote motion (`9/9`, position `1 -> 2`, eval write `99`), structured syntax/runtime errors (`4/4`), RHI frame modeling (`1` draw / `11` commands), offline replay, same-scene live tape stability (`5` draws / `180` commands), live inspect/replay and semantic-to-pixel correlation (`pixelDeltaAbsMean=0.175727`), plus RHI viewer edit/reset and no-shader falsifier. The browser bridge needed an engine fix because dynamic imports of `@forgeax/engine-scene` produced duplicate component tokens; canonicalizing every imported module against the live World now makes the public remote recipe work, and stale demo imports were migrated from removed `@forgeax/engine-runtime` Transform to `@forgeax/engine-scene`. It is nevertheless a developer inspection/forensics acceptance harness, not a player-facing game mechanic: no authored pack/GUID gameplay target, input action, reset/re-entry owner, or persistent UI loop. game-default should consume remote/RHI evidence as a diagnostic layer on existing gameplay rather than embed M6's fixture/tape viewer. The viewer gate still logs a 404/page error and a shader-rich replay pipeline error while reporting GREEN, so telemetry/readiness must be tightened before calling this a clean first-user workflow; device-loss recovery remains deferred. The rebase stale-dist/strict-pack host failures remain separate.",
+      "betterConsumer": "apps/hello/m6-inspection-forensics"
+    },
+    {
+      "id": "app:hello/m7-backend-recovery",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m7-backend-recovery/package.json",
+        "apps/hello/m7-backend-recovery/scripts/smoke.mjs",
+        "apps/hello/m7-backend-recovery/scripts/smoke-browser-device-loss.mjs",
+        "apps/hello/m7-backend-recovery/scripts/cross-backend-replay.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/device-loss-summary.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/before-loss.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/after-recover.png",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/before-loss.tape.bin",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/before-loss.report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/hello-cube-capture.tape.bin",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123159-classify-hello-m7-backend-recovery-candidate/artifacts/hello-cube-capture.report.json"
+      ],
+      "reason": "The canonical M7 gauntlet proves null/runtime lifecycle and injected recovery (`65/65`), wgpu structured contracts (`45/45`), browser submit recovery (`5/5`), Dawn fallback rejection (`4/4`), Bloom resize/resource churn (`360` frames, `0` new errors), browser capture (`196` events, `34` blobs, `5` draws, one frame mark), same-scene Dawn pixel inspection plus null structural replay, and debug-only tree-shake (`7/7`). The real Chrome driver path `Browser.crashGpuProcess` preserves one World (`entityCount=3`), transitions `alive -> device-lost -> alive`, returns `{ok:true}` from public `Renderer.recover()`, draws again, and retains `84100` non-black pixels. It is nevertheless a backend/renderer acceptance matrix with no authored gameplay/input/reset owner or persistent user-facing recovery loop; game-default should consume renderer health and capture contracts from an existing mechanic rather than copy the crash driver and fixtures. The structured device-loss console error is expected evidence, not hidden; physical hardware TDR remains unclaimed. Keep M7 shelved as the backend recovery oracle.",
+      "betterConsumer": "apps/hello/m7-backend-recovery"
+    },
+    {
+      "id": "app:hello/m8-integrated-capstone",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m8-integrated-capstone/package.json",
+        "apps/hello/m8-integrated-capstone/scripts/smoke.mjs",
+        "apps/hello/m8-integrated-capstone/scripts/smoke-browser.mjs",
+        "apps/hello/m8-integrated-capstone/scripts/smoke-dawn.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/artifacts/browser-summary.json",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/artifacts/frame-0.tape.bin",
+        ".forgeax-harness/solo/game-default/experiments/20260803-123723-classify-hello-m8-integrated-capstone-candidate/artifacts/rhi-inspect.json"
+      ],
+      "reason": "The M8 direct host composes content HMR, audio, physics, picking, custom material selection, remote-live mutation, RHI capture, structured fault, and same-process recovery in one long-lived journey: browser and Dawn pass with seven stable entities, RHI capture has 16 draws and 238 commands, and before/after frames remain non-black. It is nevertheless a synthetic code-spawned scene with direct Space polling and direct createApp ownership; it bypasses game-default's authored SceneAsset, normalized InputMap, HUD, typed Reset, Preview cleanup, and public inspection/recovery front doors. Copying it would add a second scene/capstone owner. Keep it as the integrated acceptance oracle and reuse its pressure sequence when Preview exposes a documented P7 seam; do not transplant its harness into the template.",
+      "betterConsumer": "apps/hello/m8-integrated-capstone"
+    },
+    {
+      "id": "app:hello/multi-material",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "apps/hello/multi-material/package.json",
+        "apps/hello/multi-material/src/main.ts",
+        "apps/hello/multi-material/scripts/smoke-dawn.mjs",
+        "apps/hello/multi-material/index.html",
+        "templates/game-default/assets/multi-material-target.pack.json",
+        "templates/game-default/assets/scene.pack.json",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/candidate-gates-final.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/falsify-truncate-materials.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/falsify-duplicate-material.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/browser-console-clean.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/browser-clean.png",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/render-evidence-dev-report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/render-evidence-production-report.json"
+      ],
+      "reason": "The canonical hello proves one MeshAsset can render a triangle-list and line-list submesh through two positional MaterialAsset slots: typecheck/build pass, Dawn runs 300 frames with red=5496 and cyan=536 pixels, the browser path reaches a clean HUD/screenshot after the candidate-local favicon fix, and truncate/duplicate-material falsifiers remain load-bearing. game-default adopts the same public contract on its authored RedBox target: an independent pack supplies the mesh plus two unlit materials, the existing hit-flash swaps only slot 0, R restores the complete material array, and render-evidence proves materials[0..1] stays aligned with submeshes[0..1].",
+      "betterConsumer": "apps/hello/multi-material"
+    },
+    {
+      "id": "app:hello/multi-world",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "apps/hello/multi-world/package.json",
+        "apps/hello/multi-world/src/main.ts",
+        "apps/hello/multi-world/README.md",
+        "apps/hello/multi-world/scripts/smoke-dawn.mjs",
+        "apps/hello/multi-world/index.html",
+        "packages/app/src/internal/frame-loop.ts",
+        "packages/app/src/types.ts",
+        "packages/app/src/create-app.ts",
+        "packages/app/src/__tests__/draw-source-single-world-regression.test.ts",
+        "packages/app/README.md",
+        "templates/game-default/src/multi-world-overlay.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/artifacts/candidate-gates.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/artifacts/engine-app-test.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/artifacts/template-preview-build.txt",
+        ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/artifacts/browser-multi-world-toggle.json"
+      ],
+      "reason": "The canonical hello proves merged renderables and cross-world lighting with two pixel-readback probes over 300 Dawn frames. Dogfooding found that createApp's construction-time drawSource could not receive a secondary World created during template bootstrap; the engine fix adds App.setDrawSource, a mutable routing pull that preserves one measured delta, per-World time ownership, and the single-world fallback, with a regression test. game-default adopts the seam through two authored-material beacons in a secondary World, reuses the primary camera/light owner, exposes a typed inspection toggle and multi-world render evidence, and resets/cleans up through the existing lifecycle owner. The direct browser smoke also exposed and fixed a template RGBA-to-vec3 emissive contract mistake; missing vendor DDC and fallback reset errors in the manually isolated host remain separate asset-host follow-ups.",
+      "betterConsumer": "apps/hello/multi-world"
+    },
+    {
+      "id": "app:hello/shadow-opt-out",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/shadow-opt-out/package.json",
+        "apps/hello/shadow-opt-out/src/main.ts",
+        "apps/hello/shadow-opt-out/shaders/cutout-shadow.wgsl",
+        "apps/hello/shadow-opt-out/scripts/smoke-dawn.mjs",
+        "templates/game-default/assets/base-material.pack.json",
+        "templates/game-default/assets/scene.pack.json",
+        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-081231-classify-hello-shadow-opt-out-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-081231-classify-hello-shadow-opt-out-candidate/artifacts/candidate-gates.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-081231-classify-hello-shadow-opt-out-candidate/artifacts/plugin-hydrate-and-gates.log"
+      ],
+      "reason": "The canonical app is a static three-cube shadow pipeline oracle: typecheck/build and a 300-frame Dawn smoke pass with shadow factors A=0.4444, B=1.0000, C=0.4444, proving default casting, Materials.standard({castShadow:false}), and a custom alpha-cutout ShadowCaster. game-default already owns authored directional shadows through the base-material ShadowCaster, uses the public material-level castShadow=false on its transient projectile, and composes custom WGSL, hit feedback, typed R reset, and Preview render evidence in one gameplay loop. The candidate has no authored Pack/GUID asset, input action, gameplay consequence, reset/re-entry, cleanup, recovery, or browser front door; copying its second cube gallery or an unparameterized world-space cutout shader would duplicate the existing shadow/material oracle rather than add a first-user concept. Revisit only when a license-safe authored cutout asset or a target-owned shadow participation setting changes an existing gameplay/settings outcome through the existing owners.",
+      "betterConsumer": "apps/hello/shadow-opt-out"
+    },
+    {
+      "id": "app:hello/scene-nesting",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "apps/hello/scene-nesting/package.json",
+        "apps/hello/scene-nesting/src/index.ts",
+        "apps/hello/scene-nesting/scripts/smoke-dawn.mjs",
+        "templates/game-default/assets/scene.pack.json",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/preview/__tests__/preview.browser.test.ts",
+        ".forgeax-harness/solo/game-default/experiments/20260804-072230-classify-hello-scene-nesting-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-072230-classify-hello-scene-nesting-candidate/artifacts/candidate-gates.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-072230-classify-hello-scene-nesting-candidate/artifacts/plugin-hydrate-and-gates-runtime-retry.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-072230-classify-hello-scene-nesting-candidate/artifacts/preview-browser-nested.log"
+      ],
+      "reason": "The canonical hello is the focused mount/override acceptance oracle, while game-default turns that contract into authored gameplay: scene.pack.json mounts a GUID child through memberFirst/memberCount, patches its Transform scale through the public pack path, projects the nested node into the existing target loop, and derives its collider from the live overridden Transform. NestedTarget therefore participates in scoring, hit flash/audio, typed reset, re-entry, and cleanup without copying the demo's internal resolver or creating a second scene system. Preview browser evidence asserts the mounted localId and scale override, and the canonical Dawn smoke retains the 300-frame structural gate.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:hello/room",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/room/README.md",
+        "apps/hello/room/src/index.ts",
+        "apps/hello/room/scripts/smoke-dawn.mjs",
+        "templates/game-default/assets/scene.pack.json",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-064945-classify-hello-room-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-064945-classify-hello-room-candidate/artifacts/front-door.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-064945-classify-hello-room-candidate/artifacts/targeted-gates-retry.log"
+      ],
+      "reason": "The candidate is a static SceneAsset convergence sample: three builtin-cube entities, one ChildOf edge, two solid-color materials, a camera, and a directional light. Its public entry has no input, gameplay consequence, Update/FixedUpdate system, reset/re-entry owner, or cleanup path; its unconditional draw loop only proves the same asset delivery and hierarchy path that game-default already owns, with deeper authored hierarchy, multi-material/submesh, imported FBX/glTF, physics, scoring, and the single Preview reset owner. Copying it would create a second static gallery. Keep room as the focused asset/hierarchy oracle; revisit only if a future v2 asset feature composes with gameplay and the existing reset/evidence owners.",
+      "betterConsumer": "apps/hello/room"
+    },
+    {
+      "id": "app:hello/skin",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/skin/package.json",
+        "apps/hello/skin/README.md",
+        "apps/hello/skin/src/main.ts",
+        "apps/hello/skin/scripts/smoke-dawn.mjs",
+        "apps/hello/skin/scripts/smoke-browser.mjs",
+        "apps/hello/skin/vite.config.ts",
+        "forgeax-engine-assets/khronos-gltf-samples/Fox/Fox.glb",
+        "templates/game-default/src/fbx-skinned-target.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/artifacts/smoke-browser-final.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/artifacts/falsify-clip-fixed.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/artifacts/falsify-no-skin.log",
+        ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/artifacts/falsify-identity-parent.log"
+      ],
+      "reason": "The canonical app is a strong glTF skin/animation oracle: it proves Fox.glb source/sidecar → gltf importer → GUID SceneAsset/Skin/AnimationClip delivery, a 72-byte 18F browser vertex buffer, nine successful dev import responses, 1501 live palette writes, animated joint-matrix variation, and the clip/no-Skin falsifiers. It remains a standalone Fox character gallery with direct key polling and no game-default gameplay consequence, typed reset/re-entry owner, cleanup, or recovery path; its Khronos sample asset also belongs to a vendor-license boundary. game-default already owns the authored gameplay/reset/inspection boundary for an imported FBX skinned target. Adding a second glTF character would duplicate the animation owner rather than teach a new feature-loop composition. Revisit only when glTF replaces or becomes a format switch for that existing target through the same hit/reset/recovery owners and an explicitly license-safe asset decision.",
+      "betterConsumer": "apps/hello/skin"
     }
   ]
 }

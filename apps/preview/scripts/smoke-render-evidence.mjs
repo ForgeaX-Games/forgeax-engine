@@ -19,10 +19,15 @@ const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_RENDER_EVIDENCE_DIR ?? resolve(ROOT, 'templates/game-default/.forgeax-debug/render-evidence'),
 );
 const PORT = Number.parseInt(process.env.FORGEAX_RENDER_EVIDENCE_PORT ?? '5187', 10);
+const production = process.env.FORGEAX_RENDER_EVIDENCE_MODE === 'production';
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
-const server = spawn('pnpm', ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(PORT)], {
+const serverArgs = production
+  ? ['--filter', '@forgeax/preview', 'preview', '--host', '127.0.0.1', '--port', String(PORT)]
+  : ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(PORT)];
+const server = spawn('pnpm', serverArgs, {
   cwd: ROOT,
+  detached: true,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverOutput = '';
@@ -35,6 +40,9 @@ const browser = await chromium.launch({
   args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
 });
 const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
+const emitCanvasWheel = async (deltaY) => page.evaluate((dy) => {
+  document.querySelector('canvas#app')?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: dy }));
+}, deltaY);
 const pageErrors = [];
 const consoleErrors = [];
 const notFound = [];
@@ -52,7 +60,11 @@ while (Date.now() < deadline) {
     await sleep(250);
   }
 }
-await page.waitForTimeout(2_000);
+await page.waitForFunction(() => {
+  const value = globalThis.__forgeaxGameDefaultRenderEvidence;
+  return value?.snapshot().customProjectileMesh.available === true && value.snapshot().customProjectileMesh.textureSource === 'authored-compressed';
+}, { timeout: 10_000 });
+await page.waitForTimeout(250);
 
 async function snapshot(name) {
   const path = resolve(ARTIFACT_DIR, `${name}.png`);
@@ -75,8 +87,12 @@ const scoreBefore = await page.evaluate(() => {
 });
 await page.waitForTimeout(100);
 const scoreAfter = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
+await snapshot('world-score');
 if (!scoreAfter.changeDetection || scoreAfter.changeDetection.score <= 0 || scoreAfter.changeDetection.changedTargets < 10 || scoreAfter.changeDetection.resourceChanges <= 1) {
   throw new Error(`change-detection evidence missing: ${JSON.stringify({ scoreBefore, scoreAfter })}`);
+}
+if (!scoreBefore.worldScoreText?.available || !scoreBefore.worldScoreText.baked || !scoreBefore.worldScoreText.active || !/^\+\d+$/.test(scoreBefore.worldScoreText.text)) {
+  throw new Error(`world-space GlyphText score evidence missing: ${JSON.stringify(scoreBefore.worldScoreText)}`);
 }
 if (!scoreAfter.targetHealth?.contiguousSupported || !scoreAfter.targetHealth.lengthsEqual || scoreAfter.targetHealth.rows !== scoreAfter.targetHealth.totalMax / 100 || scoreAfter.targetHealth.damageEvents <= 0 || scoreAfter.targetHealth.totalCurrent >= scoreAfter.targetHealth.totalMax) {
   throw new Error(`contiguous target-health evidence missing: ${JSON.stringify({ before: scoreBefore.targetHealth, after: scoreAfter.targetHealth })}`);
@@ -174,13 +190,13 @@ await page.waitForTimeout(250);
 const orbit = await snapshot('orbit');
 await page.mouse.click(400, 300);
 await page.mouse.move(400, 300);
-await page.mouse.wheel(0, -120);
+await emitCanvasWheel(-120);
 await page.waitForTimeout(250);
 const orbitAfter = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
 const orbitZoom = await snapshot('camera-perspective-zoom');
 await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.setViewMode('topdown'));
 await page.waitForTimeout(250);
-await page.keyboard.press('r');
+await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.reset());
 await page.waitForTimeout(250);
 const orbitReset = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
 
@@ -196,7 +212,7 @@ await page.keyboard.down('ArrowRight');
 await page.waitForTimeout(300);
 await page.keyboard.up('ArrowRight');
 await page.mouse.move(400, 300);
-await page.mouse.wheel(0, -120);
+await emitCanvasWheel(-120);
 await page.waitForTimeout(250);
 const panAfter = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
 const panMoved = await snapshot('camera-pan-moved');
@@ -233,7 +249,8 @@ const changedPixels = (a, b) => pixelmatch(a.data, b.data, undefined, a.width, a
 const flashDelta = changedPixels(baseline, flash);
 const resetDelta = changedPixels(baseline, reset);
 const report = {
-  oracle: 'baseline -> hit-flash and transient chromatic aberration change compositor pixels; R reset returns the baseline; bloom and depth-aware post-process toggles compose with the effect chain; orbit mode changes the camera composition at a fixed player-relative radius; recovery re-triggers the same flash without reload',
+  mode: production ? 'production' : 'dev',
+  oracle: 'baseline -> hit-flash and transient chromatic aberration change compositor pixels; R reset returns the baseline; the secondary World stays routed through the primary camera/light owner; bloom and depth-aware post-process toggles compose with the effect chain; orbit mode changes the camera composition at a fixed player-relative radius; recovery re-triggers the same flash without reload',
   artifacts: { baseline: baseline.path, flash: flash.path, reset: reset.path, animatedTarget: animation.path, bloomOff: bloomOff.path, depthOfFieldOn: depthOfFieldOn.path, orbit: orbit.path, orbitZoom: orbitZoom.path, pan: pan.path, panMoved: panMoved.path },
   semantic: { evidence, scoreBefore, scoreAfter, disableBeforeReset, deferredCommandsAfter, animationBefore, animationAfter, animationReset, flashBefore, resetState, bloomBefore, bloomAfter, depthOfFieldBefore, depthOfFieldAfter, orbitBefore, orbitAfter, orbitReset, panBefore, panAfter, panReset },
   pixel: { flashDelta, resetDelta, animationDelta: changedPixels(baseline, animation), bloomDelta: changedPixels(reset, bloomOff), depthOfFieldDelta: changedPixels(reset, depthOfFieldOn), orbitDelta: changedPixels(reset, orbit), orbitZoomDelta: changedPixels(orbit, orbitZoom), panDelta: changedPixels(reset, panMoved) },
@@ -246,14 +263,19 @@ writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, nu
 
 try {
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
-  if (evidence.materialShaderIdentifiers?.includes?.('game_default::hit_flash') !== true) throw new Error('hit-flash shader was not registered');
-  if (evidence.materialShaderIdentifiers?.includes?.('game_default::animated_target') !== true) throw new Error('animated-target shader was not registered');
+if (evidence.materialShaderIdentifiers?.includes?.('game_default::hit_flash') !== true) throw new Error('hit-flash shader was not registered');
+if (evidence.materialShaderIdentifiers?.includes?.('game_default::animated_target') !== true) throw new Error('animated-target shader was not registered');
+if (evidence.multiWorld?.enabled !== true || evidence.multiWorld.worldCount !== 2 || evidence.multiWorld.entityCount !== 2 || evidence.multiWorld.cameraOwner !== 0 || evidence.multiWorld.resourceOwner !== 0) throw new Error(`multi-world routing contract failed: ${JSON.stringify(evidence.multiWorld)}`);
+if (evidence.multiMaterial?.available !== true || evidence.multiMaterial.materialCount !== 2 || evidence.multiMaterial.submeshCount !== 2 || evidence.multiMaterial.slotsAligned !== true || JSON.stringify(evidence.multiMaterial.topologies) !== JSON.stringify(['triangle-list', 'line-list'])) throw new Error(`multi-material submesh contract failed: ${JSON.stringify(evidence.multiMaterial)}`);
+  if (evidence.customProjectileMesh?.available !== true || evidence.customProjectileMesh.textureSource !== 'authored-compressed' || typeof evidence.customProjectileMesh.textureFormat !== 'string' || evidence.customProjectileMesh.textureFormat.length === 0) throw new Error(`authored compressed projectile texture witness failed: ${JSON.stringify(evidence.customProjectileMesh)}`);
   if (evidence.clearcoatMaterial?.enabled !== true || Math.abs(evidence.clearcoatMaterial.strength - 0.85) > 1e-6 || Math.abs(evidence.clearcoatMaterial.roughness - 0.12) > 1e-6) throw new Error(`clearcoat material witness failed: ${JSON.stringify(evidence.clearcoatMaterial)}`);
   if (animationBefore.animatedShaderEnabled !== true || animationAfter.animatedShaderEnabled !== true || animationAfter.animatedShaderTime <= animationBefore.animatedShaderTime) throw new Error(`animated shader did not advance: ${JSON.stringify({ animationBefore, animationAfter })}`);
   if (animationReset.animatedShaderEnabled !== true || animationReset.animatedShaderTime !== 0) throw new Error(`animated shader reset failed: ${JSON.stringify(animationReset)}`);
   if (flashBefore.hitFlashBlendEnabled !== true || resetState.hitFlashBlendEnabled !== true) throw new Error('hit-flash premultiplied blend state was not active');
   if (flashBefore.chromaticAberration?.active !== true || flashBefore.chromaticAberration.intensity <= 0 || resetState.chromaticAberration?.active !== false) throw new Error(`chromatic aberration transition failed: ${JSON.stringify({ flashBefore: flashBefore.chromaticAberration, reset: resetState.chromaticAberration })}`);
   if (flashBefore.activeFlashCount !== 1 || resetState.activeFlashCount !== 0) throw new Error(`semantic transition failed: ${JSON.stringify({ flashBefore, resetState })}`);
+  if (flashBefore.multiMaterial?.available !== true || flashBefore.multiMaterial.materialCount !== 2 || flashBefore.multiMaterial.submeshCount !== 2 || resetState.multiMaterial?.slotsAligned !== true) throw new Error(`multi-material flash/reset preservation failed: ${JSON.stringify({ before: flashBefore.multiMaterial, reset: resetState.multiMaterial })}`);
+  if (flashBefore.multiWorld?.worldCount !== 2 || resetState.multiWorld?.worldCount !== 2) throw new Error(`multi-world flash/reset preservation failed: ${JSON.stringify({ before: flashBefore.multiWorld, reset: resetState.multiWorld })}`);
   if (resetState.targetHealth.totalCurrent < resetState.targetHealth.totalMax - 0.5) throw new Error(`target health reset failed: ${JSON.stringify(resetState.targetHealth)}`);
   if (resetState.targetDisabling.activeCount !== 10 || resetState.targetDisabling.disabledCount !== 0) throw new Error(`entity-disabling reset failed: ${JSON.stringify(resetState.targetDisabling)}`);
   if (bloomBefore.before.bloomEnabled !== true || bloomBefore.after.bloomEnabled !== false || bloomAfter.bloomEnabled !== true) throw new Error(`bloom toggle transition failed: ${JSON.stringify({ bloomBefore, bloomAfter })}`);
@@ -278,10 +300,14 @@ try {
   if (report.notFound.some((url) => !url.includes('/__import/'))) throw new Error(`unexpected 404 responses: ${report.notFound.join(' | ')}`);
   if (depthOfFieldBefore.before.depthOfField.enabled !== false || depthOfFieldBefore.after.depthOfField.enabled !== true || depthOfFieldAfter.depthOfField.enabled !== false) throw new Error(`depth-of-field toggle transition failed: ${JSON.stringify({ depthOfFieldBefore, depthOfFieldAfter })}`);
   if (report.pixel.depthOfFieldDelta < 20) throw new Error(`depth-of-field toggle changed only ${report.pixel.depthOfFieldDelta} pixels`);
-  console.log(`[render-evidence] PASS flashDelta=${flashDelta} resetDelta=${resetDelta} chromaticIntensity=${flashBefore.chromaticAberration.intensity} animationDelta=${report.pixel.animationDelta} bloomDelta=${report.pixel.bloomDelta} depthOfFieldDelta=${report.pixel.depthOfFieldDelta} orbitDelta=${report.pixel.orbitDelta} orbitZoomDelta=${report.pixel.orbitZoomDelta} panDelta=${report.pixel.panDelta} invalidRegistration=recovered`);
+  console.log(`[render-evidence] PASS mode=${production ? 'production' : 'dev'} flashDelta=${flashDelta} resetDelta=${resetDelta} chromaticIntensity=${flashBefore.chromaticAberration.intensity} animationDelta=${report.pixel.animationDelta} bloomDelta=${report.pixel.bloomDelta} depthOfFieldDelta=${report.pixel.depthOfFieldDelta} orbitDelta=${report.pixel.orbitDelta} orbitZoomDelta=${report.pixel.orbitZoomDelta} panDelta=${report.pixel.panDelta} invalidRegistration=recovered`);
   console.log(`[render-evidence] artifacts=${ARTIFACT_DIR}`);
 } finally {
   await browser.close();
-  server.kill('SIGTERM');
+  try {
+    if (server.pid) process.kill(-server.pid, 'SIGTERM');
+  } catch {
+    server.kill('SIGTERM');
+  }
   await sleep(300);
 }

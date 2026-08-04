@@ -258,6 +258,19 @@ export interface ParsedPackFile {
   }>;
 }
 
+export type CatalogReconcileError = AssetError;
+export type CatalogReconcileResult = Result<CatalogReplicaSnapshot, CatalogReconcileError>;
+
+function catalogSourceUnconfigured<T>(): Result<T, AssetError> {
+  return err(
+    new AssetError({
+      code: 'catalog-source-unconfigured',
+      expected: 'a configured catalog source',
+      hint: ASSET_ERROR_HINTS['catalog-source-unconfigured'],
+    }),
+  );
+}
+
 export class AssetRegistry {
   private catalogSource: CatalogSource | undefined;
   private catalogEnumerating: Promise<Result<readonly CatalogEntry[], AssetError>> | undefined;
@@ -695,15 +708,7 @@ export class AssetRegistry {
   enumerateCatalog(): Promise<Result<readonly CatalogEntry[], AssetError>> {
     if (this.catalogEnumerating !== undefined) return this.catalogEnumerating;
     if (this.catalogSource === undefined || this.catalogReplica === undefined) {
-      return Promise.resolve(
-        err(
-          new AssetError({
-            code: 'catalog-source-unconfigured',
-            expected: 'a configured catalog source',
-            hint: ASSET_ERROR_HINTS['catalog-source-unconfigured'],
-          }),
-        ),
-      );
+      return Promise.resolve(catalogSourceUnconfigured());
     }
     const promise = this.catalogReplica
       .start()
@@ -718,6 +723,14 @@ export class AssetRegistry {
   /** Read the immutable catalog projection folded by this registry. */
   catalogSnapshot(): CatalogReplicaSnapshot | undefined {
     return this.catalogReplica?.snapshot();
+  }
+
+  /** Explicitly recover the registry's single catalog replica from its configured source. */
+  reconcileCatalog(): Promise<CatalogReconcileResult> {
+    if (this.catalogSource === undefined || this.catalogReplica === undefined) {
+      return Promise.resolve(catalogSourceUnconfigured());
+    }
+    return this.catalogReplica.reconcile();
   }
 
   subscribeCatalog(listener: CatalogListener): () => void {

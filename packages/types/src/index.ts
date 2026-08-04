@@ -520,6 +520,8 @@ export const MATERIAL_PARAM_TYPES = [
 export interface NumericParamSchemaEntry {
   readonly name: string;
   readonly type: NumericParamType;
+  /** Asset-side color transfer function; runtime UBO values are always linear. */
+  readonly colorSpace?: 'srgb' | 'linear';
   readonly default?: number | readonly number[];
 }
 

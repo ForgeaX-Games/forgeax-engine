@@ -20,6 +20,8 @@ import { baseTsupConfig } from '../../tsup.base';
 //                                       dials a loopback relay and runs
 //                                       executeScript directly in the page
 //                                       realm. This entry carries NO ws import.
+//   - src/introspect.ts -> dist/introspect.mjs ./introspect sub-path; browser-safe
+//                                       projection shared by the relay's eval script
 //   - src/cli.ts    -> dist/cli.mjs     bin.forgeax CLI entry (AC-14).
 //
 // External pins keep dynamic imports + node built-ins from being bundled
@@ -31,6 +33,7 @@ export default defineConfig({
     'src/errors.ts',
     'src/server.ts',
     'src/execute.ts',
+    'src/introspect.ts',
     'src/cli.ts',
   ],
   external: ['@forgeax/engine-runtime', '@forgeax/engine-ecs', '@forgeax/engine-gltf', '@forgeax/engine-image', '@forgeax/engine-pack', 'ws', 'node:vm', 'node:util'],

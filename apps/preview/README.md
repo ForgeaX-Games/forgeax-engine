@@ -45,6 +45,134 @@ flowchart TD
 > [!IMPORTANT]
 > The global is a development smoke seam only. Production game code should consume `@forgeax/engine-ui/preview` directly and own its session root. Scenario modules are not imported into the production asset payload.
 
+## Game inspection and recovery
+
+The normal Preview host also exposes `globalThis.__forgeaxPreviewInspection` for one loaded game.
+It is the documented P7 front door for AI tooling:
+
+```ts
+const inspection = window.__forgeaxPreviewInspection;
+inspection?.list();
+await inspection?.read('game-default.snapshot');
+await inspection?.run('game-default.set-view', { mode: 'orbit' });
+inspection?.renderer.health();
+await inspection?.captureFrame(1);
+```
+
+The host owns transport, renderer health/recovery, RHI capture, and Stop cleanup. The game owns the
+projection definitions and never exposes a raw World or private renderer internals. Every operation
+returns a structured `{ ok: false, error: { code, expected, hint, detail? } }` result for expected
+failures. `captureFrame` is unavailable unless the Preview Vite dev host has its RHI debug plugin;
+this is explicit rather than a silent no-op. Stop/reload clears the global and all game projections.
+
+The clean-copy proof repeats this contract across three fresh boots. It observes
+`globalThis.__forgeaxPreviewInspection === undefined` after Stop, then
+rediscovers the same four actions and two reads after the next navigation:
+
+```sh
+FORGEAX_CLEAN_COPY_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:clean-copy-reentry
+```
+
+The production companion builds Preview and repeats the three-boot/reset/Stop contract against
+Vite Preview's `dist/`. Each production boot also requires the capture operation to return the
+structured `rhi-debug-unavailable` result, keeping the shipped inspection surface explicit:
+
+```sh
+FORGEAX_CLEAN_COPY_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:clean-copy-production
+```
+
+The cross-backend proof captures one real `game-default` Preview frame through this
+same inspection front door, then replays the exact tape on a fresh Dawn device
+for RT pixel readback and on `rhi-null` for structural replay. It requires frame
+marks and draw evidence, a non-empty Dawn RT, matching dimensions, and a
+live-vs-Dawn RGB delta <= 0.1; the null leg remains structural-only:
+
+```sh
+FORGEAX_CROSS_BACKEND_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:cross-backend-replay
+```
+
+This reuses the existing backend replay owner; it does not create a second game,
+renderer, or synthetic tape.
+
+The asset-content proof has the same production companion. It builds Preview, serves the shipped
+`dist/` through Vite Preview, and repeats the HDR GUID/name, equirect payload, skybox pass,
+intensity/reload/reset, and structured missing-GUID recovery contract. This is the production
+catalog boundary for the first-user asset lesson; it is not a second asset evidence owner:
+
+```sh
+FORGEAX_ASSET_LOOP_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:asset-loop-production
+```
+
+For development authoring, `test:catalog-refresh` builds the Preview workspace, starts the real Vite
+CLI host, changes the watched `base-material.pack.json` sidecar, and proves the same game-default
+canvas and Play inspection snapshot survive the full reload before restoring the source:
+
+```sh
+FORGEAX_CATALOG_REFRESH_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview test:catalog-refresh
+```
+
+The runner allocates a strict port, waits for HTTP readiness, and terminates its detached Vite
+process group. It uses a whitespace-tolerant numeric marker so formatting changes in the authored
+pack do not turn into a false fixture-drift failure.
+
+The shipped production counterpart rebuilds after a material edit and compares both the Pack v2
+payload and the visible frame:
+
+```sh
+FORGEAX_PRODUCTION_MATERIAL_EDIT_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:production-material-edit
+```
+
+The Preview manifest declares the template and binary sidecar roots for the build cache, so changing
+an external `templates/game-default` asset is a cache miss rather than a stale production `dist/` hit.
+The smoke restores the source and rebuilds the restored output in `finally`.
+
+The RHI debug plugin is serve-only. Production Preview builds set
+`FORGEAX_ENGINE_RHI_DEBUG=0` and the app host gates browser capture imports on
+`import.meta.env.DEV`, so generated production assets contain no
+`capture-browser` or `engine-rhi-debug` chunk.
+
+Run the focused contract proof with:
+
+```sh
+FORGEAX_INSPECTION_DIR=<run>/artifacts pnpm --filter @forgeax/preview smoke:inspection-recovery
+```
+
+The adjacent recovery proof uses Chrome's deterministic `Browser.crashGpuProcess` control, then
+reads the same projection before and after `renderer.recover()`:
+
+```sh
+FORGEAX_DEVICE_LOSS_DIR=<run>/artifacts pnpm --filter @forgeax/preview smoke:device-loss-reentry
+```
+
+This proves browser GPU-process recovery only; it does not claim physical hardware TDR coverage.
+
+The WebKit admission proof runs the same game through the existing WebGL2 fallback. It asserts the
+authored custom-material schema and capability variant, invokes the real hit-feedback action, and
+keeps a screenshot as the visual witness:
+
+```sh
+FORGEAX_WEBGL2_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:webgl2-material
+```
+
+This is a fallback admission gate, not a second renderer or template backend branch.
+
+The production companion builds the same Preview first, then serves `dist/` through Vite Preview
+and repeats the WebGL2 contract. It is the clean-copy boundary for authored pack delivery: the
+FBX skin/animation, GUID audio, custom-material schema/variant, hit, reset, and zero-error claims
+must survive the production catalog rather than only the development importer route:
+
+```sh
+FORGEAX_WEBGL2_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:webgl2-production
+```
+
 <details>
 <summary>Error recovery and prohibited shortcuts</summary>
 

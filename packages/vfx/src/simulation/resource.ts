@@ -97,6 +97,8 @@ export class ParticleSimulation {
   readonly #spaceResolver: ParticleSpaceResolver | undefined;
   readonly #players = new Map<number, PlayerRuntime>();
   readonly #seenPlayers = new Set<number>();
+  #allObservations: readonly ParticleSimulationObservation[] = Object.freeze([]);
+  #observationsTick = -1;
 
   constructor(
     assets: ParticleSimulationAssets,
@@ -111,6 +113,11 @@ export class ParticleSimulation {
   /** Read the last atomically committed observation for a live player. */
   read(player: EntityHandle): ParticleSimulationObservation | undefined {
     return this.#players.get(player)?.observation;
+  }
+
+  /** Read all live player observations as one immutable, handle-sorted snapshot. */
+  readAll(): readonly ParticleSimulationObservation[] {
+    return this.#allObservations;
   }
 
   /** Request a tick-boundary replay from tick zero using the current seed. */
@@ -139,6 +146,14 @@ export class ParticleSimulation {
         releaseRuntimeOutputs(world, runtime.emitters);
         this.#players.delete(player);
       }
+    }
+    if (this.#observationsTick !== fixed.tick) {
+      this.#allObservations = Object.freeze(
+        [...this.#players.values()]
+          .sort((left, right) => left.player - right.player)
+          .map((runtime) => cloneObservation(runtime.observation)),
+      );
+      this.#observationsTick = fixed.tick;
     }
   }
 
@@ -355,6 +370,54 @@ export class ParticleSimulation {
     if (validated.ok && existing !== undefined) releaseOutput(world, existing);
     return validated;
   }
+}
+
+function cloneObservation(
+  observation: ParticleSimulationObservation,
+): ParticleSimulationObservation {
+  const emitters = Object.freeze(
+    observation.emitters.map((emitter) => Object.freeze({ ...emitter })),
+  );
+  const batches = Object.freeze(observation.batches.batches.map(cloneOutputBatch));
+  const batchSpaces = Object.freeze(
+    (observation.batchSpaces ?? []).map((space) => Object.freeze({ ...space })),
+  );
+  const diagnostics = Object.freeze([...observation.diagnostics]);
+  const spaceDiagnostics = Object.freeze([...(observation.spaceDiagnostics ?? [])]);
+  return Object.freeze({
+    ...observation,
+    emitters,
+    batches: Object.freeze({ batches }),
+    diagnostics,
+    telemetry: Object.freeze({ ...observation.telemetry }),
+    batchSpaces,
+    spaceDiagnostics,
+  });
+}
+
+function cloneOutputBatch(batch: ParticleOutputBatch): ParticleOutputBatch {
+  if (batch.kind === 'billboard') {
+    return Object.freeze({
+      kind: 'billboard',
+      material: batch.material,
+      count: batch.count,
+      attributes: Object.freeze({
+        position: new Float32Array(batch.attributes.position),
+        size: new Float32Array(batch.attributes.size),
+        color: new Float32Array(batch.attributes.color),
+      }),
+    });
+  }
+  return Object.freeze({
+    kind: 'mesh',
+    material: batch.material,
+    mesh: batch.mesh,
+    count: batch.count,
+    attributes: Object.freeze({
+      transform: new Float32Array(batch.attributes.transform),
+      color: new Float32Array(batch.attributes.color),
+    }),
+  });
 }
 
 function createRuntime(

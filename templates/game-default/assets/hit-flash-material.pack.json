@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019e7535-5e5e-45fe-a328-0b08e3a72747",
+      "kind": "material",
+      "sourceKey": "../src/hit-flash.wgsl",
+      "payload": {
+        "kind": "material",
+        "passes": [
+          {
+            "name": "Forward",
+            "program": {
+              "module": "game_default::hit_flash",
+              "vertexEntry": "vs_main",
+              "fragmentEntry": "fs_main"
+            },
+            "renderState": {
+              "blend": {
+                "color": { "srcFactor": "one", "dstFactor": "one-minus-src-alpha", "operation": "add" },
+                "alpha": { "srcFactor": "one", "dstFactor": "one-minus-src-alpha", "operation": "add" }
+              },
+              "depthWriteEnabled": false,
+              "tags": { "LightMode": "Forward" },
+              "queue": 2000
+            }
+          }
+        ],
+        "parameters": [
+          { "name": "baseColor", "type": "color" },
+          { "name": "intensity", "type": "f32" }
+        ]
+      },
+      "refs": []
+    }
+  ]
+}

@@ -61,6 +61,7 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "vite": "8.0.10",
     "webgpu": "^0.4.0",
+    "pngjs": "^7.0.0",
     "@webgpu/types": "^0.1.71"
   }
 }

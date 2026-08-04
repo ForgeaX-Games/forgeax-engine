@@ -14,6 +14,7 @@
 import type { AssetRegistry, AssetRuntimeError } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
+import type { ProfileFrameToken, Profiler } from '@forgeax/engine-profiler';
 import type { Result, RhiDevice, RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import type { SkinError } from '@forgeax/engine-skinning';
@@ -56,7 +57,10 @@ export type RendererBackend = 'webgpu';
  *   - `{ cameraOwner, resourceOwner }`   — the two-index split form (editor
  *     composite: scene camera + separate editor-overlay resource world).
  */
-export type DrawOwnerOptions = { owner: number } | { cameraOwner: number; resourceOwner: number };
+export type DrawOwnerOptions = (
+  | { owner: number }
+  | { cameraOwner: number; resourceOwner: number }
+) & { readonly profileFrame?: ProfileFrameToken };
 
 /**
  * Normalize {@link DrawOwnerOptions} into the two-index split form. A legacy
@@ -142,40 +146,28 @@ export type RendererErrorListener = (error: RendererError) => void;
  * engine-owned Extract / Prepare / Record orchestration so a host can measure
  * attribution without guessing from RHI command counts.
  */
-export type RenderPhase = 'extract' | 'bind-groups' | 'features' | 'sort' | 'record';
+export const RENDER_PHASE_CATALOG = [
+  'extract',
+  'bind-groups',
+  'features',
+  'sort',
+  'record',
+] as const;
 
-/** A phase can be intentionally absent when its inputs make the work unnecessary. */
+export type RenderPhase = (typeof RENDER_PHASE_CATALOG)[number];
+
 export type RenderPhaseSkipReason =
   | 'feature-host-unavailable'
   | 'feature-host-empty'
   | 'pipeline-state-unavailable'
   | 'camera-unavailable';
 
-export type RenderPhaseEvent =
-  | {
-      readonly frameSeq: number;
-      readonly phase: RenderPhase;
-      readonly boundary: 'begin' | 'end';
-      readonly worldCount?: number;
-    }
-  | {
-      readonly frameSeq: number;
-      readonly phase: RenderPhase;
-      readonly boundary: 'skip';
-      readonly skipReason: RenderPhaseSkipReason;
-      readonly worldCount?: number;
-    };
-
-export interface RenderPhaseObserver {
-  readonly onEvent: (event: RenderPhaseEvent) => void;
-}
-
 /** First-version options bag (intentionally empty; reserved for v0.1). */
 export interface RendererOptions {
   /** Producer-owned features installed by the renderer host. */
   readonly features?: readonly RenderFeature<unknown>[] | undefined;
-  /** Opt-in engine-owned Extract / Prepare / Record diagnostics. */
-  readonly renderPhaseObserver?: RenderPhaseObserver | undefined;
+  /** Explicit profiler capability shared by App and Render. */
+  readonly profiler?: Profiler | undefined;
   // feat-20260608-create-app-param-surface-trim / M1 / AC-02: `clearColor`
   // was deleted as a one-cut breaking change (AGENTS.md Change stance +
   // requirements constraint #1: no deprecation window, no shim). Scene

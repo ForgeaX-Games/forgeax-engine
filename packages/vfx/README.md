@@ -163,6 +163,37 @@ ready output is missing and the observation carries a diagnostic for retry.
 `failed` means an executor or player input rejected the current tick. These are
 distinct states even when `batches.batches` is empty.
 
+### Stable observation reads
+
+Renderer and diagnostics consumers should use `ParticleSimulation.readAll()`
+instead of reading the simulation's mutable player map. The method returns one
+immutable snapshot for the latest completed fixed tick, ordered by numeric
+`EntityHandle`. Repeating the call during that tick returns the same array
+reference and does not allocate. The next completed tick atomically replaces
+the snapshot; despawned players are absent, and `stop` does not retain their
+history.
+
+```ts
+import {
+  PARTICLE_SIMULATION_RESOURCE_KEY,
+  type ParticleSimulation,
+} from '@forgeax/engine-vfx';
+
+const simulation = world.getResource<ParticleSimulation>(
+  PARTICLE_SIMULATION_RESOURCE_KEY,
+);
+const firstRead = simulation.readAll();
+const repeatedRead = simulation.readAll();
+if (firstRead !== repeatedRead) {
+  throw new Error('readAll must be stable within one fixed tick');
+}
+```
+
+This is a read-only boundary: consumers must not mutate an observation or use
+it as an authoring store. A renderer may call it once per extract phase, while
+an AI diagnostic may reuse the same snapshot to explain the current World
+without rebuilding the simulation.
+
 | State | Meaning | First action |
 |:--|:--|:--|
 | empty | The player is valid, but no emitter has live output at this tick. | Continue the fixed-step loop or inspect the player intent. |

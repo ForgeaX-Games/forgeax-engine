@@ -188,6 +188,7 @@ function buildMaterialAsset(pod: MaterialPod, guid: string, skinned = false): Im
   // gltfImporter's `skinned` routing).
   const mat: MaterialAsset = {
     kind: 'material',
+    colorSpace: 'linear',
     passes: [
       {
         name: 'Forward',

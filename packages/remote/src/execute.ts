@@ -45,6 +45,7 @@ export type ExecuteContext = {
   readonly renderer: unknown;
   readonly assets: unknown;
   readonly debugAdapter?: unknown;
+  readonly profiler?: unknown;
   readonly importModule?: (specifier: string) => Promise<unknown>;
 };
 
@@ -60,7 +61,7 @@ const _import = (specifier: string): Promise<unknown> => import(specifier);
 // construction-time SyntaxError. Returns the compiled fn, or throws the
 // statement-mode SyntaxError if BOTH modes fail to parse.
 function compile(script: string): FunctionConstructor['prototype'] {
-  const params = ['world', 'renderer', 'assets', 'debugAdapter', '_import'] as const;
+  const params = ['world', 'renderer', 'assets', 'debugAdapter', 'profiler', '_import'] as const;
   try {
     // Expression mode: `return (<expr>)` auto-returns a lone expression
     // (including an await-expression), preserving last-expression-value.
@@ -100,6 +101,7 @@ export async function executeScript(script: string, ctx: ExecuteContext): Promis
       ctx.renderer,
       ctx.assets,
       ctx.debugAdapter,
+      ctx.profiler,
       ctx.importModule ?? _import,
     );
 

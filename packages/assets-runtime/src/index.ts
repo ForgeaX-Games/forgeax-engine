@@ -13,7 +13,12 @@
 // package in w15 (the runtime barrel no longer re-exports any asset symbol).
 
 // ─── AssetRegistry + Asset / MeshAsset type aliases ─────────────────────────
-export type { Asset, MeshAsset } from './asset-registry';
+export type {
+  Asset,
+  CatalogReconcileError,
+  CatalogReconcileResult,
+  MeshAsset,
+} from './asset-registry';
 export { AssetRegistry } from './asset-registry';
 // ─── Process-static builtin payload registry + vertex-layout SSOT ───────────
 export {

@@ -1,4 +1,3 @@
-// @ts-expect-error the render package intentionally omits Node types from its public tsconfig.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {

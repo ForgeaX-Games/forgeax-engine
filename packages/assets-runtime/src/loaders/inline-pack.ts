@@ -352,7 +352,8 @@ export const materialLoader: Loader = {
           const samplerIndex = resolved.sampler;
           if (typeof samplerIndex === 'number' && Number.isInteger(samplerIndex)) {
             const samplerGuid = refGuidAt(refs, samplerIndex);
-            if (samplerGuid !== undefined) resolved.sampler = samplerGuid;
+            if (samplerGuid === undefined) delete resolved.sampler;
+            else resolved.sampler = samplerGuid;
           }
           values[fieldName] = resolved;
         }

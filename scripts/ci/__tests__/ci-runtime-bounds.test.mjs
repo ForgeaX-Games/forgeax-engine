@@ -34,6 +34,11 @@ test('browser WebGPU project bounds workers to protect the shared device', () =>
   assert.match(browserProject, /maxWorkers: 2/);
 });
 
+test('Dawn project bounds forks to protect the shared software Vulkan backend', () => {
+  const dawnProject = vitestConfig.slice(vitestConfig.indexOf("name: 'dawn'"));
+  assert.match(dawnProject, /maxWorkers: 2/);
+});
+
 test('coverage-pnpm uploads diagnostics only after a failed test run', () => {
   assert.match(
     workflow,

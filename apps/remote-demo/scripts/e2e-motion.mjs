@@ -36,17 +36,17 @@ function logCase(name, ok, detail) {
 async function main() {
   // Dynamic-import dist artefacts.
   const ecsDist = resolve(WORKSPACE_ROOT, 'packages/ecs/dist/index.mjs');
-  const runtimeDist = resolve(WORKSPACE_ROOT, 'packages/runtime/dist/index.mjs');
+  const sceneDist = resolve(WORKSPACE_ROOT, 'packages/scene/dist/index.mjs');
   const serverDist = resolve(WORKSPACE_ROOT, 'packages/remote/dist/server.mjs');
   const clientDist = resolve(WORKSPACE_ROOT, 'packages/types/dist/inspector-client.mjs');
 
   const ecsMod = await import(/* @vite-ignore */ ecsDist);
-  const runtimeMod = await import(/* @vite-ignore */ runtimeDist);
+  const sceneMod = await import(/* @vite-ignore */ sceneDist);
   const serverMod = await import(/* @vite-ignore */ serverDist);
   const clientMod = await import(/* @vite-ignore */ clientDist);
 
   const World = ecsMod.World;
-  const Transform = runtimeMod.Transform;
+  const Transform = sceneMod.Transform;
   const startServer = serverMod.startServer;
   const defaultConnect = clientMod.defaultConnect;
 
@@ -146,7 +146,7 @@ async function main() {
   // 5. Read position at current frame.
   const readScriptTpl =
     "(async () => {" +
-    "var m = await _import('@forgeax/engine-runtime'); " +
+    "var m = await _import('@forgeax/engine-scene'); " +
     "var r = world.get(%%HANDLE%%, m.Transform); " +
     "return r.ok ? r.value.pos[0] : null;" +
     "})()";
@@ -183,7 +183,7 @@ async function main() {
   // 9. Write via eval then read back (no write-denied).
   const writeScript =
     "(async () => {" +
-    "var m = await _import('@forgeax/engine-runtime'); " +
+    "var m = await _import('@forgeax/engine-scene'); " +
     "world.set(" + String(handle) + ", m.Transform, { pos: [99, 0, 0]}); " +
     "return 'ok';" +
     "})()";

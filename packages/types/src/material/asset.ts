@@ -1,4 +1,5 @@
 import type { AssetGuid } from '../index.js';
+import type { MaterialColorSpace } from './color-space.js';
 
 export type MaterialParameterType =
   | 'bool'
@@ -14,6 +15,13 @@ export type MaterialParameterType =
 export interface MaterialParameter {
   readonly name: string;
   readonly type: MaterialParameterType;
+  /**
+   * Asset-side transfer function for an authored color value. `color`
+   * parameters default to `srgb`; numeric vectors default to linear unless
+   * explicitly tagged. An asset-level `colorSpace` overrides this schema
+   * default. Runtime material values are always linear.
+   */
+  readonly colorSpace?: MaterialColorSpace;
   readonly default?: MaterialValue;
   readonly optional?: boolean;
   readonly static?: boolean;
@@ -55,6 +63,13 @@ export type MaterialPassList = readonly [MaterialPass, ...MaterialPass[]];
 
 export interface MaterialAsset {
   readonly kind: 'material';
+  /**
+   * Transfer function override for all authored color parameters. Omitted
+   * parameters ultimately default to sRGB.
+   * Explicit `linear` is reserved for physical/imported data such as glTF
+   * factors. Numeric values are never rewritten when this metadata changes.
+   */
+  readonly colorSpace?: MaterialColorSpace;
   readonly parent?: AssetGuid;
   readonly passes?: MaterialPassList;
   readonly parameters?: readonly MaterialParameter[];
@@ -72,6 +87,13 @@ export function assertMaterialAsset(
 ): asserts value is MaterialAsset {
   if (!isRecord(value) || value.kind !== 'material') {
     throw new Error(`${context}: expected a material asset`);
+  }
+  if (
+    value.colorSpace !== undefined &&
+    value.colorSpace !== 'srgb' &&
+    value.colorSpace !== 'linear'
+  ) {
+    throw new Error(`${context}: invalid colorSpace`);
   }
   if (value.passes !== undefined) {
     if (!Array.isArray(value.passes) || value.passes.length === 0) {
@@ -111,6 +133,13 @@ export function assertMaterialAsset(
         typeof parameter.type !== 'string'
       ) {
         throw new Error(`${context}: parameter ${index} is malformed`);
+      }
+      if (
+        parameter.colorSpace !== undefined &&
+        parameter.colorSpace !== 'srgb' &&
+        parameter.colorSpace !== 'linear'
+      ) {
+        throw new Error(`${context}: parameter ${index} has invalid colorSpace`);
       }
     }
   }

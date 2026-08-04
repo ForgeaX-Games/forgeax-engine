@@ -1,5 +1,6 @@
 import type {
   MaterialAsset,
+  MaterialColorSpace,
   MaterialParameter,
   MaterialPass,
   MaterialRenderState,
@@ -15,34 +16,52 @@ const STANDARD_MODULE = 'forgeax_material::standard';
 const UNLIT_MODULE = 'forgeax_material::unlit';
 const SPRITE_MODULE = 'forgeax_material::sprite';
 
-const standardParameters: readonly MaterialParameter[] = [
-  { name: 'baseColor', type: 'color' },
-  { name: 'metallic', type: 'f32' },
-  { name: 'roughness', type: 'f32' },
-  { name: 'metallicChannel', type: 'f32', optional: true },
-  { name: 'roughnessChannel', type: 'f32', optional: true },
-  { name: 'aoChannel', type: 'f32', optional: true },
-  { name: 'extraChannel', type: 'f32', optional: true },
-  { name: 'emissive', type: 'vec3', optional: true },
-  { name: 'emissiveIntensity', type: 'f32', optional: true },
-  { name: 'occlusionStrength', type: 'f32', optional: true },
-  { name: 'alphaCutoff', type: 'f32', optional: true },
-  { name: 'clearcoat', type: 'f32', optional: true },
-  { name: 'clearcoatRoughness', type: 'f32', optional: true },
-  { name: 'specularTint', type: 'vec3', optional: true },
-  { name: 'baseColorTexture', type: 'texture', optional: true },
-  { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
-  { name: 'normalTexture', type: 'texture', optional: true },
-  { name: 'specularTintTexture', type: 'texture', optional: true },
-  { name: 'emissiveTexture', type: 'texture', optional: true },
-  { name: 'occlusionTexture', type: 'texture', optional: true },
-];
+function authoredColorParameter(
+  name: string,
+  type: 'color' | 'vec3',
+  colorSpace: MaterialColorSpace,
+  optional = false,
+): MaterialParameter {
+  return {
+    name,
+    type,
+    ...(type === 'color' && colorSpace === 'srgb' ? {} : { colorSpace }),
+    ...(optional ? { optional: true } : {}),
+  };
+}
 
-const unlitParameters: readonly MaterialParameter[] = [
-  { name: 'baseColor', type: 'color' },
-  { name: 'baseColorTexture', type: 'texture', optional: true },
-  { name: 'alphaCutoff', type: 'f32', optional: true },
-];
+function standardParameters(colorSpace: MaterialColorSpace): readonly MaterialParameter[] {
+  return [
+    authoredColorParameter('baseColor', 'color', colorSpace),
+    { name: 'metallic', type: 'f32' },
+    { name: 'roughness', type: 'f32' },
+    { name: 'metallicChannel', type: 'f32', optional: true },
+    { name: 'roughnessChannel', type: 'f32', optional: true },
+    { name: 'aoChannel', type: 'f32', optional: true },
+    { name: 'extraChannel', type: 'f32', optional: true },
+    authoredColorParameter('emissive', 'vec3', colorSpace, true),
+    { name: 'emissiveIntensity', type: 'f32', optional: true },
+    { name: 'occlusionStrength', type: 'f32', optional: true },
+    { name: 'alphaCutoff', type: 'f32', optional: true },
+    { name: 'clearcoat', type: 'f32', optional: true },
+    { name: 'clearcoatRoughness', type: 'f32', optional: true },
+    authoredColorParameter('specularTint', 'vec3', colorSpace, true),
+    { name: 'baseColorTexture', type: 'texture', optional: true },
+    { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
+    { name: 'normalTexture', type: 'texture', optional: true },
+    { name: 'specularTintTexture', type: 'texture', optional: true },
+    { name: 'emissiveTexture', type: 'texture', optional: true },
+    { name: 'occlusionTexture', type: 'texture', optional: true },
+  ];
+}
+
+function unlitParameters(colorSpace: MaterialColorSpace): readonly MaterialParameter[] {
+  return [
+    authoredColorParameter('baseColor', 'color', colorSpace),
+    { name: 'baseColorTexture', type: 'texture', optional: true },
+    { name: 'alphaCutoff', type: 'f32', optional: true },
+  ];
+}
 
 function pass(
   name: string,
@@ -70,6 +89,8 @@ function pass(
 }
 
 interface UnlitOpts {
+  /** Asset-side authored color space. Defaults to sRGB. */
+  readonly colorSpace?: MaterialColorSpace;
   readonly castShadow?: boolean;
   readonly baseColorTexture?: MaterialValue;
   readonly alphaCutoff?: number;
@@ -90,13 +111,18 @@ function unlit(rgba: readonly [number, number, number, number], opts?: UnlitOpts
   if (opts?.castShadow !== false) passes.push(pass('shadow-caster', UNLIT_MODULE, undefined));
   return {
     kind: 'material',
+    ...(opts?.colorSpace === undefined || opts.colorSpace === 'srgb'
+      ? {}
+      : { colorSpace: opts.colorSpace }),
     passes,
-    parameters: unlitParameters,
+    parameters: unlitParameters(opts?.colorSpace ?? 'srgb'),
     values,
   };
 }
 
 interface StandardOpts {
+  /** Asset-side authored color space for baseColor/emissive/specularTint. Defaults to sRGB. */
+  readonly colorSpace?: MaterialColorSpace;
   readonly baseColor: readonly [number, number, number, number];
   readonly metallic?: number;
   readonly roughness?: number;
@@ -157,8 +183,11 @@ function standard(opts: StandardOpts): MaterialAsset {
   if (opts.castShadow !== false) passes.push(pass('shadow-caster', STANDARD_MODULE, undefined));
   return {
     kind: 'material',
+    ...(opts.colorSpace === undefined || opts.colorSpace === 'srgb'
+      ? {}
+      : { colorSpace: opts.colorSpace }),
     passes,
-    parameters: standardParameters,
+    parameters: standardParameters(opts.colorSpace ?? 'srgb'),
     values,
   };
 }

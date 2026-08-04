@@ -10,7 +10,6 @@
 | `StateToken<N, V>` | interface | Branded token holding `name`, `variants` (readonly tuple), `nameToIdx` (Map), `defaultValue` |
 | `StateTokenVariant<T>` | type | Extract the variant union from a `StateToken` |
 | `StateTokenName<T>` | type | Extract the name literal from a `StateToken` |
-| `getRegisteredTokens()` | function | Read-only snapshot of all globally registered tokens |
 | `setNextState(world, token, variant)` | function | Request a state transition for next frame; returns `Result<void, StateError>` |
 | `setNextStateForce(world, token, variant)` | function | Like `setNextState` but `force=true` (re-fires even same-state) |
 | `getState(world, token)` | function | Read current state variant string; returns `Result<string, StateError>` |
@@ -24,9 +23,6 @@
 | `addOnExit(token, variant, fn)` | function | Register callback for leaving variant; returns `UnsubscribeHandle` |
 | `StateCallback` | type | `(world: World) => void` |
 | `UnsubscribeHandle` | type | `() => void` |
-| `stateResourceKey(token)` | function | Resource key string for per-token State |
-| `nextStateResourceKey(token)` | function | Resource key string for per-token NextState |
-| `previousStateResourceKey(token)` | function | Resource key string for per-token PreviousState |
 
 ## Error model
 

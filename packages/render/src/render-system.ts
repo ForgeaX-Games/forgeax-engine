@@ -18,6 +18,7 @@
 
 import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
+import type { Profiler, RecorderSession } from '@forgeax/engine-profiler';
 import type {
   BindGroupLayout,
   Buffer,
@@ -82,8 +83,8 @@ import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render
 import { extractFrames } from './render-system-extract';
 import {
   type DrawOwnerOptions,
+  RENDER_PHASE_CATALOG,
   type RenderPhase,
-  type RenderPhaseObserver,
   type RenderPhaseSkipReason,
   resolveDrawOwners,
 } from './renderer';
@@ -262,13 +263,13 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'roughnessChannel', type: 'f32' },
   { name: 'aoChannel', type: 'f32' },
   { name: 'extraChannel', type: 'f32' },
-  { name: 'emissive', type: 'vec3' },
+  { name: 'emissive', type: 'vec3', colorSpace: 'srgb' },
   { name: 'emissiveIntensity', type: 'f32' },
   { name: 'occlusionStrength', type: 'f32' },
   { name: 'alphaCutoff', type: 'f32' },
   { name: 'clearcoat', type: 'f32' },
   { name: 'clearcoatRoughness', type: 'f32' },
-  { name: 'specularTint', type: 'vec3' },
+  { name: 'specularTint', type: 'vec3', colorSpace: 'srgb' },
 ];
 
 /**
@@ -397,13 +398,14 @@ export interface RenderSystem {
    * device. Two effects, both keyed to the lost device:
    *   1. the per-frame render-graph's pendingDestroy queue (PooledTextures
    *      minted by the lost device — clearPendingDestroy skips destroyTexture);
-   *   2. the post-process registry + its eager param UBOs (the WGSL re-registers
-   *      during the rebuild's buildReadyWebGPU; without this reset the tonemap
-   *      re-register throws `post-process-already-registered`, and the UBOs are
-   *      stale lost-device handles anyway).
+   *   2. post-process declarations + their eager param UBOs. Declarations are
+   *      CPU-owned author intent and survive; UBOs are stale lost-device
+   *      handles and are rebuilt after the replacement device is live.
    * Idempotent and graph-optional (no-op when nothing has compiled yet).
    */
   resetForRecover(): void;
+  /** Recreate post-process GPU parameter resources after a device rebuild. */
+  restorePostProcessResources(): void;
 }
 
 /**
@@ -616,8 +618,8 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   /** Optional feature host supplied by the renderer assembly layer. */
   readonly featureHost?: RenderFeatureHost | undefined;
-  /** Optional host diagnostics for the existing Extract / Prepare / Record path. */
-  readonly renderPhaseObserver?: RenderPhaseObserver | undefined;
+  /** Optional host profiler capability for the existing Render path. */
+  readonly profiler?: Profiler | undefined;
   // M6 / w41 (feat-20260510-rhi-resource-creation): the canvas context is the
   // forgeax `RhiCanvasContext` brand; render-system-record.ts uses
   // `getCurrentTexture()` -> `device.createTextureView(...)` (K-4 two-step
@@ -1500,6 +1502,7 @@ export interface MeshGpuHandles {
 }
 
 export function createRenderSystem(internals: RenderSystemInternals): RenderSystem {
+  internals.profiler?.registerPhaseCatalog('render', RENDER_PHASE_CATALOG);
   // Per-RenderSystem frame state: closure-internal frameNumber + the
   // per-entity instance GPU buffer cache (feat-20260514 M3 / w15: the
   // record stage owns GPU storage buffer allocation for Instances entities;
@@ -1591,49 +1594,49 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // tiles until the first frame with a castShadow spot (AC-03).
     spotShadowSnapshots: [],
   };
-  let renderFrameSeq = 0;
-  function notifyRenderPhase(
-    frameSeq: number,
-    phase: RenderPhase,
-    boundary: 'begin' | 'end',
-    worldCount: number,
-  ): void {
-    const observer = internals.renderPhaseObserver;
-    if (observer === undefined) return;
+  let directFrameId = 0;
+
+  function beginProfilePhase(session: RecorderSession | undefined, phase: RenderPhase): boolean {
+    if (session === undefined) return false;
     try {
-      observer.onEvent({ frameSeq, phase, boundary, worldCount });
+      return session.beginPhase({ source: 'render', phase }).ok;
     } catch {
-      // Diagnostics must never change the renderer's production behavior.
+      return false;
     }
   }
 
-  function skipRenderPhase(
-    frameSeq: number,
-    phase: RenderPhase,
-    skipReason: RenderPhaseSkipReason,
-    worldCount: number,
-  ): void {
-    const observer = internals.renderPhaseObserver;
-    if (observer === undefined) return;
+  function endProfilePhase(session: RecorderSession | undefined): void {
+    if (session === undefined) return;
     try {
-      observer.onEvent({ frameSeq, phase, boundary: 'skip', skipReason, worldCount });
+      session.endPhase();
     } catch {
-      // Diagnostics must never change the renderer's production behavior.
+      // Profiler failures never alter rendering.
     }
   }
 
-  function runRenderPhase<T>(
-    frameSeq: number,
+  function recordProfileSkip(
+    session: RecorderSession | undefined,
+    phase: RenderPhase,
+    reason: RenderPhaseSkipReason,
+  ): void {
+    if (session === undefined) return;
+    try {
+      session.recordSkip({ source: 'render', phase, reason });
+    } catch {
+      // Profiler failures never alter rendering.
+    }
+  }
+
+  function runProfiledRenderPhase<T>(
+    session: RecorderSession | undefined,
     phase: RenderPhase,
     action: () => T,
-    worldCount: number,
   ): T {
-    if (internals.renderPhaseObserver === undefined) return action();
-    notifyRenderPhase(frameSeq, phase, 'begin', worldCount);
+    const opened = beginProfilePhase(session, phase);
     try {
       return action();
     } finally {
-      notifyRenderPhase(frameSeq, phase, 'end', worldCount);
+      if (opened) endProfilePhase(session);
     }
   }
   // feat-20260601 M1 / w7: pipeline registry (id -> impl) + the handle the memoized
@@ -1652,6 +1655,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // post-process shader registry (id -> PostProcessShaderEntry), parallel to pipelineRegistry.
   // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.installMaterialArtifact.
   const postProcessRegistry = new Map<string, PostProcessShaderEntry>();
+  // CPU post-process declarations survive a device loss; only their buffers
+  // and compiled pipelines are device-bound. resetForRecover snapshots these
+  // descriptions before clearing the resource maps, and the renderer invokes
+  // restorePostProcessResources() once the replacement device is live.
+  let postProcessEntriesForRecover: readonly [string, PostProcessShaderEntry][] | null = null;
   // D-3 / D-8: per-shader params UBO resource table (id -> GPU Buffer).
   // Eager-created at register time when entry.params is present (byteSize >= 16,
   // defaultValue.length === byteSize); reused frame-to-frame via queue.writeBuffer.
@@ -1856,9 +1864,16 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     });
   return {
     draw(worlds: readonly World[], opts: DrawOwnerOptions): void {
+      const profileSession = internals.profiler?.activeSession();
+      let ownsProfileFrame = false;
+      if (profileSession !== undefined && opts.profileFrame === undefined) {
+        try {
+          ownsProfileFrame = profileSession.beginFrame(++directFrameId).ok;
+        } catch {
+          ownsProfileFrame = false;
+        }
+      }
       try {
-        const frameSeq = ++renderFrameSeq;
-        const worldCount = worlds.length;
         // w6: resolve the (possibly legacy single-owner) draw options into the
         // two-index split. cameraOwner drives the surfaced cameras + frustum
         // cull; resourceOwner drives skylight/skybox/postProcess + per-world
@@ -1901,18 +1916,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // `resourceWorld` so the record-stage reads are self-describing (they
         // are resource-owner reads, not camera reads).
         const resourceWorld = worlds[resourceOwner] as World;
-        const frame = runRenderPhase(
-          frameSeq,
-          'extract',
-          () =>
-            extractFrames(
-              worlds,
-              { cameraOwner, resourceOwner },
-              internals.assets,
-              internals.getPipelineState(),
-              internals.gpuStore,
-            ),
-          worldCount,
+        const frame = runProfiledRenderPhase(profileSession, 'extract', () =>
+          extractFrames(
+            worlds,
+            { cameraOwner, resourceOwner },
+            internals.assets,
+            internals.getPipelineState(),
+            internals.gpuStore,
+          ),
         );
         const {
           cameras,
@@ -1941,74 +1952,67 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
                   ? 'camera-unavailable'
                   : undefined;
         if (bindGroupSkipReason !== undefined || preparedPipelineState === null) {
-          skipRenderPhase(
-            frameSeq,
+          recordProfileSkip(
+            profileSession,
             'bind-groups',
             bindGroupSkipReason ?? 'pipeline-state-unavailable',
-            worldCount,
           );
           preparedViewBindGroup = null;
         } else {
           const pipelineState = preparedPipelineState;
-          preparedViewBindGroup = runRenderPhase(
-            frameSeq,
+          preparedViewBindGroup = runProfiledRenderPhase(
+            profileSession,
             'bind-groups',
             () =>
               buildPerFrameBindGroups(internals, frameState, pipelineState, true, bindGroupCounts)
                 .viewBindGroup,
-            worldCount,
           );
         }
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
-        const preparedResourceBatches = runRenderPhase(
-          frameSeq,
-          'features',
-          () => {
-            if (internals.featureHost === undefined) return [];
-            const featureFrame = runRenderFeatureFrame(internals.featureHost, {
-              worlds,
-              owner: resourceOwner,
-              frameNumber: frameState.frameNumber,
-              generation: 0,
-              caps: internals.device.caps,
-              createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
-                createRenderFeatureContributionStaging<RenderFeaturePassContext>(
-                  identity,
-                  order,
-                  validateGraphics,
-                  resolveGraphics,
-                ),
-              createPreparedGraphicsResolver: preparedResolverFactory,
-            });
-            for (const featureError of featureFrame.errors) {
-              internals.errorRegistry.fire(featureError);
+        const preparedResourceBatches = runProfiledRenderPhase(profileSession, 'features', () => {
+          if (internals.featureHost === undefined) return [];
+          const featureFrame = runRenderFeatureFrame(internals.featureHost, {
+            worlds,
+            owner: resourceOwner,
+            frameNumber: frameState.frameNumber,
+            generation: 0,
+            caps: internals.device.caps,
+            createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
+              createRenderFeatureContributionStaging<RenderFeaturePassContext>(
+                identity,
+                order,
+                validateGraphics,
+                resolveGraphics,
+              ),
+            createPreparedGraphicsResolver: preparedResolverFactory,
+          });
+          for (const featureError of featureFrame.errors) {
+            internals.errorRegistry.fire(featureError);
+          }
+          const featureGraphState = getRenderFeatureGraphState(internals);
+          const merged = mergeRenderFeatureContributions(featureFrame.contributions);
+          if (!merged.ok) {
+            reportRenderFeatureGraphError(internals, merged.error);
+            if (featureGraphState.composition !== undefined) {
+              retirePerFrameGraph(frameState);
+              featureGraphState.composition = undefined;
             }
-            const featureGraphState = getRenderFeatureGraphState(internals);
-            const merged = mergeRenderFeatureContributions(featureFrame.contributions);
-            if (!merged.ok) {
-              reportRenderFeatureGraphError(internals, merged.error);
-              if (featureGraphState.composition !== undefined) {
-                retirePerFrameGraph(frameState);
-                featureGraphState.composition = undefined;
-              }
-              featureGraphState.contributions = [];
-              featureGraphState.topologySignature = undefined;
-            } else {
-              const topologyChanged =
-                featureGraphState.topologySignature !== undefined &&
-                featureGraphState.topologySignature !== merged.value.topologySignature;
-              featureGraphState.contributions = featureFrame.contributions;
-              featureGraphState.topologySignature = merged.value.topologySignature;
-              if (topologyChanged) {
-                retirePerFrameGraph(frameState);
-                featureGraphState.composition = undefined;
-              }
+            featureGraphState.contributions = [];
+            featureGraphState.topologySignature = undefined;
+          } else {
+            const topologyChanged =
+              featureGraphState.topologySignature !== undefined &&
+              featureGraphState.topologySignature !== merged.value.topologySignature;
+            featureGraphState.contributions = featureFrame.contributions;
+            featureGraphState.topologySignature = merged.value.topologySignature;
+            if (topologyChanged) {
+              retirePerFrameGraph(frameState);
+              featureGraphState.composition = undefined;
             }
-            return featureFrame.preparedResourceBatches;
-          },
-          worldCount,
-        );
+          }
+          return featureFrame.preparedResourceBatches;
+        });
 
         // Unified transparent-sort: (layer ASC, sortValue ASC) for modes 0/1/2;
         // distance back-to-front for mode=3. The transparent-sort config is a
@@ -2016,11 +2020,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // world that owns skylight / skybox / singleton render state, w5 / D-3).
         // Only the Transparent segment is reordered; queue ordering between
         // segments (sortDispatchByQueue, stable) is preserved.
-        const orderedDispatch = runRenderPhase(
-          frameSeq,
-          'sort',
-          () => sortTransparentDispatch(dispatch, resourceWorld, cameras, renderables),
-          worldCount,
+        const orderedDispatch = runProfiledRenderPhase(profileSession, 'sort', () =>
+          sortTransparentDispatch(dispatch, resourceWorld, cameras, renderables),
         );
 
         // M3 / w26: single dispatch list replaces old three-bucket model.
@@ -2041,28 +2042,24 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // so the record stage can index worlds[renderable.worldId]. `resourceWorld`
         // stays the singleton-resource owner (skybox equirect / transparent-sort
         // config / video provider) — those ARE resource-owner reads.
-        const submitted = runRenderPhase(
-          frameSeq,
-          'record',
-          () =>
-            recordFrame(
-              internals,
-              resourceWorld,
-              cameras,
-              lights,
-              renderables,
-              orderedDispatch,
-              frameState,
-              dispatchCounts,
-              bindGroupCounts,
-              skylight,
-              skylightCount,
-              skybox,
-              skyboxCount,
-              postProcessParams,
-              worlds,
-            ),
-          worldCount,
+        const submitted = runProfiledRenderPhase(profileSession, 'record', () =>
+          recordFrame(
+            internals,
+            resourceWorld,
+            cameras,
+            lights,
+            renderables,
+            orderedDispatch,
+            frameState,
+            dispatchCounts,
+            bindGroupCounts,
+            skylight,
+            skylightCount,
+            skybox,
+            skyboxCount,
+            postProcessParams,
+            worlds,
+          ),
         );
         if (internals.featureHost !== undefined && preparedResourceBatches.length > 0) {
           const batches = preparedResourceBatches;
@@ -2092,6 +2089,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             detail: { error: innerError },
           }),
         );
+      } finally {
+        if (ownsProfileFrame) {
+          try {
+            profileSession?.endFrame();
+          } catch {
+            // Profiler failures never alter rendering.
+          }
+        }
       }
     },
     pipelineDispatchCounts: dispatchCounts,
@@ -2274,13 +2279,36 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       frameState.materialBgShared.clear();
       frameState.singletonMaterialCache.clear();
       frameState.postProcessBgCache = new WeakMap();
-      // (2) post-process registry + eager param UBOs: the rebuild's
-      // buildReadyWebGPU re-registers the engine tonemap, which would throw
-      // `post-process-already-registered` against a populated registry; the
-      // UBOs are stale lost-device handles released with the device.
+      // Post-process PSOs are cached outside frameState because the normal
+      // path reuses them across frames. They still carry opaque handles from
+      // the lost device, so recovery must invalidate this cache alongside the
+      // post-process registry/UBOs below.
+      postProcessPipelineCache.clear();
+      // (2) post-process declarations + eager param UBOs: declarations are
+      // CPU-owned author intent and must survive recovery (custom template
+      // effects are not re-authored by the host). The UBOs are stale
+      // lost-device handles and are rebuilt after the replacement device is
+      // live. Keep the first snapshot across retry attempts so a failed
+      // recover() cannot erase the preserved declarations.
+      if (postProcessEntriesForRecover === null) {
+        postProcessEntriesForRecover = [...postProcessRegistry.entries()];
+      }
       postProcessRegistry.clear();
       postProcessParamsBuffers.clear();
       resetRenderFeatureGraphState(internals);
+    },
+    restorePostProcessResources(): void {
+      const entries = postProcessEntriesForRecover;
+      if (entries === null) return;
+      postProcessEntriesForRecover = null;
+      for (const [id, entry] of entries) {
+        // The fresh build registers the built-in tonemap before this replay;
+        // preserving the existing declaration is the idempotent recovery path
+        // for both built-ins and user-authored post-process effects.
+        if (!postProcessRegistry.has(id)) {
+          this.postProcess.register(id, entry);
+        }
+      }
     },
   };
 }

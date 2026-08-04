@@ -200,8 +200,11 @@ async function createAppFromCanvas(
       rawDeviceForContextConfigure: opts.rawDeviceForContextConfigure,
     });
   }
-  if (opts?.renderPhaseObserver !== undefined) {
-    Object.assign(rendererOpts, { renderPhaseObserver: opts.renderPhaseObserver });
+  if (opts?.profiler !== undefined) {
+    Object.assign(rendererOpts, { profiler: opts.profiler });
+  }
+  if (opts?.features !== undefined) {
+    Object.assign(rendererOpts, { features: opts.features });
   }
 
   // m3-1: FORGEAX_ENGINE_RHI_DEBUG=1 RHI-debug recorder wiring.
@@ -221,10 +224,21 @@ async function createAppFromCanvas(
   // typeof-import.meta prefix stays at the call site. Keeps this file
   // @types/node-free (engine-app ships ESM into both browser + dawn-node;
   // same pattern as runtime/src/render-system-record.ts:isMeshSsboDevMode).
+  // Keep the Vite define key in a direct property expression. Wrapping
+  // `import.meta` in a structural cast hides the token from Vite's define
+  // pass, so production builds retain the debug-only dynamic chunks even when
+  // the Preview host explicitly sets the flag to `0`. Optional chaining keeps
+  // the package safe on the Dawn/Node path where `import.meta.env` is absent.
   const importMetaEnv =
     typeof import.meta !== 'undefined'
-      ? (import.meta as { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } }).env
+      ? { FORGEAX_ENGINE_RHI_DEBUG: import.meta.env?.FORGEAX_ENGINE_RHI_DEBUG }
       : undefined;
+  // A browser production build must be able to erase the entire recorder
+  // branch. The `undefined` arm preserves Dawn/Node's process.env fallback;
+  // Vite replaces the direct property with `"0"` or `"1"`, making this outer
+  // guard a literal false/true before Rollup sees the debug-only imports.
+  const browserBuildRhiDebugFlag =
+    typeof import.meta !== 'undefined' ? import.meta.env?.FORGEAX_ENGINE_RHI_DEBUG : undefined;
   const processEnv = (globalThis as { process?: { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } } })
     .process?.env;
   const rhiDebugFlag = resolveRhiDebugFlag(importMetaEnv, processEnv);
@@ -233,7 +247,10 @@ async function createAppFromCanvas(
       ? (globalThis as { navigator?: { gpu?: unknown } }).navigator
       : undefined;
   const hasWebGPU = nav !== undefined && 'gpu' in nav && nav.gpu !== undefined;
-  if (rhiDebugFlag === '1') {
+  if (
+    (browserBuildRhiDebugFlag === undefined || browserBuildRhiDebugFlag === '1') &&
+    rhiDebugFlag === '1'
+  ) {
     // Select backend: same auto-detect logic as createRenderer's loadBackendPack.
     let realBackend: Record<string, unknown>;
     // Literal import specifiers per branch (not a computed `backendPkg`
@@ -333,6 +350,11 @@ async function createAppFromCanvas(
     // failure -- F-3 zero-injection).
     (globalThis as { __forgeax?: { captureFrame(n: number): Promise<unknown> } }).__forgeax = {
       captureFrame(n: number): Promise<unknown> {
+        if (import.meta.env?.DEV !== true) {
+          return Promise.reject(
+            new Error('RHI browser capture is available only in a Vite dev host'),
+          );
+        }
         return import('@forgeax/engine-rhi-debug/capture-browser').then((m) =>
           m.captureAndUpload(debugInst, n),
         );
@@ -357,7 +379,9 @@ async function createAppFromCanvas(
     // shares the SSR handler, not a copied shadow (per PR1
     // resolveRhiDebugFlag SSOT pattern).
     const hotMeta = import.meta as {
-      hot?: { on(event: string, cb: (payload: { frames?: number; label?: string }) => void): void };
+      hot?: {
+        on(event: string, cb: (payload: { frames?: number; label?: string }) => void): void;
+      };
     };
     if (hotMeta.hot) {
       registerCaptureHmrListener(hotMeta.hot, debugInst);
@@ -417,26 +441,28 @@ async function createAppFromCanvas(
         // The Node adapter owns fs/path-backed replay and cannot run in a
         // browser bundle. Keep the same DebugRhiAdapter capture shape, but use
         // the browser-safe in-memory capture + dev-server upload seam here.
-        const captureMod = await import('@forgeax/engine-rhi-debug/capture-browser');
-        _debugAdapter = {
-          captureFrames: async (frames: number, label?: string) => {
-            const uploaded = await captureMod.captureAndUpload(_debugInst, frames, label);
-            return {
-              tapes: [
-                {
-                  frameIdx: 0,
-                  runId: uploaded.runId,
-                  tapePath: uploaded.tapePath,
-                  reportPath: uploaded.reportPath,
-                },
-              ],
-            };
-          },
-          inspectAt: async () => {
-            throw new Error('browser debug adapter does not expose Node-only replay inspection');
-          },
-          replayDispose: async () => ({ ok: true }),
-        };
+        if (import.meta.env?.DEV === true) {
+          const captureMod = await import('@forgeax/engine-rhi-debug/capture-browser');
+          _debugAdapter = {
+            captureFrames: async (frames: number, label?: string) => {
+              const uploaded = await captureMod.captureAndUpload(_debugInst, frames, label);
+              return {
+                tapes: [
+                  {
+                    frameIdx: 0,
+                    runId: uploaded.runId,
+                    tapePath: uploaded.tapePath,
+                    reportPath: uploaded.reportPath,
+                  },
+                ],
+              };
+            },
+            inspectAt: async () => {
+              throw new Error('browser debug adapter does not expose Node-only replay inspection');
+            },
+            replayDispose: async () => ({ ok: true }),
+          };
+        }
       } else {
         const adapterMod = (await import(
           /* @vite-ignore */ '@forgeax/engine-rhi-debug/adapter'
@@ -557,6 +583,7 @@ async function createAppFromCanvas(
           renderer?: unknown;
           assets?: unknown;
           debugAdapter?: unknown;
+          profiler?: unknown;
         }) => Promise<{
           ok: boolean;
           value?: { port: number; close(): Promise<void> };
@@ -570,6 +597,7 @@ async function createAppFromCanvas(
         renderer,
         assets: renderer.assets,
         ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
+        ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
       });
       if (serverResult.ok && serverResult.value) {
         remoteHandle = { port: serverResult.value.port, close: serverResult.value.close };
@@ -613,8 +641,8 @@ async function createAppFromCanvas(
   if (opts?.drawSource !== undefined) {
     Object.assign(buildArgs, { drawSource: opts.drawSource });
   }
-  if (opts?.framePhaseObserver !== undefined) {
-    Object.assign(buildArgs, { framePhaseObserver: opts.framePhaseObserver });
+  if (opts?.profiler !== undefined) {
+    Object.assign(buildArgs, { profiler: opts.profiler });
   }
   if (_debugInst !== undefined) {
     Object.assign(buildArgs, { debugRhi: _debugInst });
@@ -681,6 +709,7 @@ async function createAppFromCanvas(
             assets: renderer.assets,
             runtimeModule: engineRuntimeModule,
             ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
+            ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
             port: bridgePort,
           }),
         )
@@ -891,8 +920,8 @@ async function createAppFromAssemble(
   if (args.drawSource !== undefined) {
     Object.assign(buildArgs, { drawSource: args.drawSource });
   }
-  if (args.framePhaseObserver !== undefined) {
-    Object.assign(buildArgs, { framePhaseObserver: args.framePhaseObserver });
+  if (args.profiler !== undefined) {
+    Object.assign(buildArgs, { profiler: args.profiler });
   }
   return buildApp(buildArgs);
 }
@@ -943,7 +972,7 @@ interface BuildAppArgs {
         resourceOwner: number;
       }
     | undefined;
-  readonly framePhaseObserver?: import('./types').FramePhaseObserver;
+  readonly profiler?: import('@forgeax/engine-profiler').Profiler;
 }
 
 /**
@@ -968,7 +997,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     debugAdapter,
     debugDraw,
     remoteHandle,
-    framePhaseObserver,
+    profiler,
   } = args;
 
   // M2 plugin-system-unify (D-1 / D-4): audio resource injection,
@@ -1030,8 +1059,8 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   if (args.drawSource !== undefined) {
     Object.assign(loopOpts, { drawSource: args.drawSource });
   }
-  if (framePhaseObserver !== undefined) {
-    Object.assign(loopOpts, { framePhaseObserver });
+  if (profiler !== undefined) {
+    Object.assign(loopOpts, { profiler });
   }
   const loop = createFrameLoop(loopOpts);
 
@@ -1083,9 +1112,12 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       // error verbatim through the fanout dispatch below.
       //
       // feat-20260531-skybox-env-background F-1: the renderer onError channel
-      // now fans out RhiError | RuntimeError (e.g. 'equirect-projection-failed');
-      // only the RhiError 'device-lost' arm triggers the cleanup funnel, every
-      // other code (RHI or runtime) flows through to the host fan-out.
+      // now fans out RhiError | RuntimeError (e.g. 'equirect-projection-failed').
+      // Device loss is recoverable at the Renderer boundary: the frame-loop
+      // heartbeat remains armed and freezes World/update work until the host
+      // explicitly calls `renderer.recover()`. Routing it through the cleanup
+      // funnel would make the loop terminal and leave a successful recovery
+      // with no frame submitter.
       //
       // Note: we discriminate by .code rather than instanceof RhiError
       // because the listener may be invoked across module boundaries
@@ -1095,7 +1127,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       // false-negative trap. The union .code type still provides static
       // safety on .code access.
       if (e?.code === 'device-lost') {
-        cleanupFunnel({ reason: 'device-lost', lastError: e });
+        lastError = e;
       }
       // Always fan out to host listeners (D-2 last bullet: device-lost
       // error is forwarded as-is to host onError listener so the host
@@ -1154,6 +1186,9 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     },
     onError(cb: (e: AppDispatchError) => void): () => void {
       return fanout.add(cb);
+    },
+    setDrawSource(drawSource): void {
+      loop.setDrawSource(drawSource);
     },
     /**
      * Last error captured by the cleanup funnel. Useful for host

@@ -3,26 +3,26 @@
 // packages/app/src/create-app.ts (w13) and packages/app/src/internal/cleanup.ts.
 //
 // Anchors:
-//   - plan-strategy D-2: rAF closure device-lost stop = (a)
-//     cancelAnimationFrame + state -> 'stopped'. internal listener
-//     subscribes to renderer.onError; matches RhiError.code === 'device-lost'
-//     to trigger cleanup; lastError field captured; error fans out via host
-//     onError listeners verbatim.
+//   - plan-strategy D-2: device loss is a recoverable renderer-owned interval.
+//     The rAF heartbeat remains armed, World/update work is frozen while the
+//     renderer reports `device-lost`, lastError is captured, and the error fans
+//     out via host onError listeners verbatim.
 //   - plan-strategy D-3: AppError union does NOT add 'app-device-lost';
 //     RhiError({code:'device-lost'}) is forwarded through onError (D-2/D-3).
 //   - plan-strategy R-1 (research section 7.4): rAF handle must exist
 //     BEFORE renderer.onError(internal) subscribes. If renderer late-attach
 //     replays a lost event immediately, the listener cancels a still-null
 //     rafHandle. We assert no NPE on that timing.
-//   - plan-strategy R-4 (research section 7.3 / D-2): cleanup is shared by
-//     stop / device-lost / exception throw. After device-lost, input listener
-//     count drops back to 0 (detach run) AND removeSystem call landed.
+//   - plan-strategy R-4 (research section 7.3 / D-2): explicit stop and
+//     exception cleanup remain centralized. Device loss does not run the
+//     terminal cleanup funnel, so a successful Renderer.recover() can re-enter
+//     through the same App frame loop.
 //   - research section 7.7: 'device-lost' is already in RhiErrorCode 18-member
 //     union (no new AppError member).
 //
 // charter awareness:
 //   - P3 explicit failure: device-lost is a loud signal (host listener +
-//     state stopped + lastError captured) -- never silent.
+//     recoverable renderer health + lastError captured) -- never silent.
 
 import { ScheduleMutationError, Update, World, type Result } from '@forgeax/engine-ecs';
 import {
@@ -44,6 +44,7 @@ interface FakeRendererState {
   readonly errorListeners: Set<RendererErrorListener>;
   readonly lostListeners: Set<RendererLostListener>;
   drawCalls: number;
+  reason: 'alive' | 'device-lost';
   fireDeviceLost: () => void;
 }
 
@@ -56,6 +57,7 @@ function makeFakeRenderer(opts?: {
     errorListeners,
     lostListeners,
     drawCalls: 0,
+    reason: 'alive' as 'alive' | 'device-lost',
     fireDeviceLost: () => {
       // no-op until reset below
     },
@@ -66,6 +68,7 @@ function makeFakeRenderer(opts?: {
     hint: 'reload the page or rebuild the Renderer via createRenderer({...})',
   });
   state.fireDeviceLost = () => {
+    state.reason = 'device-lost';
     for (const cb of Array.from(errorListeners)) {
       cb(lostError);
     }
@@ -73,9 +76,11 @@ function makeFakeRenderer(opts?: {
   const renderer = {
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true, value: undefined }),
+    health: () => ({ reason: state.reason, recoverable: state.reason === 'device-lost' }),
     draw(): void {
       state.drawCalls++;
     },
+    dispose(): void {},
     onError(cb: RendererErrorListener): () => void {
       errorListeners.add(cb);
       if (opts?.fireOnSubscribe === true) {
@@ -123,10 +128,10 @@ function makeFakeBackend(): { backend: InputBackend; detachCalls: number; getDet
   };
 }
 
-// -------- path 1: device-lost triggers cleanup ----------------------
+// -------- path 1: device-lost freezes the recoverable interval --------
 
-describe('device-lost path 1 -- cancelAnimationFrame + state stopped + lastError', () => {
-  it('renderer.onError fires RhiError(device-lost) -> rAF cancelled, state stopped, lastError visible', async () => {
+describe('device-lost path 1 -- heartbeat retained + simulation frozen', () => {
+  it('renderer.onError fires RhiError(device-lost) -> app remains running but draw work pauses', async () => {
     const { renderer, state } = makeFakeRenderer();
     const world = new World();
     const result = await createApp({ renderer, world });
@@ -143,17 +148,15 @@ describe('device-lost path 1 -- cancelAnimationFrame + state stopped + lastError
     // fire device-lost via the fake renderer
     state.fireDeviceLost();
 
-    // assert state machine: subsequent app.start returns
-    // 'app-not-started' (frame-loop is in terminal 'stopped' state per
-    // M2 setStopped contract -- start() refuses).
+    // Device loss is recoverable at the renderer boundary, so the App remains
+    // started and an accidental second start is rejected as already-running.
     const restart = app.start();
     expect(restart.ok).toBe(false);
     if (restart.ok) return;
-    expect(restart.error.code).toBe('app-not-started');
+    expect(restart.error.code).toBe('app-already-running');
 
-    // assert lastError exposed via app.lastError or equivalent: the
-    // frame-loop SHOULD have stopped scheduling further ticks. Wait one
-    // tick and assert drawCalls did not advance.
+    // The rAF heartbeat remains armed, but the frame-loop must not submit work
+    // against a lost device until the host calls Renderer.recover().
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     expect(state.drawCalls).toBe(drawCallsBefore);
   });
@@ -215,8 +218,8 @@ describe('device-lost path 3 -- late-attach replay does not throw NPE', () => {
       // during/right after subscribe.
       const startResult = app.start();
       expect(startResult.ok).toBe(true);
-      // drive one tick; with state already stopped from late-attach
-      // replay, no more rAF schedules are armed.
+      // drive one tick; the heartbeat is retained, but the lost renderer
+      // freezes frame work until explicit recovery.
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     } finally {
       consoleErrorSpy.mockRestore();
@@ -224,9 +227,9 @@ describe('device-lost path 3 -- late-attach replay does not throw NPE', () => {
   });
 });
 
-// -------- path 4: cleanup central (R-4) -----------------------------
+// -------- path 4: explicit stop remains the cleanup owner -------------
 
-describe('device-lost path 4 -- cleanup central (R-4: detach + removeSystem)', () => {
+describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
   it('device-lost path triggers attachInputAuto detach + world.removeSystem', async () => {
     const { renderer, state } = makeFakeRenderer();
     const world = new World();
@@ -255,15 +258,13 @@ describe('device-lost path 4 -- cleanup central (R-4: detach + removeSystem)', (
 
     state.fireDeviceLost();
 
-    // After device-lost, the rAF loop is stopped: no more draws.
+    // During device-lost, the rAF heartbeat remains armed but no draws are
+    // submitted until recovery.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     expect(state.drawCalls).toBe(drawCallsBefore);
-    // Subsequent stop on a terminal 'stopped' frame-loop returns
-    // 'app-not-started' per M2 contract.
+    // Explicit stop remains the cleanup owner and is still valid after a loss.
     const stopResult = app.stop();
-    expect(stopResult.ok).toBe(false);
-    if (stopResult.ok) return;
-    expect(stopResult.error.code).toBe('app-not-started');
+    expect(stopResult.ok).toBe(true);
   });
 
   it('device-lost path on canvas form -- removeSystem called via cleanup funnel', async () => {

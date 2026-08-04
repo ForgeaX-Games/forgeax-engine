@@ -29,6 +29,13 @@ The asymmetry is the point:
   them lit proves `lights` are merged across worlds (**AC-04
   cross-world-lighting**).
 
+The direct `createRenderer` bootstrap is the smallest feature oracle. Hosts
+that discover the secondary World during a normal `createApp` bootstrap use the
+same routing contract through `app.setDrawSource(...)`; that setter changes
+only the per-frame world list and keeps one App lifecycle and one measured
+delta. `templates/game-default/src/multi-world-overlay.ts` is the composed
+consumer of that host seam.
+
 ## Smoke gate (AC-12)
 
 `pnpm --filter @forgeax/hello-multi-world smoke` runs the dawn-node harness

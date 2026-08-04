@@ -21,6 +21,9 @@ importers:
       '@fast-check/vitest':
         specifier: 0.4.1
         version: 0.4.1(vitest@4.1.5)
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:packages/app
       '@forgeax/engine-audio':
         specifier: workspace:*
         version: link:packages/audio
@@ -39,6 +42,12 @@ importers:
       '@forgeax/engine-pack':
         specifier: workspace:*
         version: link:packages/pack
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:packages/profiler
+      '@forgeax/engine-rhi-null':
+        specifier: workspace:*
+        version: link:packages/rhi-null
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:packages/runtime
@@ -4790,6 +4799,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-codec':
+        specifier: workspace:*
+        version: link:../../../packages/codec
       '@forgeax/engine-image':
         specifier: workspace:*
         version: link:../../../packages/image
@@ -4986,6 +4998,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
@@ -5430,6 +5445,9 @@ importers:
       pngjs:
         specifier: ^7.0.0
         version: 7.0.0
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
 
   apps/hello/m8-integrated-capstone:
     dependencies:
@@ -8584,6 +8602,12 @@ importers:
       '@forgeax/engine-input':
         specifier: workspace:*
         version: link:../../packages/input
+      '@forgeax/engine-physics':
+        specifier: workspace:*
+        version: link:../../packages/physics
+      '@forgeax/engine-physics-rapier3d':
+        specifier: workspace:*
+        version: link:../../packages/physics-rapier3d
       '@forgeax/engine-render':
         specifier: workspace:*
         version: link:../../packages/render
@@ -8597,12 +8621,18 @@ importers:
       '@forgeax/apps-shared':
         specifier: workspace:*
         version: link:../shared
+      '@forgeax/engine-fbx':
+        specifier: workspace:*
+        version: link:../../packages/fbx
       '@forgeax/engine-image':
         specifier: workspace:*
         version: link:../../packages/image
       '@forgeax/engine-vite-plugin-pack':
         specifier: workspace:*
         version: link:../../packages/vite-plugin-pack
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../packages/vite-plugin-shader
@@ -8966,6 +8996,9 @@ importers:
       '@forgeax/engine-plugin':
         specifier: workspace:*
         version: link:../plugin
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../profiler
       '@forgeax/engine-render':
         specifier: workspace:*
         version: link:../render
@@ -9536,8 +9569,21 @@ importers:
         specifier: workspace:*
         version: link:../ecs
 
+  packages/profiler:
+    dependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.40
+
   packages/remote:
     dependencies:
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../profiler
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
@@ -9584,6 +9630,9 @@ importers:
       '@forgeax/engine-pack':
         specifier: workspace:^
         version: link:../pack
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../profiler
       '@forgeax/engine-render-graph':
         specifier: workspace:*
         version: link:../render-graph
@@ -9744,6 +9793,9 @@ importers:
       '@forgeax/engine-plugin':
         specifier: workspace:*
         version: link:../plugin
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../profiler
       '@forgeax/engine-render':
         specifier: workspace:*
         version: link:../render

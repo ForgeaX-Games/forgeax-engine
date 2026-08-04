@@ -16,7 +16,7 @@ const FIXTURE_PATH = resolve(APP_ROOT, 'assets', 'pulse-material.pack.json');
 const MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
 const ARTIFACT_DIR = process.env.FORGEAX_MATERIAL_ARTIFACT_DIR;
 if (ARTIFACT_DIR !== undefined) mkdirSync(ARTIFACT_DIR, { recursive: true });
-const require = createRequire(resolve(APP_ROOT, '..', '..', 'package.json'));
+const require = createRequire(resolve(APP_ROOT, 'package.json'));
 const { PNG } = require('pngjs');
 const resizeVariant = process.env.FORGEAX_MATERIAL_LIVE_RESIZE_VARIANT;
 const twoSlotResizeVariant = process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE_VARIANT;

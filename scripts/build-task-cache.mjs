@@ -128,8 +128,19 @@ export function packageInputFiles(root, directory) {
   );
 }
 
-export function appInputFiles(root, directory) {
-  return [...walkFiles(directory), ...rootToolchainFiles(root)].filter(
+function expandDeclaredInput(path) {
+  if (!existsSync(path)) return [];
+  return statSync(path).isDirectory() ? walkFiles(path) : [path];
+}
+
+export function appInputFiles(root, directory, manifest = undefined) {
+  const config = manifest?.forgeax;
+  const declaredRoots = Array.isArray(config?.assetRoots) ? config.assetRoots : [];
+  const overrideSources = Object.values(config?.publicAssetOverrides ?? {});
+  const declaredInputs = [...declaredRoots, ...overrideSources]
+    .filter((path) => typeof path === 'string')
+    .flatMap((path) => expandDeclaredInput(resolve(directory, path)));
+  return [...walkFiles(directory), ...declaredInputs, ...rootToolchainFiles(root)].filter(
     (path) => !path.includes('/dist/') && !path.includes('\\dist\\'),
   );
 }

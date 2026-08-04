@@ -20,7 +20,8 @@ import type {
 } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { PluginError, PluginSource } from '@forgeax/engine-plugin';
-import type { Renderer, RendererError } from '@forgeax/engine-render';
+import type { Profiler } from '@forgeax/engine-profiler';
+import type { Renderer, RendererError, RenderFeature } from '@forgeax/engine-render';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { ImportTransport } from '@forgeax/engine-types';
@@ -77,23 +78,13 @@ export interface DrawSourceResult {
  * a host decides how to record them (for example, User Timing in a browser).
  * When omitted, the frame loop keeps its normal path and does not emit events.
  */
-export type FramePhase =
-  | 'frame-total'
-  | 'world-update-primary'
-  | 'draw-source'
-  | 'world-update-injected'
-  | 'renderer-draw';
-
-export interface FramePhaseEvent {
-  readonly frameSeq: number;
-  readonly phase: FramePhase;
-  readonly boundary: 'begin' | 'end';
-  readonly worldCount?: number;
-}
-
-export interface FramePhaseObserver {
-  readonly onEvent: (event: FramePhaseEvent) => void;
-}
+export const APP_PHASE_CATALOG = [
+  'frame-total',
+  'world-update-primary',
+  'draw-source',
+  'world-update-injected',
+  'renderer-draw',
+] as const;
 
 /**
  * Optional per-frame draw-source injection seam
@@ -143,10 +134,8 @@ export interface AppAssembleArgs {
    * (legacy behaviour). See {@link DrawSource}.
    */
   readonly drawSource?: DrawSource;
-  /** Opt-in engine-owned frame phase observer for host diagnostics. */
-  readonly framePhaseObserver?: FramePhaseObserver;
-  /** Opt-in renderer Extract / Prepare / Record diagnostics. */
-  readonly renderPhaseObserver?: import('@forgeax/engine-render').RenderPhaseObserver;
+  /** Explicit profiler capability shared by the host and renderer. */
+  readonly profiler?: Profiler;
 }
 
 /**
@@ -165,6 +154,8 @@ export interface AppAssembleArgs {
 export interface CreateAppOptions {
   /** Host-owned UI root whose events do not enter gameplay input. */
   readonly uiRoot?: Node;
+  /** Producer-owned render features forwarded to the renderer unchanged. */
+  readonly features?: readonly RenderFeature<unknown>[];
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: readonly PluginSource[];
   /**
@@ -245,10 +236,8 @@ export interface CreateAppOptions {
    * single world (legacy behaviour unchanged). See {@link DrawSource}.
    */
   readonly drawSource?: DrawSource;
-  /** Opt-in engine-owned frame phase observer for host diagnostics. */
-  readonly framePhaseObserver?: FramePhaseObserver;
-  /** Opt-in renderer Extract / Prepare / Record diagnostics. */
-  readonly renderPhaseObserver?: import('@forgeax/engine-render').RenderPhaseObserver;
+  /** Explicit profiler capability shared by the host and renderer. */
+  readonly profiler?: Profiler;
 }
 
 /**
@@ -380,6 +369,13 @@ export interface App {
    * fan-out registry lands in M4 (plan-strategy section 7).
    */
   onError(cb: (err: AppDispatchError) => void): () => void;
+  /**
+   * Replace the per-frame world routing pull. `undefined` restores the
+   * single-world path; an injected result updates every returned secondary
+   * World before drawing it with the declared owners. This changes routing,
+   * not scheduling or time ownership.
+   */
+  setDrawSource(drawSource: DrawSource | undefined): void;
   /**
    * Last error captured by the M4 cleanup funnel. Useful for host
    * self-inspection on device-lost without requiring an onError

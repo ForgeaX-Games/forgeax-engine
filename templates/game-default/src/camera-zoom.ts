@@ -8,6 +8,6 @@ export const PERSPECTIVE_ZOOM_SPEED = 0.05;
 export function zoomPerspectiveFov(fov: number, wheelDelta: number): number {
   return Math.max(
     PERSPECTIVE_FOV_MIN,
-    Math.min(PERSPECTIVE_FOV_MAX, fov - wheelDelta * PERSPECTIVE_ZOOM_SPEED),
+    Math.min(PERSPECTIVE_FOV_MAX, fov + wheelDelta * PERSPECTIVE_ZOOM_SPEED),
   );
 }

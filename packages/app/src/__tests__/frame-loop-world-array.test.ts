@@ -149,4 +149,37 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
 
     loop.stop();
   });
+
+  it('keeps the rAF heartbeat but freezes draw work during device loss', () => {
+    const world = new World();
+    let reason: 'alive' | 'device-lost' = 'alive';
+    const calls: unknown[] = [];
+    const renderer = {
+      backend: 'webgpu' as const,
+      ready: Promise.resolve({ ok: true, value: undefined }),
+      health: () => ({ reason, recoverable: reason === 'device-lost' }),
+      draw(): { ok: true; value: undefined } {
+        calls.push(undefined);
+        return { ok: true, value: undefined };
+      },
+      onError(): () => void {
+        return () => {};
+      },
+      dispose(): void {},
+    } as unknown as Renderer;
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf });
+    loop.start();
+    pump(1);
+    expect(calls).toHaveLength(1);
+
+    reason = 'device-lost';
+    pump(3);
+    expect(calls).toHaveLength(1);
+
+    reason = 'alive';
+    pump(1);
+    expect(calls).toHaveLength(2);
+    loop.stop();
+  });
 });

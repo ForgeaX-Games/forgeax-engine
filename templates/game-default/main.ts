@@ -4,14 +4,15 @@ import {
   ANTIALIAS_FXAA, ANTIALIAS_MSAA, ANTIALIAS_NONE, BLOOM_DISABLED, BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, perspective,
   PointLight, TONEMAP_REINHARD_EXTENDED, Materials,
 } from '@forgeax/engine-render';
-import { quat, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
+import { quat, type Handle, type MaterialAsset, type MeshAsset } from '@forgeax/engine-runtime';
 import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { createCapsuleGeometry } from '@forgeax/engine-geometry';
-import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, type PhysicsWorld } from '@forgeax/engine-physics';
+import { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, type PhysicsWorld } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { defineSystem, FixedUpdate, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { inState } from '@forgeax/engine-state';
-import type { BootstrapContext } from '@forgeax/engine-app';
+import { vec3 } from '@forgeax/engine-math';
+import type { BootstrapContext, GameProjectionValue } from '@forgeax/engine-app';
 import {
   createInputSnapshot, INPUT_MAP_KEY, INPUT_SNAPSHOT_RESOURCE_KEY,
   type ActionConfig, type InputSnapshot,
@@ -26,24 +27,28 @@ import { installGameplayAudio } from './src/gameplay-audio';
 import { installAudioEvidence } from './src/audio-evidence';
 import { GameState, installGameplayState } from './src/gameplay-state';
 import { installAssetContentEvidence } from './src/asset-content-evidence';
-import { createHitFlashMaterial } from './src/hit-flash-material';
+import { createHitFlashMaterial, HIT_FLASH_SHADER_ID, HIT_FLASH_SHADER_SOURCE } from './src/hit-flash-material';
 import { stepRotatingTargets } from './src/rotating-target';
-import { createAnimatedMaterialTarget, resetAnimatedMaterial, stepAnimatedMaterial, type AnimatedMaterialTarget } from './src/animated-target-material';
+import { ANIMATED_TARGET_SHADER_ID, ANIMATED_TARGET_SHADER_SOURCE, createAnimatedMaterialTarget, resetAnimatedMaterial, stepAnimatedMaterial, type AnimatedMaterialTarget } from './src/animated-target-material';
 import { resetScoringTargets, scoringPoints } from './src/scoring-target';
 import { installRenderEvidence } from './src/render-evidence';
 import { installDebugAxes } from './src/debug-axes';
 import { ORBIT_INITIAL_PITCH, ORBIT_INITIAL_YAW, ORBIT_RADIUS, orbitPose } from './src/camera-orbit';
 import { PERSPECTIVE_FOV_INITIAL, zoomPerspectiveFov } from './src/camera-zoom';
 import { installGameplayChangeDetection, type GameplayChangeDetectionHandle } from './src/change-detection';
+import { createWorldScoreText, type WorldScoreTextHandle } from './src/world-score-text';
 import { installTargetHealth, TargetHealth, type TargetHealthHandle } from './src/target-health';
 import { installTargetDisabling, type TargetDisablingHandle } from './src/target-disabling';
 import { installDepthOfField, DEPTH_OF_FIELD_ID, type DepthOfFieldHandle } from './src/depth-of-field';
 import { installChromaticAberration, CHROMATIC_ABERRATION_ID, type ChromaticAberrationHandle } from './src/chromatic-aberration';
 import { createCustomProjectileMesh, resetCustomProjectileMesh, toggleCustomProjectileMesh, type CustomProjectileMesh } from './src/custom-projectile-mesh';
 import { createMeshHandleSwap, resetMeshHandleSwap, toggleMeshHandleSwap, type MeshHandleSwap } from './src/mesh-handle-swap';
+import { createFbxMeshSwap, resetFbxMeshSwap, toggleFbxMeshSwap, type FbxMeshSwap } from './src/fbx-mesh-swap';
+import { createFbxSkinnedTarget, type FbxSkinnedTarget } from './src/fbx-skinned-target';
 import { createFreeCameraState, resetFreeCamera, stepFreeCamera } from './src/free-camera';
+import { installMultiWorldOverlay, type MultiWorldOverlay } from './src/multi-world-overlay';
 import {
-  attachScenePhysics, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
+  attachScenePhysics, expandLoadedScene, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
   spawnFallbackScene, spawnGroundCollider, type LoadedScene, type MatHandle,
 } from './src/scene-runtime';
 
@@ -78,6 +83,22 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // HUD dispose (below).
 
   const canvas = document.querySelector<HTMLCanvasElement>('#app')!;
+  // Asset-loop screenshots compare the same scene across load/reload/reset
+  // operations. Freeze unrelated authored motion in that explicit evidence
+  // mode so the pixel oracle measures the HDR change rather than a rotating
+  // target advancing between captures; normal gameplay keeps both animations.
+  const assetEvidenceMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('asset-evidence');
+  if (ctx?.renderer !== undefined) {
+    const shaders = [
+      { id: HIT_FLASH_SHADER_ID, source: HIT_FLASH_SHADER_SOURCE, paramSchema: [{ name: 'baseColor', type: 'color' }, { name: 'intensity', type: 'f32' }] },
+      { id: ANIMATED_TARGET_SHADER_ID, source: ANIMATED_TARGET_SHADER_SOURCE, paramSchema: [{ name: 'baseColor', type: 'color' }, { name: 'time', type: 'f32', default: 0 }] },
+    ] as const;
+    for (const shader of shaders) {
+      if (!ctx.renderer.shader.findMaterialArtifact(shader.id).ok) {
+        ctx.renderer.shader.installMaterialArtifact(shader.id, { source: shader.source, paramSchema: shader.paramSchema });
+      }
+    }
+  }
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
   canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
@@ -86,6 +107,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // The host normally hands us its already-instantiated default scene. Standalone
   // runs use the same GUID load path, while fallback keeps the learning loop visible.
   let loaded: LoadedScene | null = ctx ? loadedFromHost(world, ctx) : null;
+  if (loaded && ctx?.assets && ctx.defaultScene) {
+    loaded = await expandLoadedScene(ctx.assets, ctx.defaultScene, loaded);
+  }
   if (!loaded) {
     try { loaded = await loadScene({ world, assets: ctx?.assets }); }
     catch (err) { console.warn('[game] scene asset unavailable:', err); }
@@ -104,16 +128,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   //    never enables physics). ──────────────────────────────────────────────────
   let player: EntityHandle | undefined;
   let initX = 0, initZ = 0;
-  // XZ circles the kinematic player is pushed out of (the tree trunk).
-  const walkBlockers: Array<{ cx: number; cz: number; r: number }> = [];
-  const flashables: Array<{ e: EntityHandle; mat: MatHandle; clearcoat?: boolean }> = []; // hit-flash targets (dynamic props)
+  const flashables: Array<{ e: EntityHandle; materials: readonly MatHandle[]; clearcoat?: boolean }> = []; // hit-flash targets (dynamic props)
   let animatedMaterial: AnimatedMaterialTarget | undefined;
   // Time.elapsed is the engine-owned absolute clock. Keep only a reset origin
   // so the authored animation returns to phase zero without another accumulator.
   let materialElapsedOrigin = 0;
   if (loaded) {
     const phys = attachScenePhysics({ world }, loaded);
-    walkBlockers.push(...phys.walkBlockers);
     flashables.push(...phys.props);
     if (phys.animatedMaterial) animatedMaterial = createAnimatedMaterialTarget(world, phys.animatedMaterial, 52);
     const playerNode = loaded.nodes.find((n) => (n.components.Name as { value?: string } | undefined)?.value === 'Player');
@@ -124,10 +145,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       if (player !== undefined) setupPlayerRoot({ world }, player);
     }
   }
-  const origMatOf = new Map<EntityHandle, MatHandle>(flashables.map((f) => [f.e, f.mat] as [EntityHandle, MatHandle]));
+  const origMaterialsOf = new Map<EntityHandle, readonly MatHandle[]>(flashables.map((f) => [f.e, f.materials] as [EntityHandle, readonly MatHandle[]]));
   const targetHealth: TargetHealthHandle = installTargetHealth(world, flashables.map((target) => target.e));
   const targetDisabling: TargetDisablingHandle = installTargetDisabling(world, flashables.map((target) => target.e));
   const meshHandleSwap: MeshHandleSwap | undefined = createMeshHandleSwap(world, flashables[0]?.e);
+  const fbxMeshSwap: FbxMeshSwap | undefined = await createFbxMeshSwap(world, ctx?.assets, flashables[0]?.e);
+  const fbxSkinnedTarget: FbxSkinnedTarget | undefined = await createFbxSkinnedTarget({ world, assets: ctx?.assets });
+  registerCleanup?.(() => fbxSkinnedTarget?.dispose());
   const damageTarget = (entity: EntityHandle, points: number): void => {
     targetHealth.damage(entity, points);
     const health = world.get(entity, TargetHealth);
@@ -173,6 +197,16 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     { component: Camera, data: { ...perspective({ fov: PERSPECTIVE_FOV_INITIAL, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
     { component: AudioListener, data: {} },
   ).unwrap();
+  const multiWorldOverlay: MultiWorldOverlay | undefined = ctx?.app === undefined
+    ? undefined
+    : installMultiWorldOverlay(ctx.app, ctx.registerCleanup);
+
+  // Keep the existing DOM popup as the screen-space UI contract, and add one
+  // pooled world-space label to demonstrate FontAsset -> GlyphText in the same
+  // gameplay loop. The asset is optional for headless hosts; Preview includes
+  // the shared DejaVu font root so this path is exercised by the template.
+  const worldScoreText: WorldScoreTextHandle | undefined = await createWorldScoreText(world, ctx?.assets);
+  registerCleanup?.(() => worldScoreText?.dispose());
 
   // ── one warm accent point light (learn-render §2 multiple-lights; the scene
   //    already has the directional Sun + IBL skylight — keep ≤1 of each). ───────
@@ -182,17 +216,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   );
 
   // ── on-hit "+N" popup ────────────────────────────────────────────────────
-  //   Score popups are a **DOM overlay**, NOT a world-space GlyphText entity.
-  //
-  //   Why: the engine's shadow caster pass (render-system-record.ts:2611-2630)
-  //   projects every entity with a triangle-list/triangle-strip submesh into
-  //   the directional shadow map — there is no per-material `castShadow:false`
-  //   yet (design doc 2026-06-09 covers it; not yet landed). A world-space
-  //   GlyphText popup at prop.y+0.8 with billboard-to-camera rotation lies
-  //   near-horizontal in top-down view, and the sun-direction projection of
-  //   that quad onto the ground produced a clearly visible circular shadow at
-  //   the hit prop's feet (bug-20260610-glyph-mesh-cannot-opt-out-shadow-
-  //   caster). DOM overlay sidesteps the shadow path entirely.
+  //   The DOM overlay remains the stable screen-space popup. The pooled
+  //   world-space GlyphText label is a second, camera-facing feedback layer;
+  //   its generated material is Forward-only (no ShadowCaster pass), so it
+  //   does not add text geometry to the directional shadow map.
   //
   //   spawnPopup runs from the Update system (after hit detection),
   //   projects (worldX, worldY, worldZ) to canvas-CSS-pixel screen coords
@@ -414,6 +441,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     const sx = (ndcX + 1) * 0.5 * cssW;
     const sy = (1 - ndcY) * 0.5 * cssH;
     hud.floatScore(text, sx, sy);
+    // Lift the world label above tall showcase props (the DOM popup keeps the
+    // exact hit projection while GlyphText needs a depth-safe anchor).
+    worldScoreText?.show(text, [wx, wy + 0.9, wz]);
   };
 
   // ── input: keyboard via the engine InputSnapshot (WASD/Space/F + arrows) ─────
@@ -436,6 +466,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     { action: 'shoot', bindings: [KEY('f'), KEY('F'), PAD_BUTTON(7)] },
     { action: 'meshUv', bindings: [KEY('g'), KEY('G'), PAD_BUTTON(3)] },
     { action: 'meshHandle', bindings: [KEY('h'), KEY('H'), PAD_BUTTON(2)] },
+    { action: 'fbxMesh', bindings: [KEY('j'), KEY('J')] },
     { action: 'freeUp', bindings: [KEY('e')] },
     { action: 'freeDown', bindings: [KEY('q')] },
     { action: 'freeRun', bindings: [KEY('Shift')] },
@@ -493,7 +524,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // shape stay explicit rather than silently sharing an implementation detail.
   const customProjectile: CustomProjectileMesh | undefined = ctx?.renderer === undefined
     ? undefined
-    : await createCustomProjectileMesh(world, ctx.renderer);
+    : await createCustomProjectileMesh(world, ctx.renderer, ctx.assets);
   const projectileMesh = customProjectile?.meshHandle ?? bulletMesh;
   const projectileMaterial = customProjectile?.materialHandle ?? bulletMat;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
@@ -503,9 +534,27 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const triggerFlash = (entity?: EntityHandle): void => {
     const target = entity === undefined ? flashables[0]?.e : entity;
     if (target === undefined || flashUntil.has(target)) return;
-    world.set(target, MeshRenderer, { materials: [flashMat] });
+    world.set(target, MeshRenderer, { materials: [flashMat, ...(origMaterialsOf.get(target)?.slice(1) ?? [])] });
     flashUntil.set(target, 0.2);
     chromaticAberration.setIntensity(Math.max(chromaticAberration.snapshot().intensity, 0.035));
+  };
+  const multiMaterial = () => {
+    const target = flashables.find((candidate) => candidate.materials.length > 1);
+    if (target === undefined) return { available: false, materialCount: 0, submeshCount: 0, topologies: [], slotsAligned: false };
+    const renderer = world.get(target.e, MeshRenderer);
+    const filter = world.get(target.e, MeshFilter);
+    const mesh = filter.ok
+      ? world.sharedRefs.resolve<'MeshAsset', MeshAsset>(filter.value.assetHandle)
+      : undefined;
+    const materials = renderer.ok ? renderer.value.materials.length : 0;
+    const submeshes = mesh?.ok === true ? mesh.value.submeshes : [];
+    return {
+      available: materials > 1 && materials === submeshes.length,
+      materialCount: materials,
+      submeshCount: submeshes.length,
+      topologies: submeshes.map((submesh) => submesh.topology),
+      slotsAligned: materials === submeshes.length && materials > 1,
+    };
   };
   // squared hit radius for bullet→prop scoring (bullet_r 0.12 + avg prop_r 0.5 ≈
   // 0.7, plus frame-step slack since the bullet advances ~0.4/frame). Generous
@@ -514,10 +563,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   // ── gameplay update (▶ Play only — ✎ Edit stays static) ─────────────────────
   const SPEED = 6;            // top-down/orbit walk speed (units/s)
-  const PLAYER_RADIUS = 0.3;  // = the kinematic capsule radius (setupPlayerRoot)
   const BOUND = 11;           // keep the character on the 24-wide ground slab
   const JUMP_V = 6.5;         // initial jump velocity
-  const GRAV = 18;            // jump gravity (manual arc — the root is kinematic)
+  const GRAV = 18;            // jump gravity fed into CharacterController.moveAndSlide
   const BULLET_SPEED = 24;    // bullet travel speed (units/s)
   const BULLET_LIFE = 1.5;    // bullet lifetime (s)
   const SHOOT_CD = 0.18;      // fire cooldown (s)
@@ -587,7 +635,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     for (const bullet of bullets) world.despawn(bullet.e);
     bullets.length = 0;
     for (const [entity, timer] of flashUntil) {
-      if (timer > 0) world.set(entity, MeshRenderer, { materials: [origMatOf.get(entity)!] });
+      if (timer > 0) world.set(entity, MeshRenderer, { materials: [...(origMaterialsOf.get(entity) ?? [])] });
     }
     flashUntil.clear();
     for (const [entity, snapshot] of initialTransforms) {
@@ -614,16 +662,21 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     panZ = initZ + TOP_DZ;
     panHalfHeight = PAN_HALF_HEIGHT_INITIAL;
     perspectiveFov = PERSPECTIVE_FOV_INITIAL;
+    world.set(camera, Camera, { fov: perspectiveFov });
     changeDetection.reset();
     targetDisabling.reset();
     targetHealth.reset();
     depthOfField.reset();
     chromaticAberration.reset();
+    worldScoreText?.reset();
     if (customProjectile !== undefined) resetCustomProjectileMesh(customProjectile);
     resetMeshHandleSwap(world, meshHandleSwap);
+    resetFbxMeshSwap(world, fbxMeshSwap);
+    fbxSkinnedTarget?.reset();
     settingsState.depthOfField = false;
     appliedDepthOfField = false;
     setMode('topdown');
+    multiWorldOverlay?.setEnabled(true);
     if (player !== undefined) {
       world.set(player, Transform, { pos: [px, jumpY, pz], quat: [0, 0, 0, 1] });
       if (physics?.hasBody(player)) physics.teleport(player, [px, jumpY, pz]);
@@ -634,6 +687,101 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   };
   const gameplayState = installGameplayState({ world, reset: resetGameplay });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
+
+  // Preview's inspection host owns transport and lifecycle; the game owns the
+  // meaning of each projection. These are deliberately small, JSON-shaped
+  // front doors instead of a second raw World/evidence global. They are absent
+  // in hosts that do not provide BootstrapContext.gameProjection.
+  if (ctx?.gameProjection) {
+    const projectionDisposers = [
+      ctx.gameProjection.registerRead({
+        id: 'game-default.snapshot',
+        title: 'Read gameplay snapshot',
+        description: 'Read phase, camera mode, fixed-step witness, and target lifecycle counts.',
+        read: (): GameProjectionValue => {
+          const cameraData = world.get(camera, Camera);
+          return {
+            state: gameplayState.snapshot(),
+            viewMode: mode,
+            cameraProjection: cameraData.ok && cameraData.value.projection === 1 ? 'orthographic' : 'perspective',
+            targetHealth: targetHealth.snapshot(),
+            targetDisabling: targetDisabling.snapshot(),
+            multiWorld: multiWorldOverlay?.snapshot() ?? { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 },
+            worldScoreText: worldScoreText?.snapshot() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0] },
+            fbxSkinnedTarget: fbxSkinnedTarget?.snapshot() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
+          };
+        },
+      }),
+      ctx.gameProjection.registerRead({
+        id: 'game-default.renderer-contract',
+        title: 'Read renderer contract',
+        description: 'Read the public renderer health and registered material shader ids.',
+        read: (): GameProjectionValue => ({
+          health: ctx.renderer?.health() ?? { reason: 'unavailable', recoverable: false },
+          materialShaderIdentifiers: ctx.renderer?.shader.materialShaderIdentifiers() ?? [],
+        }),
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.reset',
+        title: 'Request gameplay reset',
+        description: 'Request the typed Reset state; cleanup runs through the normal lifecycle owner.',
+        run: () => {
+          gameplayState.requestReset();
+          return { requested: true };
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.invalid-state',
+        title: 'Exercise invalid state recovery',
+        description: 'Send an adjacent invalid state through the public state API and return its error code.',
+        run: () => ({ errorCode: gameplayState.requestInvalid() ?? null }),
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.trigger-hit',
+        title: 'Trigger hit feedback',
+        description: 'Use the same hit-flash/material/audio feedback owner as a real projectile hit.',
+        run: () => {
+          triggerFlash();
+          fbxSkinnedTarget?.triggerHit();
+          return { triggered: true };
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.toggle-multi-world',
+        title: 'Toggle secondary world',
+        description: 'Enable or disable two beacon entities rendered from a secondary World using the primary camera and lights.',
+        run: () => {
+          if (multiWorldOverlay === undefined) return { enabled: false, available: false };
+          const nextEnabled = !multiWorldOverlay.snapshot().enabled;
+          multiWorldOverlay.setEnabled(nextEnabled);
+          return { enabled: nextEnabled, available: true };
+        },
+      }),
+      ctx.gameProjection.registerAction({
+        id: 'game-default.set-view',
+        title: 'Set camera view',
+        description: 'Switch the existing camera owner without creating a second camera.',
+        argsSchema: {
+          type: 'object',
+          required: ['mode'],
+          properties: { mode: { type: 'string', enum: ['topdown', 'orbit', 'fps', 'pan'] } },
+        },
+        run: (args) => {
+          const modeValue = typeof args === 'object' && args !== null && !Array.isArray(args)
+            ? args.mode
+            : undefined;
+          if (modeValue !== 'topdown' && modeValue !== 'orbit' && modeValue !== 'fps' && modeValue !== 'pan') {
+            throw new Error('mode must be one of topdown, orbit, fps, pan');
+          }
+          setMode(modeValue);
+          return { viewMode: modeValue };
+        },
+      }),
+    ];
+    ctx.registerCleanup?.(() => {
+      for (const dispose of projectionDisposers.reverse()) dispose();
+    });
+  }
 
   if (player !== undefined) {
     const root = player;
@@ -652,6 +800,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           }
           if (meshHandleSwap !== undefined && snap.action('meshHandle').justPressed()) {
             toggleMeshHandleSwap(world, meshHandleSwap);
+          }
+          if (fbxMeshSwap !== undefined && snap.action('fbxMesh').justPressed()) {
+            toggleFbxMeshSwap(world, fbxMeshSwap);
           }
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
@@ -672,6 +823,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       }
       if ((mode === 'fps' || mode === 'orbit') && snap.mouse.wheelDelta !== 0) {
         perspectiveFov = zoomPerspectiveFov(perspectiveFov, snap.mouse.wheelDelta);
+        world.set(camera, Camera, { fov: perspectiveFov });
       }
 
       // — Orbit/FPS look via arrow keys (keyboard fallback: mouse-look needs
@@ -717,41 +869,47 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         mvx = s; mvz = -f;                          // W → −Z, D → +X
         if (mvx !== 0 || mvz !== 0) { const l = Math.hypot(mvx, mvz); faceX = mvx / l; faceZ = mvz / l; }
       }
-      if (mvx !== 0 || mvz !== 0) {
+      // — collision-aware movement (top-down/orbit) —
+      // Input, gravity, and jump remain game policy; the physics backend owns
+      // slope handling, auto-step, ground snap, collision response, and the
+      // transient grounded result. This keeps one movement owner for the game.
+      if (mode !== 'fps' && physics?.hasBody(root)) {
+        const before = world.get(root, CharacterController);
+        grounded = before.ok && before.value.grounded === true;
+        if (snap.action('jump').justPressed() && grounded) { vy = JUMP_V; grounded = false; }
+        vy -= GRAV * dt;
+        if (grounded && vy < 0) vy = -GRAV * dt;
         const l = Math.hypot(mvx, mvz) || 1;
         const step = SPEED * dt;
-        let nx = Math.max(-BOUND, Math.min(BOUND, px + (mvx / l) * step));
-        let nz = Math.max(-BOUND, Math.min(BOUND, pz + (mvz / l) * step));
-        // Kinematic bodies get no collision response vs static ones, so push the
-        // player OUT of each ground obstacle's XZ circle (the tree trunk) from ANY
-        // approach angle. Dynamic props are NOT walkBlockers → still get shoved.
-        for (const o of walkBlockers) {
-          const ox = nx - o.cx, oz = nz - o.cz;
-          const d = Math.hypot(ox, oz);
-          const minD = PLAYER_RADIUS + o.r;
-          if (d < minD) {
-            if (d > 1e-4) { nx = o.cx + (ox / d) * minD; nz = o.cz + (oz / d) * minD; }
-            else { nx = o.cx + minD; }   // dead-center: shove out along +X
-          }
+        physics.moveAndSlide(root, vec3.create((mvx / l) * step, vy * dt, (mvz / l) * step));
+        const tr = world.get(root, Transform);
+        if (tr.ok) {
+          px = Math.max(-BOUND, Math.min(BOUND, tr.value.pos[0] ?? px));
+          pz = Math.max(-BOUND, Math.min(BOUND, tr.value.pos[2] ?? pz));
+          jumpY = tr.value.pos[1] ?? jumpY;
         }
-        px = nx; pz = nz;
-      }
-
-      // — jump (Space, edge-triggered; manual parabolic arc since kinematic) —
-      // snap.action('jump').justPressed() is the rising edge (aggregatedPressed
-      // && !prevFramePressed), replacing the manual prevSpace edge tracking.
-      if (mode !== 'fps' && snap.action('jump').justPressed() && grounded) { vy = JUMP_V; grounded = false; }
-      if (mode !== 'fps' && !grounded) {
-        vy -= GRAV * dt;
-        jumpY += vy * dt;
-        if (jumpY <= PLAYER_Y) { jumpY = PLAYER_Y; vy = 0; grounded = true; }
+        const after = world.get(root, CharacterController);
+        grounded = after.ok && after.value.grounded === true;
+        if (grounded) vy = 0;
+      } else if (mode !== 'fps') {
+        // The normal host builds physics before bootstrap. A deliberately
+        // physics-free host keeps its first frame harmless instead of throwing.
+        jumpY = PLAYER_Y;
+      } else if (physics?.hasBody(root)) {
+        // A CharacterController disables authored kinematic mirroring. FPS is
+        // free-flight by design, so explicitly keep the collider body in sync.
+        physics.teleport(root, [px, freeY, pz]);
       }
 
       // — drive the kinematic root: position + facing yaw (front = local −Z) —
       const yaw = Math.atan2(-faceX, -faceZ);
       const q = quat.eulerY(yaw);
+      if (mode === 'fps') {
+        world.set(root, Transform, { pos: [px, freeY, pz], quat: [q[0]!, q[1]!, q[2]!, q[3]!]});
+      } else {
+        world.set(root, Transform, { quat: [q[0]!, q[1]!, q[2]!, q[3]!]});
+      }
       const playerY = mode === 'fps' ? freeY : jumpY;
-      world.set(root, Transform, { pos: [px, playerY, pz], quat: [q[0]!, q[1]!, q[2]!, q[3]!]});
 
       // — shoot (F, or left-click in FPS): kinematic bullet flies along `face` —
       shootCd -= dt;
@@ -831,16 +989,12 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       for (const [e, t] of flashUntil) {
         const nt = t - dt;
         if (nt <= 0) {
-          world.set(e, MeshRenderer, { materials: [origMatOf.get(e)!] });
+          world.set(e, MeshRenderer, { materials: [...(origMaterialsOf.get(e) ?? [])] });
           flashUntil.delete(e);
         } else flashUntil.set(e, nt);
       }
       const chromaticIntensity = chromaticAberration.snapshot().intensity;
       if (chromaticIntensity > 0) chromaticAberration.setIntensity(Math.max(0, chromaticIntensity - dt * 0.14));
-
-      // — "+N" hit popups: handled by hud.floatScore (DOM overlay) at hit
-      //   time, NOT a per-frame world-space billboard. See spawnPopup above
-      //   for why (engine shadow-caster path projects every triangle mesh).
 
       // — camera, per view mode —
       if (mode === 'fps') {
@@ -859,6 +1013,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         camZ += (pz + TOP_DZ - camZ) * a;
         world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]});
       }
+      worldScoreText?.step(dt, camera);
         },
       })
       .unwrap();
@@ -874,6 +1029,14 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         if (target !== undefined && points !== undefined) {
           changeDetection.recordHit(target.e, points);
           damageTarget(target.e, points);
+          const transform = world.get(target.e, Transform);
+          if (transform.ok) {
+            worldScoreText?.show('+' + points, [
+              transform.value.pos[0] ?? 0,
+              (transform.value.pos[1] ?? 0) + 1.7,
+              transform.value.pos[2] ?? 0,
+            ]);
+          }
         }
       },
       hitFlashBlendEnabled: () => {
@@ -911,7 +1074,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       clearcoatMaterial: () => {
         const target = flashables.find((candidate) => candidate.clearcoat === true);
         if (target === undefined) return null;
-        const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(target.mat);
+        const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(target.materials[0] ?? (0 as MatHandle));
         if (!material.ok) return null;
         const values = material.value.values as Record<string, unknown> | undefined;
         const strength = Number(values?.clearcoat ?? 0);
@@ -919,12 +1082,32 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         return { enabled: strength > 0, strength, roughness };
       },
       deferredCommands: () => ({ spawned: deferredBulletSpawns, despawned: deferredBulletDespawns }),
-      customProjectileMesh: customProjectile === undefined ? undefined : () => ({ available: true, uvMode: customProjectile.uvMode, toggles: customProjectile.toggles }),
+      multiMaterial,
+      multiWorld: multiWorldOverlay?.snapshot,
+      customProjectileMesh: customProjectile === undefined ? undefined : () => ({
+        available: true,
+        uvMode: customProjectile.uvMode,
+        toggles: customProjectile.toggles,
+        textureSource: customProjectile.textureSource,
+        textureFormat: customProjectile.textureFormat,
+      }),
       toggleCustomProjectileMesh: customProjectile === undefined ? undefined : () => toggleCustomProjectileMesh(customProjectile),
       meshHandleSwap: meshHandleSwap === undefined ? undefined : () => ({ active: meshHandleSwap.active, swaps: meshHandleSwap.swaps }),
       toggleMeshHandleSwap: meshHandleSwap === undefined ? undefined : () => toggleMeshHandleSwap(world, meshHandleSwap),
+      fbxMeshSwap: fbxMeshSwap === undefined ? undefined : () => ({ active: fbxMeshSwap.active, swaps: fbxMeshSwap.swaps }),
+      toggleFbxMeshSwap: fbxMeshSwap === undefined ? undefined : () => toggleFbxMeshSwap(world, fbxMeshSwap),
+      fbxSkinnedTarget: fbxSkinnedTarget?.snapshot,
+      characterController: () => {
+        const controller = world.get(root, CharacterController);
+        const transform = world.get(root, Transform);
+        return {
+          grounded: controller.ok && controller.value.grounded === true,
+          position: [transform.ok ? (transform.value.pos[0] ?? 0) : 0, transform.ok ? (transform.value.pos[1] ?? 0) : 0, transform.ok ? (transform.value.pos[2] ?? 0) : 0],
+        };
+      },
       targetHealth: () => targetHealth.snapshot(),
       targetDisabling: () => targetDisabling.snapshot(),
+      worldScoreText: worldScoreText?.snapshot,
       isFlashed: (entity) => flashUntil.has(entity),
       reset: resetGameplay,
       state: gameplayState,
@@ -942,8 +1125,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         fn: () => {
           // Run after physics writeback so the authored motion survives the
           // dynamic target's pose sync and is visible in the next frame.
-          stepRotatingTargets(world, world.getResource(Time).delta);
-          if (animatedMaterial) {
+          if (!assetEvidenceMode) stepRotatingTargets(world, world.getResource(Time).delta);
+          if (animatedMaterial && !assetEvidenceMode) {
             const elapsed = world.getResource(Time).elapsed - materialElapsedOrigin;
             stepAnimatedMaterial(world, animatedMaterial, elapsed);
           }
@@ -994,6 +1177,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const pose = orbitPose([px, jumpY + 0.8, pz], ORBIT_INITIAL_YAW + gameplayInput.lookYaw, ORBIT_INITIAL_PITCH + gameplayInput.lookPitch, ORBIT_RADIUS);
         world.set(camera, Transform, { pos: pose.pos, quat: pose.quat });
       },
+    }).unwrap();
+    world.addSystem(Update, {
+      name: 'game-world-score-text-fallback',
+      runIf: inState(GameState, 'Play'),
+      queries: [],
+      after: ['game-camera-fallback'],
+      fn: () => worldScoreText?.step(world.getResource(Time).delta, camera),
     }).unwrap();
   }
 }

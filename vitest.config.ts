@@ -11,6 +11,13 @@ import { websocketListenerCommands } from './packages/net-websocket/__tests__/su
 import materialContractInventory from './scripts/material-contract-inventory.json' with {
   type: 'json',
 };
+import { generateTemplateAssets } from './templates/game-default/assets/generate-assets.mjs';
+
+// The browser project mounts pluginPack directly instead of loading the
+// preview Vite config. Materialize the template's generated PNG before that
+// scanner runs, keeping the ignored source and its tracked sidecar a single
+// valid asset boundary in CI and local browser runs.
+generateTemplateAssets();
 
 // Monorepo-root anchor for pluginPack roots (see browser project below).
 // `new URL('.', import.meta.url)` already yields this file's directory
@@ -304,6 +311,11 @@ export default defineConfig({
           // the first attempt passes). Scoped to the dawn project only.
           testTimeout: 30000,
           retry: 2,
+          // Dawn tests use a shared software Vulkan backend. Do not derive the
+          // fork count from the host CPU count: the 96-vCPU heavy runners can
+          // otherwise launch dozens of GPU processes and lose workers under
+          // lavapipe contention.
+          maxWorkers: 2,
           include: [
             '**/*.dawn.test.ts',
             'packages/rhi-wgpu/src/__tests__/**/*.dawn.test.ts',

@@ -126,6 +126,7 @@ import {
 import type {
   Asset,
   Handle,
+  MaterialColorParameterSchema,
   MaterialParameter,
   MaterialRenderState,
   MaterialTextureCoordinates,
@@ -134,7 +135,13 @@ import type {
   ParamSchemaEntry,
   SkeletonAsset,
 } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError, derive, toShared } from '@forgeax/engine-types';
+import {
+  ASSET_ERROR_HINTS,
+  AssetError,
+  derive,
+  materialValuesToLinearRuntime,
+  toShared,
+} from '@forgeax/engine-types';
 import {
   type Antialias,
   antialiasFromF32,
@@ -1357,13 +1364,39 @@ function materialParametersToParamSchema(
     // Static values select a cooked specialization and boolean material
     // values have no runtime UBO representation in ParamSchemaEntry.
     if (parameter.static || parameter.type === 'bool') return [];
+    if (parameter.type === 'texture') {
+      return [{ name: parameter.name, type: 'texture2d' }];
+    }
     return [
       {
         name: parameter.name,
-        type: parameter.type === 'texture' ? 'texture2d' : parameter.type,
+        type: parameter.type,
+        ...(parameter.colorSpace === undefined ? {} : { colorSpace: parameter.colorSpace }),
       },
     ];
   });
+}
+
+/**
+ * Resolve color semantics from the material asset first and the shader schema
+ * for fields the asset does not redeclare. Generated and historical pack
+ * materials commonly omit `parameters`, while the shader registry still owns
+ * the complete parameter contract.
+ */
+function materialColorParameterSchema(
+  parameters: readonly MaterialParameter[],
+  shaderId: string | undefined,
+  assets: AssetRegistry,
+): readonly MaterialColorParameterSchema[] {
+  if (shaderId === undefined) return parameters;
+  const shader = assets.shaderRegistry.findMaterialArtifact(shaderId);
+  if (!shader.ok) return parameters;
+
+  const byName = new Map<string, MaterialColorParameterSchema>(
+    shader.value.paramSchema.map((parameter) => [parameter.name, parameter]),
+  );
+  for (const parameter of parameters) byName.set(parameter.name, parameter);
+  return [...byName.values()];
 }
 
 /**
@@ -1396,7 +1429,16 @@ function resolveMaterialSnapshot(
   const resolvedResult = walkMaterialPassesOverSharedRefs(world, tagged, assetsRef);
   if (!resolvedResult.ok) return defaultMaterialSnapshot();
   const resolved = resolvedResult.value;
-  const pv = resolved.values as Readonly<Record<string, unknown>>;
+  const allPasses = resolved.passes;
+  const firstPassShader =
+    allPasses.length > 0
+      ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
+      : undefined;
+  const pv = materialValuesToLinearRuntime(
+    resolved.values,
+    materialColorParameterSchema(resolved.parameters ?? [], firstPassShader, assetsRef),
+    resolved.colorSpace,
+  ) as Readonly<Record<string, unknown>>;
   const baseColorPv = pv.baseColor as readonly number[] | undefined;
   const baseColor = vec3.create(
     baseColorPv?.[0] ?? 1,
@@ -1417,12 +1459,7 @@ function resolveMaterialSnapshot(
       paramSnap[k] = v as number[];
     }
   }
-  const allPasses = resolved.passes;
   const materialParamSchema = materialParametersToParamSchema(resolved.parameters ?? []);
-  const firstPassShader =
-    allPasses.length > 0
-      ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
-      : undefined;
   // feat-20260614 M8 (D-19): texture / sampler values are embedded GUIDs
   // (dash-form strings) after loadByGuid. Resolve each to a user-tier column
   // handle by looking up the catalogued payload and minting via
@@ -3260,7 +3297,16 @@ export function extractFrame(
             continue;
           }
           const resolved = resolvedResult.value;
-          const pv = resolved.values as Readonly<Record<string, unknown>>;
+          const allPasses = resolved.passes;
+          const firstPassShader =
+            allPasses.length > 0
+              ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
+              : undefined;
+          const pv = materialValuesToLinearRuntime(
+            resolved.values,
+            materialColorParameterSchema(resolved.parameters ?? [], firstPassShader, assets),
+            resolved.colorSpace,
+          ) as Readonly<Record<string, unknown>>;
 
           const baseColorPv = pv.baseColor as readonly number[] | undefined;
           const baseColor = vec3.create(
@@ -3283,12 +3329,7 @@ export function extractFrame(
             }
           }
 
-          const allPasses = resolved.passes;
           const materialParamSchema = materialParametersToParamSchema(resolved.parameters ?? []);
-          const firstPassShader =
-            allPasses.length > 0
-              ? runtimeMaterialShaderId(allPasses[0]?.program.module, allPasses[0]?.name)
-              : undefined;
           // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w17 (D-5):
           // bidirectional Skin <-> pbr-skin material fail-fast at extract.
           // Skin component without a forgeax::pbr-skin first-pass material

@@ -35,6 +35,7 @@ describe('glTF material bridge values', () => {
     );
 
     expect(material.passes?.[0]?.program.module).toBe('forgeax::default-standard-pbr');
+    expect(material.colorSpace).toBe('linear');
     expect(material.values).toMatchObject({
       baseColor: [0.8, 0.2, 0.1, 1],
       metallic: 0.5,

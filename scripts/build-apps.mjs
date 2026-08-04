@@ -133,7 +133,7 @@ function transitivePackages(app, packagesByName, packageFingerprints) {
 }
 
 function taskPlan(app, packageFingerprints, packagesByName) {
-  const files = appInputFiles(root, app.directory);
+  const files = appInputFiles(root, app.directory, app.manifest);
   const inputFingerprint = hashFiles(root, files);
   const packageInputs = transitivePackages(app, packagesByName, packageFingerprints);
   return {

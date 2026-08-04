@@ -1277,7 +1277,13 @@ export function toAssetPack(
   }
   // Animation clips (feat-20260523-skin-skeleton-animation M0).
   for (let i = 0; i < doc.animationClips.length; i++) {
-    items.push({ kind: 'animation-clip', sourceIndex: i });
+    const clip = doc.animationClips[i];
+    if (clip === undefined) continue;
+    items.push({
+      kind: 'animation-clip',
+      sourceIndex: i,
+      ...(clip.name === undefined ? {} : { name: clip.name }),
+    });
   }
 
   const reuse = reimportReuseMeta(items, existingMeta);

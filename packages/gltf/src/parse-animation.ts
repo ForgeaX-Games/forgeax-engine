@@ -144,6 +144,8 @@ export interface GltfAnimationSamplerRecord {
 }
 
 export interface GltfAnimationClipRecord {
+  /** Producer-authored animation name, when the source provides one. */
+  readonly name?: string;
   /** Clip duration = max(sampler.input[last]). */
   readonly duration: number;
   /** Per-joint-property channels. */
@@ -327,7 +329,12 @@ export function parseAnimation(
       }
     }
 
-    clips.push({ duration, channels });
+    const name = anim.name?.trim();
+    clips.push({
+      ...(name === undefined || name.length === 0 ? {} : { name }),
+      duration,
+      channels,
+    });
   }
 
   return ok(clips);

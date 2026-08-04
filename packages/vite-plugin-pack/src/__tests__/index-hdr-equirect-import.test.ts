@@ -172,3 +172,32 @@ describe.skip('index-hdr-equirect-import.test.ts (w1) - dev POST /__import equiv
     expect((equirect?.payload as EquirectAsset | undefined)?.kind).toBe('equirect');
   });
 });
+
+describe('production imported-output identity', () => {
+  it('keeps authored name and current projection after texture package emission', async () => {
+    await viteBuild({
+      root: tmpRoot,
+      logLevel: 'silent',
+      configFile: false,
+      build: {
+        outDir: distDir,
+        emptyOutDir: true,
+        write: true,
+        rollupOptions: { input: { main: 'main.js' } },
+      },
+      plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
+    });
+
+    const entries = await readPackIndex();
+    const row = entries.find((entry) => entry.guid.toLowerCase() === HDR_GUID);
+    expect(row).toMatchObject({
+      name: 'newport_loft.hdr',
+      subject: 'imported-output',
+      execution: 'cooked',
+      lifecycle: 'current',
+      projection: expect.objectContaining({ lifecycle: 'current' }),
+    });
+    expect(row?.sourcePath).toMatch(/assets\/newport_loft\.hdr$/);
+    expect(row?.packageUrl).toMatch(/\.pack\.json$/);
+  });
+});

@@ -3,7 +3,8 @@ name: forgeax-engine-app
 description: >-
   ForgeaX application bootstrap and browser frame loop. Use when creating an App,
   selecting a World time policy, handling Result failures, migrating former frame
-  callbacks to Update systems, or wiring input and plugins.
+  callbacks to Update systems, wiring input and plugins, or attaching the opt-in
+  Profiler capability.
 ---
 
 # forgeax-engine-app
@@ -36,6 +37,28 @@ app.start().unwrap();
 ```
 
 The canvas form creates its World, renderer, default plugins, browser input backend, and frame loop. `app.start()` only arms the browser loop after the factory Result is successful.
+
+## Optional CPU profiling
+
+Attach `@forgeax/engine-profiler` to the App or Renderer assembly when a bounded CPU artifact is
+needed. The default is off: no profiler means no capture records or profiler-owned event objects.
+
+```ts
+import { createProfiler } from '@forgeax/engine-profiler';
+import { createApp } from '@forgeax/engine-app';
+
+const profiler = createProfiler();
+const result = await createApp({ renderer, world, profiler });
+if (!result.ok) throw result.error;
+
+const capture = profiler.startCapture({ frameLimit: 120, eventLimit: 1024 });
+if (!capture.ok) throw capture.error;
+// Drive the App, then call capture.value.finish() and validate the artifact.
+```
+
+Read `profiler.phaseCatalog` for the App/Render owner relation. Use
+`validateProfileCapture` and `buildProfileModel` from the profiler package for offline analysis;
+do not recreate phase lists or turn this capability into an ECS, GPU, UI, or RPC surface.
 
 ## Renderer feature assembly
 

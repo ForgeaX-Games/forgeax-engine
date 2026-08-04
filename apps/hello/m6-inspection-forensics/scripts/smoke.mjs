@@ -135,7 +135,7 @@ async function runRemoteLiveBrowser() {
     }
     const baselineCapture = liveEval(
       env,
-    `(async () => { if (debugAdapter === undefined) return { available: false }; const m = await _import('@forgeax/engine-runtime'); const t = world.get(${JSON.stringify(handle)}, m.Transform); const capture = await debugAdapter.captureFrames(1, 'm6-live-scene-before'); return { available: true, probe: world.getResource('m6Probe').value, posX: t.ok ? t.value.pos[0] : null, capture }; })()`,
+      `(async () => { if (debugAdapter === undefined) return { available: false }; const m = await _import('@forgeax/engine-scene'); const t = world.get(${JSON.stringify(handle)}, m.Transform); const capture = await debugAdapter.captureFrames(1, 'm6-live-scene-before'); return { available: true, probe: world.getResource('m6Probe').value, posX: t.ok ? t.value.pos[0] : null, capture }; })()`,
     );
     if (
       baselineCapture?.available !== true ||
@@ -149,7 +149,7 @@ async function runRemoteLiveBrowser() {
 
     const moved = liveEval(
       env,
-      `(async () => { const m = await _import('@forgeax/engine-runtime'); world.set(${JSON.stringify(handle)}, m.Transform, { pos: [1.25, 0, 0] }); const t = world.get(${JSON.stringify(handle)}, m.Transform); return t.ok ? t.value.pos[0] : null; })()`,
+      `(async () => { const m = await _import('@forgeax/engine-scene'); world.set(${JSON.stringify(handle)}, m.Transform, { pos: [1.25, 0, 0] }); const t = world.get(${JSON.stringify(handle)}, m.Transform); return t.ok ? t.value.pos[0] : null; })()`,
     );
     if (moved !== 1.25) {
       throw new Error(`visible Transform mutation did not read back: ${JSON.stringify(moved)}`);
@@ -157,7 +157,7 @@ async function runRemoteLiveBrowser() {
 
     const mutatedCapture = liveEval(
       env,
-      `(async () => { const m = await _import('@forgeax/engine-runtime'); const t = world.get(${JSON.stringify(handle)}, m.Transform); const capture = await debugAdapter.captureFrames(1, 'm6-live-scene-after'); return { available: debugAdapter !== undefined, probe: world.getResource('m6Probe').value, posX: t.ok ? t.value.pos[0] : null, capture }; })()`,
+      `(async () => { const m = await _import('@forgeax/engine-scene'); const t = world.get(${JSON.stringify(handle)}, m.Transform); const capture = await debugAdapter.captureFrames(1, 'm6-live-scene-after'); return { available: debugAdapter !== undefined, probe: world.getResource('m6Probe').value, posX: t.ok ? t.value.pos[0] : null, capture }; })()`,
     );
     if (
       mutatedCapture?.available !== true ||

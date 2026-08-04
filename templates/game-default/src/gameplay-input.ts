@@ -84,8 +84,17 @@ export function installGameplayInput(ctx: GameplayInputContext): GameplayInputSt
           aimX = player.x + (ev.x - ctx.canvas.width / 2);
           aimZ = player.z + (ev.y - ctx.canvas.height / 2);
         }
-        const dx = aimX - player.x, dz = aimZ - player.z;
-        const len = Math.hypot(dx, dz);
+        let dx = aimX - player.x, dz = aimZ - player.z;
+        let len = Math.hypot(dx, dz);
+        // Picking can legitimately hit the player at the screen centre. That
+        // is not an aim target; fall back to the pointer ray so a click near
+        // the avatar still produces a shot instead of being discarded as a
+        // zero-length direction.
+        if (len <= 1e-3) {
+          dx = ev.x - ctx.canvas.width / 2;
+          dz = ev.y - ctx.canvas.height / 2;
+          len = Math.hypot(dx, dz);
+        }
         if (len <= 1e-3) continue;
         const nx = dx / len, nz = dz / len;
         state.shotDir = { x: nx, z: nz };

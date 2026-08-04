@@ -4,18 +4,21 @@
 // needs to mutate a watched on-disk sidecar and observe Vite's full-reload
 // websocket crossing into the actual preview document.
 
+import { mkdirSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { createServer as createNetServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
-import { createServer, loadConfigFromFile, mergeConfig } from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..', '..', '..');
 const fixture = resolve(root, 'templates/game-default/assets/base-material.pack.json');
-const marker = '"baseColor": [0.6, 0.6, 0.6, 1]';
-const replacement = '"baseColor": [0.61, 0.6, 0.6, 1]';
+const artifactDir = resolve(process.env.FORGEAX_CATALOG_REFRESH_DIR ?? resolve(root, '.forgeax-debug/catalog-refresh'));
+const marker = /("baseColor"\s*:\s*\[\s*)0\.6/;
+mkdirSync(artifactDir, { recursive: true });
 
 async function availablePort() {
   const probe = createNetServer();
@@ -30,26 +33,30 @@ async function availablePort() {
 }
 
 const port = await availablePort();
-const config = await loadConfigFromFile(
-  { command: 'serve', mode: 'test' },
-  resolve(root, 'apps/preview/vite.config.ts'),
+const server = spawn(
+  'pnpm',
+  ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
+  { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
 );
-if (config === null) throw new Error('preview Vite config did not load');
-
-const server = await createServer(
-  mergeConfig(config.config, {
-    root: resolve(root, 'apps/preview'),
-    server: { host: '127.0.0.1', port, strictPort: true },
-  }),
-);
+let serverOutput = '';
+server.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
+server.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
 const original = await readFile(fixture, 'utf8');
 let browser;
 
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  if (address === null || typeof address === 'string') throw new Error('preview Vite server has no TCP address');
-  const origin = `http://127.0.0.1:${address.port}`;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      if (response.ok) break;
+    } catch {
+      // Vite is still starting.
+    }
+    await sleep(250);
+  }
+  if (Date.now() >= deadline) throw new Error(`preview Vite server did not start: ${serverOutput}`);
+  const origin = `http://127.0.0.1:${port}`;
 
   browser = await chromium.launch({
     headless: true,
@@ -65,6 +72,10 @@ try {
   });
   const page = await browser.newPage();
   const errors = [];
+  const lifecycle = [];
+  page.on('crash', () => lifecycle.push('page-crash'));
+  page.on('close', () => lifecycle.push('page-close'));
+  browser.on('disconnected', () => lifecycle.push('browser-disconnected'));
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
   page.on('console', (message) => {
     const url = message.location().url;
@@ -73,11 +84,15 @@ try {
     }
   });
 
-  await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto(`${origin}/?game=game-default`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#app', { timeout: 30_000 });
   await page.waitForFunction(() => {
     const canvas = document.querySelector('canvas');
     return canvas !== null && canvas.getBoundingClientRect().width > 0 && canvas.getBoundingClientRect().height > 0;
+  });
+  await page.waitForFunction(() => {
+    const listed = globalThis.__forgeaxPreviewInspection?.list();
+    return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2;
   });
 
   const before = await page.evaluate(async () => {
@@ -87,16 +102,32 @@ try {
   if (!before.ok || before.row.guid !== 'eb5bf6e6-2e47-4d9a-99fd-81843228c9b3') {
     throw new Error('pre-mutation asset catalog lookup failed');
   }
+  const beforeGame = await page.evaluate(() => globalThis.__forgeaxPreviewInspection?.read('game-default.snapshot'));
+  if (!beforeGame?.ok || beforeGame.value.state.phase !== 'Play') {
+    throw new Error(`pre-mutation game snapshot failed: ${JSON.stringify(beforeGame)}`);
+  }
+  await page.screenshot({ path: resolve(artifactDir, 'before.png') });
 
   const navigation = page.waitForEvent('framenavigated', {
     predicate: (frame) => frame === page.mainFrame() && frame.url().startsWith(origin),
     timeout: 30_000,
-  });
-  if (!original.includes(marker)) throw new Error('preview asset fixture drifted; refresh mutation marker is absent');
-  await writeFile(fixture, original.replace(marker, replacement));
-  await navigation;
+  }).then(
+    () => ({ ok: true }),
+    (error) => ({ ok: false, error }),
+  );
+  if (!marker.test(original)) throw new Error('preview asset fixture drifted; refresh mutation marker is absent');
+  await writeFile(fixture, original.replace(marker, (_match, prefix) => `${prefix}0.61`));
+  const navigationResult = await navigation;
+  if (!navigationResult.ok) {
+    throw new Error(`preview refresh lifecycle failed: ${JSON.stringify({ error: String(navigationResult.error), lifecycle, errors })}`);
+  }
 
   await page.waitForSelector('#app', { timeout: 30_000 });
+  await page.waitForFunction(() => {
+    const listed = globalThis.__forgeaxPreviewInspection?.list();
+    return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2;
+  });
+  const afterGame = await page.evaluate(() => globalThis.__forgeaxPreviewInspection?.read('game-default.snapshot'));
   const health = await page.evaluate(() => {
     const canvas = document.querySelector('canvas');
     const rect = canvas?.getBoundingClientRect();
@@ -107,11 +138,38 @@ try {
   });
   if (!health.canvasLive) throw new Error('post-refresh preview canvas is absent or zero-sized');
   if (health.errorOverlay) throw new Error('post-refresh preview displayed an error overlay');
-  if (errors.length > 0) throw new Error(`preview reported browser errors after Vite refresh: ${errors.join('; ')}`);
+  if (!afterGame?.ok || afterGame.value.state.phase !== 'Play') {
+    throw new Error(`post-refresh game snapshot failed: ${JSON.stringify(afterGame)}`);
+  }
+  if (errors.length > 0 || lifecycle.length > 0) {
+    throw new Error(`preview reported browser lifecycle/errors after Vite refresh: ${JSON.stringify({ errors, lifecycle })}`);
+  }
+  await page.screenshot({ path: resolve(artifactDir, 'after.png') });
+  await writeFile(
+    resolve(artifactDir, 'report.json'),
+    `${JSON.stringify({
+      oracle: 'watched game-default material sidecar triggers a real Vite reload while the canvas and Play inspection snapshot recover',
+      source: fixture,
+      before,
+      beforeGame,
+      afterGame,
+      health,
+      errors,
+      lifecycle,
+      serverOutput,
+    }, null, 2)}\n`,
+  );
 
-  console.log('GREEN: watched preview asset triggered Vite reload; post-refresh canvas is healthy with no error overlay.');
+  console.log(`[catalog-refresh] PASS canvasLive=${health.canvasLive} phase=${afterGame.value.state.phase} pageErrors=0 artifacts=${artifactDir}`);
 } finally {
   await writeFile(fixture, original);
   await browser?.close();
-  await server.close();
+  if (server.pid !== undefined) {
+    try {
+      process.kill(-server.pid, 'SIGTERM');
+    } catch {
+      server.kill('SIGTERM');
+    }
+  }
+  await sleep(300);
 }

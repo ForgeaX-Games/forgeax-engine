@@ -2,11 +2,9 @@
 
 export * from './authoring';
 export * from './cluster-binner';
-export * from './components/index';
 export { createDebugDrawOnReady } from './debug-draw-glue';
 export { createEngineMetrics } from './engine-metrics';
 export * from './extract/schema-readers';
-export * from './features';
 export * from './features/host';
 export type { GpuResource } from './gpu-resource';
 export { GpuBuffer, GpuTexture } from './gpu-resource';

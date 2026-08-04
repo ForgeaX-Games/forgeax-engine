@@ -76,8 +76,10 @@ const CODEC_IMPLEMENTATION_FINGERPRINT = implementationFingerprint(
  * sidecar can still opt out explicitly with `compressionMode:'none'` (R-9
  * per-fixture escape hatch for any pixel-parity smoke that will not converge).
  */
-function compressionModeOf(meta: ImageMetadata): CompressionMode {
-  const token = meta.compressionMode;
+function compressionModeOf(
+  meta: Pick<ImageMetadata, 'compressionMode'> | undefined,
+): CompressionMode {
+  const token = meta?.compressionMode;
   if (token === 'auto' || token === 'etc1s' || token === 'uastc' || token === 'none') {
     return token;
   }
@@ -106,6 +108,32 @@ function compressionFor(
 export interface ImportTextureOptions {
   /** Base directory the entry's relative `sourcePath` resolves against. */
   readonly cwd: string;
+  /** Declaring sidecar whose importSettings own the texture's color/mipmap intent. */
+  readonly metaPath?: string | undefined;
+}
+
+interface SidecarImportSettings {
+  readonly colorSpace?: 'srgb' | 'linear';
+  readonly mipmap?: 'auto' | 'none' | boolean;
+  readonly compressionMode?: CompressionMode;
+  readonly downscaleMaxDimension?: number;
+}
+
+async function readSidecarImportSettings(
+  metaPath: string | undefined,
+): Promise<SidecarImportSettings | undefined> {
+  if (metaPath === undefined) return undefined;
+  try {
+    const raw = JSON.parse(await readFile(metaPath, 'utf8')) as {
+      readonly importSettings?: unknown;
+    };
+    if (typeof raw.importSettings !== 'object' || raw.importSettings === null) return undefined;
+    return raw.importSettings as SidecarImportSettings;
+  } catch {
+    // Catalog validation owns sidecar diagnostics. Import remains fail-open for
+    // direct callers and preserves the legacy linear/no-mipmap defaults.
+    return undefined;
+  }
 }
 
 /**
@@ -153,11 +181,20 @@ export async function importTextureEntry(
     return { skipped: 'non-importable kind or missing texture metadata', real: false };
   }
   const sourceAbs = resolve(opts.cwd, entry.sourcePath);
+  const sidecar = await readSidecarImportSettings(opts.metaPath);
+  const colorSpace = sidecar?.colorSpace === 'srgb' ? 'srgb' : 'linear';
+  const mipmap = sidecar?.mipmap === 'auto' || sidecar?.mipmap === true;
+  const compressionMode = compressionModeOf(sidecar);
+  const isHdr = sourceAbs.toLowerCase().endsWith('.hdr');
   const meta: ImageMetadata = {
     kind: 'texture',
-    format: sourceAbs.toLowerCase().endsWith('.hdr') ? 'rgba16float' : 'rgba8unorm',
-    colorSpace: 'linear',
-    mipmap: false,
+    format: isHdr ? 'rgba16float' : colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+    colorSpace,
+    mipmap,
+    compressionMode,
+    ...(sidecar?.downscaleMaxDimension === undefined
+      ? {}
+      : { downscaleMaxDimension: sidecar.downscaleMaxDimension }),
   };
 
   // mime discrimination: standard image extensions import directly; .hdr
@@ -194,7 +231,6 @@ export async function importTextureEntry(
   // encoding -- and is the settings half of the DDC key (D-2). Including
   // compressionMode here means changing it re-keys the DDC and forces a clean
   // re-cook (R-9: no stale-cache poisoning across a mode change).
-  const compressionMode = compressionModeOf(meta);
   const importSettings = {
     colorSpace: meta.colorSpace,
     mipmap: meta.mipmap,
@@ -299,7 +335,6 @@ export async function importTextureEntry(
   // rgba16float `.bin` -- this agrees with the imageImporter HDR arm, which also
   // never encodes an equirect sub. Only purely-sampled textures take the basis-*
   // path (compressionFor).
-  const isHdr = lower.endsWith('.hdr');
   const compression: AssetCompression =
     entry.kind === 'equirect' ? 'none' : compressionFor(compressionMode, meta.colorSpace, isHdr);
   const metadata: ImageMetadata = {

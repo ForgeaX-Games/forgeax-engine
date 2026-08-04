@@ -124,6 +124,9 @@ function mergeMaterial(parent: MaterialAsset, child: MaterialAsset): MaterialAss
   const passes = mergePasses(parent.passes, child.passes);
   return {
     kind: 'material',
+    ...((child.colorSpace ?? parent.colorSpace) !== undefined
+      ? { colorSpace: child.colorSpace ?? parent.colorSpace }
+      : {}),
     ...(passes !== undefined && passes.length > 0
       ? { passes: passes as NonNullable<MaterialAsset['passes']> }
       : {}),

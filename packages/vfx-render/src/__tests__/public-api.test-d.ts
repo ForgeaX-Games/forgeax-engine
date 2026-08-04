@@ -6,6 +6,7 @@ import type {
 } from '@forgeax/engine-render';
 import type { ParticleRenderBatch, ParticleSimulationObservation } from '@forgeax/engine-vfx';
 import {
+  createParticleRuntimeHost,
   type ParticleRenderCamera,
   type ParticleRenderFeatureFrameData,
   type ParticleRenderFeatureOptions,
@@ -31,6 +32,10 @@ const options = {
 } satisfies ParticleRenderFeatureOptions;
 
 const feature = particleRenderFeature(options);
+const runtimeHost = createParticleRuntimeHost({ camera: options.camera });
+expectTypeOf(runtimeHost.feature).toMatchTypeOf<RenderFeature<unknown>>();
+expectTypeOf(runtimeHost.attachWorld).toBeFunction();
+expectTypeOf(runtimeHost.detachWorld).toBeFunction();
 const featureAsRenderFeature = feature satisfies RenderFeature<ParticleRenderFeatureFrameData>;
 const rendererOptions = { features: [featureAsRenderFeature] } satisfies RendererOptions;
 

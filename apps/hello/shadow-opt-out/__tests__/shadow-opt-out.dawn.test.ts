@@ -256,7 +256,9 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       // orthoHalfExtent=8 padding; CSM AABB-fits the camera frustum so the
       // shadow tile rasterizes exactly where the cube projects.
       const posA: [number, number, number] = [-3.0, 0.01, -0.5];
-      const posB: [number, number, number] = [0.0, 0.01, -0.5];
+      // Keep the opt-out probe on the CSM-lit side of the floor; the center
+      // point at z=-0.5 overlaps the neighboring caster's projected tile.
+      const posB: [number, number, number] = [0.0, 0.01, 0.5];
       const posC: [number, number, number] = [3.0, 0.01, -0.5];
 
       const shadowResults = await renderer.debugSampleShadowFactor?.([posA, posB, posC]);

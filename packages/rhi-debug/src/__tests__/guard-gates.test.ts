@@ -78,20 +78,33 @@ describe('AC-08 partial: import.meta.hot in rhiDebugFlag guard', () => {
     const content = readFileSync(createAppPath, 'utf-8');
     const lines = content.split('\n');
 
-    const guardOpenIdx = lines.findIndex((l) => l.includes("if (rhiDebugFlag === '1')"));
+    const guardConditionIdx = lines.findIndex((l) => l.includes("rhiDebugFlag === '1'"));
+    expect(guardConditionIdx).not.toBe(-1);
+    let guardOpenIdx = -1;
+    for (let i = guardConditionIdx; i >= 0; i--) {
+      if (lines[i]?.includes('if (')) {
+        guardOpenIdx = i;
+        break;
+      }
+    }
     expect(guardOpenIdx).not.toBe(-1);
+
+    const guardBraceIdx = lines.findIndex(
+      (l, index) => index >= guardConditionIdx && l.includes('{'),
+    );
+    expect(guardBraceIdx).not.toBe(-1);
 
     // Find the matching '}' at the same indent level as the 'if' statement.
     // Avoid counting braces inside template literals or strings by matching
     // the exact indent prefix.
-    const guardLine = lines[guardOpenIdx];
-    if (guardLine === undefined) throw new Error('unreachable: guardOpenIdx verified above');
+    const guardLine = lines[guardBraceIdx];
+    if (guardLine === undefined) throw new Error('unreachable: guardBraceIdx verified above');
     const indentMatch = guardLine.match(/^(\s*)/);
     if (indentMatch === null)
       throw new Error('unreachable: every line matches the whitespace regex');
     const indent = indentMatch[1];
     let guardCloseIdx = -1;
-    for (let i = guardOpenIdx + 1; i < lines.length; i++) {
+    for (let i = guardBraceIdx + 1; i < lines.length; i++) {
       if (lines[i] === `${indent}}`) {
         guardCloseIdx = i;
         break;
