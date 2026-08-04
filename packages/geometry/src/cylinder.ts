@@ -13,9 +13,7 @@
 
 import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
-import { degenerate, meshFromInterleaved } from './box';
-
-const FLOATS_PER_VERTEX = 8;
+import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 export function createCylinderGeometry(
   radiusTop: number,
@@ -52,7 +50,7 @@ export function createCylinderGeometry(
   const bottomIdxCount = bottomCap ? rs * 3 : 0;
   const indexCount = sideIndexCount + topIdxCount + bottomIdxCount;
 
-  const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
+  const vertices = new Float32Array(vertexCount * FACTORY_FLOATS_PER_VERTEX);
   const indices = new Uint32Array(indexCount);
 
   // --- side ---
@@ -74,7 +72,7 @@ export function createCylinderGeometry(
       const nz = cosT;
       // normalize
       const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      const base = vIdx * FLOATS_PER_VERTEX;
+      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
       vertices[base + 0] = x;
       vertices[base + 1] = y;
       vertices[base + 2] = z;
@@ -107,7 +105,7 @@ export function createCylinderGeometry(
   // --- top cap ---
   if (topCap) {
     const centerIdx = vIdx;
-    const cBase = vIdx * FLOATS_PER_VERTEX;
+    const cBase = vIdx * FACTORY_FLOATS_PER_VERTEX;
     vertices[cBase + 0] = 0;
     vertices[cBase + 1] = halfHeight;
     vertices[cBase + 2] = 0;
@@ -123,7 +121,7 @@ export function createCylinderGeometry(
       const theta = u * Math.PI * 2;
       const sinT = Math.sin(theta);
       const cosT = Math.cos(theta);
-      const base = vIdx * FLOATS_PER_VERTEX;
+      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
       vertices[base + 0] = radiusTop * sinT;
       vertices[base + 1] = halfHeight;
       vertices[base + 2] = radiusTop * cosT;
@@ -144,7 +142,7 @@ export function createCylinderGeometry(
   // --- bottom cap ---
   if (bottomCap) {
     const centerIdx = vIdx;
-    const cBase = vIdx * FLOATS_PER_VERTEX;
+    const cBase = vIdx * FACTORY_FLOATS_PER_VERTEX;
     vertices[cBase + 0] = 0;
     vertices[cBase + 1] = -halfHeight;
     vertices[cBase + 2] = 0;
@@ -160,7 +158,7 @@ export function createCylinderGeometry(
       const theta = u * Math.PI * 2;
       const sinT = Math.sin(theta);
       const cosT = Math.cos(theta);
-      const base = vIdx * FLOATS_PER_VERTEX;
+      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
       vertices[base + 0] = radiusBottom * sinT;
       vertices[base + 1] = -halfHeight;
       vertices[base + 2] = radiusBottom * cosT;

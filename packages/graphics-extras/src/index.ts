@@ -34,4 +34,4 @@ export { videoLoader } from './video-loader';
 // ─── VideoPlayer component ────────────────────────────────────────────────
 export { VideoPlayer } from './video-player';
 // ─── video high-perf upload capability probe ──────────────────────────────
-export { probeVideoHighPerfUpload, type VideoCapabilityDevice } from './video-player-system';
+export { probeVideoHighPerfUpload } from './video-player-system';

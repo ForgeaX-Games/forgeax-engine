@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // M3 composed browser gate: drive the public custom RenderGraph, multi-UV
 // material, texture, post-process, resize, and RHI selectors in one live scene.
-// The falsifier keeps both material handles on one compiled variant.
+// The inheritance falsifier can isolate slot attribution, pipeline topology, or both.
 
 import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
@@ -25,13 +25,30 @@ const depthPost = process.env.FORGEAX_M3_DEPTH_POST === '1';
 const depthLiveSwitch = process.env.FORGEAX_M3_DEPTH_LIVE_SWITCH === '1';
 const depthReverseLiveSwitch = process.env.FORGEAX_M3_DEPTH_REVERSE_LIVE_SWITCH === '1';
 const inheritanceLiveMaterialScenario = process.env.FORGEAX_M3_INHERITANCE_LIVE_MATERIAL === '1';
+const requestedInheritancePost =
+  process.env.FORGEAX_M3_INHERITANCE_POST ??
+  (process.env.FORGEAX_M3_INHERITANCE_DEPTH_POST === '1' ? 'depth' : 'inversion');
+if (requestedInheritancePost !== 'depth' && requestedInheritancePost !== 'inversion') {
+  throw new Error(`unsupported inherited post effect: ${requestedInheritancePost}`);
+}
+const inheritancePost = inheritanceLiveMaterialScenario ? requestedInheritancePost : 'inversion';
 const inheritanceDepthPost =
-  inheritanceLiveMaterialScenario && process.env.FORGEAX_M3_INHERITANCE_DEPTH_POST === '1';
+  inheritanceLiveMaterialScenario && inheritancePost === 'depth';
 const liveVariantSwitch = inheritanceLiveMaterialScenario && process.env.FORGEAX_M3_LIVE_VARIANT_SWITCH === '1';
 const inheritanceFalsifierKind = process.env.FORGEAX_M3_INHERITANCE_FALSIFIER_KIND ?? 'texture';
-if (inheritanceLiveMaterialScenario && inheritanceFalsifierKind !== 'texture' && inheritanceFalsifierKind !== 'pipeline') {
+if (
+  inheritanceLiveMaterialScenario &&
+  inheritanceFalsifierKind !== 'texture' &&
+  inheritanceFalsifierKind !== 'pipeline' &&
+  inheritanceFalsifierKind !== 'reverse-pipeline' &&
+  inheritanceFalsifierKind !== 'reverse-pipeline-texture'
+) {
   throw new Error(`unsupported inheritance falsifier kind: ${inheritanceFalsifierKind}`);
 }
+const reversePipelineFalsifier =
+  inheritanceFalsifierKind === 'reverse-pipeline' || inheritanceFalsifierKind === 'reverse-pipeline-texture';
+const textureSlotFalsifier =
+  inheritanceFalsifierKind === 'texture' || inheritanceFalsifierKind === 'reverse-pipeline-texture';
 const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1' || inheritanceLiveMaterialScenario;
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
@@ -273,7 +290,19 @@ async function captureRhi(page, label) {
   const rhiWebgpu = await import('@forgeax/engine-rhi-webgpu');
   const adapter = await rhiWebgpu.rhi.requestAdapter();
   if (!adapter.ok) throw new Error(`Dawn requestAdapter failed: ${adapter.error.code}`);
-  const device = await adapter.value.requestDevice({ requiredLimits: { maxUniformBufferBindingSize: 262144 } });
+  const recordedCaps = reportJson.header.rhiCapsRecorded ?? {};
+  const compressionFeatures = [
+    ['textureCompressionBc', 'texture-compression-bc'],
+    ['textureCompressionEtc2', 'texture-compression-etc2'],
+    ['textureCompressionAstc', 'texture-compression-astc'],
+  ];
+  const requiredFeatures = compressionFeatures
+    .filter(([cap, feature]) => recordedCaps[cap] === true && adapter.value.features.has(feature))
+    .map(([, feature]) => feature);
+  const device = await adapter.value.requestDevice({
+    requiredFeatures,
+    requiredLimits: { maxUniformBufferBindingSize: 262144 },
+  });
   if (!device.ok) throw new Error(`Dawn requestDevice failed: ${device.error.code}`);
   const { deserializeTape, createReplay } = await import('@forgeax/engine-rhi-debug');
   const parsed = deserializeTape(JSON.stringify({ header: reportJson.header, events: reportJson.events }), new Uint8Array(readFileSync(tape)));
@@ -311,7 +340,8 @@ async function captureRhi(page, label) {
 
 async function runLiveMaterialScenario(baseUrl, page) {
   const expectedVariant = `M3_MULTI_UV_VARIANT=${startVariant}`;
-  const expectedPost = inheritanceDepthPost ? 'depth' : 'inversion';
+  const expectedPost = inheritanceLiveMaterialScenario ? inheritancePost : 'inversion';
+  const reversePipelineJourney = inheritanceLiveMaterialScenario && reversePipelineFalsifier;
   const expectedHistory = doubleResizeChurn
     ? '640x360>480x270>720x405>640x360>480x270>720x405>640x360'
     : resizeChurn
@@ -323,7 +353,11 @@ async function runLiveMaterialScenario(baseUrl, page) {
       ? inheritanceLiveMaterialScenario
         ? inheritanceFalsifierKind === 'pipeline'
           ? '&falsify-pipeline'
-          : '&falsify-live-inheritance'
+          : reversePipelineFalsifier
+            ? inheritanceFalsifierKind === 'reverse-pipeline-texture'
+              ? '&falsify-reverse-pipeline&falsify-live-inheritance'
+              : '&falsify-reverse-pipeline'
+            : '&falsify-live-inheritance'
         : '&falsify-live-material'
       : '';
     const liveMaterialQuery = inheritanceLiveMaterialScenario
@@ -360,6 +394,10 @@ async function runLiveMaterialScenario(baseUrl, page) {
         await resizeCanvas(page, 720, 405, resizeHistory);
         await resizeCanvas(page, 640, 360, resizeHistory);
       }
+    }
+    if (reversePipelineJourney) {
+      await select(page, '#pipeline-select', 'standard', '#pipeline-status');
+      await waitForNonBlackCanvas(page, `${label} reverse standard pipeline`);
     }
     await page.evaluate((history) => {
       const evidence = globalThis.__forgeaxMultiUvEvidence;
@@ -415,13 +453,17 @@ async function runLiveMaterialScenario(baseUrl, page) {
   if (normalLive.afterComponentMaterialHandle !== normalLive.afterMaterialHandle) {
     throw new Error(`normal component handle did not follow rebind: ${JSON.stringify(normalLive)}`);
   }
-  if (normal.after.state.pipeline !== 'M3_PIPELINE=custom' || normal.after.state.post !== `M3_POST_EFFECT=${expectedPost}`) {
+  const expectedPipeline = reversePipelineJourney ? 'M3_PIPELINE=standard' : 'M3_PIPELINE=custom';
+  if (normal.after.state.pipeline !== expectedPipeline || normal.after.state.post !== `M3_POST_EFFECT=${expectedPost}`) {
     throw new Error(`normal rebind left composed scene: ${JSON.stringify(normal.after.state)}`);
   }
-  if (inheritanceFalsifierKind === 'texture' && falsifiedLive?.baseColorSlotChanged === true && falsifiedLive.detailSlotChanged === true) {
+  if (textureSlotFalsifier && falsifiedLive?.baseColorSlotChanged === true && falsifiedLive.detailSlotChanged === true) {
     throw new Error(`live-material falsifier still changed both slots: ${JSON.stringify(falsifiedLive)}`);
   }
-  if (inheritanceLiveMaterialScenario && inheritanceFalsifierKind === 'texture') {
+  if (
+    inheritanceLiveMaterialScenario &&
+    (inheritanceFalsifierKind === 'texture' || inheritanceFalsifierKind === 'reverse-pipeline-texture')
+  ) {
     if (falsifier.delta === null || falsifier.delta.changed !== 0) {
       throw new Error(`inheritance live-material falsifier changed pixels: ${JSON.stringify(falsifier.delta)}`);
     }
@@ -450,12 +492,18 @@ async function runLiveMaterialScenario(baseUrl, page) {
     if (!inheritanceMaterialCausality) {
       throw new Error(`inheritance live material texture causality failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
     }
-    if (inheritanceFalsifierKind === 'texture') {
+    if (textureSlotFalsifier) {
       if (
         falsifierMaterialCausality ||
         falsifiedLive.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
       ) {
         throw new Error(`inheritance live material texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
+      }
+      if (
+        reversePipelineFalsifier &&
+        (falsifier.rhi.draws === normal.rhi.draws || falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256)
+      ) {
+        throw new Error(`inheritance reverse pipeline texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
       }
     } else if (
       !falsifierMaterialCausality ||
@@ -475,8 +523,11 @@ async function runLiveMaterialScenario(baseUrl, page) {
   if (inheritanceDepthPost) {
     const normalHasDepth = hasDepthBinding(normal.rhi.report);
     const falsifierHasDepth = hasDepthBinding(falsifier.rhi.report);
-    if (!normalHasDepth || !falsifierHasDepth) {
-      throw new Error(`inherited depth post binding topology mismatch: normal=${normalHasDepth} falsifier=${falsifierHasDepth}`);
+    const expectedFalsifierHasDepth = !reversePipelineFalsifier && inheritanceFalsifierKind !== 'pipeline';
+    if (!normalHasDepth || falsifierHasDepth !== expectedFalsifierHasDepth) {
+      throw new Error(
+        `inherited depth post binding topology mismatch: normal=${normalHasDepth} falsifier=${falsifierHasDepth} expectedFalsifier=${expectedFalsifierHasDepth}`,
+      );
     }
   }
   for (const [label, leg] of [['normal', normal], ['falsifier', falsifier]]) {
@@ -487,7 +538,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
       throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
     }
   }
-  console.log(`[m3-live-material] PASS pipeline=custom post=${expectedPost} msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} falsifier=${inheritanceLiveMaterialScenario ? inheritanceFalsifierKind : 'texture'} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} draws=${normal.rhi.draws}/${falsifier.rhi.draws} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
+  console.log(`[m3-live-material] PASS pipeline=${expectedPipeline.replace('M3_PIPELINE=', '')} post=${expectedPost} msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} falsifier=${inheritanceLiveMaterialScenario ? inheritanceFalsifierKind : 'texture'} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} draws=${normal.rhi.draws}/${falsifier.rhi.draws} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
 async function runDepthPostScenario(baseUrl, page) {

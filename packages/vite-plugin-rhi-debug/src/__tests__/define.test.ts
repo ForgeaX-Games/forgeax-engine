@@ -1,10 +1,8 @@
 // config.define injection + prod constant-fold tests (w12).
 //
-// AC-07 / C6: config(cfg) injects
-//   cfg.define['import.meta.env.FORGEAX_ENGINE_RHI_DEBUG'] = JSON.stringify('1')
-// so a vite build of a demo that registers the plugin folds the flag to the
-// literal "1", while a build WITHOUT the plugin leaves no FORGEAX_ENGINE_RHI_DEBUG
-// literal (prod does not retain the dev-only endpoint guard).
+// AC-07 / C6: config(cfg) injects "1" for dev serve and "0" for production
+// build. The production literal lets Vite tree-shake the dev-only endpoint and
+// avoids leaving a bare @forgeax/engine-rhi-debug import in preview bundles.
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,8 +19,8 @@ const asPlugin = (): Plugin => vitePluginRhiDebug() as unknown as Plugin;
 
 // ─── config(cfg) hook unit assertion ─────────────────────────────────────────
 
-describe('config(cfg) define injection (w12)', () => {
-  it('injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG = "1"', () => {
+describe('config(cfg) define injection', () => {
+  it('injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG = "1" for serve', () => {
     const plugin = asPlugin();
     const cfg: { define?: Record<string, string> } = {};
     // Vite calls config(userConfig, env); the hook mutates/returns define.
@@ -38,6 +36,21 @@ describe('config(cfg) define injection (w12)', () => {
     const define = (ret as { define?: Record<string, string> } | undefined)?.define ?? cfg.define;
     expect(define).toBeDefined();
     expect(define?.['import.meta.env.FORGEAX_ENGINE_RHI_DEBUG']).toBe(JSON.stringify('1'));
+  });
+
+  it('injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG = "0" for build', () => {
+    const plugin = asPlugin();
+    const hook = typeof plugin.config === 'function' ? plugin.config : plugin.config?.handler;
+    const ret = hook?.call(
+      undefined as never,
+      {} as never,
+      {
+        command: 'build',
+        mode: 'production',
+      } as never,
+    );
+    const define = (ret as { define?: Record<string, string> } | undefined)?.define;
+    expect(define?.['import.meta.env.FORGEAX_ENGINE_RHI_DEBUG']).toBe(JSON.stringify('0'));
   });
 });
 
@@ -80,10 +93,10 @@ describe('vite build constant-fold (w12)', () => {
     return chunks.map((c) => ('code' in c ? c.code : '')).join('\n');
   }
 
-  it('with plugin: bundle folds the flag to the literal "1"', async () => {
+  it('with plugin: production bundle folds the flag to the literal "0"', async () => {
     const code = await buildCode(true);
-    // define replaces `import.meta.env.FORGEAX_ENGINE_RHI_DEBUG` with "1".
-    expect(code).toContain('"1"');
+    // define replaces `import.meta.env.FORGEAX_ENGINE_RHI_DEBUG` with "0".
+    expect(code).toContain('"0"');
     expect(code).not.toContain('FORGEAX_ENGINE_RHI_DEBUG');
   });
 

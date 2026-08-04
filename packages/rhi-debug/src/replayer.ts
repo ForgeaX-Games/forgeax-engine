@@ -1904,7 +1904,7 @@ export function replayInitialData(
       }
       // Walk the same canonical (layer, mip) order the snapshot used: each slice
       // is tight-packed in the blob at slice.byteOffset; writeTexture it back to
-      // its (mipLevel, baseArrayLayer) with bytesPerRow = mipWidth * bytesPerTexel.
+      // its (mipLevel, baseArrayLayer) using the format's texel-block footprint.
       const dataBytes = new Uint8Array(data);
       // Channel-order fidelity (sibling of bug #3 on the seed path): a texture
       // recorded as bgra8unorm[-srgb] is recreated by replayCreateTexture as
@@ -1932,10 +1932,14 @@ export function replayInitialData(
           sliceData,
           {
             offset: 0,
-            bytesPerRow: slice.width * layout.bytesPerTexel,
-            rowsPerImage: slice.height,
+            bytesPerRow: Math.ceil(slice.width / layout.blockWidth) * layout.bytesPerBlock,
+            rowsPerImage: Math.ceil(slice.height / layout.blockHeight),
           } as any,
-          { width: slice.width, height: slice.height, depthOrArrayLayers: 1 },
+          {
+            width: Math.ceil(slice.width / layout.blockWidth) * layout.blockWidth,
+            height: Math.ceil(slice.height / layout.blockHeight) * layout.blockHeight,
+            depthOrArrayLayers: 1,
+          },
         );
       }
     }

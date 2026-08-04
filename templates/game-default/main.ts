@@ -2,10 +2,15 @@ import { Transform } from '@forgeax/engine-scene';
 import { AudioListener } from '@forgeax/engine-audio';
 import {
   ANTIALIAS_FXAA, ANTIALIAS_MSAA, ANTIALIAS_NONE, BLOOM_DISABLED, BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, perspective,
-  PointLight, TONEMAP_REINHARD_EXTENDED, Materials,
+  Layer, PointLight, TONEMAP_REINHARD_EXTENDED, Materials,
 } from '@forgeax/engine-render';
+import {
+  setTransparentSortConfig,
+  TRANSPARENT_SORT_MODE_DISTANCE,
+  TRANSPARENT_SORT_MODE_LAYER_Z,
+} from '@forgeax/engine-render/authoring';
 import { quat, type Handle, type MaterialAsset, type MeshAsset } from '@forgeax/engine-runtime';
-import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
+import { HANDLE_QUAD, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { createCapsuleGeometry } from '@forgeax/engine-geometry';
 import { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, type PhysicsWorld } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -44,6 +49,7 @@ import { installChromaticAberration, CHROMATIC_ABERRATION_ID, type ChromaticAber
 import { createCustomProjectileMesh, resetCustomProjectileMesh, toggleCustomProjectileMesh, type CustomProjectileMesh } from './src/custom-projectile-mesh';
 import { createMeshHandleSwap, resetMeshHandleSwap, toggleMeshHandleSwap, type MeshHandleSwap } from './src/mesh-handle-swap';
 import { createFbxMeshSwap, resetFbxMeshSwap, toggleFbxMeshSwap, type FbxMeshSwap } from './src/fbx-mesh-swap';
+import { createGlbMeshSwap, resetGlbMeshSwap, toggleGlbMeshSwap, type GlbMeshSwap } from './src/glb-mesh-swap';
 import { createFbxSkinnedTarget, type FbxSkinnedTarget } from './src/fbx-skinned-target';
 import { createFreeCameraState, resetFreeCamera, stepFreeCamera } from './src/free-camera';
 import { installMultiWorldOverlay, type MultiWorldOverlay } from './src/multi-world-overlay';
@@ -150,6 +156,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const targetDisabling: TargetDisablingHandle = installTargetDisabling(world, flashables.map((target) => target.e));
   const meshHandleSwap: MeshHandleSwap | undefined = createMeshHandleSwap(world, flashables[0]?.e);
   const fbxMeshSwap: FbxMeshSwap | undefined = await createFbxMeshSwap(world, ctx?.assets, flashables[0]?.e);
+  const glbMeshSwap: GlbMeshSwap | undefined = await createGlbMeshSwap(world, ctx?.assets, flashables[0]?.e);
   const fbxSkinnedTarget: FbxSkinnedTarget | undefined = await createFbxSkinnedTarget({ world, assets: ctx?.assets });
   registerCleanup?.(() => fbxSkinnedTarget?.dispose());
   const damageTarget = (entity: EntityHandle, points: number): void => {
@@ -465,8 +472,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     { action: 'jump', bindings: [KEY(' '), PAD_BUTTON(0)] },
     { action: 'shoot', bindings: [KEY('f'), KEY('F'), PAD_BUTTON(7)] },
     { action: 'meshUv', bindings: [KEY('g'), KEY('G'), PAD_BUTTON(3)] },
+    { action: 'projectileVisual', bindings: [KEY('v'), KEY('V')] },
     { action: 'meshHandle', bindings: [KEY('h'), KEY('H'), PAD_BUTTON(2)] },
     { action: 'fbxMesh', bindings: [KEY('j'), KEY('J')] },
+    { action: 'glbMesh', bindings: [KEY('k'), KEY('K')] },
     { action: 'freeUp', bindings: [KEY('e')] },
     { action: 'freeDown', bindings: [KEY('q')] },
     { action: 'freeRun', bindings: [KEY('Shift')] },
@@ -527,14 +536,36 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     : await createCustomProjectileMesh(world, ctx.renderer, ctx.assets);
   const projectileMesh = customProjectile?.meshHandle ?? bulletMesh;
   const projectileMaterial = customProjectile?.materialHandle ?? bulletMat;
+  type ProjectileVisual = 'mesh' | 'sprite' | 'sprite-lit';
+  let projectileVisual: ProjectileVisual = 'mesh';
+  const setProjectileVisual = (visual: ProjectileVisual): void => {
+    projectileVisual = visual;
+    const sort = setTransparentSortConfig(world, {
+      mode: visual === 'mesh' ? TRANSPARENT_SORT_MODE_LAYER_Z : TRANSPARENT_SORT_MODE_DISTANCE,
+      yzAlpha: 1,
+    });
+    if (!sort.ok) {
+      console.error('[game] projectile transparent-sort setup failed:', sort.error.code, sort.error.expected, sort.error.hint);
+    }
+  };
+  setProjectileVisual('mesh');
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
   const flashMat = createHitFlashMaterial(world);
   const flashUntil = new Map<EntityHandle, number>();    // entity → remaining flash seconds
+  const materialsForCurrentMesh = (entity: EntityHandle, flashing: boolean): readonly MatHandle[] => {
+    const original = origMaterialsOf.get(entity) ?? [];
+    const replacementHasOneSubmesh =
+      (fbxMeshSwap?.entity === entity && fbxMeshSwap.active === 'fbx') ||
+      (meshHandleSwap?.entity === entity && meshHandleSwap.active === 'alternate') ||
+      (glbMeshSwap?.entity === entity && glbMeshSwap.active === 'glb');
+    if (replacementHasOneSubmesh) return [flashing ? flashMat : (original[0] ?? (0 as MatHandle))];
+    return flashing ? [flashMat, ...original.slice(1)] : [...original];
+  };
   const triggerFlash = (entity?: EntityHandle): void => {
     const target = entity === undefined ? flashables[0]?.e : entity;
     if (target === undefined || flashUntil.has(target)) return;
-    world.set(target, MeshRenderer, { materials: [flashMat, ...(origMaterialsOf.get(target)?.slice(1) ?? [])] });
+    world.set(target, MeshRenderer, { materials: [...materialsForCurrentMesh(target, true)] });
     flashUntil.set(target, 0.2);
     chromaticAberration.setIntensity(Math.max(chromaticAberration.snapshot().intensity, 0.035));
   };
@@ -635,7 +666,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     for (const bullet of bullets) world.despawn(bullet.e);
     bullets.length = 0;
     for (const [entity, timer] of flashUntil) {
-      if (timer > 0) world.set(entity, MeshRenderer, { materials: [...(origMaterialsOf.get(entity) ?? [])] });
+      if (timer > 0) world.set(entity, MeshRenderer, { materials: [...materialsForCurrentMesh(entity, false)] });
     }
     flashUntil.clear();
     for (const [entity, snapshot] of initialTransforms) {
@@ -672,6 +703,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     if (customProjectile !== undefined) resetCustomProjectileMesh(customProjectile);
     resetMeshHandleSwap(world, meshHandleSwap);
     resetFbxMeshSwap(world, fbxMeshSwap);
+    resetGlbMeshSwap(world, glbMeshSwap);
     fbxSkinnedTarget?.reset();
     settingsState.depthOfField = false;
     appliedDepthOfField = false;
@@ -684,6 +716,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     gameplayAudio?.reset();
     materialElapsedOrigin = world.getResource(Time).elapsed;
     if (animatedMaterial) resetAnimatedMaterial(world, animatedMaterial);
+    setProjectileVisual('mesh');
   };
   const gameplayState = installGameplayState({ world, reset: resetGameplay });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
@@ -798,11 +831,29 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           if (customProjectile !== undefined && snap.action('meshUv').justPressed()) {
             toggleCustomProjectileMesh(customProjectile);
           }
+          if (customProjectile !== undefined && snap.action('projectileVisual').justPressed()) {
+            setProjectileVisual(projectileVisual === 'mesh' ? 'sprite' : projectileVisual === 'sprite' ? 'sprite-lit' : 'mesh');
+          }
           if (meshHandleSwap !== undefined && snap.action('meshHandle').justPressed()) {
+            if (meshHandleSwap.active === 'original') {
+              resetFbxMeshSwap(world, fbxMeshSwap);
+              resetGlbMeshSwap(world, glbMeshSwap);
+            }
             toggleMeshHandleSwap(world, meshHandleSwap);
           }
           if (fbxMeshSwap !== undefined && snap.action('fbxMesh').justPressed()) {
+            if (fbxMeshSwap.active === 'original') {
+              resetMeshHandleSwap(world, meshHandleSwap);
+              resetGlbMeshSwap(world, glbMeshSwap);
+            }
             toggleFbxMeshSwap(world, fbxMeshSwap);
+          }
+          if (glbMeshSwap !== undefined && snap.action('glbMesh').justPressed()) {
+            if (glbMeshSwap.active === 'original') {
+              resetMeshHandleSwap(world, meshHandleSwap);
+              resetFbxMeshSwap(world, fbxMeshSwap);
+            }
+            toggleGlbMeshSwap(world, glbMeshSwap);
           }
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
@@ -934,10 +985,20 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         gameplayInput.shotDir = null;   // one-shot snapshot consumed
         const bx = px + dirX * 0.6, byy = by + dirY * 0.6, bz = pz + dirZ * 0.6;
         const bulletQuat = quat.fromUnitVectors(quat.create(), [0, 1, 0], [dirX, dirY, dirZ]);
+        const useSprite = projectileVisual !== 'mesh' && customProjectile !== undefined;
+        const shotMesh = useSprite ? HANDLE_QUAD : projectileMesh;
+        const shotMaterial = projectileVisual === 'sprite-lit'
+          ? customProjectile!.spriteLitMaterialHandle
+          : projectileVisual === 'sprite'
+            ? customProjectile!.spriteMaterialHandle
+            : projectileMaterial;
         const e = commands.spawn(
           { component: Transform, data: { pos: [bx, byy, bz], quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!]} },
-          { component: MeshFilter, data: { assetHandle: projectileMesh } },
-          { component: MeshRenderer, data: { materials: [projectileMaterial] } },
+          { component: MeshFilter, data: { assetHandle: shotMesh } },
+          { component: MeshRenderer, data: { materials: [shotMaterial] } },
+          // Layer is generic across render buckets. Sprite projectiles use a
+          // foreground band; opaque mesh projectiles retain the default layer.
+          { component: Layer, data: { value: useSprite ? 100 : 0 } },
           // ccdEnabled sweeps the fast kinematic bullet's collider along each
           // step so it reliably contacts props instead of tunneling through.
           { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } },
@@ -989,7 +1050,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       for (const [e, t] of flashUntil) {
         const nt = t - dt;
         if (nt <= 0) {
-          world.set(e, MeshRenderer, { materials: [...(origMaterialsOf.get(e) ?? [])] });
+          world.set(e, MeshRenderer, { materials: [...materialsForCurrentMesh(e, false)] });
           flashUntil.delete(e);
         } else flashUntil.set(e, nt);
       }
@@ -1086,16 +1147,20 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       multiWorld: multiWorldOverlay?.snapshot,
       customProjectileMesh: customProjectile === undefined ? undefined : () => ({
         available: true,
+        representation: projectileVisual,
         uvMode: customProjectile.uvMode,
         toggles: customProjectile.toggles,
         textureSource: customProjectile.textureSource,
         textureFormat: customProjectile.textureFormat,
       }),
       toggleCustomProjectileMesh: customProjectile === undefined ? undefined : () => toggleCustomProjectileMesh(customProjectile),
+      toggleProjectileVisual: customProjectile === undefined ? undefined : () => setProjectileVisual(projectileVisual === 'mesh' ? 'sprite' : projectileVisual === 'sprite' ? 'sprite-lit' : 'mesh'),
       meshHandleSwap: meshHandleSwap === undefined ? undefined : () => ({ active: meshHandleSwap.active, swaps: meshHandleSwap.swaps }),
       toggleMeshHandleSwap: meshHandleSwap === undefined ? undefined : () => toggleMeshHandleSwap(world, meshHandleSwap),
       fbxMeshSwap: fbxMeshSwap === undefined ? undefined : () => ({ active: fbxMeshSwap.active, swaps: fbxMeshSwap.swaps }),
       toggleFbxMeshSwap: fbxMeshSwap === undefined ? undefined : () => toggleFbxMeshSwap(world, fbxMeshSwap),
+      glbMeshSwap: glbMeshSwap === undefined ? undefined : () => ({ active: glbMeshSwap.active, swaps: glbMeshSwap.swaps }),
+      toggleGlbMeshSwap: glbMeshSwap === undefined ? undefined : () => toggleGlbMeshSwap(world, glbMeshSwap),
       fbxSkinnedTarget: fbxSkinnedTarget?.snapshot,
       characterController: () => {
         const controller = world.get(root, CharacterController);

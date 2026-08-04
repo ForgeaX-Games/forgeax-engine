@@ -10,9 +10,7 @@
 
 import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
-import { degenerate, meshFromInterleaved } from './box';
-
-const FLOATS_PER_VERTEX = 8;
+import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 export function createSphereGeometry(
   radius: number,
@@ -27,7 +25,7 @@ export function createSphereGeometry(
 
   const vertexCount = (ws + 1) * (hs + 1);
   const indexCount = ws * hs * 6;
-  const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
+  const vertices = new Float32Array(vertexCount * FACTORY_FLOATS_PER_VERTEX);
   const indices = new Uint32Array(indexCount);
 
   let vIdx = 0;
@@ -43,7 +41,7 @@ export function createSphereGeometry(
       const nx = x / radius;
       const ny = y / radius;
       const nz = z / radius;
-      const base = vIdx * FLOATS_PER_VERTEX;
+      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
       vertices[base + 0] = x;
       vertices[base + 1] = y;
       vertices[base + 2] = z;

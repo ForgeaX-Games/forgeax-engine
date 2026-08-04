@@ -7943,6 +7943,39 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(errors).toEqual([]);
     });
 
+    it('(b2) 3 submeshes share one stride-shaped material UBO upload and keep dynamic offsets', async () => {
+      const spies = makePassSpies();
+      const { renderer } = await setupRenderer(spies);
+      const errors: string[] = [];
+      renderer.onError((e) => errors.push(e.code));
+
+      const world = await spawnMultiMaterialScene(renderer, threeSubmeshMesh(), [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ]);
+      renderer.draw([world], { owner: 0 });
+
+      const matUboWrites = spies.writeBufferCalls.filter(
+        (w) => w.bufferLabel === 'pbr-material-ubo',
+      );
+      expect(matUboWrites).toHaveLength(1);
+      expect(matUboWrites[0]?.offset).toBe(0);
+      expect(matUboWrites[0]?.byteLength).toBe(3 * 512);
+
+      const drawOffsets: number[] = [];
+      let lastMatOffset: number | undefined;
+      for (const ev of spies.geometryEvents) {
+        if (ev.kind === 'setBindGroup' && ev.call.group === 1) {
+          lastMatOffset = ev.call.dynamicOffsets[0];
+        } else if (ev.kind === 'drawIndexed' && lastMatOffset !== undefined) {
+          drawOffsets.push(lastMatOffset);
+        }
+      }
+      expect(drawOffsets).toEqual([0, 512, 1024]);
+      expect(errors).toEqual([]);
+    });
+
     it('(c) single submesh + single material: 1 material UBO write at offset 0, 1 drawIndexed (backward compat)', async () => {
       const spies = makePassSpies();
       const { renderer } = await setupRenderer(spies);

@@ -676,6 +676,10 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
   const ninesliceSlices = FALSIFY_NINESLICE_ANCHOR
     ? [0, 0, 0, 0] // falsifier: degenerate sentinel; soft-warn should still fire on sliceMode=1
     : [0.25, 0.25, 0.25, 0.25];
+  // Keep the tile sign explicit for the degenerate falsifier: `-0` is
+  // numerically zero and would silently select stretch mode instead of
+  // exercising the D-9 tile sampler warning.
+  const ninesliceMode = FALSIFY_NINESLICE_ANCHOR ? -1 : -ninesliceSlices[3];
   // Catalog a material whose sampler is the clamp GUID string -> trips the D-9
   // soft-warn counter. The rendered entity below uses the column-handle variant.
   const debugCatalogResult = assets.catalog('00000000-0000-4000-8000-0000000000c2', {
@@ -693,7 +697,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
         sampler: clampSamplerGuid,
         region: [0, 0, 1, 1],
         pivotAndSize: [0.5, 0.5, 1, 1],
-        slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], -ninesliceSlices[3]],
+        slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], ninesliceMode],
       },
     });
   okResult(debugCatalogResult);
@@ -711,7 +715,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
       baseColorTexture: ninesliceTextureHandle,
       region: [0, 0, 1, 1],
       pivotAndSize: [0.5, 0.5, 1, 1],
-      slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], -ninesliceSlices[3]],
+      slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], ninesliceMode],
     },
   });
   const ninesliceMetricsAfter = renderer.metrics.snapshot();

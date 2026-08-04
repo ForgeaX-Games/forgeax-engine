@@ -1425,11 +1425,20 @@ runComposedInheritancePipelineFalsifierRepeatability({ msaa: false, startVariant
 runComposedInheritancePipelineFalsifierRepeatability({ msaa: true, startVariant: 'false' });
 runComposedInheritancePipelineFalsifierRepeatability({ msaa: true, startVariant: 'true' });
 
-function runComposedInheritanceDepthPostRepeatability({ msaa, startVariant }) {
+function runComposedInheritancePostRepeatability({ msaa, startVariant, post = 'depth', falsifierKind = 'texture' }) {
   const mode = msaa ? 'msaa' : 'no-msaa';
+  const depthPost = post === 'depth';
+  const pipelineFalsifier = falsifierKind !== 'texture';
+  const reversePipelineFalsifier =
+    falsifierKind === 'reverse-pipeline' || falsifierKind === 'reverse-pipeline-texture';
+  const textureSlotFalsifier =
+    falsifierKind === 'texture' || falsifierKind === 'reverse-pipeline-texture';
+  const expectedPipeline = reversePipelineFalsifier ? 'standard' : 'custom';
+  const passLabel = pipelineFalsifier ? `${mode} ${falsifierKind} falsifier` : mode;
+  const artifactSuffix = pipelineFalsifier ? `-${falsifierKind}-falsifier` : '';
   const artifactRoot = resolve(
     process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
-    `inheritance-depth-post-composed-${mode}-start-${startVariant}-repeatability`,
+    `inheritance-${depthPost ? 'depth-post' : `${post}-post`}-composed-${mode}-start-${startVariant}${artifactSuffix}-repeatability`,
   );
   const runs = [];
   for (const pass of ['first', 'second']) {
@@ -1437,11 +1446,13 @@ function runComposedInheritanceDepthPostRepeatability({ msaa, startVariant }) {
     runs.push({
       pass,
       result: run(
-        `browser inherited material depth post ${mode} startup-${startVariant} ${pass}`,
+        `browser inherited material ${post} post ${mode} startup-${startVariant} ${pass}`,
         ['--filter', '@forgeax/hello-multi-uv', 'run', 'smoke:browser-composed'],
         {
           FORGEAX_M3_INHERITANCE_LIVE_MATERIAL: '1',
-          FORGEAX_M3_INHERITANCE_DEPTH_POST: '1',
+          FORGEAX_M3_INHERITANCE_POST: post,
+          FORGEAX_M3_INHERITANCE_DEPTH_POST: depthPost ? '1' : '0',
+          FORGEAX_M3_INHERITANCE_FALSIFIER_KIND: falsifierKind,
           FORGEAX_M3_LIVE_VARIANT_SWITCH: '1',
           FORGEAX_M3_MSAA: msaa ? '1' : '0',
           FORGEAX_M3_START_VARIANT: startVariant,
@@ -1456,19 +1467,21 @@ function runComposedInheritanceDepthPostRepeatability({ msaa, startVariant }) {
   for (const runResult of runs) {
     if (
       runResult.result.status !== 0 ||
-      !runResult.result.output.includes(`[m3-live-material] PASS pipeline=custom post=depth msaa=${msaa} startVariant=${startVariant} variantSwitch=true`) ||
+      !runResult.result.output.includes(
+        `[m3-live-material] PASS pipeline=${expectedPipeline} post=${post} msaa=${msaa} startVariant=${startVariant} variantSwitch=true falsifier=${falsifierKind}`,
+      ) ||
       !runResult.result.output.includes('normalSlots=true/true') ||
-      !runResult.result.output.includes('falsifierSlots=false/false') ||
+      !runResult.result.output.includes(`falsifierSlots=${textureSlotFalsifier ? 'false/false' : 'true/true'}`) ||
       !runResult.result.output.includes('resizeHistory=640x360>480x270>720x405>640x360>480x270>720x405>640x360')
     ) {
-      console.error(`[m3-programmable] inherited material depth post ${mode} startup-${startVariant} ${runResult.pass}: FAIL`);
+      console.error(`[m3-programmable] inherited material ${post} post ${passLabel} startup-${startVariant} ${runResult.pass}: FAIL`);
       process.exit(1);
     }
   }
   const first = runs[0].snapshot;
   const second = runs[1].snapshot;
   if (repeatabilityDiff(first, second) !== undefined) {
-    console.error(`[m3-programmable] inherited material depth post ${mode} repeatability: FAIL - ${JSON.stringify({ first, second })}`);
+    console.error(`[m3-programmable] inherited material ${post} post ${passLabel} repeatability: FAIL - ${JSON.stringify({ first, second })}`);
     process.exit(1);
   }
   const expectedRenderedVariant = `M3_MULTI_UV_VARIANT=${startVariant === 'true' ? 'false' : 'true'}`;
@@ -1476,22 +1489,40 @@ function runComposedInheritanceDepthPostRepeatability({ msaa, startVariant }) {
     if (
       value.before.variant !== expectedRenderedVariant ||
       value.after.variant !== expectedRenderedVariant ||
-      value.after.pipeline !== 'M3_PIPELINE=custom' ||
-      value.after.post !== 'M3_POST_EFFECT=depth' ||
+      value.after.pipeline !== `M3_PIPELINE=${expectedPipeline}` ||
+      value.after.post !== `M3_POST_EFFECT=${post}` ||
       value.afterEvidence.resizeHistory.join('>') !== '640x360>480x270>720x405>640x360>480x270>720x405>640x360' ||
-      value.rhiTopology.msaaTextureResourceCount !== (msaa ? 4 : 0) ||
+      value.rhiTopology.msaaTextureResourceCount !== (msaa ? 2 : 0) ||
       value.rhiTopology.resolveTargetCount !== (msaa ? 1 : 0) ||
-      value.rhiTopology.hasDepthBinding !== true ||
-      value.draws !== 2 ||
+      value.rhiTopology.hasDepthBinding !== (depthPost && (pipelineFalsifier ? leg === 'normal' : true)) ||
+      value.draws !== (pipelineFalsifier && leg === 'falsifier' ? 1 : 2) ||
       value.inspectedDraw === undefined ||
       value.dawn.nonBlackPixelCount === 0
     ) {
-      console.error(`[m3-programmable] inherited material depth post ${mode} ${leg} topology: FAIL - ${JSON.stringify(value)}`);
+      console.error(`[m3-programmable] inherited material ${post} post ${passLabel} ${leg} topology: FAIL - ${JSON.stringify(value)}`);
       process.exit(1);
     }
   }
   const normal = first.normal;
   const falsifier = first.falsifier;
+  const textureFalsifierOracle =
+    falsifier.afterEvidence.baseColorSlotChanged === false &&
+    falsifier.afterEvidence.detailSlotChanged === false &&
+    falsifier.afterEvidence.falsifierMarker === 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind' &&
+    falsifier.delta.changed === 0;
+  const reversePipelineTextureFalsifierOracle =
+    falsifier.afterEvidence.baseColorSlotChanged === false &&
+    falsifier.afterEvidence.detailSlotChanged === false &&
+    falsifier.afterEvidence.falsifierMarker === 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind' &&
+    falsifier.delta.changed === 0 &&
+    normal.dawn.sha256 !== falsifier.dawn.sha256 &&
+    normal.draws !== falsifier.draws;
+  const pipelineFalsifierOracle =
+    falsifier.afterEvidence.baseColorSlotChanged === true &&
+    falsifier.afterEvidence.detailSlotChanged === true &&
+    falsifier.afterEvidence.falsifierMarker === null &&
+    falsifier.delta.changed >= 1000 &&
+    normal.dawn.sha256 !== falsifier.dawn.sha256;
   if (
     normal.afterEvidence.inheritanceBacked !== true ||
     normal.afterEvidence.baseColorSlotChanged !== true ||
@@ -1499,21 +1530,44 @@ function runComposedInheritanceDepthPostRepeatability({ msaa, startVariant }) {
     normal.afterEvidence.afterComponentMaterialMatchesAfter !== true ||
     normal.delta.changed < 1000 ||
     falsifier.afterEvidence.inheritanceBacked !== true ||
-    falsifier.afterEvidence.baseColorSlotChanged !== false ||
-    falsifier.afterEvidence.detailSlotChanged !== false ||
-    falsifier.afterEvidence.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind' ||
-    falsifier.delta.changed !== 0
+    (falsifierKind === 'reverse-pipeline-texture'
+      ? !reversePipelineTextureFalsifierOracle
+      : pipelineFalsifier
+        ? !pipelineFalsifierOracle
+        : !textureFalsifierOracle)
   ) {
-    console.error(`[m3-programmable] inherited material depth post ${mode} oracle: FAIL - ${JSON.stringify(first)}`);
+    console.error(`[m3-programmable] inherited material ${post} post ${passLabel} oracle: FAIL - ${JSON.stringify(first)}`);
     process.exit(1);
   }
-  console.log(`[m3-programmable] inherited material depth post ${mode} startup-${startVariant} repeatability: PASS normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} dawnSha=${normal.dawn.sha256}`);
+  console.log(
+    `[m3-programmable] inherited material ${post} post ${passLabel} startup-${startVariant} repeatability: PASS normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} dawnSha=${normal.dawn.sha256}`,
+  );
 }
 
-runComposedInheritanceDepthPostRepeatability({ msaa: false, startVariant: 'false' });
-runComposedInheritanceDepthPostRepeatability({ msaa: false, startVariant: 'true' });
-runComposedInheritanceDepthPostRepeatability({ msaa: true, startVariant: 'false' });
-runComposedInheritanceDepthPostRepeatability({ msaa: true, startVariant: 'true' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'false' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'true' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'false' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'true' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'false', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'true', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'false', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'true', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
 
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',

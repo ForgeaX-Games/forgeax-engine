@@ -305,6 +305,11 @@ describe('recorder state machine', () => {
     const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
     expect(tape?.formatVersion).toBe(TAPE_FORMAT_VERSION);
+    expect(tape?.rhiCapsRecorded).toMatchObject({
+      rgba16floatRenderable: true,
+      storageBuffer: true,
+      textureCompressionBc: false,
+    });
     expect(tape?.events.some((e: any) => e.kind === 'frameMark')).toBe(true);
   });
 });

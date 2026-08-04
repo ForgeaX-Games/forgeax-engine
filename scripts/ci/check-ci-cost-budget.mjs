@@ -50,8 +50,8 @@ function checkAc06(errors, facts) {
       continue;
     }
     const actual =
-      consumer.observedArtifactReadyToJobStartDelaySeconds ??
-      consumer.unattributedStartDelaySeconds;
+      consumer.unattributedStartDelaySeconds ??
+      consumer.observedArtifactReadyToJobStartDelaySeconds;
     if (!hasNumber(actual)) {
       errors.push(
         error('ci-cost-required-field-missing', {

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Reproduce Bevy's `shadow_caster_receiver` example: red sphere casts shadow, blue sphere does not (castShadow:false).",
+  "description": "Retained diagnostic draft for Bevy's `shadow_caster_receiver`; per-entity caster/receiver participation is routed.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -16,9 +16,9 @@
     "bevyExample": {
       "name": "shadow_caster_receiver",
       "category": "3D Rendering",
-      "status": "implemented"
+      "status": "shelved",
+      "shelvedFeedback": "feedbacks/2026-07-28-bevy-shadow-caster-receiver-needs-per-entity-shadow-participation.md"
     },
-    "smokeInvocation": "pnpm --filter @forgeax/bevy-shadow-caster-receiver smoke",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -33,8 +33,8 @@
         "reason": "demo-specific benchmarks belong to its completed reproduction"
       },
       "gate": {
-        "enabled": true,
-        "command": "pnpm --filter @forgeax/bevy-shadow-caster-receiver smoke"
+        "enabled": false,
+        "reason": "shelved: per-entity shadow caster/receiver participation is not implemented"
       },
       "spike-report": {
         "enabled": false,

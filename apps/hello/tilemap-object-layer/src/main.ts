@@ -22,8 +22,8 @@
 //
 // Atlas synthesis: charter P5 — no forgeax-engine-assets PNG dependency.
 // The two atlas TextureAsset handles registered here are unmanaged
-// placeholders (mirrors hello-tilemap M0's `toManaged('TextureAsset')(N)`
-// shape; the M3 directed gate verifies the extract system + per-entity
+// placeholders (the current handle factory is `toShared(N)`; the M3 directed
+// gate verifies the extract system + per-entity
 // sort key + multi-atlas 3-hop route through derivedCount + onError
 // signals rather than RGB pixel correctness against committed PNGs).
 //
@@ -44,7 +44,12 @@ import { ChildOf, Transform } from '@forgeax/engine-scene';
 
 import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
-import { SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import {
+  encodeSortScope,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+  TileLayer,
+  Tilemap,
+} from '@forgeax/engine-render/authoring';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 const COLS = 32;
@@ -169,7 +174,15 @@ async function main(): Promise<void> {
 
   world
     .spawn(
-      { component: TileLayer, data: { tiles: buildAnchorTiles(), layerOrder: 0, dirty: 1 } },
+      {
+        component: TileLayer,
+        data: {
+          tiles: buildAnchorTiles(),
+          layerOrder: 0,
+          dirty: 1,
+          sortScope: encodeSortScope('per-cell'),
+        },
+      },
       { component: ChildOf, data: { parent: tilemap } },
     )
     .unwrap();

@@ -47,8 +47,8 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  * @property {number} [drawIdx]     draw to inspect in structural mode (default last color pass)
  * @property {number} [rtIdx]       RT index for readbackRt (pixel mode, default 0)
  * @property {number} [epsilon]     max whole-frame pixelDeltaAbsMean (default 0.02)
- * @property {number} [maxChannelEpsilon] max single-channel abs delta over any pixel (default 0.10)
- * @property {number} [coveredEpsilon]    max mean delta over non-background pixels (default 0.03)
+ * @property {number} [maxChannelEpsilon] max RGB-channel abs delta over any pixel (default 0.10)
+ * @property {number} [coveredEpsilon]    max mean RGB delta over non-background pixels (default 0.03)
  * @property {string} [appDir]      the demo's own dir (dirname of its smoke script's parent);
  *                                  the dev endpoint writes .forgeax-debug relative to vite cwd
  *                                  (= the package dir), so artifacts are resolved against this.
@@ -228,8 +228,6 @@ export async function verifyDemoCapture(opts) {
   }
 
   // --- 5. bootstrap dawn-node + replay ----------------------------------------
-  const { freshDevice, rhiWebgpu } = await bootstrapDawn(label);
-
   const tapeJson = JSON.stringify({ header: report.header, events: report.events });
   const tapeBlob = new Uint8Array(readFileSync(tapeAbs));
 
@@ -244,6 +242,7 @@ export async function verifyDemoCapture(opts) {
     );
   }
   const tape = deserRes.value;
+  const { freshDevice, rhiWebgpu } = await bootstrapDawn(label);
   console.log(`[${label}] tape: ${tape.events.length} events, ${tape.blobPool.size} blobs`);
 
   const replayRes = createReplay(tape, freshDevice, rhiWebgpu.createShaderModule);
@@ -398,7 +397,13 @@ async function bootstrapDawn(label) {
   const rhiWebgpu = await import('@forgeax/engine-rhi-webgpu');
   const adapterRes = await rhiWebgpu.rhi.requestAdapter();
   if (!adapterRes.ok) fail(2, `[${label}] requestAdapter failed: ${adapterRes.error.code}`);
+  const compressionFeatures = [
+    'texture-compression-bc',
+    'texture-compression-etc2',
+    'texture-compression-astc',
+  ].filter((feature) => adapterRes.value.features.has(feature));
   const devRes = await adapterRes.value.requestDevice({
+    ...(compressionFeatures.length > 0 ? { requiredFeatures: compressionFeatures } : {}),
     requiredLimits: { maxUniformBufferBindingSize: 262144 },
   });
   if (!devRes.ok) fail(2, `[${label}] requestDevice failed: ${devRes.error.code}`);
@@ -494,14 +499,15 @@ function bestAlignmentDelta(live, replay, w, h, delta) {
 }
 
 /**
- * Localized fidelity metrics on two aligned RGBA buffers:
- * - maxDelta: worst single-channel |a-b|/255 over every channel of every pixel.
- *   Catches a large error confined to a small region (which a whole-frame mean
- *   would average away).
- * - coveredMean: mean delta restricted to "non-background" pixels (any pixel
- *   non-black in either buffer). For a small subject on a black frame this is
- *   the delta that actually matters; the whole-frame mean dilutes it by the
- *   black area's coverage.
+ * Localized visual fidelity metrics on two aligned RGBA buffers:
+ * - maxDelta: worst RGB-channel |a-b|/255 over every pixel. Catches a large
+ *   visual error confined to a small region (which a whole-frame mean would
+ *   average away). Alpha is transport metadata for these color captures and
+ *   is not a visual replay criterion.
+ * - coveredMean: mean RGB delta restricted to "non-background" pixels (any
+ *   RGB pixel non-black in either buffer). For a small subject on a black frame
+ *   this is the delta that actually matters; the whole-frame mean dilutes it
+ *   by the black area's coverage.
  * - coveredFrac: fraction of pixels counted as non-background.
  */
 function localMetrics(a, b) {
@@ -513,15 +519,14 @@ function localMetrics(a, b) {
     const i = p * 4;
     let pixelDeltaSum = 0;
     let nonBg = false;
-    for (let c = 0; c < 4; c++) {
+    for (let c = 0; c < 3; c++) {
       const av = a[i + c] ?? 0;
       const bv = b[i + c] ?? 0;
       const d = Math.abs(av - bv);
       if (d > maxAbs) maxAbs = d;
       pixelDeltaSum += d;
-      // Ignore alpha for background detection; a pixel is "covered" if any RGB
-      // channel is lit in either buffer.
-      if (c < 3 && (av > 8 || bv > 8)) nonBg = true;
+      // A pixel is "covered" if any RGB channel is lit in either buffer.
+      if (av > 8 || bv > 8) nonBg = true;
     }
     if (nonBg) {
       coveredSum += pixelDeltaSum;
@@ -530,7 +535,7 @@ function localMetrics(a, b) {
   }
   return {
     maxDelta: maxAbs / 255,
-    coveredMean: coveredCount > 0 ? coveredSum / (coveredCount * 4) / 255 : 0,
+    coveredMean: coveredCount > 0 ? coveredSum / (coveredCount * 3) / 255 : 0,
     coveredFrac: pixels > 0 ? coveredCount / pixels : 0,
   };
 }

@@ -50,7 +50,7 @@ import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { DebugError } from './errors';
 import { readbackBufferBytes, readbackBufferBytesBatch, readbackTexturePixels } from './readback';
 import { assembleReport, finalizeToMemory, SNAPSHOT_TIMEOUT_MS } from './recorder-core';
-import { bytesPerTexel, computeTextureLayout } from './texel-layout';
+import { computeTextureLayout, textureBlockLayout } from './texel-layout';
 import type {
   HandleId,
   RhiBindResourceKind,
@@ -97,18 +97,14 @@ function isDepthOrStencilFormat(format: GPUTextureFormat | undefined): boolean {
 
 /**
  * True for a texture the frame-header snapshot can read back AND re-seed
- * faithfully: any uncompressed color format whose texel byte size is known
- * (`bytesPerTexel`), at any array-layer count and any mip count. The
- * readback + seed path (readbackTexturePixels + computeTextureLayout +
- * replayInitialData) walks every (layer, mip) subresource with the correct
- * bytesPerRow = mipWidth * bytesPerTexel, so rgba16float (8 B), cubemaps
- * (6 layers), and mip chains (e.g. the IBL prefilter map: rgba16float / 6
- * layers / 5 mips) all round-trip.
+ * faithfully: any color format with a known texel-block footprint, at any
+ * array-layer count and any mip count. The readback + seed path
+ * (readbackTexturePixels + computeTextureLayout + replayInitialData) walks
+ * every (layer, mip) subresource with block-aware bytesPerRow, so ordinary
+ * texels and BC/ETC/ASTC compressed assets share one round-trip contract.
  *
  * Still skipped (no faithful path today, Fail Fast rather than corrupt seed):
  * - depth/stencil formats: queue.writeTexture rejects them (no CopyDst seed).
- * - block-compressed formats (bc/etc/astc): texel != byte-addressable row, not
- *   in the bytesPerTexel table -> returns undefined -> skipped.
  * - multisample (sampleCount > 1): writeTexture rejects an MSAA target. MSAA
  *   attachments are transient (resolved into a single-sample texture that IS
  *   snapshottable), so skipping loses no seed.
@@ -121,8 +117,8 @@ function isSnapshottableColorTexture(
   if (isDepthOrStencilFormat(format)) return false;
   // Multisample textures reject queue.writeTexture; skip (resolved target seeds).
   if (sampleCount !== undefined && sampleCount > 1) return false;
-  // Round-trippable iff its texel byte size is known (uncompressed color).
-  return bytesPerTexel(format) !== undefined;
+  // Round-trippable iff its texel-block footprint is known.
+  return textureBlockLayout(format) !== undefined;
 }
 
 /** Add COPY_SRC to a buffer usage unless it is a mappable (MAP_READ/WRITE) buffer. */
@@ -1464,7 +1460,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
               slice.width,
               slice.height,
               {
-                bytesPerTexel: layout.bytesPerTexel,
+                bytesPerBlock: layout.bytesPerBlock,
+                blockWidth: layout.blockWidth,
+                blockHeight: layout.blockHeight,
                 mipLevel: slice.mip,
                 baseArrayLayer: slice.layer,
               },
@@ -2821,6 +2819,19 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           // can reach it for replay without a side channel.
           const proxied = proxyDevice(devRes.value);
           s.capturedDevice = proxied;
+          s.recordedCaps = {
+            // RhiDevice does not own a canvas, so retain the existing tape
+            // default for this informational field while deriving every
+            // device-backed capability from the captured device.
+            canvasFormat: 'bgra8unorm' as GPUTextureFormat,
+            rgba16floatRenderable: proxied.caps.rgba16floatRenderable,
+            float32Filterable: proxied.caps.float32Filterable,
+            textureCompressionBc: proxied.caps.textureCompressionBc,
+            textureCompressionEtc2: proxied.caps.textureCompressionEtc2,
+            textureCompressionAstc: proxied.caps.textureCompressionAstc,
+            storageBuffer: proxied.caps.storageBuffer,
+            timestampQuery: proxied.caps.timestampQuery,
+          };
           return makeOk(proxied) as Result<RhiDevice, import('@forgeax/engine-rhi').RhiError>;
         },
       };

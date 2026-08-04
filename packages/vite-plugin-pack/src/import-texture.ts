@@ -110,6 +110,8 @@ export interface ImportTextureOptions {
   readonly cwd: string;
   /** Declaring sidecar whose importSettings own the texture's color/mipmap intent. */
   readonly metaPath?: string | undefined;
+  /** Importer seam for deterministic codec-fallback tests. */
+  readonly importer?: Pick<typeof imageImporter, 'import'> | undefined;
 }
 
 interface SidecarImportSettings {
@@ -247,20 +249,22 @@ export async function importTextureEntry(
   // a hit still flows through emitFile + getFileName unchanged (hashed names +
   // pack-index stay byte-identical to a cold build). Fail-open: a missing /
   // unwritable cache simply decodes.
-  const ddcKey = semanticDdcKey({
-    schemaVersion: 'texture-v2',
-    importerVersion: IMAGE_IMPLEMENTATION_FINGERPRINT,
-    codecVersion: CODEC_IMPLEMENTATION_FINGERPRINT,
-    sourceDependencies: [
-      {
-        path: 'source',
-        digest: createHash('sha256').update(sourceBytes).digest('hex'),
-      },
-    ],
-    settings: importSettings,
-    declaredGuids: [entry.guid],
-    cookProfile: entry.kind,
-  });
+  const ddcKeyFor = (settings: typeof importSettings): string =>
+    semanticDdcKey({
+      schemaVersion: 'texture-v2',
+      importerVersion: IMAGE_IMPLEMENTATION_FINGERPRINT,
+      codecVersion: CODEC_IMPLEMENTATION_FINGERPRINT,
+      sourceDependencies: [
+        {
+          path: 'source',
+          digest: createHash('sha256').update(sourceBytes).digest('hex'),
+        },
+      ],
+      settings,
+      declaredGuids: [entry.guid],
+      cookProfile: entry.kind,
+    });
+  const ddcKey = ddcKeyFor(importSettings);
   const cached = await ddcRead(opts.cwd, ddcKey);
   if (cached !== null) {
     return { bytes: cached.bytes, metadata: cached.metadata };
@@ -289,8 +293,11 @@ export async function importTextureEntry(
     importSettings,
   };
   let produced: readonly { guid: string; payload: unknown }[];
+  let effectiveCompressionMode = compressionMode;
+  let effectiveImportSettings = importSettings;
+  const importer = opts.importer ?? imageImporter;
   try {
-    const importedResult = await imageImporter.import(ctx);
+    const importedResult = await importer.import(ctx);
     if (!importedResult.ok) {
       return {
         skipped: `failed to import texture ${entry.sourcePath}: ${importedResult.error.hint}`,
@@ -299,12 +306,33 @@ export async function importTextureEntry(
     }
     produced = importedResult.value.assets;
   } catch (e) {
-    return {
-      skipped: `failed to import texture ${entry.sourcePath}: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-      real: true,
-    };
+    const message = e instanceof Error ? e.message : String(e);
+    if (compressionMode === 'none' || !message.includes('codec-init-failed')) {
+      return { skipped: `failed to import texture ${entry.sourcePath}: ${message}`, real: true };
+    }
+    effectiveCompressionMode = 'none';
+    effectiveImportSettings = { ...importSettings, compressionMode: 'none' };
+    console.warn(
+      `[forgeax-pack] Basis encoder unavailable; importing ${entry.sourcePath} uncompressed`,
+    );
+    try {
+      const fallbackResult = await importer.import({
+        ...ctx,
+        importSettings: effectiveImportSettings,
+      });
+      if (!fallbackResult.ok) {
+        return {
+          skipped: `failed to import texture ${entry.sourcePath}: ${fallbackResult.error.hint}`,
+          real: true,
+        };
+      }
+      produced = fallbackResult.value.assets;
+    } catch (fallbackError) {
+      return {
+        skipped: `failed to import texture ${entry.sourcePath}: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+        real: true,
+      };
+    }
   }
   const imported = produced.find((a) => a.guid === entry.guid)?.payload as
     | TextureAsset
@@ -336,7 +364,9 @@ export async function importTextureEntry(
   // never encodes an equirect sub. Only purely-sampled textures take the basis-*
   // path (compressionFor).
   const compression: AssetCompression =
-    entry.kind === 'equirect' ? 'none' : compressionFor(compressionMode, meta.colorSpace, isHdr);
+    entry.kind === 'equirect'
+      ? 'none'
+      : compressionFor(effectiveCompressionMode, meta.colorSpace, isHdr);
   const metadata: ImageMetadata = {
     kind: 'texture',
     width: imported.width,
@@ -344,7 +374,7 @@ export async function importTextureEntry(
     format: meta.format,
     colorSpace: meta.colorSpace,
     mipmap: meta.mipmap,
-    compressionMode,
+    compressionMode: effectiveCompressionMode,
     compression,
     ...(meta.downscaleMaxDimension !== undefined
       ? { downscaleMaxDimension: meta.downscaleMaxDimension }
@@ -352,6 +382,6 @@ export async function importTextureEntry(
   };
   // Populate the build DDC so the next build with identical (source, settings)
   // hits and skips this decode (D-1). Fail-open inside ddcWrite.
-  await ddcWrite(opts.cwd, ddcKey, { bytes, metadata });
+  await ddcWrite(opts.cwd, ddcKeyFor(effectiveImportSettings), { bytes, metadata });
   return { bytes, metadata };
 }

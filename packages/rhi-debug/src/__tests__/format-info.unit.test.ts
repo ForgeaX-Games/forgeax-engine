@@ -5,7 +5,12 @@
 // equals bytesPerTexel — the two tables must never drift apart.
 
 import { describe, expect, it } from 'vitest';
-import { bytesPerTexel, formatInfo } from '../texel-layout';
+import {
+  bytesPerTexel,
+  computeTextureLayout,
+  formatInfo,
+  textureBlockLayout,
+} from '../texel-layout';
 
 describe('formatInfo', () => {
   it('returns channels + channelType for representative formats', () => {
@@ -37,6 +42,22 @@ describe('formatInfo', () => {
     expect(formatInfo('depth24plus-stencil8')).toBeUndefined();
     expect(formatInfo(undefined)).toBeUndefined();
     expect(formatInfo('not-a-format')).toBeUndefined();
+  });
+
+  it('derives compressed block layout for snapshot and seed', () => {
+    expect(textureBlockLayout('bc7-rgba-unorm-srgb')).toEqual({
+      blockWidth: 4,
+      blockHeight: 4,
+      bytesPerBlock: 16,
+    });
+    const layout = computeTextureLayout('bc7-rgba-unorm-srgb', 7, 5, 1, 1);
+    expect(layout).toMatchObject({
+      blockWidth: 4,
+      blockHeight: 4,
+      bytesPerBlock: 16,
+      totalBytes: 64,
+    });
+    expect(layout?.slices[0]).toMatchObject({ width: 7, height: 5, byteLength: 64 });
   });
 
   it('plain formats: channels * per-channel-bytes == bytesPerTexel (no table drift)', () => {

@@ -10,9 +10,7 @@
 
 import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
-import { degenerate, meshFromInterleaved } from './box';
-
-const FLOATS_PER_VERTEX = 8;
+import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 export function createPlaneGeometry(
   width: number,
@@ -38,7 +36,7 @@ export function createPlaneGeometry(
 
   const vertexCount = gridX1 * gridY1;
   const indexCount = ws * hs * 6;
-  const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
+  const vertices = new Float32Array(vertexCount * FACTORY_FLOATS_PER_VERTEX);
   const indices = new Uint32Array(indexCount);
 
   let vIdx = 0;
@@ -46,7 +44,7 @@ export function createPlaneGeometry(
     const y = iy * segH - halfH;
     for (let ix = 0; ix < gridX1; ix++) {
       const x = ix * segW - halfW;
-      const base = vIdx * FLOATS_PER_VERTEX;
+      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
       vertices[base + 0] = x;
       vertices[base + 1] = -y;
       vertices[base + 2] = 0;

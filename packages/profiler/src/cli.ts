@@ -294,8 +294,16 @@ export function runProfilerCli(args: readonly string[], stdin: string): Profiler
   };
 }
 
+export function readCliInput(args: readonly string[], readStdin: () => string): string {
+  return args.includes('--file') ? '' : readStdin();
+}
+
 function main(): void {
-  const result = runProfilerCli(process.argv.slice(2), readFileSync(0, 'utf8'));
+  const args = process.argv.slice(2);
+  const result = runProfilerCli(
+    args,
+    readCliInput(args, () => readFileSync(0, 'utf8')),
+  );
   if (result.stdout !== '') process.stdout.write(result.stdout);
   if (result.stderr !== '') process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

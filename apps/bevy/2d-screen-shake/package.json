@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Scaffold for Bevy's `2d_screen_shake` example. Replace the placeholder scene and smoke before promoting this scaffold to forgeax.bevyExample.",
+  "description": "Reproduce Bevy's `2d_screen_shake` example with Perlin-noise trauma camera shake and Space-triggered decay.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

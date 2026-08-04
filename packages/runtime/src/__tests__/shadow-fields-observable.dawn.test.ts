@@ -328,7 +328,7 @@ async function renderConfigWithSpy(
           // when the spot lightViewProj array folded into its tail. The
           // directional fields this test reads live in floats [0..148); capture
           // that leading window from the now-784 B view write.
-          if (nb >= 784 && off === 0) {
+          if (buf.label === 'pbr-view-ubo' && nb >= 784 && off === 0) {
             const copy = new Float32Array(148);
             if (data instanceof Float32Array) copy.set(data.subarray(0, 148));
             else if (ArrayBuffer.isView(data)) {

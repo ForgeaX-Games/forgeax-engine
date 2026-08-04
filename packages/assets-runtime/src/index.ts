@@ -80,7 +80,6 @@ export {
   PACK_ARTIFACT_LOADERS,
   textureLoader,
 } from './loaders/pack-artifact';
-export { MaterialDependencyGraph } from './material/dependency-graph';
 export {
   type MaterialCachedArtifact,
   MaterialGenerationCache,

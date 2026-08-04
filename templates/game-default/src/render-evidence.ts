@@ -43,8 +43,10 @@ export type GameDefaultRenderEvidence = {
   readonly toggleDepthOfField: () => void;
   readonly chromaticAberration: () => ChromaticAberrationSnapshot;
   readonly toggleCustomProjectileMesh?: () => void;
+  readonly toggleProjectileVisual?: () => void;
   readonly toggleMeshHandleSwap?: () => void;
   readonly toggleFbxMeshSwap?: () => void;
+  readonly toggleGlbMeshSwap?: () => void;
   readonly gamepad: () => GamepadEvidence;
   readonly characterController?: () => CharacterControllerEvidence;
   readonly setViewMode: (mode: 'topdown' | 'orbit' | 'fps' | 'pan') => void;
@@ -68,6 +70,7 @@ export type GameDefaultRenderEvidence = {
     readonly deferredCommands: { readonly spawned: number; readonly despawned: number };
     readonly customProjectileMesh: {
       readonly available: boolean;
+      readonly representation: 'mesh' | 'sprite' | 'sprite-lit';
       readonly uvMode: 'upper' | 'lower';
       readonly toggles: number;
       readonly textureSource: 'authored-compressed' | 'procedural-fallback';
@@ -75,6 +78,7 @@ export type GameDefaultRenderEvidence = {
     };
     readonly meshHandleSwap: { readonly available: boolean; readonly active: 'original' | 'alternate'; readonly swaps: number };
     readonly fbxMeshSwap: { readonly available: boolean; readonly active: 'original' | 'fbx'; readonly swaps: number };
+    readonly glbMeshSwap: { readonly available: boolean; readonly active: 'original' | 'glb'; readonly swaps: number };
     readonly fbxSkinnedTarget: FbxSkinnedTargetSnapshot;
     readonly gamepad: GamepadEvidence;
     readonly characterController: CharacterControllerEvidence | null;
@@ -125,17 +129,21 @@ type RenderEvidenceArgs = {
   readonly chromaticAberration?: ChromaticAberrationHandle;
   readonly customProjectileMesh?: () => {
     readonly available: boolean;
+    readonly representation: 'mesh' | 'sprite' | 'sprite-lit';
     readonly uvMode: 'upper' | 'lower';
     readonly toggles: number;
     readonly textureSource: 'authored-compressed' | 'procedural-fallback';
     readonly textureFormat: string;
   };
   readonly toggleCustomProjectileMesh?: () => void;
+  readonly toggleProjectileVisual?: () => void;
   readonly meshHandleSwap?: () => { readonly active: 'original' | 'alternate'; readonly swaps: number };
   readonly toggleMeshHandleSwap?: () => void;
   readonly fbxMeshSwap?: () => { readonly active: 'original' | 'fbx'; readonly swaps: number };
   readonly fbxSkinnedTarget?: () => FbxSkinnedTargetSnapshot;
   readonly toggleFbxMeshSwap?: () => void;
+  readonly glbMeshSwap?: () => { readonly active: 'original' | 'glb'; readonly swaps: number };
+  readonly toggleGlbMeshSwap?: () => void;
   readonly input?: () => InputSnapshot;
   readonly characterController?: () => CharacterControllerEvidence;
   readonly viewMode: () => 'topdown' | 'orbit' | 'fps' | 'pan';
@@ -180,8 +188,10 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
     toggleDepthOfField: () => args.depthOfField?.setEnabled(!(args.depthOfField?.snapshot().enabled ?? false)),
     chromaticAberration: () => args.chromaticAberration?.snapshot() ?? { active: false, intensity: 0, effect: 'unavailable' },
     ...(args.toggleCustomProjectileMesh ? { toggleCustomProjectileMesh: args.toggleCustomProjectileMesh } : {}),
+    ...(args.toggleProjectileVisual ? { toggleProjectileVisual: args.toggleProjectileVisual } : {}),
     ...(args.toggleMeshHandleSwap ? { toggleMeshHandleSwap: args.toggleMeshHandleSwap } : {}),
     ...(args.toggleFbxMeshSwap ? { toggleFbxMeshSwap: args.toggleFbxMeshSwap } : {}),
+    ...(args.toggleGlbMeshSwap ? { toggleGlbMeshSwap: args.toggleGlbMeshSwap } : {}),
     gamepad: () => readGamepadEvidence(args.input),
     ...(args.characterController ? { characterController: args.characterController } : {}),
     setViewMode: args.setViewMode,
@@ -205,6 +215,7 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
       deferredCommands: args.deferredCommands?.() ?? { spawned: 0, despawned: 0 },
       customProjectileMesh: args.customProjectileMesh?.() ?? {
         available: false,
+        representation: 'mesh',
         uvMode: 'upper',
         toggles: 0,
         textureSource: 'procedural-fallback',
@@ -216,6 +227,9 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
       fbxMeshSwap: args.fbxMeshSwap?.() === undefined
         ? { available: false, active: 'original', swaps: 0 }
         : { available: true, ...args.fbxMeshSwap()! },
+      glbMeshSwap: args.glbMeshSwap?.() === undefined
+        ? { available: false, active: 'original', swaps: 0 }
+        : { available: true, ...args.glbMeshSwap()! },
       fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
       gamepad: readGamepadEvidence(args.input),
       characterController: args.characterController?.() ?? null,

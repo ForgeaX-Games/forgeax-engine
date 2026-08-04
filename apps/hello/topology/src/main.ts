@@ -25,7 +25,7 @@
 //   (2) world.allocSharedRef('MeshAsset', { kind: 'mesh', ... }) -> meshHandle
 //   (3) world.allocSharedRef('MaterialAsset', unlit material) -> materialHandle
 //   (4) world.spawn Transform + MeshFilter + MeshRenderer
-//   (5) world.spawn Camera (no light needed for unlit)
+//   (5) world.spawn Camera with an explicit look-at pose (no light needed for unlit)
 //   (6) app.start()
 
 import { createApp } from '@forgeax/engine-app';
@@ -179,10 +179,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Step 5: spawn the camera looking at the box from an oblique angle so
   // multiple edges are visible (no light needed for the unlit material).
+  // The quaternion is the public camera pose for eye=[1.6,1.4,3.2] and
+  // target=[0,0,0]. Identity would look straight down -Z and clip the box
+  // into the lower-left corner of the browser viewport.
   world.spawn(
     {
       component: Transform,
-      data: { pos: [1.6, 1.4, 3.2], quat: [0, 0, 0, 1]},
+      data: { pos: [1.6, 1.4, 3.2], quat: [-0.1804578, 0.22576895, 0.04260031, 0.9563726]},
     },
     {
       component: Camera,

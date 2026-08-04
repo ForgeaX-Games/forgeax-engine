@@ -6,6 +6,7 @@ import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
 import {
   type BindGroup,
   type Buffer,
+  type RenderPipeline,
   RhiError,
   type RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
@@ -32,6 +33,18 @@ import {
 type GeometryInstanceDraw = {
   readonly instanceBuffer: Buffer;
   readonly instanceCount: number;
+};
+
+type MaterialPipelineLookup = {
+  readonly materialShaderId: string;
+  readonly tonemapActive: boolean;
+  readonly renderState: MaterialSnapshot['renderState'];
+  readonly topology: string;
+  readonly indexFormat: string;
+  readonly variantSet: string;
+  readonly meshAttributes: unknown;
+  readonly sampleCount: number;
+  readonly handle: RenderPipeline | null;
 };
 
 /**
@@ -80,6 +93,9 @@ export function recordGeometryDraws(
   // module ships through the same cache key formula.
   // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
   let lastPipelineHandle: any = null;
+  const materialPipelineLookupState: { current: MaterialPipelineLookup | null } = {
+    current: null,
+  };
 
   for (let i = 0; i < validatedOrdered.length; i++) {
     const entry = validatedOrdered[i];
@@ -456,18 +472,44 @@ export function recordGeometryDraws(
           entry.mesh.uvSetCount > 1
             ? buildMeshAttributeMapForUvSets(entry.mesh.uvSetCount)
             : undefined;
-        const cachedPipeline =
-          runtime.getMaterialShaderPipeline?.(
-            smMaterialShaderId,
+        const previousPipelineLookup = materialPipelineLookupState.current;
+        const lookupHit: boolean =
+          previousPipelineLookup === null
+            ? false
+            : previousPipelineLookup.materialShaderId === smMaterialShaderId &&
+              previousPipelineLookup.tonemapActive === tonemapActive &&
+              previousPipelineLookup.renderState === submeshMaterial.renderState &&
+              previousPipelineLookup.topology === smTopology &&
+              previousPipelineLookup.indexFormat === entry.mesh.indexFormat &&
+              previousPipelineLookup.variantSet === variantSet &&
+              previousPipelineLookup.meshAttributes === meshUvAttributes &&
+              previousPipelineLookup.sampleCount === sampleCount;
+        const cachedPipeline: RenderPipeline | null = lookupHit
+          ? (previousPipelineLookup?.handle ?? null)
+          : (runtime.getMaterialShaderPipeline?.(
+              smMaterialShaderId,
+              tonemapActive,
+              submeshMaterial.renderState,
+              smTopology,
+              entry.mesh.indexFormat,
+              variantSet,
+              undefined, // passKind — defaults to 'forward'
+              meshUvAttributes,
+              sampleCount,
+            ) ?? null);
+        if (!lookupHit) {
+          materialPipelineLookupState.current = {
+            materialShaderId: smMaterialShaderId,
             tonemapActive,
-            submeshMaterial.renderState,
-            smTopology,
-            entry.mesh.indexFormat,
+            renderState: submeshMaterial.renderState,
+            topology: smTopology,
+            indexFormat: entry.mesh.indexFormat,
             variantSet,
-            undefined, // passKind — defaults to 'forward'
-            meshUvAttributes,
+            meshAttributes: meshUvAttributes,
             sampleCount,
-          ) ?? null;
+            handle: cachedPipeline,
+          };
+        }
         // feat-20260615-pipeline-spec-ssot M6-T1: cache miss resolves to
         // null uniformly across URP / HDRP / skin shaders. Charter P3
         // explicit failure: the pre-M6 URP-path silent fallback to the

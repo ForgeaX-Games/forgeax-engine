@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Scaffold for Bevy's `texture` example. Replace the placeholder scene and smoke before promoting this scaffold to forgeax.bevyExample.",
+  "description": "Reproduce Bevy's `texture` example with three textured 3D quads and color-tinted material variants.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

@@ -18,6 +18,15 @@ test('uses non-interactive overwrite mode when expanding duplicate artifact path
   assert.match(source, /execFileSync\('unzip', \['-q', '-o', archive, '-d', destination\]\)/);
 });
 
+test('deduplicates artifact expansion when provenance classes share an artifact', () => {
+  const source = readFileSync(script, 'utf8');
+  assert.match(
+    source,
+    /new Map\(artifacts\.map\(\(artifact\) => \[String\(artifact\.id\), artifact\]\)\)/,
+  );
+  assert.match(source, /uniqueArtifacts\.map\(\(artifact\) =>/);
+});
+
 function fixture() {
   const payloadClasses = contract.provenance.payloadClasses;
   const artifacts = payloadClasses.map((_className, index) => ({
@@ -45,6 +54,13 @@ function fixture() {
     },
     {
       name: 'shared-app-inputs',
+      started_at: '2026-07-16T00:00:00Z',
+      completed_at: '2026-07-16T00:00:15Z',
+      conclusion: 'success',
+      run_attempt: 1,
+    },
+    {
+      name: 'build-artifacts',
       started_at: '2026-07-16T00:00:00Z',
       completed_at: '2026-07-16T00:00:15Z',
       conclusion: 'success',
@@ -259,6 +275,34 @@ test('t19: classifies timing records as pass, fail, invalidSample, and notApplic
       (consumer) => consumer.jobIdentity === 'vitest-dawn',
     ).effectiveReadyAt,
     '2026-07-16T00:00:08Z',
+  );
+});
+
+test('anchors effective ready-to-start timing after the artifact provider aggregate completes', () => {
+  const input = fixture();
+  const provider = input.jobPages[0].jobs.find((job) => job.name === 'build-artifacts');
+  provider.completed_at = '2026-07-16T00:00:19Z';
+  const result = run(input);
+  assert.equal(result.exitCode, 0, result.stdout);
+  const timing = result.facts.ac06.perConsumer.find(
+    (consumer) => consumer.jobIdentity === 'primary-pnpm',
+  );
+  assert.equal(timing.artifactProviderReadyAt, '2026-07-16T00:00:19Z');
+  assert.equal(timing.effectiveReadyAt, '2026-07-16T00:00:19Z');
+  assert.equal(timing.observedArtifactReadyToJobStartDelaySeconds, 11);
+  assert.equal(timing.unattributedStartDelaySeconds, 1);
+
+  const missingProvider = fixture();
+  missingProvider.jobPages[0].jobs = missingProvider.jobPages[0].jobs.filter(
+    (job) => job.name !== 'build-artifacts',
+  );
+  missingProvider.jobPages[0].total_count -= 1;
+  const missingResult = run(missingProvider);
+  assert.equal(missingResult.exitCode, 0, missingResult.stdout);
+  assert.equal(
+    missingResult.facts.ac06.perConsumer.find((consumer) => consumer.jobIdentity === 'primary-pnpm')
+      .code,
+    'ci-cost-artifact-provider-completion-missing',
   );
 });
 

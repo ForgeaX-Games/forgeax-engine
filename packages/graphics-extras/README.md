@@ -21,8 +21,7 @@ boundary declaration below. A **near-leaf** package: depends only on
     codec SSOT (tileId + flipH/flipV/flipDiagonal flags in one `u32`).
   - **video** -- the `VideoPlayer` component, the `VideoElementProvider` host
     bridge (`VIDEO_ELEMENT_PROVIDER_KEY` + interface), the `videoLoader`
-    (`Loader<VideoAsset>`), and the `probeVideoHighPerfUpload` capability probe
-    (`VideoCapabilityDevice`).
+    (`Loader<VideoAsset>`), and the `probeVideoHighPerfUpload` capability probe.
 - **Style**: pure functions + POD component/resource definitions -- no renderer,
   no GPU device, no DOM construction. `videoLoader` and `VideoElementProvider`
   describe host-supplied `HTMLVideoElement` bridging; the package never
@@ -137,8 +136,7 @@ axiom declaration; this package does not overstate the slimming it delivers).
 | `VIDEO_ELEMENT_PROVIDER_KEY` | const | World Resource key for the host bridge |
 | `VideoElementProvider` | interface | host returns an `HTMLVideoElement` per entity + clip |
 | `videoLoader` | const | `Loader<VideoAsset>`; wired by assets-runtime defaults |
-| `probeVideoHighPerfUpload(device)` | function | AC-09 capability probe |
-| `VideoCapabilityDevice` | interface | minimal device shape the probe reads |
+| `probeVideoHighPerfUpload(device)` | function | AC-09 capability probe; accepts a structural device shape with `caps.backendKind` and optional `importExternalTexture` |
 
 ### Error codes
 

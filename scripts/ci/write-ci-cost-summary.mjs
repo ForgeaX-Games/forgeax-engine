@@ -29,7 +29,7 @@ function summary(facts) {
   const rows = facts.ac06.perConsumer
     .map(
       (consumer) =>
-        `| ${consumer.jobIdentity} | ${consumer.status} | ${consumer.observedArtifactReadyToJobStartDelaySeconds ?? 'N/A'} |`,
+        `| ${consumer.jobIdentity} | ${consumer.status} | ${consumer.unattributedStartDelaySeconds ?? consumer.observedArtifactReadyToJobStartDelaySeconds ?? 'N/A'} |`,
     )
     .join('\n');
   return [
@@ -62,7 +62,7 @@ function summary(facts) {
     `Active bytes: ${facts.cache.activeBytes}`,
     '',
     '## Fan-out (AC-06)',
-    '| Consumer | Status | Observed ready-to-start seconds |',
+    '| Consumer | Status | Effective ready-to-start seconds |',
     '| --- | --- | ---: |',
     rows,
     '',

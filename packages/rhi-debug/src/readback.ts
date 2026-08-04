@@ -154,19 +154,30 @@ export async function readbackTexturePixels(
   texWidth: number,
   texHeight: number,
   opts?: {
+    /** Bytes in one uncompressed texel; retained for depth/color callers. */
     bytesPerTexel?: number;
+    /** Compressed-format footprint; defaults to bytesPerTexel with a 1x1 block. */
+    bytesPerBlock?: number;
+    blockWidth?: number;
+    blockHeight?: number;
     mipLevel?: number;
     baseArrayLayer?: number;
     aspect?: 'all' | 'depth-only' | 'stencil-only';
   },
 ): Promise<Uint8Array> {
-  const bytesPerPixel = opts?.bytesPerTexel ?? 4;
+  const bytesPerBlock = opts?.bytesPerBlock ?? opts?.bytesPerTexel ?? 4;
+  const blockWidth = opts?.blockWidth ?? 1;
+  const blockHeight = opts?.blockHeight ?? 1;
+  const blockCountX = Math.ceil(texWidth / blockWidth);
+  const blockCountY = Math.ceil(texHeight / blockHeight);
+  const copyWidth = blockCountX * blockWidth;
+  const copyHeight = blockCountY * blockHeight;
   const mipLevel = opts?.mipLevel ?? 0;
   const baseArrayLayer = opts?.baseArrayLayer ?? 0;
   const aspect = opts?.aspect;
-  const rowBytes = texWidth * bytesPerPixel;
+  const rowBytes = blockCountX * bytesPerBlock;
   const alignedRowBytes = Math.ceil(rowBytes / 256) * 256; // WebGPU alignment
-  const bufferSize = alignedRowBytes * texHeight;
+  const bufferSize = alignedRowBytes * blockCountY;
 
   // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9
   const COPY_DST_MAP_READ = 9;
@@ -202,9 +213,9 @@ export async function readbackTexturePixels(
         buffer: readbackBuffer,
         offset: 0,
         bytesPerRow: alignedRowBytes,
-        rowsPerImage: texHeight,
+        rowsPerImage: blockCountY,
       } as unknown as never,
-      { width: texWidth, height: texHeight, depthOrArrayLayers: 1 },
+      { width: copyWidth, height: copyHeight, depthOrArrayLayers: 1 },
     );
   } catch {
     device.destroyBuffer(readbackBuffer);
@@ -246,8 +257,8 @@ export async function readbackTexturePixels(
   const fullPixels = new Uint8Array(rangeResult.value);
 
   // Extract tight pixels (strip alignment padding)
-  const tightPixels = new Uint8Array(texWidth * texHeight * bytesPerPixel);
-  for (let y = 0; y < texHeight; y++) {
+  const tightPixels = new Uint8Array(blockCountX * blockCountY * bytesPerBlock);
+  for (let y = 0; y < blockCountY; y++) {
     const srcOffset = y * alignedRowBytes;
     const dstOffset = y * rowBytes;
     for (let x = 0; x < rowBytes; x++) {

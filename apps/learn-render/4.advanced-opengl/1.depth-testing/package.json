@@ -14,6 +14,9 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
+    "rhiDebug": {
+      "riskFamilies": ["materials-textures"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

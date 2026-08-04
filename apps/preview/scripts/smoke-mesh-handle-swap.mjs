@@ -17,7 +17,13 @@ server.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
 const browser = await chromium.launch({ headless: true, channel: 'chrome', args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
 const pageErrors = [];
+const consoleErrors = [];
+const badResponses = [];
 page.on('pageerror', (error) => pageErrors.push(error.message));
+page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+page.on('response', (response) => {
+  if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) badResponses.push(`${response.status()} ${response.url()}`);
+});
 const deadline = Date.now() + 30_000;
 while (Date.now() < deadline) {
   try {
@@ -48,10 +54,20 @@ await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.reset())
 await page.waitForTimeout(180);
 const fbxReset = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
 if (fbxReset.fbxMeshSwap.active !== 'original') throw new Error(`FBX mesh reset failed: ${JSON.stringify(fbxReset.fbxMeshSwap)}`);
-const report = { before: before.meshHandleSwap, toggled: toggled.meshHandleSwap, reset: reset.meshHandleSwap, fbxBefore: before.fbxMeshSwap, fbxToggled: fbxToggled.fbxMeshSwap, fbxReset: fbxReset.fbxMeshSwap, pageErrors, serverOutput };
+if (!before.glbMeshSwap?.available || before.glbMeshSwap.active !== 'original') throw new Error(`GLB mesh witness unavailable: ${JSON.stringify(before.glbMeshSwap)} errors=${JSON.stringify(pageErrors)} server=${serverOutput}`);
+await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.toggleGlbMeshSwap?.());
+await page.waitForTimeout(220);
+const glbToggled = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
+if (glbToggled.glbMeshSwap.active !== 'glb' || glbToggled.glbMeshSwap.swaps !== before.glbMeshSwap.swaps + 1) throw new Error(`GLB mesh toggle failed: ${JSON.stringify({ before: before.glbMeshSwap, toggled: glbToggled.glbMeshSwap })}`);
+await page.screenshot({ path: resolve(ARTIFACT_DIR, 'glb-active.png') });
+await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.reset());
+await page.waitForTimeout(180);
+const glbReset = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
+if (glbReset.glbMeshSwap.active !== 'original') throw new Error(`GLB mesh reset failed: ${JSON.stringify(glbReset.glbMeshSwap)}`);
+const report = { before: before.meshHandleSwap, toggled: toggled.meshHandleSwap, reset: reset.meshHandleSwap, fbxBefore: before.fbxMeshSwap, fbxToggled: fbxToggled.fbxMeshSwap, fbxReset: fbxReset.fbxMeshSwap, glbBefore: before.glbMeshSwap, glbToggled: glbToggled.glbMeshSwap, glbReset: glbReset.glbMeshSwap, pageErrors, consoleErrors, badResponses, serverOutput };
 writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-if (pageErrors.length > 0) throw new Error(pageErrors.join(' | '));
-console.log(`[mesh-handle-swap] PASS builtin=${before.meshHandleSwap.active}->${toggled.meshHandleSwap.active}->${reset.meshHandleSwap.active} fbx=${before.fbxMeshSwap.active}->${fbxToggled.fbxMeshSwap.active}->${fbxReset.fbxMeshSwap.active}`);
+if (pageErrors.length > 0 || consoleErrors.length > 0 || badResponses.length > 0) throw new Error(JSON.stringify({ pageErrors, consoleErrors, badResponses }));
+console.log(`[mesh-handle-swap] PASS builtin=${before.meshHandleSwap.active}->${toggled.meshHandleSwap.active}->${reset.meshHandleSwap.active} fbx=${before.fbxMeshSwap.active}->${fbxToggled.fbxMeshSwap.active}->${fbxReset.fbxMeshSwap.active} glb=${before.glbMeshSwap.active}->${glbToggled.glbMeshSwap.active}->${glbReset.glbMeshSwap.active}`);
 console.log(`[mesh-handle-swap] artifacts=${ARTIFACT_DIR}`);
 await browser.close();
 server.kill('SIGTERM');

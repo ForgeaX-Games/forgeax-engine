@@ -7,9 +7,9 @@
 //     POST /__forgeax-debug/trigger, which broadcasts a capture request via
 //     HMR custom event then synchronously waits for a /tape upload to resolve
 //     a closure-level pending slot (D-1 / D-2 / AC-02--AC-06).
-//   - config (w14): injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG = "1" so a
-//     demo build that registers the plugin folds the guard flag to a literal
-//     (AC-07 / C6); without the plugin the flag leaves no residue (prod-clean).
+//   - config (w14): injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG = "1" for
+//     dev serve and "0" for production build, so the guard folds to the
+//     capture-enabled or tree-shaken branch respectively (AC-07 / C6).
 //
 // HTTP errors never enter DebugError (OOS-6 / D-9); illegal bodies and trigger
 // failures return a {error, hint} JSON envelope and write nothing (Fail Fast).
@@ -213,8 +213,10 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
   return {
     name: 'forgeax:rhi-debug',
 
-    config() {
-      return { define: { [DEFINE_KEY]: JSON.stringify('1') } };
+    config(_config, env) {
+      return {
+        define: { [DEFINE_KEY]: JSON.stringify(env.command === 'serve' ? '1' : '0') },
+      };
     },
 
     configureServer(server: ViteDevServer) {

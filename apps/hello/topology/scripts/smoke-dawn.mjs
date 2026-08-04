@@ -356,7 +356,7 @@ function spawnScene(world) {
     { component: MeshRenderer, data: { materials: [materialHandle] } },
   );
   world.spawn(
-    { component: Transform, data: { pos: [1.6, 1.4, 3.2], quat: [0, 0, 0, 1]} },
+    { component: Transform, data: { pos: [1.6, 1.4, 3.2], quat: [-0.1804578, 0.22576895, 0.04260031, 0.9563726]} },
     {
       component: Camera,
       data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },

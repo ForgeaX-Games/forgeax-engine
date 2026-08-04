@@ -13,6 +13,10 @@ const uploadOptionalArtifact = readFileSync(
   resolve('.github/actions/upload-optional-artifact/action.yml'),
   'utf8',
 );
+const mesaVulkanAction = readFileSync(
+  resolve('.github/actions/install-mesa-vulkan-drivers/action.yml'),
+  'utf8',
+);
 
 test('coverage-pnpm bounds Vitest workers on the shared self-hosted machine', () => {
   assert.match(workflow, /pnpm exec vitest run --maxWorkers=4 --typecheck --coverage/);
@@ -37,6 +41,44 @@ test('browser WebGPU project bounds workers to protect the shared device', () =>
 test('Dawn project bounds forks to protect the shared software Vulkan backend', () => {
   const dawnProject = vitestConfig.slice(vitestConfig.indexOf("name: 'dawn'"));
   assert.match(dawnProject, /maxWorkers: 2/);
+});
+
+test('cold Ubuntu smoke and browser jobs keep their real runtime budget', () => {
+  const smokeStart = workflow.indexOf('  smoke-fleet:\n');
+  const smokeFleet = workflow.slice(
+    smokeStart,
+    workflow.indexOf('  smoke-fleet-required-context:\n', smokeStart),
+  );
+  assert.match(smokeFleet, /timeout-minutes: 30/);
+
+  const sharedStart = workflow.indexOf('  shared-inputs-browser:\n');
+  const sharedInputs = workflow.slice(
+    sharedStart,
+    workflow.indexOf('  smoke-fleet:\n', sharedStart),
+  );
+  assert.match(sharedInputs, /timeout-minutes: 20/);
+  assert.doesNotMatch(sharedInputs, /Cache Playwright browsers/);
+
+  const vitestStart = workflow.indexOf('  vitest-browser:\n');
+  const vitestBrowser = workflow.slice(
+    vitestStart,
+    workflow.indexOf('  shared-inputs-browser:\n', vitestStart),
+  );
+  assert.doesNotMatch(vitestBrowser, /Cache Playwright browsers/);
+});
+
+test('self-hosted setup-node steps do not transfer the pnpm store archive', () => {
+  const setupNodeSteps = workflow.match(/uses: actions\/setup-node@v5/g) ?? [];
+  const disabledStoreCaches = workflow.match(/^\s+package-manager-cache: false$/gm) ?? [];
+  assert.equal(disabledStoreCaches.length, setupNodeSteps.length);
+  assert.doesNotMatch(workflow, /package-manager-cache:\s*true/);
+});
+
+test('Mesa installation supports root self-hosted runners without sudo', () => {
+  assert.match(mesaVulkanAction, /command -v sudo/);
+  assert.match(mesaVulkanAction, /\[ "\$\(id -u\)" -eq 0 \]/);
+  assert.match(mesaVulkanAction, /run_privileged\(\) \{ "\$@"; \}/);
+  assert.doesNotMatch(mesaVulkanAction, /sudo (?:dpkg|apt-get)/);
 });
 
 test('coverage-pnpm uploads diagnostics only after a failed test run', () => {

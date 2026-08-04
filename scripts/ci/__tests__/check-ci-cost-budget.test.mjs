@@ -150,6 +150,15 @@ test('t20: enforces AC-06 per consumer and rejects invalid evidence', () => {
   assert.match(invalidResult.stdout, /ci-cost-job-start-missing/);
 });
 
+test('uses effective prerequisite-anchored delay instead of raw artifact age', () => {
+  const value = facts();
+  value.ac06.perConsumer[0].status = 'pass';
+  value.ac06.perConsumer[0].observedArtifactReadyToJobStartDelaySeconds = 155;
+  value.ac06.perConsumer[0].unattributedStartDelaySeconds = 3;
+  const result = run(value);
+  assert.equal(result.exitCode, 0, result.stdout);
+});
+
 test('w20: accepts shared cost facts when provenance owns the declared classes', () => {
   const complete = facts();
   complete.sharedProduction = {

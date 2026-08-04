@@ -121,6 +121,53 @@ describe('bevy-demo.mjs', () => {
     expect(result.stderr).toContain('bevy-demo-partial-has-smoke');
   });
 
+  it('rejects scaffold wording on an implemented app', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-implemented-demo',
+        description: 'Scaffold placeholder for the implemented demo.',
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/bevy-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-description-stale');
+  });
+
+  it('rejects a missing description on an implemented app', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'implemented-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-implemented-demo',
+        forgeax: {
+          bevyExample: { name: 'implemented_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-implemented-demo smoke',
+          metrics: {
+            gate: { command: 'pnpm --filter @forgeax/bevy-implemented-demo smoke' },
+          },
+        },
+      }),
+    );
+
+    const result = run(root, 'validate');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-description-missing');
+  });
+
   it('refuses to claim a blank scaffold is implemented', () => {
     const root = tempRoot();
     const input = join(root, 'implemented.json');
@@ -147,6 +194,7 @@ describe('bevy-demo.mjs', () => {
       join(app, 'package.json'),
       JSON.stringify({
         name: '@forgeax/bevy-tiny-demo',
+        description: 'Implemented smoke fixture.',
         forgeax: {
           bevyExample: { name: 'tiny_demo', category: 'Animation', status: 'implemented' },
           smokeInvocation: 'pnpm --filter @forgeax/bevy-tiny-demo smoke',
@@ -167,6 +215,7 @@ describe('bevy-demo.mjs', () => {
       join(app, 'package.json'),
       JSON.stringify({
         name: '@forgeax/bevy-tiny-demo',
+        description: 'Implemented smoke fixture.',
         forgeax: {
           bevyExample: { name: 'tiny_demo', category: 'Animation', status: 'implemented' },
           smokeInvocation: 'pnpm --filter @forgeax/bevy-tiny-demo smoke',
@@ -189,6 +238,7 @@ describe('bevy-demo.mjs', () => {
         join(app, 'package.json'),
         JSON.stringify({
           name: `@forgeax/bevy-${id}`,
+          description: 'Implemented smoke fixture.',
           forgeax: {
             bevyExample: {
               name: id.replace('-', '_'),

@@ -36,7 +36,7 @@ import { deriveVertexBufferLayout } from './vertex-attribute-layout';
  * (position + normal + uv + tangent) layout consumed by the standard
  * pipeline (feat-20260518 M4 D-10).
  */
-const FACTORY_FLOATS_PER_VERTEX = 8;
+export const FACTORY_FLOATS_PER_VERTEX = 8;
 
 /**
  * Floats per vertex emitted by the factories' final MeshAsset

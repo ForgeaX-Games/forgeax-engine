@@ -11,4 +11,13 @@ export {
   Materials,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
 } from './materials';
+export {
+  getTransparentSortConfig,
+  setTransparentSortConfig,
+  TRANSPARENT_SORT_MODE_DISTANCE,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+  TRANSPARENT_SORT_MODE_LAYER_YZ,
+  TRANSPARENT_SORT_MODE_LAYER_Z,
+  type TransparentSortConfig,
+} from './systems/transparent-sort-config';
 export { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';

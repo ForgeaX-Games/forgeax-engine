@@ -15,6 +15,9 @@
     "smoke:browser-live": "node scripts/smoke-browser-live.mjs"
   },
   "forgeax": {
+    "rhiDebug": {
+      "riskFamilies": ["raster-state"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

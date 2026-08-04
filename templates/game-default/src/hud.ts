@@ -55,12 +55,12 @@ export function installHud(opts: {
     if (button) button.textContent = mode === 'topdown' ? 'View: Top-down > Orbit' : mode === 'orbit' ? 'View: Orbit > FPS' : mode === 'fps' ? 'View: FPS > Map' : 'View: Map > Top-down';
     if (crosshair) crosshair.style.display = mode === 'fps' ? 'block' : 'none';
     if (hint) hint.textContent = mode === 'fps'
-      ? 'Click canvas to lock pointer - WASD move - Q/E fly - Shift run - wheel speed - F/click shoot - ESC release'
+      ? 'Click canvas to lock pointer - WASD move - Q/E fly - Shift run - wheel speed - F/click shoot - V visual (mesh/sprite/lit) - ESC release'
       : mode === 'orbit'
-        ? 'Orbit camera - wheel zoom - click canvas for mouse look - WASD move - F/click shoot'
+        ? 'Orbit camera - wheel zoom - click canvas for mouse look - WASD move - F/click shoot - V visual (mesh/sprite/lit)'
         : mode === 'pan'
-          ? 'Map camera - arrows pan - wheel zoom - F/click shoot'
-          : 'WASD move - wheel zoom - click shoot - aim toward cursor';
+          ? 'Map camera - arrows pan - wheel zoom - F/click shoot - V visual (mesh/sprite/lit)'
+          : 'WASD move - wheel zoom - click shoot - V visual (mesh/sprite/lit) - aim toward cursor';
     if (lockStatus) lockStatus.style.display = mode === 'fps' || mode === 'orbit' ? 'block' : 'none';
   };
   const setScore = (n: number): void => { if (score) score.textContent = `Score  ${n}`; };

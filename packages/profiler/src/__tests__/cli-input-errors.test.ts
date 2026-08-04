@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runProfilerCli } from '../cli.js';
+import { readCliInput, runProfilerCli } from '../cli.js';
 
 function expectStructuredError(
   result: { stdout: string; stderr: string; exitCode: number },
@@ -21,6 +21,18 @@ function expectStructuredError(
 }
 
 describe('profiler CLI input error contract', () => {
+  it('does not read stdin when a file input is selected', () => {
+    expect(
+      readCliInput(['summary', '--file', 'capture.json'], () => {
+        throw new Error('stdin read');
+      }),
+    ).toBe('');
+  });
+
+  it('reads stdin when no file input is selected', () => {
+    expect(readCliInput(['summary'], () => 'capture')).toBe('capture');
+  });
+
   it('rejects empty stdin without producing a summary', () => {
     expectStructuredError(runProfilerCli(['summary'], ''), 'cli-input-empty');
   });

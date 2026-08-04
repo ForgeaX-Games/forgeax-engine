@@ -5,34 +5,27 @@
 ## 4-step recipe (charter F1 progressive disclosure)
 
 ```ts
-import { Update } from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { SpriteRegionOverride } from '@forgeax/engine-render/authoring';
 
 // Step 1: createApp(canvas, opts) -- one-screen takeoff
 const appRes = await createApp(target, { clearColor: [0.07, 0.07, 0.09, 1] });
 
-// Step 2: add the sprite animation tick system to the schedule
-world.addSystem(Update, {
-  name: 'sprite-animation-tick',
-  after: ['input-frame-start-scan'],
-  queries: [],
-  fn: () => { spriteAnimationTickSystem(world); },
-});
+// Step 2: configure the public Pack v2 catalogue
+assets.configurePackIndex('/pack-index.json');
 
-// Step 3: load atlas texture + sidecar (walk.atlas.meta.json)
-const texHandleRes = await assets.loadByGuid<TextureAsset>(atlasGuid);
-const sidecar = await (await fetch('/walk.atlas.meta.json')).json();
+// Step 3: load the baked atlas by its authored GUID
+const atlasGuid = AssetGuid.parse('0e8657b1-c0ab-4940-a4f6-27fcd976823c');
+const texHandleRes = await assets.loadByGuid<TextureAsset>(atlasGuid.value);
 
-// Step 4: spawn host entity with SpriteAnimation + Instances
-world.spawn(
+// Step 4: spawn independent entities; the renderer folds them transparently
+for (const position of positions) world.spawn(
   { component: Transform, data: { /* ... */ } },
   { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-  { component: MeshRenderer, data: { material: materialHandles[0] } },
-  { component: Instances, data: { transforms: instanceTransforms } },
-  { component: SpriteAnimation, data: {
-    frameCount: 4, frameDuration: 0.2, currentFrame: 0,
-    accumDt: 0, regions: flatRegions,
-    playbackMode: SPRITE_PLAYBACK_MODE_LOOP,
-  }},
+  { component: MeshRenderer, data: { materials: [materialHandle] } },
   { component: SpriteRegionOverride, data: { region: new Float32Array([0,0,0.5,0.5]) } },
 );
 
@@ -42,28 +35,18 @@ app.start();
 
 ## Component field tables
 
-### SpriteAnimation (6 fields)
-
-| Field | Type | Purpose |
-|:--|:--|:--|
-| `frameCount` | `u32` | Total frames in the animation (e.g. 4 for a 2x2 walk cycle) |
-| `frameDuration` | `f32` | Seconds per frame (e.g. 0.2 = 5 fps) |
-| `currentFrame` | `u32` | Frame index [0, frameCount); advanced by tick system each `frameDuration` seconds |
-| `accumDt` | `f32` | Accumulated delta-time since last frame advance; reset to 0 on advance |
-| `regions` | `array<f32>` | Flat Float32Array of frameCount * 4 floats: [uMin0, vMin0, uW0, vH0, uMin1, ...] |
-| `playbackMode` | `u32` | `SPRITE_PLAYBACK_MODE_LOOP (0)` wraps around; `SPRITE_PLAYBACK_MODE_CLAMP (1)` stops at last frame |
-
 ### SpriteRegionOverride (1 field)
 
 | Field | Type | Purpose |
 |:--|:--|:--|
 | `region` | `array<f32, 4>` | Per-entity UV region [uMin, vMin, uW, vH]; written by tick system each frame |
 
-### Instances
-
-| Field | Type | Purpose |
-|:--|:--|:--|
-| `transforms` | `array<f32>` | Flat Float32Array of N * 16 floats (column-major mat4); 100 in this demo, 10x10 grid |
+> [!NOTE]
+> This app is the M4 fold/performance oracle. It intentionally uses one static atlas
+> region and does not install a per-frame animation system or an `Instances` component.
+> The public `SpriteAnimation` + `SpriteRegionOverride` playback recipe lives in
+> `apps/bevy/sprite-animation`; keep that focused animation consumer separate from this
+> 10,000-entity fold gate.
 
 ## Error scenarios (charter P3 structured failure)
 
@@ -76,7 +59,7 @@ app.start();
 | `loadByGuid` fails | `AssetError` | `asset-not-found` | `.hint` on error | Log error + return (fail-fast) |
 | Sidecar fetch fails | `TypeError` / HTTP error | -- | `sidecar fetch error` | Log error + return (fail-fast) |
 | Sampler/material registration fails | `AssetError` | `asset-not-registered` | `.hint` on error | Log + return |
-| `spriteAnimationTickSystem` rejects | `EcsError` | `sprite-animation-invalid` | `.{code, expected, hint}` | `console.warn` with structured fields |
+| atlas Pack row is missing | `AssetError` | `asset-not-found` | GUID and Pack v2 catalog are not aligned | Repair the authored sidecar/catalog path |
 
 ## Atlas topology (Mermaid)
 
@@ -88,22 +71,14 @@ flowchart TD
     png2["walk-2.png (32x32)"] --> atlasCLI
     png3["walk-3.png (32x32)"] --> atlasCLI
     atlasCLI --> atlasPNG["walk.atlas.png (64x64, committed)"]
-    atlasCLI --> sidecar["walk.atlas.meta.json (text channel, charter F2)"]
+    atlasCLI --> sidecar["walk.atlas.json (text channel, charter F2)"]
     sidecar --> metaJSON["walk.atlas.png.meta.json (GUID sidecar)"]
   end
   subgraph runtime["Runtime"]
     metaJSON --> loadByGuid["assets.loadByGuid (TextureAsset)"]
-    sidecar --> fetch["fetch('/walk.atlas.meta.json')"]
-    fetch --> regions["frameRegions: [uMin,vMin,uW,vH][]"]
     loadByGuid --> tex["textureHandle"]
-    tex --> mat["4 x SpriteMaterialAsset"]
-    regions --> mat
+    tex --> mat["one SpriteMaterialAsset"]
     mat --> mr["MeshRenderer.material"]
-  end
-  subgraph tick["Per-frame tick"]
-    sched["sprite-animation-tick system"] --> anim["SpriteAnimation (accumDt += dt)"]
-    anim --> advance["currentFrame advance on threshold"]
-    advance --> write["write SpriteRegionOverride.region"]
   end
 ```
 
@@ -117,27 +92,28 @@ pnpm --filter @forgeax/hello-sprite-atlas smoke    # dawn-node 300 frames + pixe
 
 ## Rebuild atlas from sources
 
-The committed `walk.atlas.png` and `walk.atlas.meta.json` were generated by the
-`forgeax-engine-remote-asset atlas` CLI from the four 32x32 source frames in `assets/frames/`.
+The committed `walk.atlas.png` and `walk.atlas.json` are generated by the
+`forgeax-engine-remote-asset atlas` CLI from the four 32x32 source frames in the
+`forgeax-engine-assets/demo-assets/hello-sprite-atlas/frames/` asset authority.
 To regenerate them (e.g. after adding or changing source frames):
 
 ```bash
 # From the repository root:
 pnpm forgeax-engine-remote-asset atlas \
-  --input "apps/hello/sprite-atlas/assets/frames/*.png" \
+  --input "forgeax-engine-assets/demo-assets/hello-sprite-atlas/frames/*.png" \
   --name walk \
-  --output "apps/hello/sprite-atlas/assets" \
+  --output "forgeax-engine-assets/demo-assets/hello-sprite-atlas" \
   --maxSize 4096
 
 # Then force-add the binary outputs (gitignore bypasses *.png by default):
-git add -f apps/hello/sprite-atlas/assets/walk.atlas.png
-git add    apps/hello/sprite-atlas/assets/walk.atlas.meta.json
-git add    apps/hello/sprite-atlas/assets/walk.atlas.png.meta.json
+git add -f forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.png
+git add    forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.json
+git add    forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.png.meta.json
 ```
 
-The `walk.atlas.meta.json` sidecar is the charter F2 text channel — the demo fetches it at
-runtime (`fetch('/walk.atlas.meta.json')`) to discover per-frame UV regions without hard-coding
-them in source. After regenerating the atlas, also regenerate the smoke reference PNG:
+The `walk.atlas.json` sidecar remains the charter F2 text channel for downstream animation
+consumers; this fold demo only needs the authored atlas GUID and a fixed first-frame region.
+After regenerating the atlas, also regenerate the smoke reference PNG:
 
 ```bash
 pnpm --filter @forgeax/hello-sprite-atlas smoke    # writes reference PNG + exits 1 on first run
@@ -153,8 +129,8 @@ git add -f apps/hello/sprite-atlas/scripts/reference-dawn-walk-frame-0.png
 | `src/__tests__/main-type-affordance.test-d.ts` | AC-08 IDE autocomplete type inference: SpriteAnimation 6-field shape + SpriteRegionOverride 1-field shape |
 | `scripts/smoke-dawn.mjs` | dawn-node headless smoke: 10000 sprite entities, 300-frame loop, asserts drawIndexed=1/frame + instanceCount=10000 + foldedDraws metric advance (M4 / w17) |
 | `vite.config.ts` | forgeaxShader + pluginPack, port 5194 |
-| `assets/walk.atlas.meta.json` | Atlas sidecar (charter F2 text channel): 4 regions [name, uMin, vMin, uW, vH] |
-| `assets/walk.atlas.png.meta.json` | GUID sidecar for `loadByGuid<TextureAsset>` resolution |
+| `forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.json` | Atlas sidecar (charter F2 text channel): 4 regions [name, uMin, vMin, uW, vH] |
+| `forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.png.meta.json` | GUID sidecar for `loadByGuid<TextureAsset>` resolution |
 | `assets/walk.atlas.png` | 64x64 baked atlas PNG (4 walk frames, 2x2 grid) |
 
 ## Reference PNG
@@ -167,11 +143,10 @@ git add -f apps/hello/sprite-atlas/scripts/reference-dawn-walk-frame-0.png
 
 ## What this demo proves
 
-- **`SpriteAnimation` is a 6-field ECS component** with dt-accumulator frame-advance and loop/clamp playback modes. AI users discover the 6-field shape through IDE autocomplete at the `world.spawn({ component: SpriteAnimation, data: { ... } })` call site (charter F1, AC-08).
-- **`SpriteRegionOverride` is a 1-field per-entity UV override** written by `spriteAnimationTickSystem` each frame. The shader computes `uv * region.zw + region.xy` -- a single float4 write replaces an entire material rebind per frame.
-- **`spriteAnimationTickSystem` is a standalone system function** (not a class method) that reads `SpriteAnimation + Time` and writes `SpriteRegionOverride`. Consumption pattern: `world.addSystem(Update, { name: 'sprite-animation-tick', fn: () => spriteAnimationTickSystem(world) })`.
-- **100 sprite instances share 1 atlas texture** via the `Instances` component (flat Float32Array of 100 mat4 transforms). RenderSystem emits 1 `drawIndexed` call per frame (charter P4 consistent abstraction).
-- **Atlas sidecar is a first-class text channel** (charter F2: text over image). Regions are defined in `walk.atlas.meta.json` as `{ name, uMin, vMin, uW, vH }`. If the atlas is regenerated upstream, the demo picks up new regions without source code edits.
+- **`SpriteRegionOverride` is a 1-field per-entity UV override**. The shader computes `uv * region.zw + region.xy`, so a single float4 write selects one atlas tile without rebinding the material.
+- **10,000 independent entities share one atlas material**. The record-stage fold groups equal `(Layer.value, position.z, materialHandle)` rows and emits one instanced `drawIndexed` call; there is no `Instances` opt-in component.
+- **The fold is transparent to the AI user**. The canonical spawn shape remains `Transform + MeshFilter + MeshRenderer + SpriteRegionOverride`; the renderer owns the optimization.
+- **The atlas sidecar is a build-time text channel** (charter F2). The companion `apps/bevy/sprite-animation` consumer demonstrates how to project its regions into `SpriteAnimation`; this app keeps the performance oracle deterministic with a fixed first-frame region.
 
 ## Relation to docs/roadmaps/2026-05-15-2d-roadmap.md M2
 

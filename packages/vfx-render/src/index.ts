@@ -30,7 +30,6 @@ export type {
   ParticleRenderFeatureOptions,
   ParticleRenderObservationSource,
 } from './feature/particle-render-feature.js';
-export type { ParticlePreparedState } from './feature/prepared-state.js';
 /** Stable shader identities and the production particle RenderFeature producer. */
 export { PARTICLE_SHADER_IDENTIFIERS, particleRenderFeature } from './feature/prepared-state.js';
 export {

@@ -251,6 +251,26 @@ export function validateDemoApps(root) {
         `got ${JSON.stringify(pkg.name)}`,
       );
     }
+    if (
+      spec.status === 'implemented' &&
+      (typeof pkg.description !== 'string' || pkg.description.trim() === '')
+    ) {
+      fail(
+        'bevy-demo-description-missing',
+        `${relative(root, pkgPath)} describes a real implemented reproduction`,
+        'add a concise description before keeping status=implemented',
+      );
+    }
+    if (
+      spec.status === 'implemented' &&
+      /\b(?:scaffold|placeholder)\b/i.test(pkg.description ?? '')
+    ) {
+      fail(
+        'bevy-demo-description-stale',
+        `${relative(root, pkgPath)} describes a real implemented reproduction`,
+        'replace scaffold/placeholder wording before keeping status=implemented',
+      );
+    }
     const expectedSmoke = smokeInvocation(expectedName);
     const smoke = pkg?.forgeax?.smokeInvocation;
     const gate = pkg?.forgeax?.metrics?.gate?.command;

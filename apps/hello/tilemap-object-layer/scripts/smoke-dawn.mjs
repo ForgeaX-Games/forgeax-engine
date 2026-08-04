@@ -4,8 +4,7 @@
 // Drives the engine ECS path end-to-end on the dawn-node binding for the
 // directed 5-sub-scene fixture. Mirrors hello-tilemap M0's shape:
 //   - Synthesises 2 in-process atlas TextureAsset handles (charter P5 —
-//     no forgeax-engine-assets PNG dependency; placeholder handle ids,
-//     consistent with hello-tilemap M0 baseline shape).
+//     no forgeax-engine-assets PNG dependency; placeholder handle ids).
 //   - Registers a TilesetAsset (5 regions / 5 tile entries with the
 //     widthCells/heightCells/pivotX/pivotY/atlasIndex mix covering the
 //     M3 surface; AC-10/AC-11/AC-12/AC-13/AC-14 anchors).
@@ -35,6 +34,9 @@
 // [hello-tilemap-object-layer smoke] env-deferred=<reason> + exits 0 so
 // CI can record the gate as deferred rather than failing.
 
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const WIDTH = 384;
@@ -43,6 +45,9 @@ const TARGET_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '280', 10)
 const COLS = 32;
 const ROWS = 32;
 const CHUNK_SIZE = 16;
+const here = dirname(fileURLToPath(import.meta.url));
+const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
+const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 
 async function deferred(reason) {
   console.log(`[hello-tilemap-object-layer smoke] env-deferred=${reason}`);
@@ -96,7 +101,7 @@ function ensureRenderTarget(device, format) {
     size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
     format,
     usage: 0x10 | 0x01,
-    viewFormats: ['rgba8unorm-srgb'],
+    viewFormats: [format === 'bgra8unorm' ? 'bgra8unorm-srgb' : 'rgba8unorm-srgb'],
   });
   return renderTarget;
 }
@@ -127,7 +132,6 @@ const mockCanvas = {
 let runtime;
 let ecs;
 let types;
-let assetsRuntime;
 let graphicsExtras;
 let render;
 let authoring;
@@ -136,7 +140,6 @@ try {
   runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
   types = await import('@forgeax/engine-types');
-  assetsRuntime = await import('@forgeax/engine-assets-runtime');
   graphicsExtras = await import('@forgeax/engine-graphics-extras');
   render = await import('@forgeax/engine-render');
   authoring = await import('@forgeax/engine-render/authoring');
@@ -153,13 +156,13 @@ const {
   MeshFilter,
   MeshRenderer,
 } = render;
-const { SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } = authoring;
+const { encodeSortScope, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } = authoring;
 const { createRenderer } = runtime;
 const { ChildOf, Transform } = scene;
-const { HANDLE_QUAD } = assetsRuntime;
+const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
 const { encodeTileBits } = graphicsExtras;
 const { World } = ecs;
-const { toManaged } = types;
+const { toShared } = types;
 
 const TILE_GRASS = 1;
 const TILE_BIG_TREE = 2;
@@ -193,7 +196,7 @@ function buildAnchorTiles() {
 const world = new World();
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {});
+  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (createErr) {
   await deferred(
     `createRenderer threw: ${createErr instanceof Error ? createErr.message : String(createErr)}`,
@@ -207,9 +210,8 @@ if (!ready.ok) {
   await deferred(`renderer.ready failed: ${ready.error.code}`);
 }
 
-const assets = renderer.assets;
-const atlasA = toManaged('TextureAsset')(201);
-const atlasB = toManaged('TextureAsset')(202);
+const atlasA = toShared(201);
+const atlasB = toShared(202);
 
 const tileset = {
   kind: 'tileset',
@@ -234,14 +236,7 @@ const tileset = {
     { regionIndex: 4, widthCells: 2, heightCells: 2, pivotX: 0.5, pivotY: 0.5 },
   ],
 };
-const tilesetResult = assets.register(tileset);
-if (!tilesetResult.ok) {
-  console.error(
-    `[hello-tilemap-object-layer smoke] tileset register failed: ${tilesetResult.error.code}`,
-  );
-  process.exit(1);
-}
-const tilesetHandle = tilesetResult.value;
+const tilesetHandle = world.allocSharedRef('TilesetAsset', tileset);
 
 const tilemap = world
   .spawn(
@@ -261,7 +256,15 @@ const tilemap = world
 
 world
   .spawn(
-    { component: TileLayer, data: { tiles: buildAnchorTiles(), layerOrder: 0, dirty: 1 } },
+    {
+      component: TileLayer,
+      data: {
+        tiles: buildAnchorTiles(),
+        layerOrder: 0,
+        dirty: 1,
+        sortScope: encodeSortScope('per-cell'),
+      },
+    },
     { component: ChildOf, data: { parent: tilemap } },
   )
   .unwrap();
@@ -269,20 +272,14 @@ world
 // Sprite entity for sub-scene (e). Needs a sampler + material so it lands in
 // the same sprite-bucket TransparentEntry queue as tilemap-spawned per-cell
 // entities (AC-13 anchor).
-const samplerResult = assets.register({
+world.allocSharedRef('SamplerAsset', {
   kind: 'sampler',
   magFilter: 'nearest',
   minFilter: 'nearest',
   addressModeU: 'clamp-to-edge',
   addressModeV: 'clamp-to-edge',
 });
-if (!samplerResult.ok) {
-  console.error(
-    `[hello-tilemap-object-layer smoke] sampler register failed: ${samplerResult.error.code}`,
-  );
-  process.exit(1);
-}
-const spriteMaterialResult = assets.register({
+const spriteMaterialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     // feat-20260626 M3: renderState.blend SSOT.
@@ -296,17 +293,11 @@ const spriteMaterialResult = assets.register({
     pivotAndSize: [0.5, 0.5, 1, 1],
   },
 });
-if (!spriteMaterialResult.ok) {
-  console.error(
-    `[hello-tilemap-object-layer smoke] sprite material register failed: ${spriteMaterialResult.error.code}`,
-  );
-  process.exit(1);
-}
 world
   .spawn(
     { component: Transform, data: { pos: [16.5, 28.5, 0]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [spriteMaterialResult.value] } },
+    { component: MeshRenderer, data: { materials: [spriteMaterialHandle] } },
   )
   .unwrap();
 

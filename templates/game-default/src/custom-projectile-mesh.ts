@@ -2,6 +2,7 @@ import type { World } from '@forgeax/engine-ecs';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Materials, type Renderer } from '@forgeax/engine-render';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 
@@ -9,6 +10,13 @@ export const GAME_DEFAULT_PROJECTILE_TEXTURE_GUID = 'a7f20c14-5d85-4c8f-9b25-1d8
 
 const FLOATS_PER_VERTEX = 12;
 const TEXTURE_SIZE = 32;
+const SPRITE_PARAMETERS = [
+  { name: 'colorTint', type: 'vec4' },
+  { name: 'region', type: 'vec4' },
+  { name: 'pivotAndSize', type: 'vec4' },
+  { name: 'slicesAndMode', type: 'vec4' },
+  { name: 'baseColorTexture', type: 'texture' },
+] as const;
 
 const POSITIONS: readonly (readonly [number, number, number])[] = [
   [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
@@ -40,6 +48,8 @@ export interface CustomProjectileMeshStore {
 export interface CustomProjectileMesh {
   readonly meshHandle: Handle<'MeshAsset', 'shared'>;
   readonly materialHandle: Handle<'MaterialAsset', 'shared'>;
+  readonly spriteMaterialHandle: Handle<'MaterialAsset', 'shared'>;
+  readonly spriteLitMaterialHandle: Handle<'MaterialAsset', 'shared'>;
   readonly store: CustomProjectileMeshStore;
   readonly baseVertices: Float32Array;
   readonly alternateVertices: Float32Array;
@@ -156,9 +166,43 @@ export async function createCustomProjectileMesh(
     castShadow: false,
   });
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material);
+  const spriteMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    kind: 'material',
+    passes: [
+      {
+        name: 'Forward',
+        program: { module: 'forgeax::sprite' },
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 },
+      },
+    ],
+    parameters: SPRITE_PARAMETERS,
+    values: {
+      colorTint: [1, 0.7, 0.15, 1],
+      baseColorTexture: textureHandle,
+      pivotAndSize: [0.5, 0.5, 1, 1],
+    },
+  });
+  const spriteLitMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    kind: 'material',
+    passes: [
+      {
+        name: 'Forward',
+        program: { module: 'forgeax::sprite-lit' },
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND, tags: { LightMode: 'Forward' }, queue: 3000 },
+      },
+    ],
+    parameters: SPRITE_PARAMETERS,
+    values: {
+      colorTint: [1, 0.7, 0.15, 1],
+      baseColorTexture: textureHandle,
+      pivotAndSize: [0.5, 0.5, 1, 1],
+    },
+  });
   return {
     meshHandle,
     materialHandle,
+    spriteMaterialHandle: spriteMaterial,
+    spriteLitMaterialHandle: spriteLitMaterial,
     store: renderer.store as CustomProjectileMeshStore,
     baseVertices,
     alternateVertices,

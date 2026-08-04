@@ -101,8 +101,10 @@ pack plugin then demonstrates source -> image importer -> Basis/ETC1S payload ->
 atlas halves and `R` restores the mesh bytes and removes active projectiles. The explicit
 procedural checker fallback is for no-asset/unit hosts only, so a broken catalog cannot be hidden in
 the browser witness. The projectile keeps a capsule collider so rendering and physics are separate
-public contracts. The canonical standalone correctness matrix remains
-`apps/bevy/generate-custom-mesh`.
+public contracts. `V` cycles the fired representation through that PBR mesh, an unlit
+`forgeax::sprite` quad, and `forgeax::sprite-lit` using the existing authored DirectionalLight and
+PointLight; the same input, physics, scoring, audio, inspection, and reset owners remain in play.
+The canonical standalone correctness matrix remains `apps/bevy/generate-custom-mesh`.
 
 The authored `RedBox` is the multi-material/submesh lesson. Its separate
 `assets/multi-material-target.pack.json` carries one GUID-addressed 12F mesh with a filled
@@ -135,10 +137,12 @@ future composition needs another routing policy.
 
 `J` is the guided FBX asset-format lesson. Preview registers the FBX importer and scans the hydrated
 `forgeax-engine-assets/vendor/fbx-test/cube.fbx` sidecar; `src/fbx-mesh-swap.ts` loads the emitted mesh
-sub-asset by GUID and swaps it onto the same authored scoring target. The existing material, collider,
-hit/score, input, render-evidence, and `R` reset owners stay in place, so this is a format delivery
-change rather than a second scene. `H` remains the built-in sphere comparison and `J` is the FBX
-comparison; both return to the authored mesh on reset.
+sub-asset by GUID and swaps it onto the same authored scoring target. Because `cube.fbx` has one
+submesh while `RedBox` teaches two authored material slots, the swap owner derives a one-slot view
+while FBX is active and restores the complete authored mesh/material pair on `R`. The existing
+collider, hit/score, input, render-evidence, and reset owners stay in place, so this is a format
+delivery change rather than a second scene. `H` remains the built-in sphere comparison and `J` is
+the FBX comparison; both return to the authored mesh on reset.
 
 The imported `humanoid.fbx` is the guided skeletal-animation lesson. `src/fbx-skinned-target.ts`
 loads the scene and its `run` clip by stable GUID, instantiates the `Skin`/`AnimationPlayer` payload,
@@ -149,9 +153,17 @@ the same coordinate space. `game-default.snapshot` reports the root, skin entity
 placement, animation time, and hit pulses; the inspection smoke also requires a 72-byte skinned
 vertex layout and an indexed FBX draw.
 
+`K` is the guided GLB asset-format lesson. Preview scans the license-safe Khronos
+`khronos-gltf-samples/BoxTextured/BoxTextured.glb` sidecar with `gltfImporter`; `src/glb-mesh-swap.ts`
+loads the GLB mesh and its MaterialAsset by GUID, so the embedded Cesium texture dependency travels
+through the same dev import and production pack-index path. The imported one-submesh mesh/material
+pair replaces the same scored RedBox target, while its explicit physics, hit, score, inspection, and
+reset owners remain unchanged. `K` is mutually exclusive with the built-in sphere and FBX swaps, and
+`R` restores the authored RedBox mesh and its complete two-slot material array.
+
 The same semantic `InputMap` accepts a standard gamepad without adding a second input owner:
 left-stick axes move, South jumps, R2 fires, Y toggles the projectile UV atlas, and East requests
-reset. `InputSnapshot.gamepad(0)` is frozen at the frame-start scan, so browser evidence can inspect
+reset; keyboard `V` cycles the projectile visual. `InputSnapshot.gamepad(0)` is frozen at the frame-start scan, so browser evidence can inspect
 the exact button/trigger/axis state while normal gameplay systems consume the same actions. Run the
 focused proof with `pnpm --filter @forgeax/preview smoke:gamepad`.
 

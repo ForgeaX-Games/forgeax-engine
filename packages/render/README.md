@@ -212,8 +212,18 @@ Optional text, tilemap, and sprite authoring is intentionally isolated from the
 base vocabulary:
 
 ```ts
-import { GlyphText, SpriteAnimation, Tilemap } from '@forgeax/engine-render/authoring';
+import {
+  GlyphText,
+  SpriteAnimation,
+  Tilemap,
+  setTransparentSortConfig,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+} from '@forgeax/engine-render/authoring';
 ```
+
+`authoring` also owns the public transparent-bucket configuration helpers and
+their four named modes. A consumer that composes sprites with an existing 3D
+game may set the world-level mode here; it should not reach into `/internal`.
 
 The root barrel does not expose frame stores, extract/prepare/record stages,
 or concrete pipeline implementation machinery. The supported custom-pipeline

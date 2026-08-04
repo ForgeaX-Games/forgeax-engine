@@ -56,10 +56,7 @@ import {
 } from './shared-build-inputs.js';
 import { dedupeFinalizedUiEntries, finalizeUiArtifact } from './ui-pack-finalizer.js';
 
-export {
-  type AssetProductionProjection,
-  projectAssetProduction,
-} from './build/asset-production.js';
+export { projectAssetProduction } from './build/asset-production.js';
 export { CATALOG_DELTA_EVENT, createCatalogClient, reloadAssetHost } from './catalog-client.js';
 export { ASSET_CHANGED_EVENT, type AssetChangedPayload } from './dev/events.js';
 export {
@@ -253,6 +250,15 @@ function readCompressionOverride(importSettings: unknown): 'none' | 'zstd' | und
   if (importSettings === null || typeof importSettings !== 'object') return undefined;
   const c = (importSettings as { compression?: unknown }).compression;
   return c === 'none' || c === 'zstd' ? c : undefined;
+}
+
+function isProceduralAliasMeta(meta: unknown): boolean {
+  if (meta === null || typeof meta !== 'object') return false;
+  const candidate = meta as { importer?: unknown; importSettings?: unknown };
+  if (candidate.importer !== 'gltf') return false;
+  if (candidate.importSettings === null || typeof candidate.importSettings !== 'object')
+    return false;
+  return (candidate.importSettings as { geometry?: unknown }).geometry === 'procedural';
 }
 
 /**
@@ -1835,6 +1841,23 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     }
     const importedEntries: PackIndexEntry[] = [];
     for (const entry of entries) {
+      const metaPath = guidToMetaBuild.get(entry.guid.toLowerCase());
+      if (metaPath !== undefined) {
+        let metaRaw: unknown;
+        try {
+          metaRaw = JSON.parse(readFileSync(metaPath, 'utf-8'));
+        } catch {
+          metaRaw = undefined;
+        }
+        if (isProceduralAliasMeta(metaRaw)) {
+          // A procedural alias has no source payload to cook: the runtime
+          // resolves its GUID onto a process-static builtin mesh. Keeping the
+          // source-meta row in a production pack-index would advertise a
+          // package URL that cannot be emitted or fetched, while routing it
+          // through gltfImporter would reject the intentional `.stub` source.
+          continue;
+        }
+      }
       // gap-3 (w5): the pure import logic now lives in the shared
       // `importTextureEntry` SSOT (import-texture.ts), used by both this build
       // arm and the dev POST /__import path (D-1). The shared fn returns

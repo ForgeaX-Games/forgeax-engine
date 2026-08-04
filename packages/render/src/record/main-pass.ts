@@ -318,6 +318,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // slot (length=1), preserving the byte-stable single-material layout
     // that render-system-record-pbr-ubo-stable.test.ts pins.
     const materialSlotStart: number[] = new Array(validatedOrdered.length);
+    let materialSlotCount = 0;
     {
       let cursor = 0;
       for (let i = 0; i < validatedOrdered.length; i++) {
@@ -335,7 +336,9 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
             : e.source.materials.length;
         cursor += slotsForEntity;
       }
+      materialSlotCount = cursor;
     }
+    const materialUboPayload = new Uint8Array(materialSlotCount * MATERIAL_PER_ENTITY_STRIDE);
     // feat-city-glb Bug 5 (per-submesh transparency): shared per-submesh
     // material bind-group assembly, called by BOTH the geometry pass and the
     // LDR blend sub-pass so a transparent PBR submesh binds the identical
@@ -467,14 +470,23 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           }
         }
 
-        const subMatUpload = runtime.device.queue.writeBuffer(
-          pipelineState.materialUniformBuffer.buffer,
-          (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE,
+        materialUboPayload.set(
           new Uint8Array(slotPayload),
+          (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE,
         );
-        if (!subMatUpload.ok) throw subMatUpload.error;
       }
     }
+
+    // All material slots are staged before the first geometry draw. One
+    // stride-shaped upload preserves every dynamic offset while avoiding one
+    // queue call per material; the RHI still validates alignment and bounds at
+    // this single owner-level write boundary.
+    const materialUboUpload = runtime.device.queue.writeBuffer(
+      pipelineState.materialUniformBuffer.buffer,
+      0,
+      materialUboPayload,
+    );
+    if (!materialUboUpload.ok) throw materialUboUpload.error;
 
     pass.setBindGroup(0, viewBindGroup as BindGroup);
 

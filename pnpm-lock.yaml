@@ -5044,6 +5044,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)

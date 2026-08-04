@@ -341,6 +341,7 @@ export function uploadMeshSsboBatch(
   } else {
     _meshSsboScratch.fill(0, 0, neededBytes);
   }
+  const normalMatrixScratch = mat3.create();
   for (let i = 0; i < slotCount; i++) {
     const entry = validatedOrdered[i];
     if (entry === undefined) continue;
@@ -363,7 +364,7 @@ export function uploadMeshSsboBatch(
       const worldFromLocal = entry.source.transform.world;
       for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
       const normal = mat3.normalMatrix(
-        mat3.create(),
+        normalMatrixScratch,
         worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
       );
       slot[16] = normal[0] ?? 0;

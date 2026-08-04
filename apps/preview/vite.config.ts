@@ -4,6 +4,7 @@ import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { fbxImporter } from '@forgeax/engine-fbx';
+import { gltfImporter } from '@forgeax/engine-gltf';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { defineConfig } from 'vite';
@@ -31,6 +32,7 @@ const submoduleSkyMetaPath = resolve(
 const submoduleSfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
 const submoduleBgmMetaPath = resolve(monorepoRoot, 'forgeax-engine-assets', 'collectathon-audio', 'bgm-loop.wav.meta.json');
 const submoduleFbxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'vendor', 'fbx-test');
+const submoduleGlbDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'khronos-gltf-samples', 'BoxTextured');
 const submoduleDejavuFontsDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'dejavu-fonts');
 
 export default defineConfig(({ command }) => ({
@@ -61,9 +63,10 @@ export default defineConfig(({ command }) => ({
         submoduleSfxDir,
         submoduleBgmMetaPath,
         submoduleFbxDir,
+        submoduleGlbDir,
         submoduleDejavuFontsDir,
       ],
-      importers: [audioImporter, imageImporter, fbxImporter],
+      importers: [audioImporter, imageImporter, fbxImporter, gltfImporter],
     }) as never,
   ],
   server: {

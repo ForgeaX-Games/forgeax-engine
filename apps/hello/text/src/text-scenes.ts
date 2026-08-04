@@ -82,7 +82,7 @@ export function spawnTextScenes(
   for (const s of TEXT_SCENES) {
     world
       .spawn(
-        { component: Transform, data: { ...s.pos, quat: [0, 0, 0, 1]} },
+        { component: Transform, data: { pos: s.pos, quat: [0, 0, 0, 1] } },
         {
           component: GlyphText,
           data: {

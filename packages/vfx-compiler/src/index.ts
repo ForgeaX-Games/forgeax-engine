@@ -32,10 +32,7 @@ export type {
   ParticleProgramInput,
 } from './canonicalize.js';
 export { canonicalizeParticleProgram } from './canonicalize.js';
-export type {
-  ParticleCookError,
-  ParticleEffectNativeCookInput,
-} from './cook.js';
+export type { ParticleCookError } from './cook.js';
 export {
   cookParticleEffect,
   cookParticleEffectProduct,

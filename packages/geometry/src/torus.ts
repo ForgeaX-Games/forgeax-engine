@@ -11,9 +11,7 @@
 
 import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
-import { degenerate, meshFromInterleaved } from './box';
-
-const FLOATS_PER_VERTEX = 8;
+import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 export function createTorusGeometry(
   radius: number,
@@ -30,7 +28,7 @@ export function createTorusGeometry(
 
   const vertexCount = (rs + 1) * (ts + 1);
   const indexCount = rs * ts * 6;
-  const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
+  const vertices = new Float32Array(vertexCount * FACTORY_FLOATS_PER_VERTEX);
   const indices = new Uint32Array(indexCount);
 
   let vIdx = 0;
@@ -52,7 +50,7 @@ export function createTorusGeometry(
       const ny = y - centerY;
       const nz = z;
       const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      const base = vIdx * FLOATS_PER_VERTEX;
+      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
       vertices[base + 0] = x;
       vertices[base + 1] = y;
       vertices[base + 2] = z;

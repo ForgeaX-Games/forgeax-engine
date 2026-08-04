@@ -59,9 +59,14 @@ function requiredArtifactClasses(contract, timingEntry) {
 }
 function measureExpandedBytes(artifacts) {
   const root = mkdtempSync(join(tmpdir(), 'ci-artifact-expanded-'));
+  // Multiple provenance classes can intentionally point at one artifact. Measure each
+  // archive once; the facts remain keyed by artifact ID and class projection is unchanged.
+  const uniqueArtifacts = [
+    ...new Map(artifacts.map((artifact) => [String(artifact.id), artifact])).values(),
+  ];
   try {
     return Object.fromEntries(
-      artifacts.map((artifact) => {
+      uniqueArtifacts.map((artifact) => {
         const archive = join(root, `${artifact.id}.zip`);
         const destination = join(root, String(artifact.id));
         const bytes = execFileSync(
@@ -247,6 +252,19 @@ function classifyConsumer(consumer, contract, mapping, artifactsById, jobs) {
       code: 'ci-cost-job-start-missing',
     };
   let effectiveReadyAt = artifactReady.created_at;
+  const artifactProviderJob = consumer.artifactProvider
+    ? jobForIdentity(jobs, consumer.artifactProvider)
+    : null;
+  if (consumer.artifactProvider !== undefined) {
+    if (!artifactProviderJob || !timestamp(artifactProviderJob.completed_at))
+      return {
+        jobIdentity: consumer.jobIdentity,
+        status: 'invalidSample',
+        code: 'ci-cost-artifact-provider-completion-missing',
+      };
+    if (dateSeconds(artifactProviderJob.completed_at) > dateSeconds(effectiveReadyAt))
+      effectiveReadyAt = artifactProviderJob.completed_at;
+  }
   for (const prerequisite of consumer.allowedNonArtifactPrerequisites ?? []) {
     const prerequisiteJob = jobForIdentity(jobs, prerequisite);
     if (!prerequisiteJob || !timestamp(prerequisiteJob.completed_at))
@@ -264,6 +282,7 @@ function classifyConsumer(consumer, contract, mapping, artifactsById, jobs) {
     artifactIds: selected.map((artifact) => artifact.id),
     producerAttempts: records.map((record) => record.producerAttempt),
     lastRequiredArtifactReadyAt: artifactReady.created_at,
+    artifactProviderReadyAt: artifactProviderJob?.completed_at ?? null,
     lastPrerequisiteReadyAt: effectiveReadyAt,
     effectiveReadyAt,
     observedJobStartedAt: job.started_at,

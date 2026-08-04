@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Scaffold for Bevy's `parenting` example. Replace the placeholder scene and smoke before promoting this scaffold to forgeax.bevyExample.",
+  "description": "Reproduce Bevy's `parenting` example with a rotating parent and child transform hierarchy.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

@@ -24,3 +24,18 @@ pnpm --filter @forgeax/hello-tonemap smoke    # dawn-node 300-frame headless smo
 - **Opt-in via spawn-time field.** Adding `tonemap: TONEMAP_REINHARD_EXTENDED` to a `Camera` component turns the path on; nothing else changes at the AI-user surface.
 - **Zero overhead when off.** The default `tonemap: 0` (`TONEMAP_NONE`) path leaves the geometry pass writing directly to the swap-chain — no HDR alloc, no extra fullscreen pass.
 - **Highlights survive.** With intensity-2 light + a mid-grey sphere the unclipped luminance easily exceeds 1.0; the extended Reinhard knee at `whitePoint = 8.0` maps it back into `[0, 1]` without integer-white burn.
+
+## Template boundary
+
+This app remains the focused HDR/tonemap oracle. `templates/game-default` already
+owns the same public `Camera.tonemap` path in its authored target-range loop,
+where bloom, FXAA, depth of field, transient post effects, lighting, gameplay,
+reset, and render-evidence share one lifecycle. Copying this static sphere would
+add a second camera/lighting scene without a new feature-loop concept.
+
+The better first-game lesson is the existing template camera and its authored
+emissive projectile: a future guided change should expose a meaningful
+exposure/white-point setting through that same settings, evidence, and `R`
+reset owners, then prove a gameplay-visible outcome. This oracle's intensity,
+white-point, HDR readback, and reference PNG remain the regression boundary for
+the renderer path.

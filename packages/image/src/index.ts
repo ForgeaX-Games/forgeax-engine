@@ -19,7 +19,6 @@
 //   - loadJpeg / loadUpng            -- lazy Node decoder loaders (legacy; OOS-2)
 
 export { IMAGE_ERROR_EXPECTED, ImageErrorImpl, imageError } from './errors.js';
-export type { HdrDecoded } from './hdr-decoder.js';
 export { decodeHdr } from './hdr-decoder.js';
 export { decodeImageInBrowser } from './image-decoder-browser.js';
 export type { JpegModule, UpngModule } from './image-decoder-node.js';

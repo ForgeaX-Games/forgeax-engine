@@ -6,8 +6,7 @@
     "declarationMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "tsBuildInfoFile": "./dist/.tsbuildinfo",
-    "types": ["@webgpu/types"]
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
   "references": [

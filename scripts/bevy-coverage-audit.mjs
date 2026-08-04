@@ -24,20 +24,23 @@
 // Usage:
 //   node scripts/bevy-coverage-audit.mjs [--root <dir>] [--bevy <cargoTomlPath>]
 //                                        [--roadmap <markdownPath>] [--json]
-//                                        [--category <name>]
+//                                        [--category <name>] [--strict-routes]
+//                                        [--strict-authority]
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { validateDemoApps } from './bevy-demo.mjs';
 
 const argv = process.argv.slice(2);
-const args = { json: false };
+const args = { json: false, strictRoutes: false, strictAuthority: false };
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--root' && argv[i + 1]) args.root = argv[++i];
   else if (argv[i] === '--bevy' && argv[i + 1]) args.bevy = argv[++i];
   else if (argv[i] === '--roadmap' && argv[i + 1]) args.roadmap = argv[++i];
   else if (argv[i] === '--category' && argv[i + 1]) args.category = argv[++i];
   else if (argv[i] === '--json') args.json = true;
+  else if (argv[i] === '--strict-routes') args.strictRoutes = true;
+  else if (argv[i] === '--strict-authority') args.strictAuthority = true;
 }
 
 const root = resolve(args.root ?? process.cwd());
@@ -75,6 +78,39 @@ function readRoadmapShelvedNames(path) {
     if (demo && /\bshelved\b/i.test(cells[2])) names.add(demo);
   }
   return names;
+}
+
+function findRouteRoots(roadmapPath) {
+  const roots = [];
+  let dir = resolve(roadmapPath, '..');
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, 'feedbacks'))) roots.push(dir);
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return roots.length > 0 ? roots : [resolve(roadmapPath, '..')];
+}
+
+function readRoadmapFeedbackRoutes(path) {
+  if (!existsSync(path) || !statSync(path).isFile()) return { total: 0, missing: [], roots: [] };
+  const rootDirs = findRouteRoots(path);
+  const refs = new Set();
+  const pattern = /feedbacks\/[A-Za-z0-9._/-]+\.md/g;
+  for (const raw of readFileSync(path, 'utf8').split('\n')) {
+    for (const ref of raw.matchAll(pattern)) refs.add(ref[0]);
+  }
+  const missing = [...refs]
+    .filter((ref) => !rootDirs.some((rootDir) => existsSync(resolve(rootDir, ref))))
+    .sort();
+  return { total: refs.size, missing, roots: rootDirs };
+}
+
+function readRoadmapAuthorityConflicts(declarations, shelvedNames) {
+  return declarations
+    .filter((d) => shelvedNames.has(d.name) && d.status !== 'shelved')
+    .map(({ app, name, status }) => ({ app, name, status }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.app.localeCompare(b.app));
 }
 
 // --- 1. Enumerate apps + read self-declared forgeax.bevyExample ------------
@@ -214,6 +250,40 @@ if (!bevyPresent) {
 
 const bevy = parseBevyExamples(readFileSync(bevyCargo, 'utf8'));
 const roadmapShelved = readRoadmapShelvedNames(roadmapPath);
+const roadmapRoutes = readRoadmapFeedbackRoutes(roadmapPath);
+const roadmapAuthorityConflicts = readRoadmapAuthorityConflicts(declared, roadmapShelved);
+
+if (roadmapRoutes.missing.length > 0) {
+  const routeOutput = args.json ? process.stderr : process.stdout;
+  routeOutput.write(
+    `[warn] ${roadmapRoutes.missing.length}/${roadmapRoutes.total} ROADMAP feedback routes are missing under ${roadmapRoutes.roots.join(' or ')}\n`,
+  );
+  for (const ref of roadmapRoutes.missing) routeOutput.write(`  - ${ref}\n`);
+  if (args.strictRoutes) {
+    fail(
+      'bevy-roadmap-route-missing',
+      'every ROADMAP feedbacks/*.md reference resolves from the configured feedback roots',
+      'repair the route or run without --strict-routes when the harness clone is intentionally absent',
+    );
+  }
+}
+
+if (roadmapAuthorityConflicts.length > 0) {
+  const conflictOutput = args.json ? process.stderr : process.stdout;
+  conflictOutput.write(
+    `[warn] ${roadmapAuthorityConflicts.length} ROADMAP shelved rows conflict with app metadata\n`,
+  );
+  for (const conflict of roadmapAuthorityConflicts) {
+    conflictOutput.write(`  - ${conflict.name}: ${conflict.status} (${conflict.app})\n`);
+  }
+  if (args.strictAuthority) {
+    fail(
+      'bevy-coverage-authority-conflict',
+      'ROADMAP shelved rows agree with app bevyExample status',
+      'demote the app to shelved or update ROADMAP only after faithful implementation',
+    );
+  }
+}
 
 // --- 4. Validate declared names against the Bevy SSOT ----------------------
 for (const d of declared) {
@@ -252,7 +322,7 @@ if (args.json) {
   const out = {};
   for (const [cat, c] of [...cats].sort()) out[cat] = c;
   process.stdout.write(
-    `${JSON.stringify({ bevyCheckout: 'present', categories: out, declared }, null, 2)}\n`,
+    `${JSON.stringify({ bevyCheckout: 'present', categories: out, declared, roadmapRoutes, roadmapAuthorityConflicts }, null, 2)}\n`,
   );
   process.exit(0);
 }

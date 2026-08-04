@@ -10,7 +10,7 @@
 //      `bgra8unorm-srgb` viewFormat so the swap-chain srgb encode runs).
 //   3. Spawn the same World as apps/hello/tonemap/src/main.ts: 1 PBR
 //      sphere + 1 Camera with `tonemap = 'reinhard-extended'` /
-//      `exposure = 1.0` / `whitePoint = 4.0` + 1 intensity-20
+//      `exposure = 1.0` / `whitePoint = 8.0` + 1 intensity-2
 //      DirectionalLight.
 //   4. await renderer.ready + 300 frames of renderer.draw(world).
 //   5. copyTextureToBuffer + mapAsync; full-frame scan for AC-07
@@ -80,11 +80,10 @@ try {
   process.exit(1);
 }
 Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: true, writable: true });
-// bug-20260612 dawn-only stub: pin getPreferredCanvasFormat to 'rgba8unorm' so this
-// smoke harness's hardcoded rgba8unorm-srgb viewFormats stay compatible with the
-// dawn-node webgpu module's actual UA preference (which is bgra8unorm). Browser
-// path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
-// BGRA path is exercised through the helper unmodified there.
+// bug-20260612 dawn-only stub: pin getPreferredCanvasFormat to 'rgba8unorm' so
+// the readback stays byte-comparable to the committed baseline. Browser path
+// (test:browser project) does not run smoke-dawn.mjs; the real Channel 2 BGRA
+// path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
@@ -110,7 +109,7 @@ function ensureRenderTarget(device, format) {
     size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
     format,
     usage: 0x10 | 0x01,
-    viewFormats: ['rgba8unorm-srgb'],
+    viewFormats: [format === 'bgra8unorm' ? 'bgra8unorm-srgb' : 'rgba8unorm-srgb'],
   });
   return renderTarget;
 }
@@ -170,12 +169,6 @@ try {
 }
 
 console.log(`[hello-tonemap] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
 
 const sphereRes = createSphereGeometry(0.6, 32, 24);
 if (!sphereRes.ok) {

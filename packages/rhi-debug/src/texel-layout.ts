@@ -13,13 +13,12 @@
 // the prefilter map has a 5-mip roughness chain. Snapshotting them with the old
 // assumptions either skipped them (-> replay renders unlit/black) or would have
 // seeded corrupt bytes. This module computes the real per-subresource layout so a
-// full snapshot + faithful seed round-trips any uncompressed color format.
+// full snapshot + faithful seed round-trips any color format with a known texel
+// block footprint, including block-compressed formats.
 
 /**
- * Bytes per texel for uncompressed color formats the snapshot path can
- * round-trip. `undefined` => not snapshottable here: depth/stencil (writeTexture
- * rejects), block-compressed (bc/etc/astc -- texel != byte-addressable), or any
- * format not in this table. Callers treat `undefined` as "skip this texture".
+ * Bytes per texel for uncompressed color formats. Block-compressed formats use
+ * {@link textureBlockLayout} because their bytes are addressed by blocks.
  */
 export function bytesPerTexel(format: GPUTextureFormat | undefined): number | undefined {
   if (format === undefined) return undefined;
@@ -27,8 +26,7 @@ export function bytesPerTexel(format: GPUTextureFormat | undefined): number | un
 }
 
 // Uncompressed color formats only. Keyed to the W3C WebGPU GPUTextureFormat
-// names. Depth/stencil and block-compressed formats are deliberately absent
-// (their bytes are not a simple width*bytesPerTexel row layout).
+// names. Depth/stencil and block-compressed formats are deliberately absent.
 const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
   // 8-bit channels
   r8unorm: 1,
@@ -70,6 +68,83 @@ const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
   rgb10a2unorm: 4,
   rg11b10ufloat: 4,
 };
+
+export interface TextureBlockLayout {
+  readonly blockWidth: number;
+  readonly blockHeight: number;
+  readonly bytesPerBlock: number;
+}
+
+const COMPRESSED_BLOCKS: Partial<Record<GPUTextureFormat, TextureBlockLayout>> = {
+  // BCn: all formats use 4x4 blocks; BC1/BC4 are 8 bytes, the rest 16.
+  'bc1-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'bc1-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'bc2-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc2-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc3-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc3-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc4-r-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'bc4-r-snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'bc5-rg-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc5-rg-snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc6h-rgb-ufloat': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc6h-rgb-float': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc7-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'bc7-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  // ETC2/EAC: all formats use 4x4 blocks; one or two 64-bit blocks.
+  'etc2-rgb8unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'etc2-rgb8unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'etc2-rgb8a1unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'etc2-rgb8a1unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'etc2-rgba8unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'etc2-rgba8unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'eac-r11unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'eac-r11snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
+  'eac-rg11unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'eac-rg11snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  // ASTC uses 16-byte blocks with a format-specific footprint.
+  'astc-4x4-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'astc-4x4-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
+  'astc-5x4-unorm': { blockWidth: 5, blockHeight: 4, bytesPerBlock: 16 },
+  'astc-5x4-unorm-srgb': { blockWidth: 5, blockHeight: 4, bytesPerBlock: 16 },
+  'astc-5x5-unorm': { blockWidth: 5, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-5x5-unorm-srgb': { blockWidth: 5, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-6x5-unorm': { blockWidth: 6, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-6x5-unorm-srgb': { blockWidth: 6, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-6x6-unorm': { blockWidth: 6, blockHeight: 6, bytesPerBlock: 16 },
+  'astc-6x6-unorm-srgb': { blockWidth: 6, blockHeight: 6, bytesPerBlock: 16 },
+  'astc-8x5-unorm': { blockWidth: 8, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-8x5-unorm-srgb': { blockWidth: 8, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-8x6-unorm': { blockWidth: 8, blockHeight: 6, bytesPerBlock: 16 },
+  'astc-8x6-unorm-srgb': { blockWidth: 8, blockHeight: 6, bytesPerBlock: 16 },
+  'astc-8x8-unorm': { blockWidth: 8, blockHeight: 8, bytesPerBlock: 16 },
+  'astc-8x8-unorm-srgb': { blockWidth: 8, blockHeight: 8, bytesPerBlock: 16 },
+  'astc-10x5-unorm': { blockWidth: 10, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-10x5-unorm-srgb': { blockWidth: 10, blockHeight: 5, bytesPerBlock: 16 },
+  'astc-10x6-unorm': { blockWidth: 10, blockHeight: 6, bytesPerBlock: 16 },
+  'astc-10x6-unorm-srgb': { blockWidth: 10, blockHeight: 6, bytesPerBlock: 16 },
+  'astc-10x8-unorm': { blockWidth: 10, blockHeight: 8, bytesPerBlock: 16 },
+  'astc-10x8-unorm-srgb': { blockWidth: 10, blockHeight: 8, bytesPerBlock: 16 },
+  'astc-10x10-unorm': { blockWidth: 10, blockHeight: 10, bytesPerBlock: 16 },
+  'astc-10x10-unorm-srgb': { blockWidth: 10, blockHeight: 10, bytesPerBlock: 16 },
+  'astc-12x10-unorm': { blockWidth: 12, blockHeight: 10, bytesPerBlock: 16 },
+  'astc-12x10-unorm-srgb': { blockWidth: 12, blockHeight: 10, bytesPerBlock: 16 },
+  'astc-12x12-unorm': { blockWidth: 12, blockHeight: 12, bytesPerBlock: 16 },
+  'astc-12x12-unorm-srgb': { blockWidth: 12, blockHeight: 12, bytesPerBlock: 16 },
+};
+
+/** Return the WebGPU texel-block footprint for any supported color format. */
+export function textureBlockLayout(
+  format: GPUTextureFormat | undefined,
+): TextureBlockLayout | undefined {
+  if (format === undefined) return undefined;
+  return (
+    COMPRESSED_BLOCKS[format] ??
+    (TEXEL_BYTES[format] === undefined
+      ? undefined
+      : { blockWidth: 1, blockHeight: 1, bytesPerBlock: TEXEL_BYTES[format] })
+  );
+}
 
 // ============================================================================
 // formatInfo -- per-channel semantics for CPU-side decode (viewer preview)
@@ -162,7 +237,9 @@ export interface SubresourceSlice {
 
 /** Full subresource layout of a texture snapshot blob. */
 export interface TextureLayout {
-  readonly bytesPerTexel: number;
+  readonly blockWidth: number;
+  readonly blockHeight: number;
+  readonly bytesPerBlock: number;
   readonly layerCount: number;
   readonly mipLevelCount: number;
   readonly slices: readonly SubresourceSlice[];
@@ -173,12 +250,12 @@ export interface TextureLayout {
 /**
  * Compute the canonical tight byte layout for a texture snapshot: every array
  * layer, every mip level, packed in layer-major then mip-minor order with no row
- * padding (tight bytesPerRow = mipWidth * bytesPerTexel). Mip dimensions halve
+ * padding (tight bytesPerRow = blockCountX * bytesPerBlock). Mip dimensions halve
  * per level (floor, min 1), matching the WebGPU mip size rule.
  *
- * Returns `undefined` when the format has no entry in `bytesPerTexel` (caller
- * skips the texture). The recorder reads each slice into this exact offset; the
- * replayer reads each slice back out and writeTexture's it to (layer, mip).
+ * Returns `undefined` when the format has no known block footprint. The
+ * recorder reads each slice into this exact offset; the replayer reads each
+ * slice back out and writeTexture's it to (layer, mip).
  */
 export function computeTextureLayout(
   format: GPUTextureFormat | undefined,
@@ -187,8 +264,8 @@ export function computeTextureLayout(
   layerCount: number,
   mipLevelCount: number,
 ): TextureLayout | undefined {
-  const bpt = bytesPerTexel(format);
-  if (bpt === undefined) return undefined;
+  const block = textureBlockLayout(format);
+  if (block === undefined) return undefined;
 
   const layers = Math.max(1, layerCount);
   const mips = Math.max(1, mipLevelCount);
@@ -198,13 +275,17 @@ export function computeTextureLayout(
     for (let mip = 0; mip < mips; mip++) {
       const mw = Math.max(1, width >> mip);
       const mh = Math.max(1, height >> mip);
-      const byteLength = mw * mh * bpt;
+      const blockCountX = Math.ceil(mw / block.blockWidth);
+      const blockCountY = Math.ceil(mh / block.blockHeight);
+      const byteLength = blockCountX * blockCountY * block.bytesPerBlock;
       slices.push({ layer, mip, width: mw, height: mh, byteOffset: offset, byteLength });
       offset += byteLength;
     }
   }
   return {
-    bytesPerTexel: bpt,
+    blockWidth: block.blockWidth,
+    blockHeight: block.blockHeight,
+    bytesPerBlock: block.bytesPerBlock,
     layerCount: layers,
     mipLevelCount: mips,
     slices,

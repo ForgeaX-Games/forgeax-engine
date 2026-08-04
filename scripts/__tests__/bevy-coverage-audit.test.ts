@@ -107,5 +107,48 @@ describe('bevy-coverage-audit.mjs', () => {
     expect(cats['3D Rendering'].uncovered).toHaveLength(0);
     expect(cats['2D Rendering'].covered).toBe(1); // app metadata wins over roadmap text
     expect(cats['2D Rendering'].shelved).toBe(0);
+    expect(JSON.parse(r.stdout).roadmapAuthorityConflicts).toEqual([
+      { app: '@fixture/app-a', name: 'sprite', status: 'implemented' },
+    ]);
+  });
+
+  it('(g) roadmap routes: reports missing feedback files without changing coverage', () => {
+    const root = resolve(fx, 'happy');
+    const r = run(['--root', root, '--bevy', fixtureBevy, '--roadmap', fixtureRoadmap, '--json']);
+    expect(r.status, `stderr:\n${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.roadmapRoutes.total).toBe(2);
+    expect(out.roadmapRoutes.missing).toEqual(['feedbacks/missing.md']);
+    expect(out.categories['3D Rendering'].shelved).toBe(1);
+  });
+
+  it('(h) strict routes: fails closed when a shelved route is missing', () => {
+    const root = resolve(fx, 'happy');
+    const r = run([
+      '--root',
+      root,
+      '--bevy',
+      fixtureBevy,
+      '--roadmap',
+      fixtureRoadmap,
+      '--strict-routes',
+    ]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('bevy-roadmap-route-missing');
+  });
+
+  it('(i) strict authority: fails closed when app metadata masks a shelved roadmap row', () => {
+    const root = resolve(fx, 'happy');
+    const r = run([
+      '--root',
+      root,
+      '--bevy',
+      fixtureBevy,
+      '--roadmap',
+      fixtureRoadmap,
+      '--strict-authority',
+    ]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('bevy-coverage-authority-conflict');
   });
 });

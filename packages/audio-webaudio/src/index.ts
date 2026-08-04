@@ -16,7 +16,6 @@
 
 // Re-exports from engine-audio for convenience
 export { AUDIO_ENGINE_RESOURCE_KEY, type AudioBackend } from '@forgeax/engine-audio';
-export type { WorldMatrixData } from './audio-listener-sync-system';
 // audio listener sync system (Transform.world mat4 -> Web Audio listener)
 export {
   audioListenerSyncSystem,
@@ -24,7 +23,7 @@ export {
 } from './audio-listener-sync-system';
 export { audioLoader } from './audio-loader';
 // M3: audio tick system (edge detection + node lifecycle + property sync)
-export { audioTickSystem, detectEdge, type TickStateEntry } from './audio-tick-system';
+export { audioTickSystem, detectEdge } from './audio-tick-system';
 // M3: AudioClipAsset byte decoder (runtime-only bytes API)
 export { decodeAudioClipBytes } from './clip-loader';
 // M2 (feat-20260623-plugin-system-unify): audioPlugin factory (w9)

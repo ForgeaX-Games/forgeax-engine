@@ -1121,8 +1121,10 @@ export interface PipelineState {
  * Configure a canvas surface from the two PipelineState format fields, applying
  * the WebGL2-fallback gate (storage-buffer cap == 0 proxy): full WebGPU surface
  * (sRGB view format + RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC usage) when
- * storage buffers are available, single-format COLOR_TARGET-only surface on the
- * GLES fallback. Single SSOT for the configure descriptor consumed by both the
+ * storage buffers are available. A low-capability WebGPU surface stays
+ * single-format but retains COPY_SRC for capture; the wgpu WebGL2 surface must
+ * remain COLOR_TARGET-only because its GLES surface rejects COPY_SRC. Single
+ * SSOT for the configure descriptor consumed by both the
  * lazy first-frame path (ensureContextConfigured in createRenderer.ts) and the
  * F2 surface-outdated reconfigure-and-retry branch (render-system-record.ts) so
  * the two cannot drift (architecture-principles #1 SSOT). Returns the configure
@@ -1138,11 +1140,12 @@ export function configureSurface(
   const limitsHere = (device as { limits?: Readonly<Record<string, number>> }).limits;
   const storageCap = limitsHere?.maxStorageBuffersPerShaderStage ?? 1;
   const supportsViewFormats = storageCap > 0;
+  const supportsSurfaceCopy = device.caps?.backendKind !== 'wgpu-webgl2';
   return context.configure({
     device,
     format: (supportsViewFormats ? format : colorAttachmentFormat) as unknown as GPUTextureFormat,
     alphaMode: 'opaque',
-    usage: supportsViewFormats ? 0x10 | 0x04 | 0x01 : 0x10,
+    usage: 0x10 | (supportsViewFormats ? 0x04 : 0) | (supportsSurfaceCopy ? 0x01 : 0),
     ...(supportsViewFormats
       ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] }
       : {}),

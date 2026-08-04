@@ -30,46 +30,52 @@ describe('learn-render 4.9 instancing onerror-gate (reverse expectation)', () =>
   // bootstrap-complete marker (full 15s budget), never a quiet timeout, so a
   // slow / device-lost-storming CI runner cannot end the wait before bootstrap
   // resolves.
-  it('SUT bootstrap fires no SUT-attributable error', async () => {
-    if (typeof navigator.gpu === 'undefined') {
-      throw new Error(
-        "[learn-render 4.9 instancing.onerror-gate] code: 'webgpu-unavailable'; vitest.config.ts launches chrome-beta with WebGPU flags",
-      );
-    }
-    canvas = document.createElement('canvas');
-    canvas.id = 'app';
-    canvas.width = 256;
-    canvas.height = 256;
-    document.body.appendChild(canvas);
+  it(
+    'SUT bootstrap fires no SUT-attributable error',
+    // Keep the 15s bootstrap contract below, but allow cold Vite/Basis/WASM
+    // imports to finish before Vitest's outer timeout interrupts the witness.
+    { timeout: 30_000 },
+    async () => {
+      if (typeof navigator.gpu === 'undefined') {
+        throw new Error(
+          "[learn-render 4.9 instancing.onerror-gate] code: 'webgpu-unavailable'; vitest.config.ts launches chrome-beta with WebGPU flags",
+        );
+      }
+      canvas = document.createElement('canvas');
+      canvas.id = 'app';
+      canvas.width = 256;
+      canvas.height = 256;
+      document.body.appendChild(canvas);
 
-    const errors: Array<{ code: string; hint?: string }> = [];
-    (globalThis as unknown as { __learnRenderErrors: typeof errors }).__learnRenderErrors = errors;
+      const errors: Array<{ code: string; hint?: string }> = [];
+      (globalThis as unknown as { __learnRenderErrors: typeof errors }).__learnRenderErrors = errors;
 
-    await import('../index.ts');
+      await import('../index.ts');
 
-    const bootstrapComplete = (): boolean =>
-      (globalThis as unknown as { __learnRenderBootstrapComplete?: boolean })
-        .__learnRenderBootstrapComplete === true;
-    const hasSutError = (): boolean => errors.some((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
-    for (let elapsed = 0; elapsed < 15000 && !hasSutError() && !bootstrapComplete(); elapsed += 50) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
+      const bootstrapComplete = (): boolean =>
+        (globalThis as unknown as { __learnRenderBootstrapComplete?: boolean })
+          .__learnRenderBootstrapComplete === true;
+      const hasSutError = (): boolean => errors.some((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
+      for (let elapsed = 0; elapsed < 15000 && !hasSutError() && !bootstrapComplete(); elapsed += 50) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
 
-    const sutErrors = errors.filter((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
-    if (sutErrors.length === 0 && !bootstrapComplete()) {
-      // Bootstrap neither failed with a SUT error nor ran to completion within
-      // 15s — disrupted (e.g. device-lost storm) before the planet load.
-      // Inconclusive on a flaky runner; throw with what was captured so the
-      // failure is a clear "rerun" signal rather than a silent assert.
-      throw new Error(
-        '[learn-render 4.9 instancing.onerror-gate] bootstrap inconclusive within 15s ' +
-          `(no SUT error, not complete); captured codes=[${errors.map((e) => e.code).join(', ')}] ` +
-          '-> runner instability, rerun',
-      );
-    }
-    // Forward assertion (gap closed): bootstrap completed clean -> sutErrors
-    // empty -> GREEN. A real regression that reintroduces a SUT-attributable
-    // bootstrap error makes this RED.
-    expect(sutErrors).toEqual([]);
-  });
+      const sutErrors = errors.filter((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
+      if (sutErrors.length === 0 && !bootstrapComplete()) {
+        // Bootstrap neither failed with a SUT error nor ran to completion within
+        // 15s — disrupted (e.g. device-lost storm) before the planet load.
+        // Inconclusive on a flaky runner; throw with what was captured so the
+        // failure is a clear "rerun" signal rather than a silent assert.
+        throw new Error(
+          '[learn-render 4.9 instancing.onerror-gate] bootstrap inconclusive within 15s ' +
+            `(no SUT error, not complete); captured codes=[${errors.map((e) => e.code).join(', ')}] ` +
+            '-> runner instability, rerun',
+        );
+      }
+      // Forward assertion (gap closed): bootstrap completed clean -> sutErrors
+      // empty -> GREEN. A real regression that reintroduces a SUT-attributable
+      // bootstrap error makes this RED.
+      expect(sutErrors).toEqual([]);
+    },
+  );
 });
