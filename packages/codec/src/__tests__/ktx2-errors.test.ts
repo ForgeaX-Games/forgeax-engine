@@ -199,8 +199,8 @@ describe('KTX2 error paths (w23)', () => {
   });
 
   describe('Error code closed-union exhaustiveness', () => {
-    it('all 6 CodecErrorCode members are reachable', () => {
-      // Type-level check: verify the CodecErrorCode union has exactly 6 members.
+    it('all 5 CodecErrorCode members are reachable', () => {
+      // Type-level check: verify the CodecErrorCode union has exactly 5 members.
       // This is validated by TS compilation — if a member is missing,
       // the following code fails to typecheck.
       const codes: CodecErrorCode[] = [

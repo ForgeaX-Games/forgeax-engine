@@ -23,33 +23,24 @@ import {
 import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { createPreviewInspection } from './preview-inspection';
 import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('preview: missing <canvas id="app"> in index.html');
 
-const runtimeBinding = import.meta.env.DEV
-  ? createStandaloneRuntimeAssetBinding(import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'preview')
-  : undefined;
-
 const previewRun = createPreviewUiRun(canvas.parentElement ?? document.body);
 
 // Wire dev-mode ImportTransport so loadByGuid for raw-source assets in
 // templates/<slug>/scene.pack.json (and the engine-assets submodule's
-// sky.hdr) lazy-imports via the binding's scoped import endpoint. The shipped
-// form deliberately leaves this transport absent and reads the emitted
-// /pack-index.json, so a missing DDC artefact fails fast instead of probing a
-// dev-only route.
+// sky.hdr) lazy-imports via vite-plugin-pack's POST /__import route.
+// Absent transport => any DDC miss fails fast with 'asset-not-imported'.
 const app = await createApp(
   canvas,
   { uiRoot: previewRun.uiRoot, plugins: [audioPlugin(), physicsPlugin('rapier-3d')] },
   {
     ...forgeaxBundlerAdapter(),
-    ...(runtimeBinding === undefined
-      ? {}
-      : { importTransport: createDevImportTransport(runtimeBinding) }),
+    importTransport: createDevImportTransport(),
   },
 );
 if (!app.ok) {
@@ -61,8 +52,7 @@ if (!app.ok) {
 
 async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   const assets = app.renderer.assets;
-  if (runtimeBinding === undefined) assets.configurePackIndex('/pack-index.json');
-  else assets.configureRuntimeBinding(runtimeBinding);
+  assets.configurePackIndex('/pack-index.json');
   const previewInspection = createPreviewInspection(app, previewRun.registerCleanup);
 
   const ctx: BootstrapContext = {

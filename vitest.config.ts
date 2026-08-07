@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import {
   createParticleEffectNativeCooker,
   createStockParticleOperatorRegistry,
@@ -29,7 +28,7 @@ const materialPackages = materialContractInventory.materialPackages;
 // Keep authored WGSL sidecars under the template's single assets/ content
 // root without handing build-only shader sources to the runtime catalog. The
 // browser project must mirror apps/preview's explicit pack boundary so a
-// shader diagnostic cannot downgrade the scoped catalog and turn every GUID
+// shader diagnostic cannot downgrade /pack-index.json and turn every GUID
 // load into a misleading ImportTransport miss.
 const templatePackRoots = [
   'animated-target-material.pack.json',
@@ -171,8 +170,8 @@ export default defineConfig({
       // configureServer (no build cost).
       {
         // tweak-20260521 D-1: mount pluginPack() alongside forgeaxShader() so
-        // vitest browser project tests reach the binding's scoped catalog
-        // through the plugin's configureServer middleware (real texture fetch path) rather
+        // vitest browser project tests reach `/pack-index.json` through the
+        // plugin's configureServer middleware (real texture fetch path) rather
         // than the silent untextured fallback. Roots are explicit 6-entry SSOT
         // (charter F1 single-grep): four learn-render section local assets/
         // dirs (1.4 / 1.5 / 1.6 / 1.7) plus the two shared NonCommercial
@@ -192,7 +191,6 @@ export default defineConfig({
         plugins: [
           forgeaxShader({ materialPackages }),
           pluginPack({
-            runtimeBinding: createStandaloneRuntimeAssetBinding('browser-tests'),
             roots: [
               resolve(rootDir, 'apps/learn-render/1.getting-started/4.textures/assets'),
               resolve(rootDir, 'apps/learn-render/1.getting-started/5.transformations/assets'),
@@ -235,9 +233,6 @@ export default defineConfig({
         ],
         server: {
           fs: { allow: [rootDir] },
-        },
-        define: {
-          'import.meta.env.FORGEAX_RUNTIME_SCOPE_ID': JSON.stringify('browser-tests'),
         },
         test: {
           name: 'browser',

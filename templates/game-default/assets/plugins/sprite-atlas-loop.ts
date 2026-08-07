@@ -26,8 +26,6 @@ export type SpriteAtlasSnapshot = {
   readonly frameCount: number;
   readonly frameDuration: number;
   readonly trackedEntities: number;
-  readonly animatedShots: number;
-  readonly animatedHits: number;
   readonly swaps: number;
   readonly guid: string | null;
   readonly name: string | null;
@@ -48,7 +46,6 @@ export type SpriteAtlasLoop = {
   readonly regions: Float32Array;
   readonly snapshot: () => SpriteAtlasSnapshot;
   readonly toggle: () => boolean;
-  readonly recordHit: (entity: EntityHandle) => boolean;
   readonly reset: () => void;
   readonly track: (entity: EntityHandle) => void;
   readonly untrack: (entity: EntityHandle) => void;
@@ -63,8 +60,6 @@ function unavailable(errorCode: string | null = null): SpriteAtlasSnapshot {
     frameCount: FRAME_COUNT,
     frameDuration: FRAME_DURATION,
     trackedEntities: 0,
-    animatedShots: 0,
-    animatedHits: 0,
     swaps: 0,
     guid: null,
     name: null,
@@ -128,9 +123,6 @@ export async function createSpriteAtlasLoop(
   let swaps = 0;
   let errorCode: string | null = null;
   const tracked = new Set<EntityHandle>();
-  const hitEntities = new Set<EntityHandle>();
-  let animatedShots = 0;
-  let animatedHits = 0;
   world.addSystem(Update, {
     name: 'game-default-sprite-animation',
     queries: [],
@@ -157,8 +149,6 @@ export async function createSpriteAtlasLoop(
       frameCount: FRAME_COUNT,
       frameDuration: FRAME_DURATION,
       trackedEntities: tracked.size,
-      animatedShots,
-      animatedHits,
       swaps,
       guid: GAME_DEFAULT_SPRITE_ATLAS_GUID,
       name: assets.resolveName(GAME_DEFAULT_SPRITE_ATLAS_GUID),
@@ -184,26 +174,13 @@ export async function createSpriteAtlasLoop(
       swaps += 1;
       return active;
     },
-    recordHit: (entity) => {
-      if (!tracked.has(entity) || hitEntities.has(entity)) return false;
-      hitEntities.add(entity);
-      animatedHits += 1;
-      return true;
-    },
     reset: () => {
       active = false;
       swaps = 0;
       errorCode = null;
       tracked.clear();
-      hitEntities.clear();
-      animatedShots = 0;
-      animatedHits = 0;
     },
-    track: (entity) => {
-      if (tracked.has(entity)) return;
-      tracked.add(entity);
-      animatedShots += 1;
-    },
+    track: (entity) => { tracked.add(entity); },
     untrack: (entity) => { tracked.delete(entity); },
     get active() { return active; },
   };

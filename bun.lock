@@ -22,7 +22,6 @@
         "@forgeax/engine-rhi-null": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
-        "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-vfx-compiler": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
@@ -63,7 +62,6 @@
         "@forgeax/engine-scene": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -999,7 +997,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1157,7 +1154,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1168,7 +1164,6 @@
       "name": "@forgeax/bevy-orthographic",
       "version": "0.0.0",
       "dependencies": {
-        "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
@@ -1177,7 +1172,6 @@
         "@forgeax/engine-scene": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1707,7 +1701,6 @@
       "name": "@forgeax/bevy-spotlight",
       "version": "0.0.0",
       "dependencies": {
-        "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
@@ -1716,7 +1709,6 @@
         "@forgeax/engine-scene": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1736,7 +1728,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1756,7 +1747,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1777,7 +1767,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1797,7 +1786,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1817,7 +1805,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1940,7 +1927,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -1960,7 +1946,6 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -4277,27 +4262,6 @@
         "vite": "8.0.10",
       },
     },
-    "apps/perf/10k-cubes-lights": {
-      "name": "@forgeax/perf-10k-cubes-lights",
-      "version": "0.0.0",
-      "dependencies": {
-        "@forgeax/engine-app": "workspace:*",
-        "@forgeax/engine-assets-runtime": "workspace:*",
-        "@forgeax/engine-ecs": "workspace:*",
-        "@forgeax/engine-profiler": "workspace:*",
-        "@forgeax/engine-render": "workspace:*",
-        "@forgeax/engine-runtime": "workspace:*",
-        "@forgeax/engine-scene": "workspace:*",
-      },
-      "devDependencies": {
-        "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.71",
-        "playwright": "^1.56.1",
-        "vite": "8.0.10",
-        "vitest": "4.1.5",
-        "webgpu": "^0.4.0",
-      },
-    },
     "apps/preview": {
       "name": "@forgeax/preview",
       "version": "0.0.0",
@@ -4310,7 +4274,6 @@
         "@forgeax/engine-physics-rapier3d": "workspace:*",
         "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
-        "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
       },
       "devDependencies": {
@@ -4726,7 +4689,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-geometry": "workspace:*",
-        "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -5940,8 +5902,6 @@
     "@forgeax/parity-instancing-static": ["@forgeax/parity-instancing-static@workspace:apps/parity/instancing-static"],
 
     "@forgeax/parity-urp-vs-hdrp": ["@forgeax/parity-urp-vs-hdrp@workspace:apps/parity/urp-vs-hdrp"],
-
-    "@forgeax/perf-10k-cubes-lights": ["@forgeax/perf-10k-cubes-lights@workspace:apps/perf/10k-cubes-lights"],
 
     "@forgeax/preview": ["@forgeax/preview@workspace:apps/preview"],
 

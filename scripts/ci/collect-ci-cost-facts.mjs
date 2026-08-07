@@ -1,14 +1,11 @@
 #!/usr/bin/env node
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { parseGhPages } from './parse-gh-pages.mjs';
 
 const maxDelaySeconds = 60;
-const execFileAsync = promisify(execFile);
-const expandedBytesConcurrency = 3;
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -60,19 +57,7 @@ function requiredArtifactClasses(contract, timingEntry) {
     });
   return classes;
 }
-async function mapBatches(values, concurrency, mapper) {
-  const results = [];
-  for (let offset = 0; offset < values.length; offset += concurrency) {
-    const batch = values.slice(offset, offset + concurrency);
-    const settled = await Promise.allSettled(batch.map(mapper));
-    const failure = settled.find((result) => result.status === 'rejected');
-    if (failure) throw failure.reason;
-    results.push(...settled.map((result) => result.value));
-  }
-  return results;
-}
-
-async function measureExpandedBytes(artifacts) {
+function measureExpandedBytes(artifacts) {
   const root = mkdtempSync(join(tmpdir(), 'ci-artifact-expanded-'));
   // Multiple provenance classes can intentionally point at one artifact. Measure each
   // archive once; the facts remain keyed by artifact ID and class projection is unchanged.
@@ -80,13 +65,11 @@ async function measureExpandedBytes(artifacts) {
     ...new Map(artifacts.map((artifact) => [String(artifact.id), artifact])).values(),
   ];
   try {
-    const measurements = await mapBatches(
-      uniqueArtifacts,
-      expandedBytesConcurrency,
-      async (artifact) => {
+    return Object.fromEntries(
+      uniqueArtifacts.map((artifact) => {
         const archive = join(root, `${artifact.id}.zip`);
         const destination = join(root, String(artifact.id));
-        const { stdout: bytes } = await execFileAsync(
+        const bytes = execFileSync(
           'gh',
           ['api', `repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`],
           { encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 },
@@ -95,17 +78,14 @@ async function measureExpandedBytes(artifacts) {
         // Artifact ZIPs can contain duplicate paths when producers merge outputs.
         // Cost collection is a read-only measurement, so overwrite deterministically
         // instead of letting unzip prompt on a non-interactive runner.
-        await execFileAsync('unzip', ['-q', '-o', archive, '-d', destination]);
-        const { stdout: diskUsage } = await execFileAsync('du', ['-sk', destination], {
-          encoding: 'utf8',
-        });
+        execFileSync('unzip', ['-q', '-o', archive, '-d', destination]);
+        const diskUsage = execFileSync('du', ['-sk', destination], { encoding: 'utf8' });
         const kibibytes = Number(diskUsage.trim().split(/\s+/)[0]);
         if (!Number.isFinite(kibibytes))
           fail('ci-cost-expanded-bytes-missing', { artifactId: artifact.id });
         return [artifact.id, kibibytes * 1024];
-      },
+      }),
     );
-    return Object.fromEntries(measurements);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -399,9 +379,7 @@ const sharedProduction = sharedProductionFacts(
 const sharedEvidence = sharedEvidenceFacts(sharedEvidenceInput);
 const expanded =
   input?.expandedBytesByArtifactId ??
-  (await measureExpandedBytes(
-    [...mapping.values()].map((record) => artifactsById.get(record.artifactId)),
-  ));
+  measureExpandedBytes([...mapping.values()].map((record) => artifactsById.get(record.artifactId)));
 const factsArtifacts = [...mapping.values()].map((record) => {
   const artifact = artifactsById.get(record.artifactId);
   const compressedBytes = artifact?.size_in_bytes;

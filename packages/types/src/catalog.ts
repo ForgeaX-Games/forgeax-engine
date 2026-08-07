@@ -95,9 +95,6 @@ export interface CatalogEntry {
  * is safe to apply; a degraded delta carries no identity-bearing changes.
  */
 export interface CatalogDelta {
-  /** Runtime realm identity for dev publications; absent for immutable legacy builds. */
-  readonly scopeId?: string;
-  readonly generation?: number;
   readonly added: readonly CatalogEntry[];
   readonly changed: readonly CatalogEntry[];
   readonly removed: readonly CatalogEntry['guid'][];

@@ -10,7 +10,6 @@ import type {
   RenderFeaturePreparedGraphicsState,
   RenderFeaturePreparedRef,
 } from '../features/prepared-graphics';
-import { createRenderFeatureTarget } from '../features/targets';
 
 const target: ResourceDescriptor = { kind: 'texture', lifetime: 'transient' };
 
@@ -114,96 +113,6 @@ describe('render feature graphics staging', () => {
     expect(contribution.ok).toBe(true);
     if (!contribution.ok) return;
     expect(contribution.value.passes[0]?.descriptor.writes).toEqual(['swapchain']);
-  });
-
-  it('uses render-pipeline target handles to order scene features before post-processing', () => {
-    const colorTarget = createRenderFeatureTarget({
-      kind: 'scene-color',
-      resource: 'sceneColor',
-      format: 'rgba16float',
-      sampleCount: 1,
-    });
-    const depthTarget = createRenderFeatureTarget({
-      kind: 'scene-depth',
-      resource: 'depth',
-      format: 'depth24plus-stencil8',
-      sampleCount: 1,
-    });
-    const targetPass: RenderFeatureGraphicsPassDescriptor = {
-      ...pass,
-      attachments: {
-        colors: [
-          { resource: colorTarget, format: colorTarget.format, loadOp: 'load', storeOp: 'store' },
-        ],
-        depthStencil: {
-          resource: depthTarget,
-          format: depthTarget.format,
-          depthLoadOp: 'load',
-          depthStoreOp: 'store',
-        },
-      },
-    };
-    const staging = createRenderFeatureContributionStaging('synthetic.scene', 0);
-    expect(staging.addGraphicsPass('particles', targetPass).ok).toBe(true);
-    const contribution = staging.commit();
-    expect(contribution.ok).toBe(true);
-    if (!contribution.ok) return;
-
-    const graph = new RenderGraph();
-    graph.addColorTarget('hdrColor', {
-      format: 'rgba16float',
-      size: 'swapchain',
-      sample: 1,
-      usage: 0x10,
-    });
-    graph.addColorTargetAlias('sceneColor', 'hdrColor');
-    graph.addColorTarget('depth', {
-      format: 'depth24plus-stencil8',
-      size: 'swapchain',
-      sample: 1,
-      usage: 0x10,
-    });
-    const observed: string[] = [];
-    graph.addPass('skybox', {
-      reads: [],
-      writes: ['hdrColor'],
-      execute: () => observed.push('skybox'),
-    });
-    graph.addPass('main', {
-      reads: ['hdrColor'],
-      writes: ['sceneColor', 'depth'],
-      execute: () => observed.push('main'),
-    });
-    graph.addPass('tonemap', {
-      reads: ['sceneColor'],
-      writes: ['swapchain'],
-      execute: () => observed.push('tonemap'),
-    });
-    graph.addPass('debug-overlay', {
-      reads: ['sceneColor'],
-      writes: [],
-      execute: () => observed.push('debug-overlay'),
-    });
-    expect(
-      composeRenderFeatureGraph(graph, [contribution.value], (_ctx, _pass, _resolve, execute) => {
-        execute(undefined as never);
-        observed.push('synthetic.scene::particles');
-      }).ok,
-    ).toBe(true);
-
-    expect(graph.compile({ backendKind: 'null', caps: {} as never }).ok).toBe(true);
-    graph.execute(undefined);
-    expect(observed).toEqual([
-      'skybox',
-      'main',
-      'synthetic.scene::particles',
-      'tonemap',
-      'debug-overlay',
-    ]);
-    expect(contribution.value.passes[0]?.descriptor).toMatchObject({
-      reads: ['depth'],
-      writes: ['sceneColor'],
-    });
   });
 
   it('keeps ordinary addPass graph-only and contributes no work for an empty draw list', () => {

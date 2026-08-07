@@ -9,7 +9,6 @@ import type {
   RenderFeaturePreparedRef,
   RenderFeatureVertexDataDescriptor,
 } from './prepared-graphics';
-import type { RenderFeatureTargetHandle } from './targets';
 
 export type PreparedGraphicsKind = Exclude<PreparedKind, 'attachment'>;
 
@@ -65,10 +64,7 @@ export interface PreparedGraphicsTransaction {
   owns(reference: RenderFeaturePreparedRef): boolean;
   graphicsState(
     capabilityAvailable: boolean,
-    attachments: readonly {
-      readonly resource: string | RenderFeatureTargetHandle;
-      readonly format: string;
-    }[],
+    attachments: readonly { readonly resource: string; readonly format: string }[],
   ): RenderFeaturePreparedGraphicsState;
   commit(): Result<PreparedGraphicsStoreSnapshot, RenderError>;
   abort(): void;
@@ -165,7 +161,6 @@ function normalizeDescriptor(
         vertexLayout: pipeline.vertexLayout,
         colorFormats: Object.freeze([...pipeline.colorFormats]),
         ...(pipeline.depthFormat === undefined ? {} : { depthFormat: pipeline.depthFormat }),
-        ...(pipeline.sampleCount === undefined ? {} : { sampleCount: pipeline.sampleCount }),
         ...(pipeline.renderState === undefined
           ? {}
           : {
@@ -312,10 +307,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
 
   graphicsState(
     capabilityAvailable: boolean,
-    attachments: readonly {
-      readonly resource: string | RenderFeatureTargetHandle;
-      readonly format: string;
-    }[],
+    attachments: readonly { readonly resource: string; readonly format: string }[],
   ): RenderFeaturePreparedGraphicsState {
     const items = [...(this.committedSlot?.items.values() ?? []), ...this.overlay.values()];
     return {

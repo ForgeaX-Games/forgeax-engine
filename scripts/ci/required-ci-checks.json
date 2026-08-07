@@ -2,7 +2,6 @@
   "build-artifacts",
   "primary-pnpm",
   "coverage-pnpm",
-  "coverage-perf",
   "vitest-browser",
   "shared-inputs-browser",
   "smoke-fleet",

@@ -2,7 +2,7 @@
 #import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
-#import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, scaleTangentSpaceNormal, applyTBN}
+#import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, applyTBN}
 #import forgeax_pbr::lighting_directional::{evalDirectional}
 #import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot, evalSpotShadowed}
 #ifdef POINT_SHADOW_AVAILABLE
@@ -119,7 +119,6 @@ struct Material {
   specularTintCoordinates       : MaterialTextureCoordinates,
   emissiveCoordinates           : MaterialTextureCoordinates,
   occlusionCoordinates          : MaterialTextureCoordinates,
-  normalScale                   : f32,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -374,9 +373,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // unchanged.
   let normalUv = transformedMaterialUv(material.normalCoordinates, in);
   let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalCoordinates.metadata.zw).rg;
-  let normTangent = scaleTangentSpaceNormal(
-    decodeTangentSpaceNormalRg(normSampleRg), material.normalScale,
-  );
+  let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
   let v = normalize(view.cameraPos - in.worldPos);
@@ -604,9 +601,7 @@ fn fs_gbuffer(in : VsOut) -> GBufferOutput {
 
   let normalUv = transformedMaterialUv(material.normalCoordinates, in);
   let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalCoordinates.metadata.zw).rg;
-  let normTangent = scaleTangentSpaceNormal(
-    decodeTangentSpaceNormalRg(normSampleRg), material.normalScale,
-  );
+  let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
   let emissiveUv = transformedMaterialUv(material.emissiveCoordinates, in);

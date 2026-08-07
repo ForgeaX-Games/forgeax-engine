@@ -14,7 +14,6 @@ import {
   type CookExecution,
   type ProviderProvenance,
   type ResourceRevision,
-  type RuntimeAssetBinding,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 
@@ -129,56 +128,13 @@ export function parseCatalog(
   raw: unknown,
   resolveUrl: (packageUrl: string) => string = (packageUrl) => packageUrl,
   expectedRevision?: ResourceRevision,
-  expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>,
 ): Result<Map<string, CatalogRecord>, AssetError> {
-  let rows: readonly unknown[];
-  if (expectedScope !== undefined) {
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-      return err(
-        parseError(
-          'scoped catalog snapshot to be an object with schema, scopeId, generation, authority, and entries',
-        ),
-      );
-    }
-    const snapshot = raw as Record<string, unknown>;
-    if (
-      snapshot.schemaVersion !== 'runtime-catalog-snapshot-v1' ||
-      typeof snapshot.scopeId !== 'string' ||
-      typeof snapshot.generation !== 'number' ||
-      !Number.isSafeInteger(snapshot.generation) ||
-      !Array.isArray(snapshot.entries)
-    ) {
-      return err(parseError('scoped catalog snapshot to satisfy its runtime schema'));
-    }
-    if (
-      snapshot.scopeId !== expectedScope.scopeId ||
-      snapshot.generation !== expectedScope.generation
-    ) {
-      return err(
-        parseError('scoped catalog snapshot to match the active scope and generation', {
-          expectedScope,
-          actualScope: { scopeId: snapshot.scopeId, generation: snapshot.generation },
-        }),
-      );
-    }
-    if (snapshot.authority !== 'authoritative') {
-      return err(
-        parseError(
-          'scoped catalog snapshot authority to be authoritative before identity lookup',
-          { authority: snapshot.authority, diagnostics: snapshot.diagnostics },
-          'repair the active game catalog before loading assets',
-        ),
-      );
-    }
-    rows = snapshot.entries;
-  } else if (Array.isArray(raw)) {
-    rows = raw;
-  } else {
+  if (!Array.isArray(raw)) {
     return err(parseError('pack-index.json to be a JSON array'));
   }
 
   const catalog = new Map<string, CatalogRecord>();
-  for (const item of rows) {
+  for (const item of raw) {
     if (item === null || typeof item !== 'object') {
       return err(parseError('each catalog row to be an object'));
     }
@@ -284,7 +240,6 @@ export async function fetchCatalog(
   fetch: CatalogFetch,
   resolveUrl?: (packageUrl: string) => string,
   expectedRevision?: ResourceRevision,
-  expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>,
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
   let raw: unknown;
   try {
@@ -308,17 +263,13 @@ export async function fetchCatalog(
       }),
     );
   }
-  return parseCatalog(raw, resolveUrl, expectedRevision, expectedScope);
+  return parseCatalog(raw, resolveUrl, expectedRevision);
 }
 
 export function fetchPackIndex(
   registry: AssetRegistry,
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
-  return fetchCatalog(
-    registry.packIndexUrl as string,
-    globalThis.fetch,
-    (packageUrl) => resolveCatalogAssetUrl(registry, packageUrl),
-    undefined,
-    registry.runtimeBinding,
+  return fetchCatalog(registry.packIndexUrl as string, globalThis.fetch, (packageUrl) =>
+    resolveCatalogAssetUrl(registry, packageUrl),
   );
 }

@@ -19,10 +19,6 @@
       "types": "./dist/capture-browser.d.ts",
       "import": "./dist/capture-browser.mjs"
     },
-    "./dev-routes": {
-      "types": "./dist/dev-routes.d.ts",
-      "import": "./dist/dev-routes.mjs"
-    },
     "./inspector": {
       "types": "./dist/inspector.d.ts",
       "import": "./dist/inspector.mjs"

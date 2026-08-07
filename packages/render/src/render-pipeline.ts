@@ -24,17 +24,9 @@
 // no longer reachable through the public pipeline ctx (AC-08 oracle).
 
 import type { RenderGraph } from '@forgeax/engine-render-graph';
-import type { RenderFeatureTargetHandle } from './features/targets';
 import type { RenderPipelineContext, RenderPipelineData } from './render-pipeline-context';
 
 export type { RenderPipelineContext, RenderPipelineData } from './render-pipeline-context';
-
-/** Narrow input used by a pipeline to publish logical feature attachments. */
-export interface RenderFeatureTargetContext {
-  readonly camera: Pick<RenderPipelineData['camera'], 'tonemap' | 'antialias'>;
-  readonly colorAttachmentFormat: string;
-  readonly backendKind: string;
-}
 
 /**
  * The forgeax render pipeline contract: a registrable, installable, hot-swappable unit
@@ -55,10 +47,6 @@ export interface RenderFeatureTargetContext {
  * - `execute(ctx)` runs the compiled graph for one frame (`graph.execute(ctx)`).
  */
 export interface RenderPipeline<Ctx = RenderPipelineContext, Data = RenderPipelineData> {
-  /** Publish the scene color/depth contract for producer-owned graphics features. */
-  readonly getRenderFeatureTargets?: (
-    context: RenderFeatureTargetContext,
-  ) => readonly RenderFeatureTargetHandle[];
   buildGraph(ctx: Ctx, data: Data): RenderGraph<Ctx> | null;
   execute(ctx: Ctx): void;
 }

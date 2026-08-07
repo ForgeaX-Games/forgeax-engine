@@ -1,7 +1,7 @@
 // @forgeax/engine-state -- ScopedTo components + despawnOnExit/Enter (M3 / m3w2)
 //
 // Per-token __scopedTo__<name> components: defineComponent with two enum fields
-// (value = u32 variant index, mode = exit/enter enum). Components are lazily
+// (value = u32 variant index, mode = 0=exit / 1=enter). Components are lazily
 // created on first use via getOrCreateScopedComponent.
 //
 // despawnOnExit / despawnOnEnter are free functions that add the corresponding
@@ -26,7 +26,7 @@ import { getRegisteredTokens } from './define-state';
 
 const SCOPED_COMPONENTS = new Map<string, ReturnType<typeof defineComponent>>();
 
-/** Fixed label-to-value map for the ScopedTo `mode` enum field. */
+/** Fixed label→value map for the ScopedTo `mode` enum field (0=exit / 1=enter). */
 export const SCOPED_MODE_VALUE = { exit: 0, enter: 1 } as const;
 
 function getOrCreateScopedComponent(token: StateToken): ReturnType<typeof defineComponent> {
@@ -44,7 +44,7 @@ function getOrCreateScopedComponent(token: StateToken): ReturnType<typeof define
 
   const comp = defineComponent(`__scopedTo__${token.name}`, {
     value: { type: 'enum', default: 0, labels: valueLabels },
-    mode: { type: 'enum', default: SCOPED_MODE_VALUE.exit, labels: SCOPED_MODE_VALUE },
+    mode: { type: 'enum', default: 0, labels: SCOPED_MODE_VALUE },
   });
   SCOPED_COMPONENTS.set(token.name, comp);
   return comp;
@@ -63,7 +63,7 @@ function resolveVariantIndex(token: StateToken, variant: string): number {
 /**
  * Mark `entity` to be despawned when `token` leaves `variant`.
  *
- * Adds a `__scopedTo__<token.name>` component with mode=exit
+ * Adds a `__scopedTo__<token.name>` component with mode=0 (exit)
  * and value=<variant index>. When transitionStatesSystem detects
  * the token transitions away from `variant`, it despawns the entity.
  *
@@ -95,7 +95,7 @@ export function despawnOnExit<T extends StateToken>(
 ): void {
   const idx = resolveVariantIndex(token, variant);
   const scoped = getOrCreateScopedComponent(token);
-  const result = addScopedComponent(world, entity, scoped, idx, SCOPED_MODE_VALUE.exit);
+  const result = addScopedComponent(world, entity, scoped, idx, 0);
   if (!result.ok) {
     throw result.error;
   }
@@ -104,7 +104,7 @@ export function despawnOnExit<T extends StateToken>(
 /**
  * Mark `entity` to be despawned when `token` enters `variant`.
  *
- * Adds a `__scopedTo__<token.name>` component with mode=enter
+ * Adds a `__scopedTo__<token.name>` component with mode=1 (enter)
  * and value=<variant index>. When transitionStatesSystem detects
  * the token transitions into `variant`, it despawns the entity.
  *
@@ -119,7 +119,7 @@ export function despawnOnEnter<T extends StateToken>(
 ): void {
   const idx = resolveVariantIndex(token, variant);
   const scoped = getOrCreateScopedComponent(token);
-  const result = addScopedComponent(world, entity, scoped, idx, SCOPED_MODE_VALUE.enter);
+  const result = addScopedComponent(world, entity, scoped, idx, 1);
   if (!result.ok) {
     throw result.error;
   }
