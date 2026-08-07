@@ -7,7 +7,6 @@
 
 // ─── glyph text layout (feat-20260531-world-space-msdf-text-rendering) ─────
 export {
-  FloatsPerGlyphVertex,
   FONT_CONCURRENCY_LIMIT,
   type GlyphLayoutResult,
   layoutGlyphText,

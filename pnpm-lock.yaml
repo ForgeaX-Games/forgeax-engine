@@ -54,6 +54,12 @@ importers:
       '@forgeax/engine-shader':
         specifier: workspace:*
         version: link:packages/shader
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:packages/types
+      '@forgeax/engine-vfx-compiler':
+        specifier: workspace:*
+        version: link:packages/vfx-compiler
       '@forgeax/engine-vite-plugin-pack':
         specifier: workspace:*
         version: link:packages/vite-plugin-pack
@@ -204,6 +210,49 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/bevy/2d-shapes:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-geometry':
+        specifier: workspace:*
+        version: link:../../../packages/geometry
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../../packages/math
+      '@forgeax/engine-render':
+        specifier: workspace:*
+        version: link:../../../packages/render
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-scene':
+        specifier: workspace:*
+        version: link:../../../packages/scene
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/bevy/2d-top-down-camera:
     dependencies:
       '@forgeax/engine-app':
@@ -283,6 +332,9 @@ importers:
 
   apps/bevy/3d-scene:
     dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
       '@forgeax/engine-assets-runtime':
         specifier: workspace:*
         version: link:../../../packages/assets-runtime
@@ -302,6 +354,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/scene
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -317,6 +372,9 @@ importers:
 
   apps/bevy/3d-shapes:
     dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
       '@forgeax/engine-assets-runtime':
         specifier: workspace:*
         version: link:../../../packages/assets-runtime
@@ -342,6 +400,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -563,6 +624,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -793,6 +857,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -832,6 +899,52 @@ importers:
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
+  apps/bevy/bounding-2d:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-assets-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/assets-runtime
+      '@forgeax/engine-debug-draw':
+        specifier: workspace:*
+        version: link:../../../packages/debug-draw
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-input':
+        specifier: workspace:*
+        version: link:../../../packages/input
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../../packages/math
+      '@forgeax/engine-render':
+        specifier: workspace:*
+        version: link:../../../packages/render
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-scene':
+        specifier: workspace:*
+        version: link:../../../packages/scene
     devDependencies:
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
@@ -1316,6 +1429,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -1861,6 +1977,9 @@ importers:
 
   apps/bevy/lighting:
     dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
       '@forgeax/engine-assets-runtime':
         specifier: workspace:*
         version: link:../../../packages/assets-runtime
@@ -1880,6 +1999,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/scene
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -1920,6 +2042,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -2124,6 +2249,52 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/bevy/mesh2d-arcs:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-debug-draw':
+        specifier: workspace:*
+        version: link:../../../packages/debug-draw
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-geometry':
+        specifier: workspace:*
+        version: link:../../../packages/geometry
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../../packages/math
+      '@forgeax/engine-render':
+        specifier: workspace:*
+        version: link:../../../packages/render
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-scene':
+        specifier: workspace:*
+        version: link:../../../packages/scene
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/bevy/mouse-input:
     dependencies:
       '@forgeax/engine-app':
@@ -2200,6 +2371,9 @@ importers:
 
   apps/bevy/orthographic:
     dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
       '@forgeax/engine-assets-runtime':
         specifier: workspace:*
         version: link:../../../packages/assets-runtime
@@ -2219,6 +2393,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/scene
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -2345,6 +2522,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/scene
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3308,6 +3488,9 @@ importers:
 
   apps/bevy/spotlight:
     dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
       '@forgeax/engine-assets-runtime':
         specifier: workspace:*
         version: link:../../../packages/assets-runtime
@@ -3327,6 +3510,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/scene
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3364,6 +3550,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3401,6 +3590,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3441,6 +3633,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3478,6 +3673,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3515,6 +3713,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3555,6 +3756,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3758,6 +3962,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3795,6 +4002,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -3909,6 +4119,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -4627,6 +4840,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -4949,6 +5165,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
@@ -5461,9 +5680,15 @@ importers:
       '@forgeax/engine-fbx':
         specifier: workspace:*
         version: link:../../../packages/fbx
+      '@forgeax/engine-gltf':
+        specifier: workspace:*
+        version: link:../../../packages/gltf
       '@forgeax/engine-image':
         specifier: workspace:*
         version: link:../../../packages/image
+      '@forgeax/engine-import':
+        specifier: workspace:*
+        version: link:../../../packages/import
       '@forgeax/engine-pack':
         specifier: workspace:*
         version: link:../../../packages/pack
@@ -5477,17 +5702,43 @@ importers:
       playwright:
         specifier: ^1.50.0
         version: 1.56.1
+      upng-js:
+        specifier: ^2.1.0
+        version: 2.1.0
 
-  apps/hello/m3-programmable-rendering: {}
+  apps/hello/m3-programmable-rendering:
+    devDependencies:
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
 
   apps/hello/m4-interactive-simulation: {}
 
   apps/hello/m5-interaction-media: {}
 
-  apps/hello/m6-inspection-forensics: {}
+  apps/hello/m6-inspection-forensics:
+    devDependencies:
+      '@forgeax/engine-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-debug
+      playwright:
+        specifier: ^1.50.0
+        version: 1.56.1
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
 
   apps/hello/m7-backend-recovery:
     devDependencies:
+      '@forgeax/engine-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-debug
+      '@forgeax/engine-rhi-null':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-null
+      '@forgeax/engine-rhi-webgpu':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-webgpu
       playwright:
         specifier: ^1.50.0
         version: 1.56.1
@@ -5718,6 +5969,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
@@ -6829,6 +7083,9 @@ importers:
       '@forgeax/engine-rhi':
         specifier: workspace:*
         version: link:../../../../packages/rhi
+      '@forgeax/engine-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../../packages/rhi-debug
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:../../../../packages/runtime
@@ -6842,12 +7099,18 @@ importers:
       '@forgeax/apps-shared':
         specifier: workspace:*
         version: link:../../../shared
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../../packages/vite-plugin-shader
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      playwright:
+        specifier: ^1.50.0
+        version: 1.56.1
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
@@ -8224,6 +8487,9 @@ importers:
       '@forgeax/apps-shared':
         specifier: workspace:*
         version: link:../../../shared
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../../../../packages/profiler
       '@forgeax/engine-rhi-debug':
         specifier: workspace:*
         version: link:../../../../packages/rhi-debug
@@ -8637,6 +8903,49 @@ importers:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
 
+  apps/perf/10k-cubes-lights:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-assets-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/assets-runtime
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../../../packages/profiler
+      '@forgeax/engine-render':
+        specifier: workspace:*
+        version: link:../../../packages/render
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-scene':
+        specifier: workspace:*
+        version: link:../../../packages/scene
+    devDependencies:
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      playwright:
+        specifier: ^1.56.1
+        version: 1.56.1
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      vitest:
+        specifier: 4.1.5
+        version: 4.1.5(@types/node@25.8.0)(@vitest/browser-playwright@4.1.5)(@vitest/coverage-v8@4.1.5)(jsdom@26.1.0)(vite@8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7))
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/preview:
     dependencies:
       '@forgeax/engine-app':
@@ -8663,6 +8972,9 @@ importers:
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@forgeax/engine-ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -8679,6 +8991,9 @@ importers:
       '@forgeax/engine-image':
         specifier: workspace:*
         version: link:../../packages/image
+      '@forgeax/engine-vfx-compiler':
+        specifier: workspace:*
+        version: link:../../packages/vfx-compiler
       '@forgeax/engine-vite-plugin-pack':
         specifier: workspace:*
         version: link:../../packages/vite-plugin-pack
@@ -8691,6 +9006,12 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      pixelmatch:
+        specifier: ^7.0.0
+        version: 7.2.0
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
@@ -9363,6 +9684,9 @@ importers:
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../ecs
+      '@forgeax/engine-geometry':
+        specifier: workspace:*
+        version: link:../geometry
       '@forgeax/engine-rhi':
         specifier: workspace:*
         version: link:../rhi
@@ -9410,6 +9734,12 @@ importers:
 
   packages/import:
     dependencies:
+      '@forgeax/engine-geometry':
+        specifier: workspace:*
+        version: link:../geometry
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../pack
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
@@ -9480,6 +9810,9 @@ importers:
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
+      '@noble/hashes':
+        specifier: ^2.2.0
+        version: 2.2.0
       fast-glob:
         specifier: ^3.3.3
         version: 3.3.3
@@ -9936,6 +10269,9 @@ importers:
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
+      '@noble/hashes':
+        specifier: ^2.2.0
+        version: 2.2.0
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
@@ -10208,6 +10544,12 @@ importers:
       '@forgeax/engine-ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@forgeax/engine-vfx':
+        specifier: workspace:*
+        version: link:../../packages/vfx
+      '@forgeax/engine-vfx-render':
+        specifier: workspace:*
+        version: link:../../packages/vfx-render
     devDependencies:
       '@webgpu/types':
         specifier: ^0.1.71
@@ -12172,6 +12514,7 @@ packages:
 
   pixelmatch@7.2.0:
     resolution: {integrity: sha512-xhcb4yHu9sM/G7foGzoLtXYcC0zHEaOXXjRKhGup0fw78Nf2Tkiapv4EQyMzrbcmQPsllAI7DbFY2UT7PlI9Pg==}
+    hasBin: true
 
   pkg-dir@3.0.0:
     resolution: {integrity: sha512-/E57AYkoeQ25qkxMj5PBOVgF8Kiu/h7cYS30Z5+R7WaiCCBfLq58ZI/dSeaEKb9WVJV5n/03QwrN3IeWIFllvw==}

@@ -11,4 +11,5 @@ export default withRhiDebug({
   here,
   rootDepth: 4,
   port: 5200,
+  engineEntries: { pointShadows: true },
 });

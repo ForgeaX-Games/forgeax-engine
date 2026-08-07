@@ -15,6 +15,9 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
+    "rhiDebug": {
+      "riskFamilies": ["screen-space-post"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-5-advanced-lighting-9-ssao smoke",
     "metrics": {
       "bundle-size": {

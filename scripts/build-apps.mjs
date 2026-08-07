@@ -24,6 +24,7 @@ import {
   writeReceipt,
 } from './build-task-cache.mjs';
 import {
+  createPrebuildInvocation,
   createViteBuildInvocation,
   resolveViteCli,
   validateCanonicalAppBuilds,
@@ -192,6 +193,21 @@ function runApp(app, className, appFactsDir, viteCliPath) {
   return new Promise((resolveRun) => {
     const startedAt = performance.now();
     let peakRssBytes = 0;
+    const prebuild = createPrebuildInvocation({ app });
+    if (prebuild !== null) {
+      const result = spawnSync(prebuild.command, prebuild.args, prebuild.options);
+      if (result.status !== 0) {
+        resolveRun({
+          ok: false,
+          code: result.status ?? 1,
+          signal: result.signal,
+          className,
+          durationMs: Number((performance.now() - startedAt).toFixed(1)),
+          peakRssBytes,
+        });
+        return;
+      }
+    }
     const invocation = createViteBuildInvocation({
       app,
       viteCliPath,

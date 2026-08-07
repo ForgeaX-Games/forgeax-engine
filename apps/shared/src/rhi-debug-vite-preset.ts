@@ -20,7 +20,7 @@
 
 import { resolve } from 'node:path';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
-import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { type ForgeaXShaderOptions, forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 // defineConfig is taken from vitest/config (not vite) so the returned config may
 // carry the `test` field; importing it from 'vite' rejects `test` as an unknown
 // property (TS2769). Plugin types are deliberately NOT annotated below -- the
@@ -57,6 +57,8 @@ export interface RhiDebugViteOptions {
    */
   readonly keepBinExternal?: boolean;
   readonly materialPackages?: readonly string[];
+  /** Optional engine fullscreen entries consumed by this demo. */
+  readonly engineEntries?: ForgeaXShaderOptions['engineEntries'];
 }
 
 /**
@@ -78,11 +80,15 @@ export function withRhiDebug(opts: RhiDebugViteOptions) {
     extraPlugins = [],
     keepBinExternal = false,
     materialPackages,
+    engineEntries,
   } = opts;
   const upSegments = Array.from({ length: rootDepth }, () => '..');
   const monorepoRoot = resolve(here, ...upSegments);
 
-  const shaderOptions = materialPackages === undefined ? {} : { materialPackages };
+  const shaderOptions: ForgeaXShaderOptions = {
+    ...(materialPackages === undefined ? {} : { materialPackages }),
+    ...(engineEntries === undefined ? {} : { engineEntries }),
+  };
   const plugins = [forgeaxShader(shaderOptions), vitePluginRhiDebug(), ...extraPlugins];
 
   return defineConfig({

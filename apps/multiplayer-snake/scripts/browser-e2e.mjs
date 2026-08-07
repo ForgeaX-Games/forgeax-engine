@@ -445,7 +445,7 @@ async function main() {
         const inspection = JSON.parse((await execFileAsync(process.execPath, [cli, 'inspect-offline', capture.tapePath, String(drawIndex), '--fields=rt'], { maxBuffer: 2_000_000 })).stdout);
         if (typeof inspection.rt !== 'string') throw new Error(`rhi-debug: color draw has no render-target PNG: ${JSON.stringify(inspection)}`);
         await access(inspection.rt);
-        captures.push({ tapePath: capture.tapePath, drawIndex, renderTarget: inspection.rt });
+        captures.push({ mode: 'structural', tapePath: capture.tapePath, drawIndex, renderTarget: inspection.rt });
       }
       if (captures.length !== 1) throw new Error('rhi-debug: did not collect a color-draw capture');
       console.log(JSON.stringify({ rhiDebugCapture: captures }));

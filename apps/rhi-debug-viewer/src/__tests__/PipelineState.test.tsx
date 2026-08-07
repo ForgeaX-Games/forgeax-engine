@@ -26,6 +26,7 @@ import { SelectionContext } from '../selection-context';
 import { instanceDataSectionAnchor, instanceRowAnchor } from '../selectors';
 import { TapeContext, ViewModelContext } from '../viewer-context';
 import type { CreateDescriptor, DrawEntry, ViewModel } from '../viewer-model';
+import { buildResourceLifecycle } from '../viewer-model';
 
 const mockProps = {
   api: {},
@@ -141,6 +142,7 @@ function mockViewModel(): ViewModel {
         },
       ],
     ]),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 

@@ -1,6 +1,6 @@
 // @forgeax/engine-geometry - single-import barrel.
 //
-// AI users get the 7 procedural geometry factories under one namespace import,
+// AI users get the procedural geometry factories under one namespace import,
 // each returning `Result<MeshAsset, AssetError>` (charter F1 single-entry
 // indexability; P3 explicit failure). Alongside them: the vertex attribute
 // layout SSOT (deriveVertexBufferLayout / buildMeshAttributeMapForUvSets /
@@ -19,6 +19,16 @@ export {
 export { createCapsuleGeometry } from './capsule';
 export { createConeGeometry } from './cone';
 export { createCylinderGeometry } from './cylinder';
+export {
+  compute2dBounds,
+  create2dGeometry,
+  create2dRingGeometry,
+  type Shape2d,
+  type Shape2dBounds,
+  type Shape2dMeshOptions,
+  type Shape2dPose,
+  type Vec2,
+} from './dim2';
 export { createPlaneGeometry } from './plane';
 export { createSphereGeometry } from './sphere';
 export { computeTangentVec4 } from './tangent';

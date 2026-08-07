@@ -13,7 +13,7 @@
 //       overlay pass to a render-graph. The pass execute closure reads the
 //       internally-registered DebugDraw instance (set by createDebugDrawOnReady).
 
-import type { CreateShaderModule, DebugDraw } from '@forgeax/engine-debug-draw';
+import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import { createDebugDraw } from '@forgeax/engine-debug-draw';
 import type { Mat4 } from '@forgeax/engine-math';
 import type { RenderGraph } from '@forgeax/engine-render-graph';
@@ -28,35 +28,6 @@ import { selectSwapChainFormat } from './surface-format';
  * execute closures. A single renderer has one DebugDraw instance.
  */
 let registeredDebugDraw: DebugDraw | null = null;
-
-/**
- * Dynamically import createShaderModule from the appropriate RHI backend.
- *
- * Mirrors the auto-detect logic in createRenderer: navigator.gpu presence
- * selects rhi-webgpu, otherwise rhi-wgpu (dawn-node). The dynamic import
- * resolves the same module instance already loaded by createRenderer,
- * so it does not pull a second copy.
- */
-async function resolveCreateShaderModule(): Promise<CreateShaderModule> {
-  const nav: { gpu?: unknown } | undefined =
-    typeof globalThis !== 'undefined'
-      ? (globalThis as { navigator?: { gpu?: unknown } }).navigator
-      : undefined;
-  const hasWebGPU = nav !== undefined && 'gpu' in nav && nav.gpu !== undefined;
-
-  // Literal import specifiers (not a variable) so Vite can statically analyze
-  // each branch — mirrors createRenderer's channel-2/channel-3 split.
-  // biome-ignore lint/suspicious/noExplicitAny: dynamic import result shape
-  const backend: Record<string, any> = hasWebGPU
-    ? await import('@forgeax/engine-rhi-webgpu')
-    : await import('@forgeax/engine-rhi-wgpu');
-
-  if (!hasWebGPU && typeof backend.ensureReady === 'function') {
-    await backend.ensureReady();
-  }
-
-  return backend.createShaderModule as CreateShaderModule;
-}
 
 /**
  * Create a DebugDraw instance once `renderer.ready` settles.
@@ -85,8 +56,6 @@ export async function createDebugDrawOnReady(
   const ready = await renderer.ready;
   if (!ready.ok) throw ready.error;
 
-  const createShaderModule = await resolveCreateShaderModule();
-
   const resolvedFormat =
     format ??
     (selectSwapChainFormat(renderer.device.caps.storageBuffer).view as unknown as TextureFormat);
@@ -94,7 +63,7 @@ export async function createDebugDrawOnReady(
   const ddResult = await createDebugDraw({
     device: renderer.device,
     queue: renderer.device.queue,
-    createShaderModule,
+    createShaderModule: renderer._internal_createShaderModule,
     format: resolvedFormat,
   });
   if (!ddResult.ok) throw ddResult.error;

@@ -220,8 +220,10 @@ export interface Replay {
  * Create a Replay object from a Tape and a target RhiDevice.
  *
  * **Caps fail-fast** (m5-1): checks that the target device's caps cover
- * every capability recorded in the tape. Each boolean field in
- * tape.rhiCapsRecorded must be <= the corresponding field in device.caps.
+ * every capability recorded in the tape that its events actually exercise.
+ * Optional texture-compression capabilities are derived from createTexture
+ * formats so a device-wide feature snapshot does not block tapes that never
+ * create a compressed texture.
  * Missing caps produce a DebugError with code='caps-mismatch' and
  * detail.missingCaps listing the RhiCapsRecorded key names.
  *
@@ -248,7 +250,7 @@ export function createReplay(
   // detail.missingCaps carries raw RhiCapsRecordedKey values (typed for
   // AI-user `switch` narrowing, AC-11). hint carries the human-readable
   // labels via CAPS_KEY_LABELS — prose stays out of the structured slot.
-  const missingCaps = computeMissingCaps(tape.rhiCapsRecorded, device.caps);
+  const missingCaps = computeMissingCaps(tape.rhiCapsRecorded, device.caps, tape.events);
   if (missingCaps.length > 0) {
     return err(
       new DebugError({
@@ -354,6 +356,7 @@ export function createReplay(
 // ============================================================================
 
 interface RhiCapsShape {
+  readonly backendKind: RhiDevice['caps']['backendKind'];
   readonly rgba16floatRenderable: boolean;
   readonly float32Filterable: boolean;
   readonly textureCompressionBc: boolean;
@@ -366,12 +369,16 @@ interface RhiCapsShape {
 /**
  * Compute which RhiCapsRecorded keys are not satisfied by the target device caps.
  *
- * The check is: for each boolean field in recorded, if it is `true` and the
- * corresponding target field is `false`, it's a "missing" cap.
+ * The check is: for each boolean field in recorded that the event stream
+ * exercises, if it is `true` and the corresponding target field is `false`,
+ * it's a "missing" cap. Compression fields are recorded from the device-wide
+ * feature set, so their event-level use is derived here from createTexture
+ * formats; otherwise an unrelated adapter feature would over-constrain replay.
  */
 function computeMissingCaps(
   recorded: RhiCapsRecorded,
   targetCaps: RhiCapsShape,
+  events: readonly RhiCallEvent[] = [],
 ): (keyof RhiCapsRecorded)[] {
   const missing: (keyof RhiCapsRecorded)[] = [];
 
@@ -381,13 +388,34 @@ function computeMissingCaps(
   if (recorded.float32Filterable && !targetCaps.float32Filterable) {
     missing.push('float32Filterable');
   }
-  if (recorded.textureCompressionBc && !targetCaps.textureCompressionBc) {
+  const usedCompressionCaps = compressionCapsUsedBy(events);
+  // RhiNull is a structural ledger, not a hardware capability profile. It
+  // accepts every texture descriptor without executing or sampling it, so
+  // compression formats remain structurally replayable even though the null
+  // backend correctly reports no compression hardware.
+  const structuralNull = targetCaps.backendKind === 'null';
+  if (
+    !structuralNull &&
+    recorded.textureCompressionBc &&
+    usedCompressionCaps.bc &&
+    !targetCaps.textureCompressionBc
+  ) {
     missing.push('textureCompressionBc');
   }
-  if (recorded.textureCompressionEtc2 && !targetCaps.textureCompressionEtc2) {
+  if (
+    !structuralNull &&
+    recorded.textureCompressionEtc2 &&
+    usedCompressionCaps.etc2 &&
+    !targetCaps.textureCompressionEtc2
+  ) {
     missing.push('textureCompressionEtc2');
   }
-  if (recorded.textureCompressionAstc && !targetCaps.textureCompressionAstc) {
+  if (
+    !structuralNull &&
+    recorded.textureCompressionAstc &&
+    usedCompressionCaps.astc &&
+    !targetCaps.textureCompressionAstc
+  ) {
     missing.push('textureCompressionAstc');
   }
   if (recorded.storageBuffer && !targetCaps.storageBuffer) {
@@ -398,6 +426,26 @@ function computeMissingCaps(
   }
 
   return missing;
+}
+
+function compressionCapsUsedBy(events: readonly RhiCallEvent[]): {
+  readonly bc: boolean;
+  readonly etc2: boolean;
+  readonly astc: boolean;
+} {
+  let bc = false;
+  let etc2 = false;
+  let astc = false;
+
+  for (const event of events) {
+    if (event.kind !== 'createTexture') continue;
+    const format = event.desc.format;
+    bc ||= format.startsWith('bc');
+    etc2 ||= format.startsWith('etc2-') || format.startsWith('eac-');
+    astc ||= format.startsWith('astc-');
+  }
+
+  return { bc, etc2, astc };
 }
 
 // ============================================================================
@@ -749,6 +797,20 @@ async function replayEvent(
     case 'createTexture':
       replayCreateTexture(event, device, handleMap);
       break;
+
+    case 'destroyBuffer': {
+      const handle = handleMap.get(event.handleId);
+      if (handle !== undefined) device.destroyBuffer(handle as any);
+      handleMap.delete(event.handleId);
+      break;
+    }
+
+    case 'destroyTexture': {
+      const handle = handleMap.get(event.handleId);
+      if (handle !== undefined) device.destroyTexture(handle as any);
+      handleMap.delete(event.handleId);
+      break;
+    }
 
     case 'createTextureView':
       replayCreateTextureView(event, device, handleMap);

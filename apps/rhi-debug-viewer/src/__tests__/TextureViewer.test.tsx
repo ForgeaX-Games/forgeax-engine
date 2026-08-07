@@ -23,6 +23,7 @@ import {
 import { SelectionContext } from '../selection-context';
 import { TapeContext, ViewModelContext } from '../viewer-context';
 import type { ViewModel } from '../viewer-model';
+import { buildResourceLifecycle } from '../viewer-model';
 
 const mockProps = {
   api: {},
@@ -127,6 +128,7 @@ function mockViewModel(): ViewModel {
       },
     ],
     resources: new Map(),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 

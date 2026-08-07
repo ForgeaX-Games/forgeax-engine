@@ -12,6 +12,7 @@
 
 import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
 import type { AnimationTargetIdValue } from '@forgeax/engine-types';
+import { decodeF32Accessor } from './decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
@@ -38,6 +39,8 @@ interface AnimationJson {
   readonly samplers: readonly SamplerJson[];
 }
 
+const ANIMATION_ACCESSOR_TYPES = ['SCALAR', 'VEC2', 'VEC3', 'VEC4'] as const;
+
 interface AccessorJson {
   readonly bufferView?: number;
   readonly componentType: number;
@@ -50,79 +53,6 @@ interface BufferViewJson {
   readonly buffer: number;
   readonly byteOffset?: number;
   readonly byteLength: number;
-}
-
-/**
- * Decode a F32 SCALAR or VEC accessor into a Float32Array.
- */
-function decodeFloatAccessor(
-  accessorIndex: number,
-  accessor: AccessorJson,
-  bufferViews: readonly BufferViewJson[],
-  buffers: readonly Uint8Array[],
-): Result<Float32Array, GltfError> {
-  if (accessor.componentType !== 5126) {
-    return err(
-      gltfErr('gltf-accessor-type-mismatch', { accessorIndex, reason: 'unknownComponentType' }),
-    );
-  }
-  const bvIndex = accessor.bufferView;
-  if (bvIndex === undefined) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: 0,
-        byteLength: 0,
-        bufferIndex: 0,
-      }),
-    );
-  }
-  const bv = bufferViews[bvIndex];
-  if (bv === undefined) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: 0,
-        byteLength: 0,
-        bufferIndex: bvIndex,
-      }),
-    );
-  }
-  const buf = buffers[bv.buffer];
-  if (buf === undefined) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: bv.byteOffset ?? 0,
-        byteLength: bv.byteLength,
-        bufferIndex: bv.buffer,
-      }),
-    );
-  }
-  const typeCounts: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
-  const componentCount = typeCounts[accessor.type];
-  if (componentCount === undefined) {
-    return err(
-      gltfErr('gltf-accessor-type-mismatch', { accessorIndex, reason: 'unknownComponentType' }),
-    );
-  }
-  const elementSize = 4 * componentCount;
-  const totalBytes = elementSize * accessor.count;
-  const absoluteOffset = (bv.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
-  if (absoluteOffset + totalBytes > buf.byteLength) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: absoluteOffset,
-        byteLength: totalBytes,
-        bufferIndex: bv.buffer,
-      }),
-    );
-  }
-  const out = new Float32Array(accessor.count * componentCount);
-  const src = new Float32Array(buf.buffer, buf.byteOffset + absoluteOffset, out.length);
-  out.set(src);
-  return ok(out);
 }
 
 export interface GltfAnimationChannelRecord {
@@ -215,7 +145,13 @@ export function parseAnimation(
           }),
         );
       }
-      const inputResult = decodeFloatAccessor(sampler.input, inputAcc, bufferViews, buffers);
+      const inputResult = decodeF32Accessor(
+        sampler.input,
+        inputAcc,
+        ANIMATION_ACCESSOR_TYPES,
+        bufferViews,
+        buffers,
+      );
       if (!inputResult.ok) return err(inputResult.error);
 
       const outputAcc = accessors[sampler.output];
@@ -229,7 +165,13 @@ export function parseAnimation(
           }),
         );
       }
-      const outputResult = decodeFloatAccessor(sampler.output, outputAcc, bufferViews, buffers);
+      const outputResult = decodeF32Accessor(
+        sampler.output,
+        outputAcc,
+        ANIMATION_ACCESSOR_TYPES,
+        bufferViews,
+        buffers,
+      );
       if (!outputResult.ok) return err(outputResult.error);
 
       decodedSamplers.push({

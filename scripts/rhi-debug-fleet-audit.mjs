@@ -23,6 +23,7 @@ for (let i = 0; i < argv.length; i++) {
 const root = resolve(args.root ?? process.cwd());
 const appsRoot = resolve(root, 'apps');
 const CAPTURE_SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.ts', '.tsx']);
+const GENERATED_SOURCE_DIRECTORIES = new Set(['coverage', 'dist', 'node_modules']);
 const RENDER_PACKAGES = new Set([
   '@forgeax/engine-render',
   '@forgeax/engine-render-graph',
@@ -77,7 +78,7 @@ function walkSource(dir, files = []) {
     return files;
   }
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+    if (GENERATED_SOURCE_DIRECTORIES.has(entry.name) || entry.name.startsWith('.')) continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) walkSource(path, files);
     else if (CAPTURE_SOURCE_EXTENSIONS.has(entry.name.slice(entry.name.lastIndexOf('.'))))

@@ -10,11 +10,22 @@ describe('prepared graphics operation snapshots', () => {
       vertexLayout: string;
       colorFormats: string[];
       depthFormat: string;
+      renderState: {
+        depthWriteEnabled: boolean;
+        blend: GPUBlendState;
+      };
     } = {
       shader: 'synthetic::forward',
       vertexLayout: 'position',
       colorFormats: ['rgba8unorm'],
       depthFormat: 'depth24plus-stencil8',
+      renderState: {
+        depthWriteEnabled: false,
+        blend: {
+          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+        },
+      },
     };
     const vertexData = new Float32Array([0, 1, 2, 3, 4, 5]);
     const indexData = new Uint16Array([0, 1, 2]);
@@ -40,6 +51,8 @@ describe('prepared graphics operation snapshots', () => {
     if (!pipelineRef.ok || !bindingsRef.ok || !vertexRef.ok || !indexRef.ok) return;
 
     pipeline.colorFormats[0] = 'bgra8unorm';
+    pipeline.renderState.depthWriteEnabled = true;
+    pipeline.renderState.blend.color.dstFactor = 'zero';
     vertexData[0] = 99;
     indexData[0] = 99;
 
@@ -55,6 +68,13 @@ describe('prepared graphics operation snapshots', () => {
       vertexLayout: 'position',
       colorFormats: ['rgba8unorm'],
       depthFormat: 'depth24plus-stencil8',
+      renderState: {
+        depthWriteEnabled: false,
+        blend: {
+          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+        },
+      },
     });
     expect(bindingsItem?.descriptor).toMatchObject({
       pipeline: pipelineRef.value,

@@ -11,10 +11,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:rhi-debug": "node scripts/smoke.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-5-advanced-lighting-3-2-point-shadows smoke",
+    "rhiDebug": {
+      "riskFamilies": ["lighting-shadows"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

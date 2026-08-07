@@ -16,6 +16,32 @@ export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Squared length of a four-component numeric value. */
+export function lengthSq4(a: ArrayLike<number>): number {
+  const x = a[0] as number;
+  const y = a[1] as number;
+  const z = a[2] as number;
+  const w = a[3] as number;
+  return x * x + y * y + z * z + w * w;
+}
+
+/** Normalize a four-component numeric value into a typed-array output. */
+export function normalize4(out: Float32Array, a: ArrayLike<number>, epsilon: number): void {
+  const lenSq = lengthSq4(a);
+  if (lenSq < epsilon) {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    out[3] = 0;
+    return;
+  }
+  const inv = 1 / Math.sqrt(lenSq);
+  out[0] = (a[0] as number) * inv;
+  out[1] = (a[1] as number) * inv;
+  out[2] = (a[2] as number) * inv;
+  out[3] = (a[3] as number) * inv;
+}
+
 /**
  * Exponential-decay smoothing factor for frame-rate-INDEPENDENT damping:
  * `1 − exp(−decayRate · dt)`. The single value the vec `smoothDamp` helpers interpolate by.
@@ -61,21 +87,4 @@ export function clamp(v: number, min: number, max: number): number {
   if (v < min) return min;
   if (v > max) return max;
   return v;
-}
-
-/**
- * Approximate equality: |a-b| ≤ epsilon. NaN inputs always return false (matches IEEE 754).
- * Default epsilon 1e-6 fits Float32 single-precision comparisons.
- */
-export function approxEqual(a: number, b: number, epsilon = 1e-6): boolean {
-  if (Number.isNaN(a) || Number.isNaN(b)) return false;
-  return Math.abs(a - b) <= epsilon;
-}
-
-/**
- * 4-component Euclidean length sqrt(x²+y²+z²+w²). Hand-expanded to avoid the variadic overhead of
- * Math.hypot (research §Finding 5.2 hot-path optimization template).
- */
-export function hypot4(x: number, y: number, z: number, w: number): number {
-  return Math.sqrt(x * x + y * y + z * z + w * w);
 }

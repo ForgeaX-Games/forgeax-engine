@@ -5,9 +5,9 @@ import { Update } from '@forgeax/engine-ecs';
 // LearnOpenGL section 2.lighting 3.materials dawn-node smoke.
 // Mirrors the 2.basic-lighting smoke shape with a single-cube scene
 // (LO 3.1 original) and a time-varying PointLight color (sin waves per
-// RGB channel, negatives clamped to 0). Verdict: at least one meshed
-// sample site exceeds the clear-color threshold, proving the lit cube
-// + lamp marker rendered non-empty pixels.
+// RGB channel, negatives clamped to 0). The semantic oracle proves that the
+// orange StandardMaterial responds to the animated point-light spectrum;
+// FALSIFY_NO_LIGHT=1 keeps the lamp mesh but removes only PointLight.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-materials] backend=<backend>`
@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -209,46 +210,58 @@ world
   )
   .unwrap();
 
-// LO lamp position (1.2, 1.0, 2.0). Lamp visual + PointLight share one
-// entity so the lamp's Transform drives both the marker position and the
-// light's world-space position via the [Transform, PointLight] query.
+// LO lamp position (1.2, 1.0, 2.0). The falsifier keeps the visible lamp and
+// removes only the PointLight, isolating the material response from marker
+// geometry and the clear color.
 const LPX = 1.2, LPY = 1.0, LPZ = 2.0;
-const lightEntity = world
-  .spawn(
-    {
-      component: Transform,
-      data: {
-        pos: [LPX, LPY, LPZ], quat: [0, 0, 0, 1], scale: [0.2, 0.2, 0.2],},
-    },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [lampMatHandle] } },
-    {
-      component: PointLight,
-      data: {
-        color: [1.0, 1.0, 1.0],
-        intensity: 1.0,
-        range: Number.POSITIVE_INFINITY,
-      },
-    },
-  )
-  .unwrap();
+const lamp = {
+  component: Transform,
+  data: {
+    pos: [LPX, LPY, LPZ], quat: [0, 0, 0, 1], scale: [0.2, 0.2, 0.2],
+  },
+};
+const lightEntity = FALSIFY_NO_LIGHT
+  ? world
+      .spawn(
+        lamp,
+        { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+        { component: MeshRenderer, data: { materials: [lampMatHandle] } },
+      )
+      .unwrap()
+  : world
+      .spawn(
+        lamp,
+        { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+        { component: MeshRenderer, data: { materials: [lampMatHandle] } },
+        {
+          component: PointLight,
+          data: {
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            range: Number.POSITIVE_INFINITY,
+          },
+        },
+      )
+      .unwrap();
 
 // ECS system: animate light color (sin per channel, negatives clamped).
 // Same frequencies and dt as src/index.ts.
 let elapsed = 0;
 const DT = 0.016;
 const FREQ_R = 2.0, FREQ_G = 0.7, FREQ_B = 1.3;
-world.addSystem(Update, {
-  name: 'animated-light-color',
-  queries: [],
-  fn: () => {
-    elapsed += DT;
-    const colorR = Math.max(0, Math.sin(elapsed * FREQ_R));
-    const colorG = Math.max(0, Math.sin(elapsed * FREQ_G));
-    const colorB = Math.max(0, Math.sin(elapsed * FREQ_B));
-    world.set(lightEntity, PointLight, { color: [colorR, colorG, colorB] });
-  },
-});
+if (!FALSIFY_NO_LIGHT) {
+  world.addSystem(Update, {
+    name: 'animated-light-color',
+    queries: [],
+    fn: () => {
+      elapsed += DT;
+      const colorR = Math.max(0, Math.sin(elapsed * FREQ_R));
+      const colorG = Math.max(0, Math.sin(elapsed * FREQ_G));
+      const colorB = Math.max(0, Math.sin(elapsed * FREQ_B));
+      world.set(lightEntity, PointLight, { color: [colorR, colorG, colorB] });
+    },
+  });
+}
 
 // Spawn static camera (LO: Camera(0,0,3) Zoom=45 deg).
 world.spawn(
@@ -353,6 +366,19 @@ for (const name of meshSiteNames) {
 }
 console.log(`[smoke] perSiteDistance=${JSON.stringify(perSite)}`);
 
+const ndcCenter = pixelSamples.ndcCenter;
+const cubeOffCenter = pixelSamples.cubeOffCenter;
+const animatedMaterialPointLightWitness =
+  ndcCenter[0] > 0.12 &&
+  cubeOffCenter[0] > 0.12 &&
+  cubeOffCenter[1] > 0.03 &&
+  cubeOffCenter[2] > 0.02 &&
+  cubeOffCenter[0] > cubeOffCenter[1] * 2.0 &&
+  cubeOffCenter[1] > cubeOffCenter[2] * 1.25;
+console.log(
+  `[smoke] oracle=animated-material-point-light cubeOffCenter=${JSON.stringify(cubeOffCenter)} witness=${animatedMaterialPointLightWitness} falsifier=${FALSIFY_NO_LIGHT ? 'no-point-light' : 'none'}`,
+);
+
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
 
@@ -364,6 +390,11 @@ if (framesObserved < SMOKE_MIN_FRAMES)
 if (meshedCount < 1) {
   failures.push(
     `(c) 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD} from clear color; perSite=${JSON.stringify(perSite)}`,
+  );
+}
+if (!animatedMaterialPointLightWitness) {
+  failures.push(
+    `(e) animated material point-light witness rejected ndcCenter=${JSON.stringify(ndcCenter)} cubeOffCenter=${JSON.stringify(cubeOffCenter)}; expected lit red-dominant StandardMaterial response with a stable minimum`,
   );
 }
 if (errors.length > 0) {
@@ -382,7 +413,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedCount}/${meshSiteNames.length}, oracle=animated-material-point-light, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

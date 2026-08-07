@@ -3,7 +3,7 @@
 // feat-20260612-hdrp-deferred-shading-learn-render-5-8 M4 / w21.
 //
 // LearnOpenGL section 5.8 deferred-shading dawn-node smoke (structural-only).
-// Spawns 32 point lights + 9 cube 3x3 grid through HDRP deferred opaque,
+// Spawns a configurable point-light count (default 32) + 9 cube 3x3 grid through HDRP deferred opaque,
 // renders 300 frames, and asserts no RhiError / no unknown onError codes.
 //
 // Output literals (preserved for grep tooling):
@@ -12,16 +12,31 @@
 //   - `[smoke] PASS`
 //   - `[smoke] FAIL`
 
+import { writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
+const PROFILE_CAPTURE_PATH = process.env.FORGEAX_PROFILE_CAPTURE_PATH;
+const PROFILE_DETAIL = process.env.FORGEAX_PROFILE_DETAIL === 'nested' ? 'nested' : 'owner';
+const PROFILE_FRAME_LIMIT = Number.parseInt(
+  process.env.FORGEAX_PROFILE_FRAME_LIMIT ?? String(SMOKE_MIN_FRAMES),
+  10,
+);
+const PROFILE_EVENT_LIMIT = Number.parseInt(process.env.FORGEAX_PROFILE_EVENT_LIMIT ?? '40000', 10);
 const WIDTH = 512;
 const HEIGHT = 512;
 
-const NUM_LIGHTS = 32;
+const DEFAULT_NUM_LIGHTS = 32;
+const NUM_LIGHTS = (() => {
+  const requested = process.env.FORGEAX_DEFERRED_LIGHTS;
+  if (requested === undefined) return DEFAULT_NUM_LIGHTS;
+  const parsed = Number(requested);
+  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 128) return parsed;
+  throw new Error('FORGEAX_DEFERRED_LIGHTS must be an integer in [1, 128]');
+})();
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 };
 const CUBE_SCALE = 0.5;
 const CUBE_SPACING = 3.0;
@@ -29,7 +44,7 @@ const CUBE_Y = -0.5;
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// Known-noise app.onError codes during HDRP deferred demo (32 lights within cluster-grid budget).
+// Known-noise app.onError codes during HDRP deferred demo.
 const KNOWN_NOISE_CODES = new Set([
   'hdrp-light-budget-exceeded',
   'hdrp-index-list-overflow',
@@ -147,6 +162,7 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
+const { createProfileClock, createProfiler } = await import('@forgeax/engine-profiler');
 
 const runtimePkg = await import('@forgeax/engine-runtime');
 const { Materials } = await import('@forgeax/engine-render');
@@ -157,7 +173,19 @@ const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');
 
-const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+const profiler =
+  PROFILE_CAPTURE_PATH === undefined
+    ? undefined
+    : createProfiler({
+        // The smoke loop replaces performance.now() with a deterministic frame
+        // clock, so diagnostic profiling must use an independent monotonic clock.
+        clock: createProfileClock(() => Number(process.hrtime.bigint() / 1000n)),
+      });
+const appResult = await createApp(
+  mockCanvas,
+  profiler === undefined ? {} : { profiler },
+  { shaderManifestUrl: MANIFEST_URL },
+);
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 
 if (!appResult.ok) {
@@ -168,6 +196,22 @@ if (!appResult.ok) {
 }
 const app = appResult.value;
 console.log(`[learn-render-5-8-deferred] backend=${app.renderer.backend}`);
+console.log(`[smoke] lights=${NUM_LIGHTS}`);
+
+if (profiler !== undefined) {
+  const started = profiler.startCapture({
+    frameLimit: PROFILE_FRAME_LIMIT,
+    eventLimit: PROFILE_EVENT_LIMIT,
+    detail: PROFILE_DETAIL,
+  });
+  if (!started.ok) {
+    console.error(`[smoke] FAIL - profiler.startCapture: ${started.error.code}`);
+    process.exit(1);
+  }
+  console.log(
+    `[smoke] profiler capture=${started.value.captureId} detail=${PROFILE_DETAIL} frames=${PROFILE_FRAME_LIMIT} events=${PROFILE_EVENT_LIMIT}`,
+  );
+}
 
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
@@ -337,6 +381,18 @@ const stopResult = app.stop();
 if (!stopResult.ok) {
   console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
   process.exit(1);
+}
+
+if (profiler !== undefined && PROFILE_CAPTURE_PATH !== undefined) {
+  const capture = profiler.latestCapture();
+  if (capture === undefined) {
+    console.error('[smoke] FAIL - profiler did not produce a capture');
+    process.exit(1);
+  }
+  writeFileSync(PROFILE_CAPTURE_PATH, `${JSON.stringify(capture)}\n`);
+  console.log(
+    `[smoke] profiler capture written=${PROFILE_CAPTURE_PATH} records=${capture.records.length} completeness=${capture.completeness.status} dropped=${capture.completeness.droppedEventCount}`,
+  );
 }
 
 console.log(`[smoke] frames observed=${totalFrames}`);

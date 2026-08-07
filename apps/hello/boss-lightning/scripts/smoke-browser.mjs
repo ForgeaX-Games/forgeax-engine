@@ -6,10 +6,13 @@ import { fileURLToPath } from 'node:url';
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const repoRoot = resolve(appRoot, '..', '..', '..');
 const harnessRoot = [
+  process.env.FORGEAX_HARNESS_ROOT,
+  resolve(repoRoot, '.forgeax-harness'),
   resolve(repoRoot, '..', 'forgeax-harness'),
   resolve(repoRoot, '..', '..', '..', 'forgeax-harness'),
   resolve(repoRoot, '..', '..', 'forgeax-harness'),
-].find(candidate => existsSync(candidate));
+].filter(candidate => candidate !== undefined)
+  .find(candidate => existsSync(resolve(candidate, 'skills/forgeax-visual/scripts/pwcli-wrapper.py')));
 if (harnessRoot === undefined) throw new Error('boss-lightning: forgeax-harness checkout not found');
 const wrapper = resolve(harnessRoot, 'skills/forgeax-visual/scripts/pwcli-wrapper.py');
 const session = `boss-lightning-${process.pid}`;
@@ -94,12 +97,30 @@ function assertFalsified(value) {
 }
 
 let server;
+async function waitForServer(url) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (server?.exitCode !== null && server?.exitCode !== undefined) {
+      throw new Error(`Vite exited before serving ${url} (code=${server.exitCode})`);
+    }
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+    } catch {
+      // Vite is still booting.
+    }
+    await new Promise(resolveReady => setTimeout(resolveReady, 100));
+  }
+  throw new Error(`Vite did not serve ${url} within 10s`);
+}
+
 try {
-  server = spawn('pnpm', ['--filter', '@forgeax/hello-boss-lightning', 'exec', 'vite', '--host', '127.0.0.1', '--port', port], {
+  server = spawn('pnpm', ['--filter', '@forgeax/hello-boss-lightning', 'exec', 'vite', '--host', '127.0.0.1', '--port', port, '--strictPort'], {
     cwd: repoRoot,
     stdio: 'ignore',
+    detached: process.platform !== 'win32',
   });
-  await new Promise(resolveReady => setTimeout(resolveReady, 1800));
+  await waitForServer(pageUrl);
   cli('open', pageUrl);
   const value = JSON.parse(cli('--raw', 'run-code', probeCode()));
   if (mode.length === 0) assertNormal(value);
@@ -114,5 +135,14 @@ try {
   } catch {
     // A failed browser launch has no session to close.
   }
-  server?.kill('SIGTERM');
+  if (server !== undefined && server.exitCode === null) {
+    if (process.platform === 'win32') server.kill('SIGTERM');
+    else {
+      try {
+        process.kill(-server.pid, 'SIGTERM');
+      } catch {
+        server.kill('SIGTERM');
+      }
+    }
+  }
 }

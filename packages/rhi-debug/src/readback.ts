@@ -23,6 +23,9 @@ import type { Replay } from './replayer';
 import { bytesPerTexel } from './texel-layout';
 import type { RhiCallEvent } from './types';
 
+// GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
+const COPY_DST_MAP_READ = 9;
+
 // ============================================================================
 // resolveTextureDescriptor — tape handle -> source texture descriptor (SSOT)
 // ============================================================================
@@ -50,8 +53,7 @@ export interface ResolvedTextureDescriptor {
  * createTextureView.resultHandleId -> sourceHandleId -> createTexture, falling
  * back to the id itself when it is a direct texture handle (no view event).
  *
- * Size is read from the raw createTexture event (FrameModel.resources hard-codes
- * size to [1,1,1]; see inspect-core buildResources). Returns null when no
+ * Size is read from the raw createTexture event. Returns null when no
  * createTexture event declares the resolved handle.
  */
 export function resolveTextureDescriptor(
@@ -178,9 +180,6 @@ export async function readbackTexturePixels(
   const rowBytes = blockCountX * bytesPerBlock;
   const alignedRowBytes = Math.ceil(rowBytes / 256) * 256; // WebGPU alignment
   const bufferSize = alignedRowBytes * blockCountY;
-
-  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9
-  const COPY_DST_MAP_READ = 9;
 
   const readbackBufferResult = device.createBuffer({
     size: bufferSize,
@@ -320,9 +319,6 @@ export async function readbackBufferBytes(
       }),
     );
 
-  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9
-  const COPY_DST_MAP_READ = 9;
-
   const readbackBufferResult = device.createBuffer({ size, usage: COPY_DST_MAP_READ });
   if (!readbackBufferResult.ok) {
     return fail('copy', `staging buffer creation failed: ${readbackBufferResult.error.code}`);
@@ -433,8 +429,6 @@ export async function readbackBufferBytesBatch(
     }
   };
 
-  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
-  const COPY_DST_MAP_READ = 9;
   let encoder: RhiCommandEncoder;
   try {
     const encoderResult = device.createCommandEncoder({});

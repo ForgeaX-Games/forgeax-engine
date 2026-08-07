@@ -18,6 +18,26 @@ function gatedFeature(): RenderFeature<{ readonly frame: number }> {
 }
 
 describe('render feature diagnostics and capability gate', () => {
+  it('installs a late feature once and keeps identity conflicts explicit', () => {
+    const host = createRenderFeatureHost([], caps(true)).unwrap();
+    const feature = gatedFeature();
+    expect(host.install(feature)).toEqual(ok(undefined));
+    expect(host.install(feature)).toEqual(ok(undefined));
+    expect(host.size).toBe(1);
+    expect(host.install(gatedFeature())).toMatchObject({
+      ok: false,
+      error: { code: 'render-feature-registration-conflict' },
+    });
+    expect(
+      runRenderFeatureFrame(host, {
+        worlds: [],
+        owner: 0,
+        frameNumber: 1,
+        caps: caps(true),
+      }).stageEvents,
+    ).toHaveLength(3);
+  });
+
   it('disables without a capability and re-enables only after recover re-evaluation', () => {
     const host = createRenderFeatureHost([gatedFeature()], caps(false)).unwrap();
     const first = runRenderFeatureFrame(host, {

@@ -98,6 +98,8 @@ export interface RenderFeatureHost {
   readonly size: number;
   readonly features: readonly RenderFeature<unknown>[];
   readonly preparedGeneration: number;
+  /** Install a producer after renderer creation; same object identity is idempotent. */
+  install(feature: RenderFeature<unknown>): Result<void, RenderError>;
   advancePreparedGeneration(): number;
   registerResource(
     identity: string,
@@ -489,6 +491,28 @@ class FeatureHostImpl implements RenderFeatureHost {
 
   get features(): readonly RenderFeature<unknown>[] {
     return this.slots.map((slot) => slot.feature);
+  }
+
+  install(feature: RenderFeature<unknown>): Result<void, RenderError> {
+    if (this.disposed) return err(unknownFeatureError(feature.identity, 'dispose'));
+    const existingOrder = this.slots.findIndex(
+      (slot) => slot.feature.identity === feature.identity,
+    );
+    if (existingOrder >= 0) {
+      const existing = this.slots[existingOrder];
+      if (existing?.feature === feature) return ok(undefined);
+      return err(registrationConflict(feature.identity, this.slots.length, existingOrder));
+    }
+    this.slots.push({
+      feature,
+      order: this.slots.length,
+      resources: [],
+      preparedResourceBatches: new Set(),
+      preparedStore: createPreparedGraphicsStore(),
+      status: 'active',
+      latestError: undefined,
+    });
+    return ok(undefined);
   }
 
   advancePreparedGeneration(): number {

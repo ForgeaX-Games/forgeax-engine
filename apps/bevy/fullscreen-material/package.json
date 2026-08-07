@@ -18,6 +18,9 @@
       "category": "Shaders",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["screen-space-post"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-fullscreen-material smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },

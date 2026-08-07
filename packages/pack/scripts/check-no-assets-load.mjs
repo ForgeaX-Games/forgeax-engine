@@ -4,6 +4,10 @@
 // Exit 0 = clean; exit 1 = pattern found (use loadByGuid instead).
 
 import { execSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 const searchPaths = ['packages/', 'apps/', 'templates/'];
 const excludes = [
@@ -19,7 +23,7 @@ let output = '';
 try {
   output = execSync(
     `grep -rn 'engine\\.assets\\.load(' ${searchPaths.join(' ')} ${excludes.join(' ')} 2>/dev/null`,
-    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
   );
 } catch (e) {
   // grep exits 1 when no matches found (which is success for this gate)
@@ -42,7 +46,7 @@ if (output.trim().length > 0) {
 try {
   output = execSync(
     "grep -rnE '@forgeax/engine-assets-runtime|loadByGuid\\(' packages/pack/src 2>/dev/null",
-    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
   );
 } catch (e) {
   const status = e && typeof e.status === 'number' ? e.status : 1;

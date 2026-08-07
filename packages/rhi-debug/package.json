@@ -19,6 +19,10 @@
       "types": "./dist/capture-browser.d.ts",
       "import": "./dist/capture-browser.mjs"
     },
+    "./dev-routes": {
+      "types": "./dist/dev-routes.d.ts",
+      "import": "./dist/dev-routes.mjs"
+    },
     "./inspector": {
       "types": "./dist/inspector.d.ts",
       "import": "./dist/inspector.mjs"
@@ -30,6 +34,10 @@
     "./frame-model": {
       "types": "./dist/frame-model.d.ts",
       "import": "./dist/frame-model.mjs"
+    },
+    "./resource-lifecycle": {
+      "types": "./dist/resource-lifecycle.d.ts",
+      "import": "./dist/resource-lifecycle.mjs"
     },
     "./rt-to-canvas": {
       "types": "./dist/rt-to-canvas.d.ts",

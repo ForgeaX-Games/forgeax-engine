@@ -34,6 +34,8 @@
         "source": { "$ref": "#/$defs/source" },
         "frameId": { "$ref": "#/$defs/positiveSafeInteger" },
         "phase": { "type": "string", "minLength": 1 },
+        "parentSource": { "$ref": "#/$defs/source" },
+        "parentPhase": { "type": "string", "minLength": 1 },
         "startMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" },
         "endMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" },
         "durationMicros": { "$ref": "#/$defs/nonNegativeSafeInteger" }

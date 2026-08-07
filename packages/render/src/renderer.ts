@@ -12,6 +12,7 @@
 // `document` at import time; canvas is supplied by the caller.
 
 import type { AssetRegistry, AssetRuntimeError } from '@forgeax/engine-assets-runtime';
+import type { CreateShaderModule } from '@forgeax/engine-debug-draw';
 import type { World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import type { ProfileFrameToken, Profiler } from '@forgeax/engine-profiler';
@@ -140,18 +141,107 @@ export type RendererError =
 export type RendererErrorListener = (error: RendererError) => void;
 
 /**
+ * Built-in graph pass owners used as nested children of `record/graph-execute`.
+ * Unknown extension pass names use the explicit `other` bucket so custom
+ * pipelines retain a bounded catalog while the default render workload gets
+ * actionable owner attribution.
+ */
+export const RENDER_GRAPH_EXECUTION_PHASE_CATALOG = [
+  'record/graph-execute/point-shadow',
+  'record/graph-execute/cluster-binner-upload',
+  'record/graph-execute/g-buffer',
+  'record/graph-execute/g-buffer/geometry-loop',
+  'record/graph-execute/g-buffer/material-bind-groups',
+  'record/graph-execute/g-buffer/pipeline-selection',
+  'record/graph-execute/g-buffer/draw-submit',
+  'record/graph-execute/ssao-calc',
+  'record/graph-execute/ssao-blur',
+  'record/graph-execute/lighting',
+  'record/graph-execute/forward',
+  'record/graph-execute/forward/geometry-loop',
+  'record/graph-execute/forward/material-bind-groups',
+  'record/graph-execute/forward/pipeline-selection',
+  'record/graph-execute/forward/draw-submit',
+  'record/graph-execute/tonemap',
+  'record/graph-execute/debug-overlay',
+  'record/graph-execute/shadow',
+  'record/graph-execute/spot-shadow',
+  'record/graph-execute/skybox',
+  'record/graph-execute/main',
+  'record/graph-execute/fxaa',
+  'record/graph-execute/bloom-bright',
+  'record/graph-execute/bloom-blur-h',
+  'record/graph-execute/bloom-blur-v',
+  'record/graph-execute/bloom-composite',
+  'record/graph-execute/other',
+] as const;
+
+export type RenderGraphExecutionPhase = (typeof RENDER_GRAPH_EXECUTION_PHASE_CATALOG)[number];
+
+/** Bounded producer-owned children of the scene-state record owner. */
+export const RENDER_HDRP_BINNER_PHASE_CATALOG = [
+  'record/scene-state/hdrp-cluster/binner/light-bounds-and-occupancy',
+  'record/scene-state/hdrp-cluster/binner/light-bounds-and-occupancy/light-aabb',
+  'record/scene-state/hdrp-cluster/binner/light-bounds-and-occupancy/cluster-occupancy',
+  'record/scene-state/hdrp-cluster/binner/cluster-reserve',
+  'record/scene-state/hdrp-cluster/binner/input-preparation',
+  'record/scene-state/hdrp-cluster/binner/bin-core',
+  'record/scene-state/hdrp-cluster/binner/light-index-write',
+  'record/scene-state/hdrp-cluster/binner/light-index-write/bounds-read',
+  'record/scene-state/hdrp-cluster/binner/light-index-write/cluster-write',
+] as const;
+
+export type RenderHdrpBinnerPhase = (typeof RENDER_HDRP_BINNER_PHASE_CATALOG)[number];
+
+export const RENDER_HDRP_CLUSTER_PHASE_CATALOG = [
+  'record/scene-state/hdrp-cluster/binner',
+  ...RENDER_HDRP_BINNER_PHASE_CATALOG,
+  'record/scene-state/hdrp-cluster/payload-packing',
+  'record/scene-state/hdrp-cluster/buffer-upload',
+] as const;
+
+export type RenderHdrpClusterPhase = (typeof RENDER_HDRP_CLUSTER_PHASE_CATALOG)[number];
+
+export const RENDER_SCENE_STATE_PHASE_CATALOG = [
+  'record/scene-state/fold-buckets',
+  'record/scene-state/lighting-prep',
+  'record/scene-state/ambient-resolution',
+  'record/scene-state/hdrp-cluster',
+  ...RENDER_HDRP_CLUSTER_PHASE_CATALOG,
+] as const;
+
+export type RenderSceneStatePhase = (typeof RENDER_SCENE_STATE_PHASE_CATALOG)[number];
+
+/**
  * Opt-in boundaries inside one `Renderer.draw` call. The observer is a
  * diagnostics seam only: it receives wall-time boundaries and must never be
  * required for rendering correctness. The stage names mirror the existing
  * engine-owned Extract / Prepare / Record orchestration so a host can measure
  * attribution without guessing from RHI command counts.
  */
+export const RENDER_RECORD_PHASE_CATALOG = [
+  'record/scene-state',
+  ...RENDER_SCENE_STATE_PHASE_CATALOG,
+  'record/swapchain',
+  'record/render-graph',
+  'record/target-views',
+  'record/validation',
+  'record/dispatch-plan',
+  'record/uploads',
+  'record/bind-groups',
+  'record/graph-execute',
+  ...RENDER_GRAPH_EXECUTION_PHASE_CATALOG,
+] as const;
+
+export type RenderRecordPhase = (typeof RENDER_RECORD_PHASE_CATALOG)[number];
+
 export const RENDER_PHASE_CATALOG = [
   'extract',
   'bind-groups',
   'features',
   'sort',
   'record',
+  ...RENDER_RECORD_PHASE_CATALOG,
 ] as const;
 
 export type RenderPhase = (typeof RENDER_PHASE_CATALOG)[number];
@@ -260,6 +350,16 @@ export interface Renderer {
    * `rhi.requestAdapter` to capture the device handle.
    */
   readonly device: RhiDevice;
+  /**
+   * @internal
+   *
+   * Shader-module creation must stay on the backend pack selected while the
+   * renderer was assembled. Engine-owned extensions (debug-draw is the
+   * current consumer) use this seam instead of importing a concrete RHI
+   * module again; a second bundled rhi-webgpu copy cannot recognize the
+   * renderer's opaque device handle.
+   */
+  readonly _internal_createShaderModule: CreateShaderModule;
   /**
    * Instance-per-engine ShaderRegistry: on first access this lazy property
    * constructs a `ShaderRegistry({ device, manifestUrl })` instance;
@@ -586,6 +686,13 @@ export interface Renderer {
    * while rebuilding the active graph.
    */
   renderFeatureDiagnostics(): readonly RenderFeatureDiagnostics[];
+  /**
+   * Install a feature after the renderer is ready. The renderer keeps feature
+   * identity and lifecycle ownership in the same host as boot-time features;
+   * installing the same object twice is a no-op, while a different object with
+   * the same identity returns `render-feature-registration-conflict`.
+   */
+  installRenderFeature(feature: RenderFeature<unknown>): Promise<RenderResult<void, RenderError>>;
   /**
    * feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
    * createBindGroup counter. Reset to 0 on every `draw([world], { owner: 0 })` call,

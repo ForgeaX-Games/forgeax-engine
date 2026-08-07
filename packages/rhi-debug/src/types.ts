@@ -2,7 +2,7 @@
 //
 // Shape:
 // - RhiCallEvent: closed union (~40 kind incl. initialData + frameMark), each kind name 1:1 with RHI method name.
-//   Excludes: destroy* calls (per OOS-5), writeTimestamp/resolveQuerySet (per OOS-3).
+//   Excludes: writeTimestamp/resolveQuerySet (per OOS-3).
 //   Includes: core RHI + copyExternalImageToTexture + clearBuffer (per IS-11).
 // - Tape: header with formatVersion, rhiCapsRecorded, events array, blobPool map.
 // - InspectReport: frameIdx, drawIdx, bindings, drawCall, rt (path string, not inline base64).
@@ -72,6 +72,8 @@ export interface RhiCallEventCreateBuffer {
 export interface RhiCallEventCreateTexture {
   readonly kind: 'createTexture';
   readonly handleId: HandleId;
+  /** Present only for a canvas swapchain texture synthesized from getCurrentTexture. */
+  readonly origin?: 'swapchain' | undefined;
   readonly desc: {
     readonly size: GPUExtent3DStrict;
     readonly mipLevelCount?: number | undefined;
@@ -82,6 +84,18 @@ export interface RhiCallEventCreateTexture {
     readonly viewFormats?: Iterable<GPUTextureFormat> | undefined;
     readonly textureBindingViewDimension?: GPUTextureViewDimension | undefined;
   };
+}
+
+/** A successful GPUBuffer.destroy call observed while recording. */
+export interface RhiCallEventDestroyBuffer {
+  readonly kind: 'destroyBuffer';
+  readonly handleId: HandleId;
+}
+
+/** A successful GPUTexture.destroy call observed while recording. */
+export interface RhiCallEventDestroyTexture {
+  readonly kind: 'destroyTexture';
+  readonly handleId: HandleId;
 }
 
 export interface RhiCallEventCreateTextureView {
@@ -508,7 +522,7 @@ export interface RhiCallEventInitialData {
  * Closed union of all recordable RHI call events.
  *
  * v1 covers: core RHI methods + copyExternalImageToTexture + clearBuffer (IS-11).
- * Excludes: destroy* calls (OOS-5), writeTimestamp/resolveQuerySet (OOS-3),
+ * Excludes: writeTimestamp/resolveQuerySet (OOS-3),
  *           executeBundles (OOS-10), beginOcclusionQuery/endOcclusionQuery.
  *
  * Kinds are named 1:1 with RHI method names per plan-strategy §8 naming convention.
@@ -518,6 +532,8 @@ export type RhiCallEvent =
   | RhiCallEventFrameMark
   | RhiCallEventCreateBuffer
   | RhiCallEventCreateTexture
+  | RhiCallEventDestroyBuffer
+  | RhiCallEventDestroyTexture
   | RhiCallEventCreateTextureView
   | RhiCallEventCreateSampler
   | RhiCallEventCreateBindGroupLayout

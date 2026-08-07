@@ -67,9 +67,6 @@ export {
   type MaterialShaderManifestVariant,
 } from './types.js';
 
-/** Package-level version number (debug label). */
-export const SHADER_PACKAGE_VERSION = '0.0.0';
-
 export const BUILTIN_MATERIAL_MODULES = {
   standard: 'forgeax_material::standard',
   unlit: 'forgeax_material::unlit',

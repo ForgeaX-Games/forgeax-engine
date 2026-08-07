@@ -6,6 +6,7 @@ import type {
   CatalogEntry,
   CatalogRevisionWindow,
   ResourceRevision,
+  RuntimeAssetBinding,
 } from '@forgeax/engine-types';
 import type { CatalogSource } from '../catalog-source';
 
@@ -66,6 +67,16 @@ function diagnosticForGap(): CatalogDiagnostic {
   };
 }
 
+function diagnosticForScopeMismatch(): CatalogDiagnostic {
+  return {
+    code: 'catalog-scope-mismatch',
+    severity: 'blocking',
+    expected: 'catalog delta scopeId and generation to match the active runtime binding',
+    hint: 'discard the stale publication and reconcile the active runtime catalog',
+    authority: 'catalog',
+  };
+}
+
 function appendDiagnostic(
   diagnostics: readonly CatalogDiagnostic[],
   incoming: readonly CatalogDiagnostic[] | undefined,
@@ -97,9 +108,11 @@ export class CatalogReplica {
   private stale = false;
   private diagnostics: readonly CatalogDiagnostic[] = [];
   private currentSnapshot: CatalogReplicaSnapshot;
+  private readonly expectedScope: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'> | undefined;
 
   constructor(source: CatalogSource) {
     this.source = source;
+    this.expectedScope = source.expectedScope;
     this.currentSnapshot = freezeSnapshot({
       version: 0,
       entries: [],
@@ -177,6 +190,17 @@ export class CatalogReplica {
   }
 
   private fold(delta: CatalogDelta, publish: boolean): void {
+    if (
+      this.expectedScope !== undefined &&
+      (delta.scopeId !== this.expectedScope.scopeId ||
+        delta.generation !== this.expectedScope.generation)
+    ) {
+      this.stale = true;
+      this.diagnostics = appendDiagnostic(this.diagnostics, [diagnosticForScopeMismatch()]);
+      this.currentSnapshot = this.makeSnapshot();
+      if (publish) this.publish(delta);
+      return;
+    }
     const gap = hasRevisionGap(delta.revisions);
     const degraded = delta.authority === 'degraded' || gap;
     this.stale = this.stale || degraded;

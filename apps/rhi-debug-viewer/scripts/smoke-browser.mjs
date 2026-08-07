@@ -57,6 +57,7 @@ const FIXTURES_DIR = mkdtempSync(resolve(tmpdir(), 'rhi-debug-viewer-fixture-'))
 // variant would also pass. The variant asserts RT IS all-zero (black) and
 // exits 0 to signal falsification confirmed.
 const FALSIFY_MODE = process.env.FALSIFY_NO_SHADER_MODULE === '1';
+const captureEvidence = { mode: 'pixel' };
 if (FALSIFY_MODE) {
   console.log('[smoke-browser] FALSIFY mode: skipping createShaderModule — RT expected all-black');
 }
@@ -629,7 +630,8 @@ if (errors.length > 0) {
 
 console.log(`\n[smoke-browser] GREEN — all assertions passed`);
 console.log(
-  `  tree: ${tree.length} passes, ` +
+  `  oracle: ${captureEvidence.mode}, ` +
+    `tree: ${tree.length} passes, ` +
     `draws: ${drawCount} entries, ` +
     `tree[0].kind=${firstPassNode?.kind}, ` +
     `tree[0].draws=${passDrawCount}, ` +

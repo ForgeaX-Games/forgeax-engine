@@ -14,8 +14,6 @@
 //   detail live in @forgeax/engine-types as the SSOT (decision section
 //   2.3); the single-import surface re-exports them here.
 
-export const GLTF_PACKAGE_VERSION = '0.0.0';
-
 // Sub-asset POD SSOT re-exports (from @forgeax/engine-types; replaces
 // the old unprefixed Ir types which are now Gltf-prefixed exports above).
 export type {

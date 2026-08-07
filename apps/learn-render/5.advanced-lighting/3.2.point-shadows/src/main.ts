@@ -25,8 +25,8 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 // 2. scene constants
 
-// Room: HANDLE_CUBE scaled to 5 units viewed from inside.
-const ROOM_SCALE = 5;
+// Room: HANDLE_CUBE scaled to contain the furthest inner cube and camera.
+const ROOM_SCALE = 10;
 const ROOM_Y = 0;
 
 // Camera: first-person starting at origin looking -Z.
@@ -184,7 +184,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       elapsed += 1 / 60;
       const t = elapsed;
       world.set(lightEntity, Transform, {
-        pos: [Math.sin(t) * LIGHT_ORBIT_RADIUS, 0, Math.cos(t) * LIGHT_ORBIT_RADIUS],});
+        pos: [Math.sin(t) * LIGHT_ORBIT_RADIUS, LIGHT_ORBIT_Y, Math.cos(t) * LIGHT_ORBIT_RADIUS],});
     },
   });
 

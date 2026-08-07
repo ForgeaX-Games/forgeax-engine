@@ -59,7 +59,10 @@ export interface GameActionDef {
   readonly title: string;
   readonly description?: string;
   readonly argsSchema?: GameActionArgsSchema;
-  readonly run: (args: GameProjectionValue) => void | Promise<void>;
+  /** Return an optional JSON-shaped result for inspection clients. */
+  readonly run: (
+    args: GameProjectionValue,
+  ) => GameProjectionValue | void | Promise<GameProjectionValue | void>;
 }
 
 /** A named, serializable Play-only read projection owned by game code. */

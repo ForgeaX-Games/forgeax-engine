@@ -46,12 +46,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  BUILTIN_FLOATS_PER_VERTEX,
-  HANDLE_CUBE,
-  HANDLE_TRIANGLE,
-  resolveAssetHandle,
-} from '@forgeax/engine-assets-runtime';
+import { HANDLE_CUBE, HANDLE_TRIANGLE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
   createBoxGeometry,
@@ -2806,10 +2801,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 {
   // --- from pipeline-vertex-stride-branch.test.ts ---
   describe('vertex stride is uniformly 12 floats per vertex (bug-20260519)', () => {
-    it('BUILTIN_FLOATS_PER_VERTEX equals PROCEDURAL_FLOATS_PER_VERTEX (single-stride invariant)', () => {
-      expect(BUILTIN_FLOATS_PER_VERTEX).toBe(12);
+    it('the geometry owner defines the single runtime vertex stride', () => {
       expect(PROCEDURAL_FLOATS_PER_VERTEX).toBe(12);
-      expect(BUILTIN_FLOATS_PER_VERTEX).toBe(PROCEDURAL_FLOATS_PER_VERTEX);
     });
 
     it('BUILTIN_CUBE and BUILTIN_TRIANGLE expose 12 floats per vertex (boundary)', () => {
@@ -2819,9 +2812,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(cube.ok).toBe(true);
       expect(tri.ok).toBe(true);
       if (!cube.ok || !tri.ok) return;
-      expect(cube.value.vertices.length % BUILTIN_FLOATS_PER_VERTEX).toBe(0);
-      expect(tri.value.vertices.length % BUILTIN_FLOATS_PER_VERTEX).toBe(0);
-      expect(tri.value.vertices.length).toBe(3 * BUILTIN_FLOATS_PER_VERTEX);
+      expect(cube.value.vertices.length % PROCEDURAL_FLOATS_PER_VERTEX).toBe(0);
+      expect(tri.value.vertices.length % PROCEDURAL_FLOATS_PER_VERTEX).toBe(0);
+      expect(tri.value.vertices.length).toBe(3 * PROCEDURAL_FLOATS_PER_VERTEX);
     });
 
     it('all 6 procedural factories produce 12 floats per vertex (normal)', () => {
@@ -2854,7 +2847,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(cube.ok).toBe(true);
       expect(proc.ok).toBe(true);
       if (!cube.ok || !proc.ok) return;
-      expect(cube.value.vertices.length % BUILTIN_FLOATS_PER_VERTEX).toBe(0);
+      expect(cube.value.vertices.length % PROCEDURAL_FLOATS_PER_VERTEX).toBe(0);
       expect(proc.value.vertices.length % PROCEDURAL_FLOATS_PER_VERTEX).toBe(0);
     });
   });

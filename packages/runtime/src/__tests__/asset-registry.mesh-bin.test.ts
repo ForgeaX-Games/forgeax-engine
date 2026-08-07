@@ -40,7 +40,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // 12 floats per vertex (position vec3 + normal vec3 + uv vec2 + tangent vec4) --
-// matches BUILTIN_FLOATS_PER_VERTEX and the meshLoader stride invariant.
+// matches PROCEDURAL_FLOATS_PER_VERTEX and the meshLoader stride invariant.
 const FLOATS_PER_VERTEX = 12;
 
 const MESH_BIN_GUID = '00000000-0000-7000-8000-00006d657368'; // mesh sentinel

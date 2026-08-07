@@ -28,6 +28,7 @@
   "dependencies": {
     "@forgeax/engine-naga": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
+    "@noble/hashes": "^2.2.0",
     "@webgpu/types": "^0.1.71"
   },
   "forgeax": {

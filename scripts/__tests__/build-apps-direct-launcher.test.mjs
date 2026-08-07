@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { appPackages } from '../build-task-cache.mjs';
 import {
+  createPrebuildInvocation,
   createViteBuildInvocation,
   resolveViteCli,
   validateCanonicalAppBuild,
@@ -21,7 +22,7 @@ test('resolves the installed Vite CLI from the repository package manifest', () 
 
 test('the discovered app fleet uses the canonical Vite build script', () => {
   const apps = appPackages(repoRoot);
-  assert.equal(apps.length, 192);
+  assert.equal(apps.length, 196);
   validateCanonicalAppBuilds(apps);
 });
 
@@ -53,4 +54,33 @@ test('build invocation preserves app cwd, explicit environment, and direct Node 
       FORGEAX_BUILD_METRICS_DIR: '/tmp/facts',
     },
   });
+});
+
+test('prebuild invocation preserves the package lifecycle before direct Vite builds', () => {
+  assert.equal(
+    createPrebuildInvocation({
+      app: { directory: '/tmp/fixture-app', manifest: { scripts: { build: 'vite build' } } },
+      baseEnv: { KEEP_ME: 'yes' },
+    }),
+    null,
+  );
+  assert.deepEqual(
+    createPrebuildInvocation({
+      app: {
+        directory: '/tmp/fixture-app',
+        manifest: { scripts: { prebuild: 'node assets/gen-png.mjs' } },
+      },
+      baseEnv: { KEEP_ME: 'yes' },
+    }),
+    {
+      command: 'pnpm',
+      args: ['run', 'prebuild'],
+      options: {
+        cwd: '/tmp/fixture-app',
+        stdio: 'inherit',
+        shell: false,
+        env: { KEEP_ME: 'yes' },
+      },
+    },
+  );
 });

@@ -1,13 +1,13 @@
 # @forgeax/engine-geometry
 
 Pure-function procedural mesh geometry factories + the vertex-attribute-layout SSOT for
-forgeax-engine. A **leaf** package: depends only on `@forgeax/engine-ecs` (`Result`) +
-`@forgeax/engine-types` (`MeshAsset` / `AssetError` / `VertexAttributeMap`), and never
-imports the renderer, math, or RHI.
+forgeax-engine. A **leaf** package: depends on `@forgeax/engine-ecs` (`Result`),
+`@forgeax/engine-math` (AABB derivation), and `@forgeax/engine-types` (`MeshAsset` /
+`AssetError` / `VertexAttributeMap`), and never imports the renderer or RHI.
 
 ## 30-second self-introduction
 
-- **Surface**: 7 Three.js-r184-aligned procedural factories
+- **Surface**: 7 Three.js-r184-aligned 3D procedural factories
   (`createBoxGeometry` / `createCapsuleGeometry` / `createConeGeometry` /
   `createCylinderGeometry` / `createPlaneGeometry` / `createSphereGeometry` /
   `createTorusGeometry`),
@@ -17,6 +17,9 @@ imports the renderer, math, or RHI.
   (`computeTangentVec4` / `meshFromInterleaved` /
   `PROCEDURAL_FLOATS_PER_VERTEX`). A single entry-point
   `import { ... } from '@forgeax/engine-geometry'`.
+- **2D primitives**: `create2dGeometry` turns the twelve Bevy `2d_shapes` primitive
+  definitions into triangle-list or line-list `MeshAsset` values, while
+  `create2dRingGeometry` builds the reusable ring variants used by the same gallery.
 - **Style**: pure functions -- no classes, no mutation, no side effects. Every
   factory returns `Result<MeshAsset, AssetError>` (charter P3 explicit failure).
   Caller owns the returned `MeshAsset`; the package never touches GPU or ECS.
@@ -45,6 +48,28 @@ const sphere = createSphereGeometry(1, 32, 24);
 The 7 factories cover the most common procedural primitives. For an imported
 glTF / FBX mesh, use `@forgeax/engine-assets` (`loadByGuid` / sidecar pipeline)
 instead of this package.
+
+### 2D primitive geometry
+
+`Shape2d` is the closed input union for circles, sectors, segments, ellipses,
+annuli, capsules, rhombi, rectangles, regular polygons, triangles, segments, and
+polylines. `create2dGeometry(shape)` returns a filled mesh for closed shapes and a
+`line-list` mesh for `segment` / `polyline`. `create2dRingGeometry(shape, thickness)`
+returns the ring form for closed non-annulus shapes; ellipse and sector rings follow
+the same visual approximation as Bevy's source example. `compute2dBounds(shape, pose)`
+derives the transformed AABB and bounding circle from that same shape contract.
+
+```ts
+import { create2dGeometry, create2dRingGeometry } from '@forgeax/engine-geometry';
+
+const filled = create2dGeometry({ kind: 'circle', radius: 50 });
+const ring = create2dRingGeometry({ kind: 'rectangle', width: 50, height: 100 }, 5);
+const arc = create2dGeometry(
+  { kind: 'circular-sector', radius: 40, angle: Math.PI / 2 },
+  { uv: { kind: 'circular-mask', angle: -Math.PI / 4 } },
+);
+if (!filled.ok || !ring.ok) return;
+```
 
 ## API surface
 

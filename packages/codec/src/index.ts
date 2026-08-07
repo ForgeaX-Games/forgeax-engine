@@ -9,12 +9,7 @@ export type {
   TranscodedMip,
   TranscodedTexture,
 } from './basis-transcoder.js';
-export {
-  _basisTranscoderInitCount,
-  _setBasisTranscoderImporter,
-  initBasisTranscoder,
-  transcodeKtx2,
-} from './basis-transcoder.js';
+export { initBasisTranscoder, transcodeKtx2 } from './basis-transcoder.js';
 export type { BlockParams } from './block-format.js';
 export {
   blockParamsForFormat,
@@ -32,4 +27,4 @@ export type {
   TranscodeSource,
 } from './transcode.js';
 export { selectTranscodeTarget } from './transcode.js';
-export { _setZstdImporter, _zstdInitCount, decompressZstd } from './zstd.js';
+export { decompressZstd } from './zstd.js';

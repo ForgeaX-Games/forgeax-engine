@@ -2,6 +2,7 @@
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
 import { vec3 } from '@forgeax/engine-math';
+import type { ClusterBinScratch } from '../cluster-binner';
 
 /**
  * feat-20260708-composited-multi-world-rendering M1 / D-1 / D-9:
@@ -146,6 +147,12 @@ export interface RenderFrameState {
   /** Graphs detached from the active pipeline while GPU work may still use them. */
   readonly retiredPerFrameGraphs: Set<RenderGraph<RenderPipelineContext>>;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
+  readonly hdrpClusterBinScratch: ClusterBinScratch;
+  /** Reusable HDRP cluster output buffers; sized once and grown only if the grid/cap changes. */
+  hdrpClusterGridScratch: Uint32Array | null;
+  hdrpLightIndexListScratch: Uint32Array | null;
+  /** Compute bind group for the optional WebGPU HDRP membership producer. */
+  hdrpClusterMembershipBindGroup: BindGroup | null;
   transientInstanceBuffers: InstanceBufferCacheEntry[];
   warnedZeroLightStandard: boolean;
   /**

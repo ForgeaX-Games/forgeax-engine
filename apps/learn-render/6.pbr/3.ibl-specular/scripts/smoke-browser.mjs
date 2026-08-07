@@ -1,12 +1,11 @@
 // smoke-browser.mjs -- RHI-debug capture verification for learn-render
 // 6.pbr/3.ibl-specular (static IBL split-sum sphere matrix, Skylight equirect HDR).
 //
-// STRUCTURAL mode (not pixel) by design: same as sibling 2.ibl-irradiance -- the
-// Skylight irradiance/prefilter maps are rgba16float cubemaps the frame-header
-// snapshot SKIPS (4-byte single-layer seed only; roadmap specs §10 residual #1).
-// With IBL textures unseeded the replayed spheres are unlit, so we verify the
-// capture->replay->inspect chain (structural) rather than pixel-comparing.
-// Upgrade to pixel once residual #1 lands.
+// Pixel mode proves live->replay fidelity for the final target, but it does not
+// prove split-sum algorithm truth: the Skylight irradiance/prefilter maps are
+// rgba16float cubemaps and remain outside the frame-header seed path (roadmap
+// specs §10 residual #1). Keep the longer warmup so the IBL precompute completes;
+// intermediate cubemap and BRDF-LUT truth remains a separate F3/F5 gap.
 
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

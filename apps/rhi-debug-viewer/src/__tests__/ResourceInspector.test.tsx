@@ -17,6 +17,7 @@ import { ResourceInspector } from '../components/ResourceInspector';
 import { SelectionContext } from '../selection-context';
 import { ViewModelContext } from '../viewer-context';
 import type { ViewModel } from '../viewer-model';
+import { buildResourceLifecycle } from '../viewer-model';
 
 const mockProps = {
   api: {},
@@ -107,6 +108,7 @@ function mockViewModel(): ViewModel {
         },
       ],
     ]),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 

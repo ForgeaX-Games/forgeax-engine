@@ -29,7 +29,23 @@ pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" build
 
 # Preview
 pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" preview
+
+# Semantic RHI-debug smoke and controlled falsifier
+pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:rhi-debug
+FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:rhi-debug
+
+# Browser capture -> fresh replay -> pixel comparison
+pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:browser
 ```
+
+The semantic smoke requires the animated StandardMaterial response to be red-dominant at the
+documented sample site after the 60-frame light-color animation. The `FALSIFY_NO_LIGHT=1` control
+keeps the white lamp mesh but removes its `PointLight`; the same material witness must then reject
+the frame, proving that the result came from the producer's point-light/material path.
+
+The browser smoke uses the producer's `__captureMaterials` hook through the shared RHI-debug capture
+path and compares the live WebGPU readback with a fresh-device replay; it is a local Chrome + WebGPU
+gate, while the Dawn smoke remains the deterministic CI gate.
 
 ## forgeax-vs-LearnOpenGL mapping
 
@@ -81,7 +97,8 @@ pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" preview
 | File | Role |
 |:--|:--|
 | `src/index.ts` | Three-section (engine usage + example glue + bootstrap) -- spawns one standard-material cube, lamp+PointLight (single co-located entity) animated via ECS system, and a first-person camera (`addFirstPersonSystem` from `apps/shared`) |
-| `scripts/smoke-dawn.mjs` | dawn-node smoke (mirrors the same scene; see `architecture-principles.md` SSOT note in the follow-up plan) |
+| `scripts/smoke-dawn.mjs` | dawn-node smoke with the animated-material oracle and no-light falsifier |
+| `scripts/smoke-browser.mjs` | browser capture -> fresh replay -> pixel comparison through the shared RHI-debug verifier |
 | `package.json` | Workspace metadata + dependencies (`engine-app`, `engine-runtime`, `engine-ecs`, `engine-types`) |
 | `vite.config.ts` | Vite config with `forgeaxShader` plugin, port 5192 |
 

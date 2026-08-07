@@ -11,8 +11,8 @@
 //
 // The 13 sites under test (plus 2 read-side instancesBgPerEntity reads):
 //
-//  Site 1:  main-pass-geometry.ts:658 — instanceBuffers.get (inst.cacheKey → worldEntityKey)
-//  Site 2:  main-pass-geometry.ts:689 — instanceBuffers.set (inst.cacheKey → worldEntityKey)
+//  Site 1:  main-pass-geometry.ts:696 — instanceBuffers.get (inst.cacheKey → worldEntityKey)
+//  Site 2:  main-pass-geometry.ts:727 — instanceBuffers.set (inst.cacheKey → worldEntityKey)
 //  Site 3:  main-pass-sprite-draws.ts:345 — instancesBgPerEntity write (entityKey → worldEntityKey)
 //  Site 4:  main-pass-sprite-draws.ts:701 — instanceBuffers.get (spriteInst.cacheKey → worldEntityKey)
 //  Site 5:  main-pass-sprite-draws.ts:730 — instanceBuffers.set (spriteInst.cacheKey → worldEntityKey)
@@ -80,12 +80,12 @@ describe('production-path geometry instanceBuffers worldEntityKey', () => {
     new URL('../../../render/src/record/main-pass-geometry.ts', import.meta.url),
   );
 
-  it('inst.cacheKey get at line 658 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(FILE, 658, 'main-pass-geometry:658 instanceBuffers.get');
+  it('inst.cacheKey get at line 696 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(FILE, 696, 'main-pass-geometry:696 instanceBuffers.get');
   });
 
-  it('inst.cacheKey set at line 689 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(FILE, 689, 'main-pass-geometry:689 instanceBuffers.set');
+  it('inst.cacheKey set at line 727 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(FILE, 727, 'main-pass-geometry:727 instanceBuffers.set');
   });
 });
 

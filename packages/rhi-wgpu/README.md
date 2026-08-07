@@ -72,7 +72,6 @@ See `packages/wgpu-wasm/README.md` for the full wasm-bindgen method table.
 | `acquireCanvasContext(canvas)` | function | Canvas context acquisition via wasm Surface path |
 | `createShaderModule(device, desc)` | async function | Async shader module factory |
 | `err`, `ok`, `RhiErrorClass` | re-export | From `@forgeax/engine-rhi` |
-| `ensureRhiWgpuReady` | function | Legacy alias for `ensureReady` |
 
 ## Constraints
 

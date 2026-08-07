@@ -1,7 +1,12 @@
 import { createProfiler, type ProfileFrameToken } from '@forgeax/engine-profiler';
 import { describe, expect, it } from 'vitest';
 
-import { type DrawOwnerOptions, RENDER_PHASE_CATALOG, type RenderPhase } from '../renderer';
+import {
+  type DrawOwnerOptions,
+  RENDER_PHASE_CATALOG,
+  RENDER_RECORD_PHASE_CATALOG,
+  type RenderPhase,
+} from '../renderer';
 
 const RENDER_PHASES: readonly RenderPhase[] = [
   'extract',
@@ -9,6 +14,7 @@ const RENDER_PHASES: readonly RenderPhase[] = [
   'features',
   'sort',
   'record',
+  ...RENDER_RECORD_PHASE_CATALOG,
 ];
 
 function startSession(profiler: ReturnType<typeof createProfiler>) {
@@ -18,7 +24,7 @@ function startSession(profiler: ReturnType<typeof createProfiler>) {
 }
 
 describe('Render profiler token and skip contract', () => {
-  it('exposes the five owner phases and accepts an App frame token', () => {
+  it('exposes owner phases and accepts an App frame token', () => {
     expect(RENDER_PHASE_CATALOG).toEqual(RENDER_PHASES);
     const token: ProfileFrameToken = {
       captureId: 'capture-0001',

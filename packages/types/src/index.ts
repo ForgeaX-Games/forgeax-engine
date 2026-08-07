@@ -54,6 +54,7 @@ export * from './material/index.js';
 // AI users import the binary success/failure carrier via `@forgeax/engine-types`
 // (or via the rhi/ecs package barrels which re-export this same module).
 export * from './result';
+export * from './runtime-scope';
 export * from './vfx';
 
 // === Sub-asset POD SSOT (feat-20260615-fbx-importer-via-sdk M1 / t9) ===========
@@ -2311,180 +2312,78 @@ export type AssetErrorDetail =
       };
     };
 
-// === Image importer error model SSOT (feat-20260515-learn-render-getting-started M2 T-M2-04) ===
-//
-// Decision anchors:
-// - requirements AC-12 (ImageErrorCode 4-member independent closed union; not
-//   merged into AssetErrorCode) + AC-26 (ImageMeta + DecodedImage POD types
-//   exported from @forgeax/engine-types so producer (image importer) +
-//   consumer (runtime AssetRegistry.uploadTexture) share one schema)
-// - plan-strategy section 2.3 D-12 (image importer error closed union 4
-//   members independent from AssetErrorCode 4 members; structurally
-//   parallel to GltfErrorCode 7 / ShaderErrorCode 7 same-shape errors)
-// - plan-strategy section 2.5 D Open Q-4 selected (c) (TextureAsset.format
-//   <-> colorSpace consistency assertion; conflict surfaces via
-//   image-format-unsupported.detail.formatColorSpaceConflict optional sub-shape)
-// - plan-strategy section 3.3 error path 1 (sidecar three-way fallback path
-//   (a) image-meta-missing) + error path 2 (format-unsupported with conflict)
-// - charter proposition 3 (machine-readable union > prose) + proposition 4
-//   (explicit failure: switch (err.code) exhaustive without default; tsc
-//   guards completeness) + proposition 5 (consistent abstraction:
-//   structurally parallel to AssetError / RhiError / ShaderError four-field
-//   surface)
-// - architecture-principles #1 SSOT (4 literals + 4 detail shapes + 5-field
-//   ImageMeta + 6-field DecodedImage live here once; @forgeax/engine-image
-//   errors.ts class implementation references this module; AGENTS.md
-//   Error model row references this module)
+// === Image importer error model SSOT ===
+// ImageErrorDetailByCode owns the closed vocabulary and payload shapes. The
+// envelope and runtime constructors are derived from it so `.code` and
+// `.detail` stay correlated for consumers.
 
-/**
- * Closed `ImageErrorCode` union -- 4 members (plan-strategy section 2.3 D-12;
- * requirements AC-12). Exhaustive `switch (err.code)` needs no default
- * fallback -- TypeScript guards union completeness at compile time
- * (charter proposition 4 explicit failure + proposition 3 machine-readable
- * union > prose).
- *
- * Independent from the 4-member `AssetErrorCode`; image importer errors
- * cover the disk-to-memory translation phase exclusively (charter P5
- * producer / consumer split). The runtime `AssetRegistry.uploadTexture`
- * surface returns `Result<void, ImageError | RhiError>` because it bridges
- * image importer errors (consistency assertion fail-fast) and the GPU
- * upload path (RHI errors).
- *
- * | code | trigger |
- * |:--|:--|
- * | `'image-decode-failed'` | UPNG / jpeg-js threw on the byte stream (corrupt PNG / JPG; charter proposition 4 explicit failure). |
- * | `'image-format-unsupported'` | mime not in `['image/png', 'image/jpeg']`; OR uploadTexture entry detected `format='*-srgb' <-> colorSpace='linear'` mismatch (plan-strategy section 2.5 D Open Q-4 (c)). |
- * | `'image-dimension-out-of-bounds'` | width or height exceeds device caps `maxTextureDimension2D` (or hard 16k cap when caps absent). |
- * | `'image-meta-missing'` | source file exists but `<source>.meta.json` sidecar absent in same directory (path (a) of three-way fallback per AC-17). |
- */
-export type ImageErrorCode =
-  | 'image-decode-failed'
-  | 'image-format-unsupported'
-  | 'image-dimension-out-of-bounds'
-  | 'image-meta-missing'
-  | 'image-hdr-decode-failed'
-  // feat-20260521-sprite-atlas-animation M1 T-02 — vite-plugin-image atlas
-  // hook fail-fast SSOT (plan-strategy section 2 D-2; add-only minor per
-  // AGENTS.md section Error model evolution contract; research F-7
-  // candidate B). The three members cover the AC-10 (a/b/c) build-time
-  // invariants — empty glob match (a), single image larger than the atlas
-  // cap (b), and a region-pack safety net when shelfPack regions overflow
-  // the atlas footprint (c). All three reuse ImageErrorImpl + IMAGE_ERROR_*
-  // SSOT tables (no new error class, no new error union — charter P4
-  // consistent abstraction; AI users keep one switch (err.code) shape).
-  | 'atlas-empty-input'
-  | 'atlas-size-exceeded'
-  | 'atlas-region-mismatch';
-
-/**
- * Discriminated detail union for `ImageError` -- narrowed per `ImageError.code`
- * (plan-strategy section 2.3 D-12 + section 2.5 D Open Q-4 (c)).
- *
- * AI users access `err.detail.<field>` directly after `switch (err.code)`
- * narrows the variant -- never by parsing `.message` (charter proposition 4
- * explicit failure red line).
- *
- * The detail shapes:
- * - `image-decode-failed -> { reason, path? }` -- `reason` carries the
- *   underlying decoder error message; `path` may be empty for in-memory
- *   parseImage calls (the file-system entry decodeImageFromFile fills it in).
- * - `image-format-unsupported -> { actualMime, path?, formatColorSpaceConflict? }`
- *   -- `actualMime` is the rejected mime; optional
- *   `formatColorSpaceConflict` carries `{ format, colorSpace, expected }`
- *   when uploadTexture surfaced a `format <-> colorSpace` mismatch
- *   (plan-strategy section 2.5 D Open Q-4 (c) extension).
- * - `image-dimension-out-of-bounds -> { requested: {width,height}, limit }`
- *   -- numeric verdict, no parsing required.
- * - `image-meta-missing -> { sourcePath, expectedSidecarPath }` --
- *   AI users surface both paths in stderr / IDE jump-to-source.
- */
-export type ImageErrorDetail =
-  | {
-      readonly code: 'image-decode-failed';
-      readonly reason: string;
-      readonly path?: string;
-    }
-  | {
-      readonly code: 'image-format-unsupported';
-      readonly actualMime: string;
-      readonly path?: string;
-      readonly formatColorSpaceConflict?: {
-        readonly format: string;
-        readonly colorSpace: 'srgb' | 'linear';
-        readonly expected: 'srgb' | 'linear';
-      };
-    }
-  | {
-      readonly code: 'image-dimension-out-of-bounds';
-      readonly requested: { readonly width: number; readonly height: number };
-      readonly limit: number;
-    }
-  | {
-      readonly code: 'image-meta-missing';
-      readonly sourcePath: string;
-      readonly expectedSidecarPath: string;
-    }
-  | {
-      readonly code: 'image-hdr-decode-failed';
-      readonly reason: string;
-      readonly path?: string;
-    }
-  // feat-20260521-sprite-atlas-animation M1 T-02 — atlas hook fail-fast
-  // detail SSOT (1:1 with requirements section AC-10 a/b/c).
-  //
-  // `atlas-empty-input -> { receivedCount }` — fast-glob produced zero
-  //   matches; AI users read `.detail.receivedCount` and inspect the
-  //   `atlas.input` glob string against the on-disk layout.
-  // `atlas-size-exceeded -> { name, width, height, maxAtlasSize }` — a
-  //   single source PNG cannot fit inside the cap; AI users compare
-  //   `.detail.width` * `.detail.height` against `.detail.maxAtlasSize`^2
-  //   and either downscale the source or split the atlas (the hint string
-  //   in IMAGE_ERROR_HINTS spells the copy-pasteable recovery commands).
-  // `atlas-region-mismatch -> { name, regionsTotalPixels, atlasPixels }` —
-  //   shelfPack returned a region map whose summed area exceeds the atlas
-  //   footprint; algorithm safety net (plan-strategy section 2 D-4 future
-  //   MaxRects swap keeps this invariant), so AI users normally never see
-  //   this code outside of a packer regression.
-  | {
-      readonly code: 'atlas-empty-input';
-      readonly receivedCount: number;
-    }
-  | {
-      readonly code: 'atlas-size-exceeded';
-      readonly name: string;
-      readonly width: number;
-      readonly height: number;
-      readonly maxAtlasSize: number;
-    }
-  | {
-      readonly code: 'atlas-region-mismatch';
-      readonly name: string;
-      readonly regionsTotalPixels: number;
-      readonly atlasPixels: number;
+/** Closed code union, derived from the detail map below. */
+interface ImageErrorDetailByCode {
+  'image-decode-failed': {
+    readonly reason: string;
+    readonly path?: string;
+  };
+  'image-format-unsupported': {
+    readonly actualMime: string;
+    readonly path?: string;
+    readonly formatColorSpaceConflict?: {
+      readonly format: string;
+      readonly colorSpace: 'srgb' | 'linear';
+      readonly expected: 'srgb' | 'linear';
     };
+  };
+  'image-dimension-out-of-bounds': {
+    readonly requested: { readonly width: number; readonly height: number };
+    readonly limit: number;
+  };
+  'image-meta-missing': {
+    readonly sourcePath: string;
+    readonly expectedSidecarPath: string;
+  };
+  'image-hdr-decode-failed': {
+    readonly reason: string;
+    readonly path?: string;
+  };
+  'atlas-empty-input': {
+    readonly receivedCount: number;
+  };
+  'atlas-size-exceeded': {
+    readonly name: string;
+    readonly width: number;
+    readonly height: number;
+    readonly maxAtlasSize: number;
+  };
+  'atlas-region-mismatch': {
+    readonly name: string;
+    readonly regionsTotalPixels: number;
+    readonly atlasPixels: number;
+  };
+}
+
+export type ImageErrorCode = keyof ImageErrorDetailByCode;
+
+/** Detail union projected from one code-to-payload map. */
+export type ImageErrorDetailFor<C extends ImageErrorCode> = Readonly<{ code: C }> &
+  ImageErrorDetailByCode[C];
+
+export type ImageErrorDetail = {
+  [C in ImageErrorCode]: ImageErrorDetailFor<C>;
+}[ImageErrorCode];
 
 /**
- * Structural shape of a forgeax image error (M2 T-M2-04). Four-field surface
- * (`.code` / `.expected` / `.hint` / `.detail`) structurally parallel to
- * `@forgeax/engine-rhi` `RhiError` + `@forgeax/engine-types` `AssetError` +
- * `MetricError` (charter proposition 5 consistent abstraction; AGENTS.md
- * "Errors are structured. Return Result, never throw for expected failures").
- *
- * AI users perform a single `switch (err.code)` over the 4 members and pick
- * up `err.detail.<per-code-field>` with full IDE autocomplete (charter
- * proposition 3 machine-readable union > prose; AI-user review F-1
- * affordance).
- *
- * The interface intentionally extends `Error` so a runtime `ImageError`
- * **class** (defined in `@forgeax/engine-image/errors`) satisfies the
- * contract without re-declaring inherited `name` / `message` slots.
+ * Correlated error envelope. `ImageErrorFor<C>` is the producer-facing
+ * generic; `ImageError` is its closed union for exhaustive consumer switches.
  */
-export interface ImageError extends Error {
-  readonly code: ImageErrorCode;
+export type ImageErrorFor<C extends ImageErrorCode> = Error & {
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: ImageErrorDetail;
-}
+  readonly detail: ImageErrorDetailFor<C>;
+};
+
+export type ImageError = {
+  [C in ImageErrorCode]: ImageErrorFor<C>;
+}[ImageErrorCode];
 
 /**
  * Per-code `.hint` string literals SSOT (plan-strategy section 2.3 / Tier 2
@@ -4029,19 +3928,13 @@ export interface ParityCaptureDetail {
 }
 
 /**
- * Discriminated union of `.detail` shapes per `MetricErrorCode` member
- * (D-P11; structurally parallel to `@forgeax/engine-rhi` `RhiErrorDetail`
- * lines 165-189 of `packages/rhi/src/errors.ts`).
+ * Non-optional detail projection carried by `MetricError`.
  *
- * The dispatch happens through `MetricError`'s `.code` discriminator: per-code
- * interfaces narrow `.detail` automatically when the consumer writes
- * `if (err.code === 'pixel-parity-threshold-exceeded') { ...err.detail.diffPixelCount... }`.
- *
- * Listed in the same order as `MetricErrorCode` so a reviewer can grep the two
- * unions vertically for drift (M1 T-002 acceptance check ties `MetricErrorDetail`
- * grep hit to this layout).
+ * `MetricError` owns the complete code-to-detail relation. `NonNullable` removes
+ * only the four legacy absence markers; parity payloads and the legacy detail
+ * shape remain in the public family without a second manually maintained list.
  */
-export type MetricErrorDetail = MetricLegacyDetail | ParityThresholdDetail | ParityCaptureDetail;
+export type MetricErrorDetail = NonNullable<MetricError['detail']>;
 
 /**
  * Structural shape of a forgeax metric error (feat-20260512 T-002).

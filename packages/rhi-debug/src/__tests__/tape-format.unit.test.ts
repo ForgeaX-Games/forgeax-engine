@@ -733,7 +733,7 @@ describe('tape-format — event kind round-trip', () => {
 // ============================================================================
 
 describe('tape-format — formatVersion reject', () => {
-  it('formatVersion = 0 -> reject (expectedVersion=3)', () => {
+  it('formatVersion = 0 -> reject (expectedVersion=4)', () => {
     const b = makeEmptyTape();
     const badTape: Tape = { ...b, formatVersion: 0 };
     const { json, blob } = serializeTape(badTape);
@@ -743,14 +743,14 @@ describe('tape-format — formatVersion reject', () => {
       expect(res.error.code).toBe('tape-format-version-mismatch');
       const detail = res.error.detail;
       if (detail && 'expectedVersion' in detail) {
-        expect(detail.expectedVersion).toBe(3);
+        expect(detail.expectedVersion).toBe(4);
       }
     }
   });
 
-  it('formatVersion = 4 -> reject (v3 accepts {2,3} only)', () => {
+  it('formatVersion = 5 -> reject (v4 accepts {2,3,4} only)', () => {
     const b = makeEmptyTape();
-    const badTape: Tape = { ...b, formatVersion: 4 };
+    const badTape: Tape = { ...b, formatVersion: 5 };
     const { json, blob } = serializeTape(badTape);
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(false);
@@ -758,24 +758,24 @@ describe('tape-format — formatVersion reject', () => {
       expect(res.error.code).toBe('tape-format-version-mismatch');
       const detail = res.error.detail;
       if (detail && 'tapeVersion' in detail) {
-        expect(detail.tapeVersion).toBe(4);
-        expect(detail.expectedVersion).toBe(3);
+        expect(detail.tapeVersion).toBe(5);
+        expect(detail.expectedVersion).toBe(4);
       }
     }
   });
 
-  it('formatVersion = 3 (current) -> accepted (v3 supports {2,3})', () => {
+  it('formatVersion = 4 (current) -> accepted (v4 supports {2,3,4})', () => {
     const b = makeEmptyTape();
-    const v3Tape: Tape = { ...b, formatVersion: 3 };
-    const { json, blob } = serializeTape(v3Tape);
+    const v4Tape: Tape = { ...b, formatVersion: 4 };
+    const { json, blob } = serializeTape(v4Tape);
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.value.formatVersion).toBe(3);
+      expect(res.value.formatVersion).toBe(4);
     }
   });
 
-  it('v1 tape (formatVersion=1) -> explicit reject with expectedVersion=3', () => {
+  it('v1 tape (formatVersion=1) -> explicit reject with expectedVersion=4', () => {
     const b = makeEmptyTape();
     const v1Tape: Tape = { ...b, formatVersion: 1 };
     const { json, blob } = serializeTape(v1Tape);
@@ -786,7 +786,7 @@ describe('tape-format — formatVersion reject', () => {
       const detail = res.error.detail;
       if (detail && 'tapeVersion' in detail) {
         expect(detail.tapeVersion).toBe(1);
-        expect(detail.expectedVersion).toBe(3);
+        expect(detail.expectedVersion).toBe(4);
       }
     }
   });

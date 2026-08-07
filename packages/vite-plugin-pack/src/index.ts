@@ -14,7 +14,13 @@ import {
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { type NativeCooker, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
-import type { Importer, PackIndexEntry } from '@forgeax/engine-types';
+import {
+  type Importer,
+  type PackIndexEntry,
+  RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
+  type RuntimeAssetBinding,
+  runtimeScopePath,
+} from '@forgeax/engine-types';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { projectAssetProduction } from './build/asset-production.js';
 import {
@@ -48,6 +54,7 @@ import {
   type LogicalPackage,
   type LogicalPackageAsset,
 } from './package-finalizer.js';
+import { PackRuntimeRealm } from './runtime-realm.js';
 import {
   loadSharedPackInput,
   projectPackIndexUrl,
@@ -173,6 +180,13 @@ interface WsLike {
 /** Shape of the plugin returned by pluginPack(). */
 export interface ForgeaXPackPlugin {
   readonly name: string;
+  /** Bind this dev producer to exactly one runtime scope. */
+  rebind(
+    binding: import('@forgeax/engine-types').RuntimeAssetBinding,
+    roots: readonly string[],
+  ): Promise<import('@forgeax/engine-types').RuntimeAssetBinding>;
+  /** Return the current scope binding, if this producer has been bound. */
+  runtimeBinding(): import('@forgeax/engine-types').RuntimeAssetBinding | undefined;
   configureServer(server: ViteDevServerLike): void;
   generateBundle(this: MinimalPluginContext): Promise<void>;
   writeBundle(options: { readonly dir?: string | undefined }): Promise<void>;
@@ -209,6 +223,16 @@ export interface PluginPackOptions {
   readonly cookers?: readonly NativeCooker[] | undefined;
   /** Host-owned reaction to a real watched-byte change; absent means no reload. */
   readonly refresh?: AssetHostRefreshPolicy | undefined;
+  /**
+   * Host-owned build-input boundary. Matching paths are ignored by catalog
+   * projection and GUID-to-meta indexing, while their containing directories
+   * remain watched for normal HMR. This keeps build-only producers (for example
+   * shader sidecars owned by vite-plugin-shader) out of runtime Pack catalogs
+   * without forcing hosts to materialize one-off file roots.
+   */
+  readonly ignorePath?: (path: string) => boolean;
+  /** Optional fixed single-game binding for standalone/static dev hosts. */
+  readonly runtimeBinding?: RuntimeAssetBinding;
 }
 
 // ─── Config loading ──────────────────────────────────────────────────────────
@@ -230,15 +254,20 @@ function mimeFromPath(path: string): 'image/jpeg' | 'image/png' | undefined {
 
 // Dev import DDC (Derived Data Cache) location. The imported `.bin` is derived
 // data -- delete it and the next `loadByGuid` re-derives it from the source.
-// Keying it by GUID under `node_modules/.cache/forgeax-ddc/` keeps it gitignored
-// everywhere (root `node_modules/` rule) so it never pollutes the source tree,
-// which for vendor assets (e.g. Sponza textures) is a tracked git submodule.
-// Deterministic from `(cwd, guid)`: the write site (importOneTexture) and the
-// warm-refresh reconstruction site (buildUrlToAbs) MUST agree on this formula.
-// GUIDs are globally unique (UUIDv5/v7 per sub-asset), so no collision with the
-// build arm's `dist/assets/<guid>-<hash>.bin` Rollup namespace.
-function ddcPath(cwd: string, guidLower: string): string {
-  return resolve(resolveDdcRoot(cwd), `${guidLower}.bin`);
+// The GUID overlay is deliberately generation-local: the same GUID may be
+// authored by two independent games, so a bare `<guid>.bin` path is not a
+// valid identity boundary. The semantic DDC payload remains content-addressed
+// by its desired key, while this path is only the disposable runtime overlay.
+function runtimeDdcRoot(cwd: string, binding: RuntimeAssetBinding | undefined): string {
+  const scope =
+    binding === undefined
+      ? 'unbound'
+      : `${binding.scopeId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${binding.generation}`;
+  return resolve(resolveDdcRoot(cwd), 'runtime', scope);
+}
+
+function ddcPath(cwd: string, guidLower: string, binding?: RuntimeAssetBinding): string {
+  return resolve(runtimeDdcRoot(cwd, binding), `${guidLower}.bin`);
 }
 
 /**
@@ -283,6 +312,17 @@ async function readOverrideFromMeta(
 
 /** Vite plugin factory for the ForgeaX asset package system. */
 export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
+  const runtimeRealm = new PackRuntimeRealm();
+  let activeScopeToken: number | undefined;
+
+  const currentDdcPath = (cwd: string, guidLower: string): string =>
+    ddcPath(cwd, guidLower, runtimeRealm.snapshot()?.binding);
+
+  function assertCurrentRuntimeScope(token: number | undefined): void {
+    if (token !== undefined && !runtimeRealm.isCurrent(token)) {
+      throw new Error('forgeax: stale runtime scope publication rejected');
+    }
+  }
   // Mutable catalog state — rebuilt on startup and on file watch events.
   let catalog: PackIndexEntry[] = [];
   let catalogProjection: CatalogLegacyProjection = {
@@ -347,9 +387,29 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   const devArtifactBodies: Map<string, { readonly bytes: Uint8Array; readonly mimeType: string }> =
     new Map();
   const DEV_PACK_PREFIX = '/__forgeax-ddc/';
-  const packageRoutes = createPackageRoutes();
+  let packageRoutes = createPackageRoutes();
   const nativeCookerRegistry = new NativeCookerRegistry();
   for (const cooker of opts.cookers ?? []) nativeCookerRegistry.register(cooker);
+
+  function resetDevState(): void {
+    catalog = [];
+    catalogProjection = {
+      schemaVersion: 'catalog-legacy-v1',
+      entries: [],
+      authority: 'authoritative',
+      diagnostics: [],
+    };
+    urlToAbs = new Map();
+    guidToMeta = new Map();
+    importedRows.clear();
+    inFlightImports.clear();
+    inFlightMetaImports.clear();
+    metaPackBodies.clear();
+    devArtifactBodies.clear();
+    packageRoutes.invalidate();
+    packageRoutes = createPackageRoutes();
+    catalogReady = false;
+  }
 
   interface AuthoredPackAssetInput {
     readonly guid: string;
@@ -520,6 +580,84 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       ? catalogProjection.entries
       : catalogProjection;
   }
+
+  function scopedPackageUrl(binding: RuntimeAssetBinding, packageUrl: string): string {
+    const base = binding.packageUrlBase.replace(/\/+$/, '');
+    const scopedNamespace = runtimeScopePath(binding, 'asset');
+    // buildCatalog() receives the Vite host base, so an unscoped dev row may
+    // already be `/preview/__forgeax-ddc/<guid>.pack.json`. The binding's
+    // packageUrlBase owns that same host prefix plus the scoped namespace;
+    // remove the host prefix before placing the row under the scoped asset
+    // route. Otherwise `/preview` is inserted twice and loadByGuid receives
+    // a 404 even though the scoped package body exists.
+    const hostBase = base.endsWith(scopedNamespace) ? base.slice(0, -scopedNamespace.length) : '';
+    const rawUrl = packageUrl.startsWith('/') ? packageUrl : `/${packageUrl}`;
+    const internalUrl =
+      hostBase.length > 0 && (rawUrl === hostBase || rawUrl.startsWith(`${hostBase}/`))
+        ? rawUrl.slice(hostBase.length) || '/'
+        : rawUrl;
+    const scopedPath = runtimeScopePath(binding, `asset${internalUrl}`);
+    // `packageUrlBase` is the host-visible base (for example `/preview`),
+    // while `runtimeScopePath` is intentionally engine-relative. Keeping the
+    // two pieces separate lets the same realm contract work behind a Vite
+    // base, a Studio proxy, or a root standalone host.
+    if (base.length === 0) return scopedPath;
+    if (base.endsWith(scopedNamespace)) {
+      return `${base}${internalUrl}`;
+    }
+    return `${base}${scopedPath}`;
+  }
+
+  function scopedCatalogEntries(
+    binding: RuntimeAssetBinding,
+    entries: readonly PackIndexEntry[],
+  ): readonly PackIndexEntry[] {
+    return entries.map((entry) => ({
+      ...entry,
+      packageUrl: scopedPackageUrl(binding, entry.packageUrl),
+    }));
+  }
+
+  function scopedCatalogResponse(binding: RuntimeAssetBinding) {
+    const response = legacyCatalogResponse();
+    if (!('authority' in response)) {
+      return {
+        schemaVersion: RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
+        scopeId: binding.scopeId,
+        generation: binding.generation,
+        authority: 'authoritative' as const,
+        entries: scopedCatalogEntries(binding, response),
+        diagnostics: [],
+      } as const;
+    }
+    return {
+      schemaVersion: RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
+      scopeId: binding.scopeId,
+      generation: binding.generation,
+      authority: response.authority,
+      entries: scopedCatalogEntries(binding, response.entries),
+      diagnostics: response.diagnostics,
+    } as const;
+  }
+
+  function runtimeDiagnostics(
+    diagnostics: readonly {
+      readonly code: string;
+      readonly message: string;
+      readonly expected?: string;
+      readonly actual?: string;
+      readonly hint?: string;
+    }[],
+  ): RuntimeAssetBinding['diagnostics'] {
+    return diagnostics.map((diagnostic) => ({
+      code: diagnostic.code,
+      severity: 'blocking' as const,
+      message: diagnostic.message,
+      ...(diagnostic.expected === undefined ? {} : { expected: diagnostic.expected }),
+      ...(diagnostic.actual === undefined ? {} : { actual: diagnostic.actual }),
+      ...(diagnostic.hint === undefined ? {} : { hint: diagnostic.hint }),
+    }));
+  }
   async function publishAuthoredDevPacks(
     raw: readonly PackIndexEntry[],
   ): Promise<PackIndexEntry[]> {
@@ -591,22 +729,25 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   }
 
   // Import exactly ONE texture GUID to the DDC
-  // (`node_modules/.cache/forgeax-ddc/<guid>.bin`, see ddcPath -- gitignored,
-  // never written into the source tree) and incrementally patch the
-  // live catalog + urlToAbs for that single row. No whole-catalog rebuild, no
-  // global swap. Idempotent: a GUID already in the import overlay returns its
-  // imported row without re-importing. Returns `[]` when the GUID is absent from
-  // the catalog or its row is not an importable texture (the caller fails fast
-  // rather than silently rebuilding).
+  // generation-local runtime overlay and incrementally patch the live catalog
+  // + urlToAbs for that single row. No whole-catalog rebuild, no global swap.
+  // Idempotent: a GUID already in the import overlay returns its imported row
+  // without re-importing. Returns `[]` when the GUID is absent from the catalog
+  // or its row is not an importable texture (the caller fails fast rather than
+  // silently rebuilding).
   async function importOneTexture(guidLower: string): Promise<PackIndexEntry[]> {
+    const scopeToken = activeScopeToken;
+    const scopeBinding = runtimeRealm.snapshot()?.binding;
+    const scopeDdcPath = (guid: string): string => ddcPath(process.cwd(), guid, scopeBinding);
     const already = importedRows.get(guidLower);
     if (already !== undefined) return [already];
-    const raw = catalog.find((e) => e.guid.toLowerCase() === guidLower);
+    const raw = rawRowForGuid(guidLower);
     if (raw === undefined) return [];
     const imported = await importTextureEntry(raw, {
       cwd: process.cwd(),
       metaPath: guidToMeta.get(guidLower),
     });
+    assertCurrentRuntimeScope(scopeToken);
     if ('skipped' in imported) {
       // Fail-fast (architecture-principles §5), mirroring the per-meta path's
       // `throw runResult.error`: a REAL cook failure (source read / decode /
@@ -627,12 +768,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
       return [];
     }
-    const binAbs = ddcPath(process.cwd(), guidLower);
+    const binAbs = scopeDdcPath(guidLower);
     await mkdir(dirname(binAbs), { recursive: true });
     // (A) Texture arm dev: compress after importTextureEntry, before writeFile (D-3).
     // M2 default 'none' → pass-through; M3 flips to 'zstd' in STRATEGY_TABLE.
     // AC-01: honor an explicit importSettings.compression override from the meta.
     const texOverride = await readOverrideFromMeta(guidToMeta.get(guidLower));
+    assertCurrentRuntimeScope(scopeToken);
     const compressed = await compressArtifact({
       bytes: imported.bytes,
       kind: 'texture',
@@ -647,6 +789,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         : {}),
     });
     await writeFile(binAbs, compressed.compressed);
+    assertCurrentRuntimeScope(scopeToken);
     const packageUrl = `${DEV_PACK_PREFIX}${guidLower}.pack.json`;
     const artifactUrl = `${DEV_PACK_PREFIX}${guidLower}/body.bin`;
     const artifactCodec =
@@ -715,6 +858,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       ...(raw.name !== undefined ? { name: raw.name } : {}),
       ...COOKED_CURRENT_PROJECTION,
     };
+    assertCurrentRuntimeScope(scopeToken);
     importedRows.set(guidLower, importedRow);
     const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
     if (idx >= 0) catalog[idx] = importedRow;
@@ -726,13 +870,19 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // DDC, overlays all produced rows onto the catalog, and returns the
   // resulting PackIndexEntry[] for all rows belonging to this meta.
   async function startMetaImport(metaPath: string): Promise<PackIndexEntry[]> {
+    const scopeToken = activeScopeToken;
+    const routeRegistry = packageRoutes;
     const cwd = process.cwd();
+    const scopeBinding = runtimeRealm.snapshot()?.binding;
+    const scopeDdcPath = (guid: string): string => ddcPath(cwd, guid, scopeBinding);
+    const scopeDdcRoot = (): string => runtimeDdcRoot(cwd, scopeBinding);
     const previousCatalog = [...catalog];
     const previousImportedRows = new Map(importedRows);
     const { paths } = loadAssetConfig(cwd);
     let rm: unknown;
     try {
       rm = JSON.parse(await readFile(metaPath, 'utf-8'));
+      assertCurrentRuntimeScope(scopeToken);
     } catch {
       throw new ImportError({
         code: 'import-internal-error',
@@ -776,6 +926,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     }
 
     const runResult = await runImport(runMeta, importerRegistry, fsForImport);
+    assertCurrentRuntimeScope(scopeToken);
     // Fail-fast (architecture-principles §5): a failed import must not collapse
     // to an empty result that the route can only report as a generic
     // `import-failed`. Throw the structured ImportError so the dev route can
@@ -830,7 +981,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const finalizedRoute =
       routeSubGuid === undefined
         ? undefined
-        : await packageRoutes.publish(
+        : await routeRegistry.publish(
             { origin: 'sourceMeta', cooked: true, logicalPackage },
             {
               write: (path, bytes) => {
@@ -851,6 +1002,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               artifactPath: (guid, key) => `${guid}/${key}.bin`,
             },
           );
+    assertCurrentRuntimeScope(scopeToken);
     if (finalizedRoute !== undefined && !finalizedRoute.ok) {
       throw new ImportError({
         code: 'import-internal-error',
@@ -865,8 +1017,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const guid = meta.subAssets[0]?.guid;
       if (guid === undefined) return [];
       uiDependencies.recordSuccess(guid, runResult.value.product.sourceDependencies);
-      const uiRow = catalog.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
+      const uiRow = rawRowForGuid(guid.toLowerCase());
       if (uiRow !== undefined) {
+        assertCurrentRuntimeScope(scopeToken);
         const packUrl = finalizedRoute?.ok
           ? finalizedRoute.value.packageUrl
           : `${DEV_PACK_PREFIX}${guid.toLowerCase()}.pack.json`;
@@ -893,6 +1046,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const packUrl =
       firstSubGuid !== undefined ? `${DEV_PACK_PREFIX}${firstSubGuid}.pack.json` : undefined;
     if (packUrl !== undefined) {
+      assertCurrentRuntimeScope(scopeToken);
       metaPackBodies.set(packUrl, JSON.stringify(pack));
     }
 
@@ -900,14 +1054,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // and overlay the imported form.
     for (const sub of meta.subAssets) {
       const guidLower = sub.guid.toLowerCase();
-      const raw = catalog.find((e) => e.guid.toLowerCase() === guidLower);
+      const raw = rawRowForGuid(guidLower);
       if (raw === undefined) continue;
 
       // If this sub-asset has binary data in bins, write it to the DDC
       // and rewrite the row to a .bin packageUrl.
       const bytes = bins?.get(guidLower);
       if (bytes !== undefined) {
-        const binAbs = ddcPath(cwd, guidLower);
+        const binAbs = scopeDdcPath(guidLower);
         await mkdir(dirname(binAbs), { recursive: true });
         // (C) Mesh bins arm dev: compress after bins.get, before writeFile (D-3).
         const compressKind = raw.kind === 'mesh' ? 'mesh' : 'texture';
@@ -918,6 +1072,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           ...(metaOverride !== undefined ? { override: metaOverride } : {}),
         });
         await writeFile(binAbs, compressedBin.compressed);
+        assertCurrentRuntimeScope(scopeToken);
         // round-2 finding 4: overlay metadata.colorSpace / format / mipmap
         // from the imported TextureAsset payload so dev pack-index reflects
         // per-image truth (catalog default 'linear' is wrong for srgb
@@ -979,6 +1134,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             : nonBinAsset?.refs !== undefined
               ? { ...raw, refs: nonBinAsset.refs.map((ref) => ref.guid) }
               : raw;
+        assertCurrentRuntimeScope(scopeToken);
         importedRows.set(guidLower, importedRow);
         const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
         if (idx >= 0) catalog[idx] = importedRow;
@@ -995,9 +1151,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const packJson = metaPackBodies.get(packUrl ?? '');
       if (packUrl !== undefined && packJson !== undefined && firstSubGuid !== undefined) {
         try {
-          const packPath = ddcPath(cwd, `${firstSubGuid}.meta.pack`);
+          const packPath = scopeDdcPath(`${firstSubGuid}.meta.pack`);
           await mkdir(dirname(packPath), { recursive: true });
           await writeFile(packPath, packJson);
+          assertCurrentRuntimeScope(scopeToken);
         } catch (e) {
           console.warn('[forgeax-pack] persist DDC pack failed:', e);
         }
@@ -1015,8 +1172,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         cookProfile: 'dev',
         ...(meta.sourceOverrides === undefined ? {} : { sourceOverrides: meta.sourceOverrides }),
       });
+      assertCurrentRuntimeScope(scopeToken);
       const publication = await publishImportPublication({
-        root: resolveDdcRoot(cwd),
+        root: scopeDdcRoot(),
         guid: firstSubGuid,
         desiredKey,
         pack,
@@ -1025,6 +1183,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         publishedGuids: allEntries.map((entry) => entry.guid),
         onDelta: (delta) => publishCatalogDelta?.(delta),
       });
+      assertCurrentRuntimeScope(scopeToken);
       if (!publication.ok) {
         catalog = previousCatalog;
         importedRows.clear();
@@ -1048,6 +1207,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         const projected = publishedRows.get(current.guid.toLowerCase());
         if (projected !== undefined) allEntries[index] = projected;
       }
+      assertCurrentRuntimeScope(scopeToken);
       for (const entry of allEntries) importedRows.set(entry.guid.toLowerCase(), entry);
     }
 
@@ -1100,6 +1260,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   const registeredImporterKeys: ReadonlySet<string> = new Set(
     importerRegistry.registeredImporters(),
   );
+  const scanOptions = opts.ignorePath === undefined ? {} : { ignorePath: opts.ignorePath };
+  const projectCatalog = (roots: readonly string[]) =>
+    buildCatalogProjection(roots, opts.base, registeredImporterKeys, scanOptions);
+  const buildGuidToMeta = (roots: readonly string[]) => buildGuidToMetaMap(roots, scanOptions);
+
+  // Set by this plugin's generateBundle hook. These rows own the final hashed
+  // Pack v2 URLs and are emitted as one immutable single-game build catalog.
+  let productionCatalog: readonly PackIndexEntry[] | undefined;
+  function rawRowForGuid(guidLower: string): PackIndexEntry | undefined {
+    return catalog.find((entry) => entry.guid.toLowerCase() === guidLower);
+  }
 
   // M4 / w32 (AC-20) + feat-20260608 round-2: create the filesystem adapter
   // for the import runner. `decodeImage` and `readSibling` are wired here so
@@ -1222,36 +1393,90 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
   // ─── configureServer (dev mode) ──────────────────────────────────────────
 
+  interface RuntimeScopeRoute {
+    readonly scopeId: string;
+    readonly generation: number;
+    readonly suffix: string;
+  }
+
+  function parseRuntimeScopeRoute(url: string): RuntimeScopeRoute | undefined {
+    const match = /^\/__pack\/scopes\/([^/]+)\/(\d+)(\/.*)?$/.exec(url);
+    if (match === null) return undefined;
+    let scopeId: string;
+    try {
+      const encodedScopeId = match[1];
+      if (encodedScopeId === undefined) return undefined;
+      scopeId = decodeURIComponent(encodedScopeId);
+    } catch {
+      return undefined;
+    }
+    const generation = Number(match[2]);
+    if (!Number.isSafeInteger(generation)) return undefined;
+    return { scopeId, generation, suffix: match[3] ?? '/' };
+  }
+
+  let stopRuntimeWatcher: () => void = () => {};
+  let rebindServer:
+    | ((binding: RuntimeAssetBinding, roots: readonly string[]) => Promise<RuntimeAssetBinding>)
+    | undefined;
+
   function configureServer(server: ViteDevServerLike): void {
     publishCatalogDelta = (delta) => {
-      server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: delta });
+      const binding = runtimeRealm.snapshot()?.binding;
+      const scopedDelta =
+        binding === undefined
+          ? delta
+          : { ...delta, scopeId: binding.scopeId, generation: binding.generation };
+      server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: scopedDelta });
     };
     // Async startup: scan roots to build the initial catalog.
-    const { roots } = resolvePackBuildInputs(opts);
+    let roots = [...resolvePackBuildInputs(opts).roots];
+    const initialRuntimeToken =
+      opts.runtimeBinding === undefined
+        ? undefined
+        : runtimeRealm.beginBind(opts.runtimeBinding, roots);
+    activeScopeToken = initialRuntimeToken;
     // Install the watcher before the async initial scan. A host can edit an
     // asset as soon as the dev server exists; delaying watch registration until
     // the scan resolves loses that first mutation (and its refresh signal).
     let resolveStartupReady!: () => void;
-    const startupReady = new Promise<void>((resolve) => {
-      resolveStartupReady = resolve;
-    });
+    let startupReady: Promise<void>;
+    const resetStartupReady = (): void => {
+      startupReady = new Promise<void>((resolve) => {
+        resolveStartupReady = resolve;
+      });
+    };
+    resetStartupReady();
     let applyWatchBatch: ((batch: WatchBatch) => Promise<void>) | undefined;
     let serialBatches = Promise.resolve();
-    watchDevRoots({
-      roots,
-      onBatch: (batch) => {
-        serialBatches = serialBatches.then(async () => {
-          await startupReady;
-          await applyWatchBatch?.(batch);
-        });
-        return serialBatches;
-      },
-    });
-    Promise.all([
-      buildCatalogProjection(roots, opts.base, registeredImporterKeys),
-      buildGuidToMetaMap(roots),
-    ])
+    let buildToken = 0;
+    let stopWatcher: () => void = () => {};
+    const startWatcher = (): void => {
+      stopWatcher = watchDevRoots({
+        roots,
+        onBatch: (batch) => {
+          const queuedBuildToken = buildToken;
+          serialBatches = serialBatches.then(async () => {
+            // A batch queued by a retired watcher must not observe the new
+            // roots or publish into the next runtime generation.
+            if (queuedBuildToken !== buildToken) return;
+            await startupReady;
+            if (queuedBuildToken !== buildToken) return;
+            await applyWatchBatch?.(batch);
+          });
+          return serialBatches;
+        },
+      });
+      stopRuntimeWatcher = stopWatcher;
+    };
+    startWatcher();
+    const initialBuildToken = ++buildToken;
+    Promise.all([projectCatalog(roots), buildGuidToMeta(roots)])
       .then(async ([rawProjection, g2m]) => {
+        if (initialBuildToken !== buildToken) {
+          resolveStartupReady();
+          return;
+        }
         // The dev catalog passes the discoverable bare-source texture rows
         // straight through, with the per-asset import overlay applied so any
         // already-imported `.bin` row survives the rebuild (monotonic import).
@@ -1266,9 +1491,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         guidToMeta = g2m;
         urlToAbs = buildUrlToAbsolute(catalog, {
           cwd: process.cwd(),
-          ddcPath: (guid) => ddcPath(process.cwd(), guid),
+          ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
         });
         catalogReady = true;
+        if (initialRuntimeToken !== undefined) {
+          runtimeRealm.publish(
+            initialRuntimeToken,
+            rawProjection.authority === 'authoritative' ? 'ready' : 'degraded',
+            rawProjection.authority,
+            runtimeDiagnostics(rawProjection.diagnostics),
+          );
+        }
 
         applyWatchBatch = async ({ sidecars, sources }) => {
           let catalogChanged = false;
@@ -1302,8 +1535,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             const previousCatalog = catalog;
             try {
               const [rawProjection2, g2m2] = await Promise.all([
-                buildCatalogProjection(roots, opts.base, registeredImporterKeys),
-                buildGuidToMetaMap(roots),
+                projectCatalog(roots),
+                buildGuidToMeta(roots),
               ]);
               installCatalogProjection({
                 ...rawProjection2,
@@ -1316,12 +1549,21 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               guidToMeta = g2m2;
               urlToAbs = buildUrlToAbsolute(catalog, {
                 cwd: process.cwd(),
-                ddcPath: (guid) => ddcPath(process.cwd(), guid),
+                ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
               });
               const delta = calculateCatalogDelta(previousCatalog, catalog);
               if (delta !== undefined) {
                 catalogChanged = true;
-                server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: delta });
+                const binding = runtimeRealm.snapshot()?.binding;
+                const scopedDelta =
+                  binding === undefined
+                    ? delta
+                    : { ...delta, scopeId: binding.scopeId, generation: binding.generation };
+                server.ws?.send({
+                  type: 'custom',
+                  event: CATALOG_DELTA_EVENT,
+                  data: scopedDelta,
+                });
               }
             } catch (err: unknown) {
               console.warn('[forgeax-pack] rebuild catalog error:', err);
@@ -1368,56 +1610,181 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         resolveStartupReady();
       })
       .catch((err: unknown) => {
+        if (initialBuildToken !== buildToken) {
+          resolveStartupReady();
+          return;
+        }
         console.warn('[forgeax-pack] startup scan error:', err);
         catalogReady = true;
+        if (initialRuntimeToken !== undefined) {
+          runtimeRealm.publish(initialRuntimeToken, 'unavailable', undefined, [
+            {
+              code: 'runtime-scope-startup-failed',
+              severity: 'blocking',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          ]);
+        }
         resolveStartupReady();
       });
+
+    rebindServer = async (binding, nextRoots) => {
+      const token = runtimeRealm.beginBind(binding, nextRoots);
+      activeScopeToken = token;
+      buildToken += 1;
+      // Let the first scan settle before replacing its shared state. This
+      // keeps rebind deterministic even when the host binds immediately after
+      // Vite creates the server, while the token guards stale publications.
+      const previousStartupReady = startupReady;
+      await previousStartupReady;
+      stopWatcher();
+      roots = [...nextRoots];
+      resetDevState();
+      serialBatches = Promise.resolve();
+      resetStartupReady();
+      startWatcher();
+      try {
+        const [rawProjection, g2m] = await Promise.all([
+          projectCatalog(roots),
+          buildGuidToMeta(roots),
+        ]);
+        if (!runtimeRealm.isCurrent(token)) {
+          throw new Error('forgeax: runtime scope was replaced during catalog bind');
+        }
+        installCatalogProjection({
+          ...rawProjection,
+          entries: await publishAuthoredDevPacks(rawProjection.entries),
+        });
+        guidToMeta = g2m;
+        urlToAbs = buildUrlToAbsolute(catalog, {
+          cwd: process.cwd(),
+          ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
+        });
+        catalogReady = true;
+        resolveStartupReady();
+        return (
+          runtimeRealm.publish(
+            token,
+            rawProjection.authority === 'authoritative' ? 'ready' : 'degraded',
+            rawProjection.authority,
+            runtimeDiagnostics(rawProjection.diagnostics),
+          ) ?? binding
+        );
+      } catch (error) {
+        if (runtimeRealm.isCurrent(token)) {
+          catalogReady = true;
+          resolveStartupReady();
+          runtimeRealm.publish(token, 'unavailable', undefined, [
+            {
+              code: 'runtime-scope-bind-failed',
+              severity: 'blocking',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          ]);
+        }
+        throw error;
+      }
+    };
 
     // Register connect middleware for /__pack/* routes + the
     // dev-mode `/pack-index.json` route (charter P4 consistent
     // abstraction: production emits the same file via generateBundle).
     server.middlewares.use(async (req, res, next) => {
-      const url = req.url ?? '';
-
-      if (url === '/__pack/index' || url === '/pack-index.json') {
-        // Wait for catalog to be ready (short-circuit if already built).
-        if (!catalogReady) {
-          await new Promise<void>((resolve) => {
-            const interval = setInterval(() => {
-              if (catalogReady) {
-                clearInterval(interval);
-                resolve();
-              }
-            }, 5);
-          });
-        }
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(legacyCatalogResponse()));
-        return;
-      }
-
-      const lookupPrefix = '/__pack/lookup/';
-      if (url.startsWith(lookupPrefix)) {
-        if (!catalogReady) {
-          await new Promise<void>((resolve) => {
-            const interval = setInterval(() => {
-              if (catalogReady) {
-                clearInterval(interval);
-                resolve();
-              }
-            }, 5);
-          });
-        }
-        const guid = url.slice(lookupPrefix.length);
-        const entry = catalog.find((e) => e.guid.toLowerCase() === guid.toLowerCase());
-        if (entry === undefined) {
+      let url = req.url ?? '';
+      let scopedBinding: RuntimeAssetBinding | undefined;
+      const boundRuntime = runtimeRealm.snapshot()?.binding;
+      const parsed = parseRuntimeScopeRoute(url);
+      if (parsed !== undefined) {
+        const current = boundRuntime;
+        if (current === undefined) {
           res.statusCode = 404;
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'not-found', guid }));
+          res.end(JSON.stringify({ error: 'runtime-scope-unbound' }));
           return;
         }
+        if (current.scopeId !== parsed.scopeId) {
+          res.statusCode = 404;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'runtime-scope-not-found', scopeId: parsed.scopeId }));
+          return;
+        }
+        if (current.generation !== parsed.generation) {
+          res.statusCode = 410;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              error: 'runtime-scope-generation-expired',
+              scopeId: parsed.scopeId,
+              generation: parsed.generation,
+              currentGeneration: current.generation,
+            }),
+          );
+          return;
+        }
+        scopedBinding = current;
+        if (parsed.suffix === '/catalog.json') {
+          await startupReady;
+          const latest = runtimeRealm.snapshot()?.binding;
+          if (latest === undefined || latest.generation !== parsed.generation) {
+            res.statusCode = 410;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'runtime-scope-generation-expired' }));
+            return;
+          }
+          if (latest.status === 'transitioning' || latest.status === 'unavailable') {
+            res.statusCode = 503;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'runtime-scope-unavailable', status: latest.status }));
+            return;
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(scopedCatalogResponse(latest)));
+          return;
+        }
+        if (current.status === 'transitioning' || current.status === 'unavailable') {
+          res.statusCode = 503;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'runtime-scope-unavailable', status: current.status }));
+          return;
+        }
+        if (current.status === 'degraded' || current.authority === 'degraded') {
+          res.statusCode = 409;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              error: 'runtime-scope-catalog-degraded',
+              diagnostics: current.diagnostics ?? [],
+            }),
+          );
+          return;
+        }
+        if (parsed.suffix.startsWith('/import/')) {
+          const guid = parsed.suffix.slice('/import/'.length);
+          if (guid.length === 0 || guid.includes('/')) {
+            res.statusCode = 404;
+            res.end('');
+            return;
+          }
+          url = `/__import/${guid}`;
+        } else if (parsed.suffix.startsWith('/asset/')) {
+          url = parsed.suffix.slice('/asset'.length);
+        } else {
+          res.statusCode = 404;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'runtime-scope-route-not-found' }));
+          return;
+        }
+      }
+      const requiresRuntimeScope =
+        url === '/__pack/index' ||
+        url === '/pack-index.json' ||
+        url.startsWith('/__pack/lookup/') ||
+        url.startsWith('/__import/') ||
+        url.startsWith(DEV_PACK_PREFIX);
+      if (requiresRuntimeScope && scopedBinding === undefined) {
+        res.statusCode = 404;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(entry));
+        res.end(JSON.stringify({ error: 'global-runtime-scope-route-disabled' }));
         return;
       }
 
@@ -1463,19 +1830,15 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           // the debounced watcher flushes its catalog/index update. Refresh
           // the lightweight GUID index once so the import endpoint remains
           // race-free for just-written authoring sources.
-          guidToMeta = await buildGuidToMetaMap(roots);
-          const refreshedProjection = await buildCatalogProjection(
-            roots,
-            opts.base,
-            registeredImporterKeys,
-          );
+          guidToMeta = await buildGuidToMeta(roots);
+          const refreshedProjection = await projectCatalog(roots);
           installCatalogProjection({
             ...refreshedProjection,
             entries: await publishAuthoredDevPacks(refreshedProjection.entries),
           });
           urlToAbs = buildUrlToAbsolute(catalog, {
             cwd: process.cwd(),
-            ddcPath: (guid) => ddcPath(process.cwd(), guid),
+            ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
           });
         }
         if (guidToMeta.get(guidLower) === undefined && importedRows.get(guidLower) === undefined) {
@@ -1505,7 +1868,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         const alreadyImported = importedRows.get(guidLower);
         if (alreadyImported !== undefined) {
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify([alreadyImported]));
+          res.end(
+            JSON.stringify(
+              scopedBinding === undefined
+                ? [alreadyImported]
+                : scopedCatalogEntries(scopedBinding, [alreadyImported]),
+            ),
+          );
           return;
         }
 
@@ -1615,7 +1984,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           return;
         }
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(resultEntries));
+        res.end(
+          JSON.stringify(
+            scopedBinding === undefined
+              ? resultEntries
+              : scopedCatalogEntries(scopedBinding, resultEntries),
+          ),
+        );
         return;
       }
 
@@ -1733,7 +2108,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // its catalog, URL projection, and deployment payload.
     }
     const { paths } = loadAssetConfig(cwd);
-    const projection = await buildCatalogProjection(roots, opts.base, registeredImporterKeys);
+    const projection = await projectCatalog(roots);
     if (projection.authority !== 'authoritative') {
       throw new Error(
         JSON.stringify({
@@ -1786,7 +2161,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // AC-01: guid -> meta path so the texture arm can honor an explicit
     // importSettings.compression override (built once, reused by the mesh arm
     // below as allGuidToMeta).
-    const guidToMetaBuild = await buildGuidToMetaMap(roots);
+    const guidToMetaBuild = await buildGuidToMeta(roots);
     const authoredPackUrls = new Map<string, string>();
     const authoredPackUrlsBySource = new Map<string, string>();
     const authoredCookedRefs = new Map<string, ReadonlyMap<string, readonly string[]>>();
@@ -2253,7 +2628,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
     }
 
-    const productionCatalog = dedupeFinalizedUiEntries(importedEntries, finalizedUiUrls);
+    productionCatalog = dedupeFinalizedUiEntries(importedEntries, finalizedUiUrls);
     this.emitFile({
       type: 'asset',
       fileName: 'pack-index.json',
@@ -2299,19 +2674,35 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   }
 
   async function closeBundle(): Promise<void> {
+    stopRuntimeWatcher();
+    activeScopeToken = undefined;
+    runtimeRealm.clear();
     const stage = buildArtifactStage;
     buildArtifactStage = undefined;
     if (stage !== undefined) await rm(stage.root, { recursive: true, force: true });
   }
 
+  async function rebind(
+    binding: RuntimeAssetBinding,
+    roots: readonly string[],
+  ): Promise<RuntimeAssetBinding> {
+    if (rebindServer === undefined) {
+      throw new Error('forgeax:pack rebind requires configureServer first');
+    }
+    return rebindServer(binding, roots);
+  }
+
+  function runtimeBinding(): RuntimeAssetBinding | undefined {
+    return runtimeRealm.snapshot()?.binding;
+  }
+
   return {
     name: 'forgeax:pack',
+    rebind,
+    runtimeBinding,
     configureServer,
     generateBundle,
     writeBundle,
     closeBundle,
   };
 }
-
-/** Package version string (debug tag). */
-export const VITE_PLUGIN_PACK_PACKAGE_VERSION = '0.0.0';

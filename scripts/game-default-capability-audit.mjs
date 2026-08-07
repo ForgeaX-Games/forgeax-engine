@@ -300,8 +300,7 @@ function addSource(file, kind) {
 function templateImportProfile(packageName, manifest) {
   const templateFiles = walkFiles(
     templateRoot,
-    (file) =>
-      file.endsWith('.ts') && !file.includes('/src/__tests__/') && !file.endsWith('.test.ts'),
+    (file) => file.endsWith('.ts') && !file.includes('/tests/') && !file.endsWith('.test.ts'),
   );
   const importPaths = [];
   for (const file of templateFiles) {

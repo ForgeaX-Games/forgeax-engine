@@ -30,7 +30,7 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "no CI gate on template scaffold; apps/preview hosts acceptance"
+        "reason": "CI acceptance is owned by the apps/preview host; the template has no standalone runner"
       },
       "spike-report": {
         "enabled": false,
@@ -57,7 +57,9 @@
     "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71"

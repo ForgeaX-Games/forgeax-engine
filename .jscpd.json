@@ -18,10 +18,31 @@
   "filePairIgnore": [
     {
       "files": [
+        "apps/preview/scripts/smoke-hit-streak.mjs",
+        "apps/preview/scripts/smoke-mission-progression.mjs"
+      ],
+      "rationale": "game-default M0 progression round 20260806: both smokes keep a self-contained Preview/WebGPU browser front door so an AI user can run one player path without traversing a helper. hit-streak proves the timed combo lifecycle; mission-progression proves the ordered score-unlock-profile-reset task and its DOM contract. Revisit if a third Preview gameplay smoke repeats the same harness."
+    },
+    {
+      "files": [
         "apps/bevy/bloom-2d/scripts/smoke-dawn.mjs",
         "apps/bevy/transparency-2d/scripts/smoke-dawn.mjs"
       ],
       "rationale": "solo bevy-examples round 20260729-212017: both 2D Dawn smokes keep the self-contained WebGPU injection, mock canvas, shared-device capture, copyTextureToBuffer readback, and N-frame gate inline for AI grepability. bloom-2d is unique where it matters: it toggles Camera.bloom, compares bloom-off/on pixel readbacks, and asserts bloom pass names; transparency-2d owns its separate alpha/depth-order verdict. Revisit if a shared 2D smoke helper becomes the explicit front-door contract."
+    },
+    {
+      "files": [
+        "apps/bevy/2d-shapes/scripts/smoke-dawn.mjs",
+        "apps/bevy/transparency-3d/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260805-092728: both Dawn smokes keep the WebGPU injection, mock canvas, shared-device capture, copyTextureToBuffer readback, and 300-frame gate inline for AI grepability. 2d-shapes is unique where it matters: it renders the twelve filled/line primitives and ten ring variants and asserts colored coverage plus motion; transparency-3d owns alpha ordering and depth/blending assertions. Revisit if a shared 2D smoke helper becomes the explicit front-door contract."
+    },
+    {
+      "files": [
+        "apps/bevy/mesh2d-arcs/scripts/smoke-dawn.mjs",
+        "apps/bevy/transparency-3d/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260805-104912: both Dawn smokes keep the WebGPU injection, mock canvas, shared-device capture, copyTextureToBuffer readback, and 300-frame gate inline for AI grepability. mesh2d-arcs is unique where it matters: it renders circular-mask sectors and segments and asserts upper/lower arc coverage plus transformed 2D bounds; transparency-3d owns alpha ordering and depth/blending assertions. Revisit if a shared 2D smoke helper becomes the explicit front-door contract."
     },
     {
       "files": [

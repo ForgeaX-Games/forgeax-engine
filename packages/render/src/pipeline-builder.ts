@@ -57,7 +57,11 @@ import {
   type PassKind,
   type PrimitiveTopology,
 } from '@forgeax/engine-types';
-import { buildPipelineDescriptor, type PipelineSpec } from './pipeline-spec';
+import {
+  buildPipelineDescriptor,
+  colorFormatsForPassKind,
+  type PipelineSpec,
+} from './pipeline-spec';
 
 /**
  * feat-20260604-mesh-topology-debug-draw M3 / w8: per-mesh geometry facts that
@@ -199,7 +203,7 @@ export function buildPipelineForMaterialShader(
 ): Result<RenderPipeline, RhiError> {
   const label = ctx.label ?? `pbr-pipeline-${id}`;
   const vsEntry = vertexEntry ?? 'vs_main';
-  const fsEntry = fragmentEntry ?? 'fs_main';
+  const fsEntry = fragmentEntry ?? (passKind === 'deferred' ? 'fs_gbuffer' : 'fs_main');
 
   let source = entry.source;
   if (defines !== undefined && Object.keys(defines).length > 0) {
@@ -314,7 +318,7 @@ export function buildPipelineForMaterialShader(
   const forwardSpec: PipelineSpec = {
     shader: { id, passKind, variantSet: undefined },
     attachments: {
-      colorFormats: [ctx.colorFormat],
+      colorFormats: colorFormatsForPassKind(passKind, ctx.colorFormat),
       depthFormat: ctx.depthFormat,
       sampleCount: (sampleCount === 4 ? 4 : 1) as 1 | 4,
     },

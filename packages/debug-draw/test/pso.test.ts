@@ -12,12 +12,14 @@ describe('w15: PSO topology === line-list', () => {
 
     const mockDevice = {
       createBuffer: vi.fn().mockReturnValue({ ok: true, value: { _brand: 'buffer' } }),
+      createBindGroupLayout: vi.fn().mockReturnValue({ ok: true, value: { _brand: 'bgl' } }),
+      createPipelineLayout: vi.fn().mockReturnValue({ ok: true, value: { _brand: 'pipeline-layout' } }),
       createBindGroup: vi.fn().mockReturnValue({ ok: true, value: { _brand: 'bind-group' } }),
       createRenderPipeline: vi.fn((desc: any) => {
         pipelineDescCapture.push(desc);
         return {
           ok: true,
-          value: { _brand: 'pipeline', getBindGroupLayout: () => ({ _brand: 'bgl' }) },
+          value: { _brand: 'pipeline' },
         };
       }),
       destroyBuffer: vi.fn(),
@@ -37,8 +39,11 @@ describe('w15: PSO topology === line-list', () => {
 
     if (r.ok) {
       expect(pipelineDescCapture.length).toBeGreaterThanOrEqual(1);
+      expect(mockDevice.createBindGroupLayout).toHaveBeenCalledOnce();
+      expect(mockDevice.createPipelineLayout).toHaveBeenCalledOnce();
       if (pipelineDescCapture[0]) {
         expect(pipelineDescCapture[0].primitive.topology).toBe('line-list');
+        expect(pipelineDescCapture[0].layout).not.toBe('auto');
       }
     }
   });

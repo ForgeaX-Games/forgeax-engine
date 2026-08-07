@@ -7,7 +7,7 @@
 // declare a `GlyphText` component and the system bakes behind the scenes.
 //
 // 12-float stride (R-2 hard gate): the layout already produced interleaved
-// vertices at the canonical `BUILTIN_FLOATS_PER_VERTEX` stride (position + uv
+// vertices at the canonical `PROCEDURAL_FLOATS_PER_VERTEX` stride (position + uv
 // real, normal (0,0,1) / tangent (0,0,0,1) placeholder). We deinterleave into
 // the `VertexAttributeMap` (position / normal / uv / tangent) so
 // `AssetRegistry.register` can derive the GPU vertex layout + AABB. The
@@ -30,6 +30,7 @@
 // is NOT modified -- the cube is purely a bake-step property of the mesh.
 
 import type { World } from '@forgeax/engine-ecs';
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { ok, type Result } from '@forgeax/engine-rhi';
 import type { AssetError, Handle, MeshAsset, VertexAttributeMap } from '@forgeax/engine-types';
 
@@ -64,7 +65,7 @@ export function buildGlyphMeshAsset(layout: GlyphLayoutResult): MeshAsset {
       {
         indexOffset: 0,
         indexCount: indices.length,
-        vertexCount: vertices.length / 12,
+        vertexCount: vertices.length / PROCEDURAL_FLOATS_PER_VERTEX,
         topology: 'triangle-list',
       },
     ],

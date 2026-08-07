@@ -11,12 +11,11 @@
 //   3. registerWithGuid<TextureAsset> for both (CONTAINER2_TEXTURE_GUID
 //      + CONTAINER2_SPECULAR_GUID).
 //   4. registerWithGuid<MeshAsset>(cubeGuid, HANDLE_CUBE asset).
-//   5. unlit material with baseColorTexture: diffuse handle (the smoke
-//      drives the visible cube via diffuse; specular slot is registered
-//      to exercise the loader path).
-//   6. spawn 1 lit cube at origin + camera at z=3 + DirectionalLight +
-//      a small lamp cube at (1.2, 1.0, 2.0) carrying PointLight (LO 4.2
-//      lightPos canonical literal).
+//   5. Standard PBR material with baseColorTexture: diffuse handle and
+//      metallicRoughnessTexture: specular handle.
+//   6. spawn 1 lit cube at origin + camera at z=3 + a small lamp cube at
+//      (1.2, 1.0, 2.0) carrying PointLight (LO 4.2 lightPos canonical
+//      literal). FALSIFY_NO_LIGHT=1 keeps only the lamp mesh.
 //
 // Differential axes vs hello-triangle (D-2 / D-8 byte-level):
 //   - GUID set: 2 textures (CONTAINER2_TEXTURE + SPECULAR) + cube +
@@ -40,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -169,7 +169,7 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   createRenderer,
 } = enginePkg;
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
+const { Camera, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -256,12 +256,12 @@ if (!cubeAssetRes.ok) {
 }
 assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 
-// LO 2.4 main lit cube material -- diffuse map drives baseColor; the
-// specular handle is exercised via the loader path even though the
+// LO 2.4 main lit cube material -- mirror the production pack's Standard PBR
+// program. The specular handle exercises the loader path even though the
 // dawn-node deferred-upload falls back to a 1x1 white view.
 const cubeMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
+  passes: [{ name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
   values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
 });
 // Lamp marker material (white emissive proxy).
@@ -285,24 +285,26 @@ world.spawn(
     data: { materials: [cubeMaterial] },
   },
 );
-// LO 4.2 lamp marker + co-located PointLight at (1.2, 1.0, 2.0).
-world.spawn(
-  {
-    component: Transform,
-    data: {
-      pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z], quat: [0, 0, 0, 1], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],},
+// LO 4.2 lamp marker + co-located PointLight at (1.2, 1.0, 2.0). The
+// falsifier keeps the marker and removes only the light component.
+const lamp = {
+  component: Transform,
+  data: {
+    pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z], quat: [0, 0, 0, 1], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],
   },
+};
+const lampComponents = [
+  lamp,
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [lampMaterial] } },
-  {
+];
+if (!FALSIFY_NO_LIGHT) {
+  lampComponents.push({
     component: PointLight,
-    data: {
-      color: [1, 1, 1],
-      intensity: 100.0,
-      range: 50,
-    },
-  },
-);
+    data: { color: [1, 1, 1], intensity: 100.0, range: 50 },
+  });
+}
+world.spawn(...lampComponents);
 world.spawn(
   {
     component: Transform,
@@ -314,15 +316,6 @@ world.spawn(
     data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
   },
 );
-world.spawn({
-  component: DirectionalLight,
-  data: {
-    direction: [-0.5, -1, -0.3],
-    color: [1, 1, 1],
-    intensity: 1,
-  },
-});
-
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const frameStart = Date.now();
 let framesObserved = 0;
@@ -411,6 +404,19 @@ for (const name of meshSiteNames) {
 }
 console.log(`[smoke] perSiteDistance=${JSON.stringify(perSiteDistance)}`);
 
+const litCubeCenter = pixelSamples.litCubeCenter;
+const litCubeUL = pixelSamples.litCubeUL;
+const litCubeBR = pixelSamples.litCubeBR;
+const diffuseSpecularPointLightWitness =
+  litCubeCenter[0] > 0.18 &&
+  litCubeCenter[1] > 0.1 &&
+  litCubeCenter[2] > 0.05 &&
+  litCubeUL[0] > litCubeBR[0] + 0.08 &&
+  litCubeUL[0] > litCubeUL[1] * 1.15;
+console.log(
+  `[smoke] oracle=diffuse-specular-point-light witness=${diffuseSpecularPointLightWitness} falsifier=${FALSIFY_NO_LIGHT ? 'no-point-light' : 'none'}`,
+);
+
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
 
@@ -424,6 +430,11 @@ if (framesObserved < SMOKE_MIN_FRAMES)
 if (meshedRenderCount < 1) {
   failures.push(
     `(c) LO 2.4 lit cube - 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD}; perSiteDistance=${JSON.stringify(perSiteDistance)}`,
+  );
+}
+if (!diffuseSpecularPointLightWitness) {
+  failures.push(
+    `(e) diffuse/specular point-light witness rejected center=${JSON.stringify(litCubeCenter)} ul=${JSON.stringify(litCubeUL)} br=${JSON.stringify(litCubeBR)}`,
   );
 }
 if (errors.length > 0) {
@@ -443,7 +454,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.4 lit cube + lamp sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.4 lit cube + lamp sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, oracle=diffuse-specular-point-light, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

@@ -2,6 +2,7 @@
 // (feat-20260705-runtime-tier2-decomposition M1 / w4, D-4 F1 straight-cut).
 // Pure move from asset-registry.ts; zero identifier changes.
 
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import type {
   AddressMode,
   AnimationChannel,
@@ -18,7 +19,6 @@ import type {
   ParseErrorDetail,
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
-import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
 import { unpackMeshBin } from '../mesh-bin';
 import { parseScenePayload } from '../scene-payload';
 
@@ -114,7 +114,7 @@ export const meshLoader: Loader = {
       if (arr.length === 0) {
         indices = undefined;
       } else {
-        const vertexCount = vertices.length / BUILTIN_FLOATS_PER_VERTEX;
+        const vertexCount = vertices.length / PROCEDURAL_FLOATS_PER_VERTEX;
         const useUint32 = vertexCount > 0xffff;
         indices = useUint32 ? new Uint32Array(arr) : new Uint16Array(arr);
       }
@@ -177,7 +177,7 @@ export const meshLoader: Loader = {
       decoded.vertices.length % floatsPerVertex === 0
     ) {
       const hasSkin = floatsPerVertex === 18 + (uvSetCount - 1) * 2;
-      const firstExtraUvOffset = hasSkin ? 18 : 12;
+      const firstExtraUvOffset = hasSkin ? 18 : PROCEDURAL_FLOATS_PER_VERTEX;
       const vertexCount = decoded.vertices.length / floatsPerVertex;
       for (let set = 1; set < uvSetCount; set++) {
         const values = new Float32Array(vertexCount * 2);

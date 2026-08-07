@@ -45,7 +45,9 @@ export type {
 //   - easing (scalar S-curve time remaps)
 //   - noise (Perlin noise, growable home for further variants)
 
+export * as box2 from './box2';
 export * as box3 from './box3';
+export * as circle2 from './circle2';
 export * as color from './color';
 export * as easing from './easing';
 export * as euler from './euler';
@@ -56,6 +58,7 @@ export * as mat4 from './mat4';
 export * as noise from './noise';
 export * as quat from './quat';
 export * as ray from './ray';
+export * as ray2 from './ray2';
 export * as sphere from './sphere';
 export * as vec2 from './vec2';
 export * as vec3 from './vec3';

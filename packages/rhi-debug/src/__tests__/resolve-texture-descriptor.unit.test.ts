@@ -4,7 +4,7 @@
 // readbackDrawRt) and the viewer's depth + bound-texture preview paths share. It walks
 // createTextureView resultHandleId -> sourceHandleId -> createTexture, falling back to the
 // id itself for direct texture handles, and reads size from the raw createTexture event
-// (FrameModel.resources hard-codes size to [1,1,1], so this must NOT use it).
+// (The raw event remains the authoritative source for texture dimensions.)
 
 import { describe, expect, it } from 'vitest';
 import { resolveAttachmentSize, resolveTextureDescriptor } from '../readback';

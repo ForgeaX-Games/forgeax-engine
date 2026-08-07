@@ -93,7 +93,7 @@ export function shaderCompileFailed(
 /**
  * rhi-not-available path — wgpu wasm bundle failed to load (network /
  * instantiate / structural error) OR the caller invoked an RHI entry before
- * `ensureRhiWgpuReady()` settled. The hint reflects the M3 escape hatch
+ * `ensureReady()` settled. The hint reflects the M3 escape hatch
  * (`createRenderer(canvas, { rhi: explicitInstance })`) so AI users see the
  * opt-in injection path even when the default lazy load fails.
  *

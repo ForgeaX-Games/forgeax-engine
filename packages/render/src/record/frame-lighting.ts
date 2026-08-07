@@ -3,8 +3,13 @@
 // Pure leaf helpers invoked once each from recordFrame; behavior verbatim.
 
 import { mat4, vec3 } from '@forgeax/engine-math';
-import { type BindGroup, RhiError, type TextureView } from '@forgeax/engine-rhi';
-import { bin } from '../cluster-binner';
+import {
+  type BindGroup,
+  type BindGroupLayout,
+  RhiError,
+  type TextureView,
+} from '@forgeax/engine-rhi';
+import { bin, type ClusterBinProfilePhase, type ClusterBinProfileRunner } from '../cluster-binner';
 import {
   HdrpIndexListOverflowError,
   HdrpLightBudgetExceededError,
@@ -12,12 +17,13 @@ import {
   PointShadowAtlasUninitializedError,
 } from '../errors/render';
 import {
+  createHdrpClusterMembershipBindGroup,
   createHdrpUnifiedBindGroup,
   getOrCreateHdrpBuffers,
   HDRP_UNIFORM_LIGHT_CAPACITY,
   packClusterUniform,
 } from '../hdrp-buffers';
-import { LIGHT_INDEX_LIST_CAPACITY } from '../hdrp-pipeline';
+import { DEFAULT_CLUSTER_GRID, LIGHT_INDEX_LIST_CAPACITY } from '../hdrp-pipeline';
 import {
   LIGHT_ARRAY_HEADER_BYTES,
   LIGHT_ARRAY_MAX_SLOTS,
@@ -37,9 +43,10 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
 } from '../render-system-extract';
+import type { RenderHdrpClusterPhase } from '../renderer';
 import { ShadowAtlas } from '../shadow-atlas';
 import { getOrCreateSsaoBuffers } from '../ssao-buffers';
-
+import type { RecordProfileRunner } from './frame';
 import type { BindGroupCounts, RenderFrameState } from './frame-snapshot';
 import {
   computeProjectionMatrix,
@@ -50,6 +57,14 @@ import {
   warnMultiLightSpot,
 } from './helpers';
 import { getOrCreateFromChain, MESH_SSBO_BYTES, MESH_UBO_FULL_ARRAY_BYTES } from './mesh-ssbo';
+
+function runHdrpClusterProfilePhase<T>(
+  runner: RecordProfileRunner | undefined,
+  phase: RenderHdrpClusterPhase,
+  action: () => T,
+): T {
+  return runner === undefined ? action() : runner(phase, action);
+}
 
 /**
  * feat-20260704 M3/w18: per-frame bind-group cache resolution, extracted
@@ -72,6 +87,7 @@ export function buildPerFrameBindGroups(
   viewBindGroup: BindGroup | null;
   meshBindGroup: BindGroup | null;
   hdrpClusterBindGroup: BindGroup | null;
+  hdrpClusterMembershipBindGroup: BindGroup | null;
 } {
   // View main (#1) chain = b0(viewUniformBuffer), b1(pointLightsBuffer),
   // b2(spotLightsBuffer), b3(graph shadowDepth view or
@@ -84,6 +100,9 @@ export function buildPerFrameBindGroups(
   // BindGroup. Non-null when `frameState.isHdrpActive` AND HDRP buffer
   // allocation succeeded; consumed by recordMainPass at `setBindGroup(2, ...)`.
   let hdrpClusterBindGroup: BindGroup | null = null;
+  const hdrpClusterMembershipBindGroup: BindGroup | null = frameState.isHdrpActive
+    ? frameState.hdrpClusterMembershipBindGroup
+    : null;
   if (hasValidated) {
     // M5-T1: shadow atlas view sourced directly from render-graph
     // (`addColorTarget('shadowDepth', ...)` declared in `urp-pipeline.ts`).
@@ -314,7 +333,7 @@ export function buildPerFrameBindGroups(
       }
     }
   }
-  return { viewBindGroup, meshBindGroup, hdrpClusterBindGroup };
+  return { viewBindGroup, meshBindGroup, hdrpClusterBindGroup, hdrpClusterMembershipBindGroup };
 }
 
 /**
@@ -600,6 +619,9 @@ export function writeHdrpClusterAndSsaoBuffers(
   camera: CameraSnapshot,
   pointLights: ExtractedLights['point'],
   spotLights: ExtractedLights['spot'],
+  profilePhase?: RecordProfileRunner,
+  useGpuMembership = false,
+  membershipBindGroupLayout: BindGroupLayout | null = null,
 ): void {
   const hdrpLightCount = pointLights.length + spotLights.length;
   if (!(frameState.isHdrpActive && hdrpLightCount > 0)) return;
@@ -621,199 +643,313 @@ export function writeHdrpClusterAndSsaoBuffers(
       effectiveSpotLights = spotLights.slice(0, HDRP_LIGHT_BUDGET - pointLights.length);
     }
   }
-
-  const hdrpLights: Array<{ position: Float32Array; range: number }> = [];
-  for (const pl of effectivePointLights) {
-    const range =
-      Number.isFinite(pl.invRangeSquared) && pl.invRangeSquared > 0
-        ? Math.sqrt(1 / pl.invRangeSquared)
-        : 1000;
-    hdrpLights.push({ position: pl.position as unknown as Float32Array, range });
+  const effectiveLightCount = effectivePointLights.length + effectiveSpotLights.length;
+  const configuredClusterGrid =
+    frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
+  let gpuMembership = useGpuMembership && membershipBindGroupLayout !== null;
+  if (
+    gpuMembership &&
+    membershipBindGroupLayout !== null &&
+    frameState.hdrpClusterMembershipBindGroup === null
+  ) {
+    const hdrpBuffers = getOrCreateHdrpBuffers(internals, configuredClusterGrid);
+    if (hdrpBuffers !== null) {
+      frameState.hdrpClusterMembershipBindGroup = createHdrpClusterMembershipBindGroup(
+        internals,
+        hdrpBuffers,
+        membershipBindGroupLayout,
+      );
+    }
+    gpuMembership = frameState.hdrpClusterMembershipBindGroup !== null;
   }
-  for (const sl of effectiveSpotLights) {
-    const range =
-      Number.isFinite(sl.invRangeSquared) && sl.invRangeSquared > 0
-        ? Math.sqrt(1 / sl.invRangeSquared)
-        : 1000;
-    hdrpLights.push({ position: sl.position as unknown as Float32Array, range });
-  }
 
-  const clusterGrid = frameState.installedPipelineConfig?.clusterGrid ?? {
-    x: 16,
-    y: 9,
-    z: 24,
-  };
-  const gridX = clusterGrid.x;
-  const gridY = clusterGrid.y;
-  const gridZ = clusterGrid.z;
-  const clusterCount = gridX * gridY * gridZ;
+  const { clusterGrid, gridX, gridY, gridZ, clusterGridBuf, lightIndexListBuf, lightIndexCount } =
+    runHdrpClusterProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster/binner', () => {
+      const binnerProfile: ClusterBinProfileRunner | undefined =
+        profilePhase === undefined
+          ? undefined
+          : <T>(phase: ClusterBinProfilePhase, action: () => T): T =>
+              runHdrpClusterProfilePhase(
+                profilePhase,
+                `record/scene-state/hdrp-cluster/binner/${phase}` as RenderHdrpClusterPhase,
+                action,
+              );
+      const {
+        hdrpLights,
+        clusterGrid,
+        gridX,
+        gridY,
+        gridZ,
+        clusterGridBuf,
+        lightIndexListBuf,
+        projMatrix,
+        viewMatrix,
+      } = runHdrpClusterProfilePhase(
+        profilePhase,
+        'record/scene-state/hdrp-cluster/binner/input-preparation',
+        () => {
+          const hdrpLights: Array<{ position: Float32Array; range: number }> = [];
+          for (const pl of effectivePointLights) {
+            const range =
+              Number.isFinite(pl.invRangeSquared) && pl.invRangeSquared > 0
+                ? Math.sqrt(1 / pl.invRangeSquared)
+                : 1000;
+            hdrpLights.push({ position: pl.position as unknown as Float32Array, range });
+          }
+          for (const sl of effectiveSpotLights) {
+            const range =
+              Number.isFinite(sl.invRangeSquared) && sl.invRangeSquared > 0
+                ? Math.sqrt(1 / sl.invRangeSquared)
+                : 1000;
+            hdrpLights.push({ position: sl.position as unknown as Float32Array, range });
+          }
 
-  const projMatrix = computeProjectionMatrix(camera);
-  const viewMatrix = computeViewMatrix(camera);
+          const clusterGrid =
+            frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
+          const gridX = clusterGrid.x;
+          const gridY = clusterGrid.y;
+          const gridZ = clusterGrid.z;
+          const clusterCount = gridX * gridY * gridZ;
 
-  const clusterGridBuf = new Uint32Array(clusterCount * 2);
-  const lightIndexListBuf = new Uint32Array(LIGHT_INDEX_LIST_CAPACITY);
+          const projMatrix = computeProjectionMatrix(camera);
+          const viewMatrix = computeViewMatrix(camera);
 
-  const binResult = bin(
-    hdrpLights as unknown as Array<{
-      position: import('@forgeax/engine-math').Vec3;
-      range: number;
-    }>,
-    viewMatrix,
-    projMatrix,
-    { x: gridX, y: gridY, z: gridZ },
-    camera.near,
-    camera.far,
-    clusterGridBuf,
-    lightIndexListBuf,
-    LIGHT_INDEX_LIST_CAPACITY,
+          const clusterGridBuf =
+            frameState.hdrpClusterGridScratch === null ||
+            frameState.hdrpClusterGridScratch.length < clusterCount * 2
+              ? new Uint32Array(clusterCount * 2)
+              : frameState.hdrpClusterGridScratch;
+          frameState.hdrpClusterGridScratch = clusterGridBuf;
+          const lightIndexListBuf =
+            frameState.hdrpLightIndexListScratch === null ||
+            frameState.hdrpLightIndexListScratch.length < LIGHT_INDEX_LIST_CAPACITY
+              ? new Uint32Array(LIGHT_INDEX_LIST_CAPACITY)
+              : frameState.hdrpLightIndexListScratch;
+          frameState.hdrpLightIndexListScratch = lightIndexListBuf;
+
+          return {
+            hdrpLights,
+            clusterGrid,
+            gridX,
+            gridY,
+            gridZ,
+            clusterGridBuf,
+            lightIndexListBuf,
+            projMatrix,
+            viewMatrix,
+          };
+        },
+      );
+
+      const binResult = runHdrpClusterProfilePhase(
+        profilePhase,
+        'record/scene-state/hdrp-cluster/binner/bin-core',
+        () =>
+          bin(
+            hdrpLights as unknown as Array<{
+              position: import('@forgeax/engine-math').Vec3;
+              range: number;
+            }>,
+            viewMatrix,
+            projMatrix,
+            { x: gridX, y: gridY, z: gridZ },
+            camera.near,
+            camera.far,
+            clusterGridBuf,
+            lightIndexListBuf,
+            LIGHT_INDEX_LIST_CAPACITY,
+            frameState.hdrpClusterBinScratch,
+            binnerProfile,
+            { writeMembership: !gpuMembership },
+          ),
+      );
+
+      if (!binResult.ok && !frameState.hdrpOncePerFrameFired.has('hdrp-index-list-overflow')) {
+        frameState.hdrpOncePerFrameFired.add('hdrp-index-list-overflow');
+        const detail = binResult.error.detail;
+        internals.errorRegistry.fire(
+          new HdrpIndexListOverflowError(detail.actual, detail.capacity),
+        );
+      }
+
+      // Falsify injection point: FORGEAX_HDRP_FALSIFY_CLUSTER_GRID_ZERO
+      // zeroes the cluster_grid buffer so every fragment culls every light.
+      // Used by hello-hdrp-lighting smoke FALSIFY=cluster-grid-zero to
+      // prove the smoke has discriminability (must FAIL vs baseline).
+      // Read process via globalThis to keep this file @types/node-free.
+      const envFalsify = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+        .process?.env;
+      if (envFalsify?.FORGEAX_HDRP_FALSIFY_CLUSTER_GRID_ZERO) {
+        clusterGridBuf.fill(0);
+      }
+
+      return {
+        clusterGrid,
+        gridX,
+        gridY,
+        gridZ,
+        clusterGridBuf,
+        lightIndexListBuf,
+        lightIndexCount: binResult.ok ? binResult.value : 0,
+      };
+    });
+
+  const hdrpPayload = runHdrpClusterProfilePhase(
+    profilePhase,
+    'record/scene-state/hdrp-cluster/payload-packing',
+    () => {
+      const hdrpBuffers = getOrCreateHdrpBuffers(internals, clusterGrid);
+      if (hdrpBuffers === null) return null;
+
+      const lightCapacity = hdrpBuffers.storageBuffer ? 256 : HDRP_UNIFORM_LIGHT_CAPACITY;
+      const lightDataPayload = new Float32Array(lightCapacity * 16);
+      let slotIdx = 0;
+      for (const pl of effectivePointLights) {
+        if (slotIdx >= lightCapacity) break;
+        // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4
+        // (plan-strategy §D-8): thread the optional shadow info through
+        // packLightSlot. PointLightSnapshot.shadowAtlasLayer is set by
+        // extract's join pass when the entity carries PointLightShadow;
+        // sentinel -1 means no shadow (unshadowed evalPoint path).
+        const layer = pl.shadowAtlasLayer;
+        const packed =
+          layer !== undefined &&
+          layer >= 0 &&
+          pl.shadowNear !== undefined &&
+          pl.shadowFar !== undefined
+            ? packLightSlot(pl, {
+                shadowAtlasLayer: layer,
+                near: pl.shadowNear,
+                far: pl.shadowFar,
+              })
+            : packLightSlot(pl);
+        lightDataPayload.set(packed, slotIdx * 16);
+        slotIdx += 1;
+      }
+      for (const sl of effectiveSpotLights) {
+        if (slotIdx >= lightCapacity) break;
+        const packed = packLightSlot(sl);
+        lightDataPayload.set(packed, slotIdx * 16);
+        slotIdx += 1;
+      }
+
+      // scope-amend-webgl2-ubo: SSAO intensity is folded into the
+      // cluster_uniform .w lane (formerly pad), removing the dedicated
+      // @binding(9) UBO that pushed fragment-stage UBO count past
+      // WebGL2's max_uniform_buffers_per_shader_stage=11. Disabled-SSAO
+      // path writes 0 so `mix(1.0, ssao*ao, 0.0) = 1.0` in the lighting
+      // shader (no PSO recompile across enable/disable).
+      const clusterSsaoConfig = frameState.installedPipelineConfig?.ssao;
+      const clusterSsaoIntensity =
+        clusterSsaoConfig !== undefined && clusterSsaoConfig.enabled === true
+          ? (clusterSsaoConfig.intensity ?? 1.0)
+          : 0;
+      const clusterUniformPayload = packClusterUniform(
+        { x: gridX, y: gridY, z: gridZ },
+        camera.near,
+        camera.far,
+        clusterSsaoIntensity,
+        Math.min(effectivePointLights.length + effectiveSpotLights.length, lightCapacity),
+        lightCapacity,
+      );
+
+      return {
+        hdrpBuffers,
+        lightDataUploadPayload: lightDataPayload.subarray(0, slotIdx * 16),
+        clusterUniformPayload: new Uint8Array(clusterUniformPayload),
+      };
+    },
   );
 
-  if (!binResult.ok && !frameState.hdrpOncePerFrameFired.has('hdrp-index-list-overflow')) {
-    frameState.hdrpOncePerFrameFired.add('hdrp-index-list-overflow');
-    const detail = binResult.error.detail;
-    internals.errorRegistry.fire(new HdrpIndexListOverflowError(detail.actual, detail.capacity));
-  }
-
-  // Falsify injection point: FORGEAX_HDRP_FALSIFY_CLUSTER_GRID_ZERO
-  // zeroes the cluster_grid buffer so every fragment culls every light.
-  // Used by hello-hdrp-lighting smoke FALSIFY=cluster-grid-zero to
-  // prove the smoke has discriminability (must FAIL vs baseline).
-  // Read process via globalThis to keep this file @types/node-free.
-  const envFalsify = (globalThis as { process?: { env?: Record<string, string | undefined> } })
-    .process?.env;
-  if (envFalsify?.FORGEAX_HDRP_FALSIFY_CLUSTER_GRID_ZERO) {
-    clusterGridBuf.fill(0);
-  }
-
-  const hdrpBuffers = getOrCreateHdrpBuffers(internals, clusterGrid);
-  if (hdrpBuffers !== null) {
-    const lightCapacity = hdrpBuffers.storageBuffer ? 256 : HDRP_UNIFORM_LIGHT_CAPACITY;
-    const lightDataPayload = new Float32Array(lightCapacity * 16);
-    let slotIdx = 0;
-    for (const pl of effectivePointLights) {
-      if (slotIdx >= lightCapacity) break;
-      // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4
-      // (plan-strategy §D-8): thread the optional shadow info through
-      // packLightSlot. PointLightSnapshot.shadowAtlasLayer is set by
-      // extract's join pass when the entity carries PointLightShadow;
-      // sentinel -1 means no shadow (unshadowed evalPoint path).
-      const layer = pl.shadowAtlasLayer;
-      const packed =
-        layer !== undefined &&
-        layer >= 0 &&
-        pl.shadowNear !== undefined &&
-        pl.shadowFar !== undefined
-          ? packLightSlot(pl, {
-              shadowAtlasLayer: layer,
-              near: pl.shadowNear,
-              far: pl.shadowFar,
-            })
-          : packLightSlot(pl);
-      lightDataPayload.set(packed, slotIdx * 16);
-      slotIdx += 1;
-    }
-    for (const sl of effectiveSpotLights) {
-      if (slotIdx >= lightCapacity) break;
-      const packed = packLightSlot(sl);
-      lightDataPayload.set(packed, slotIdx * 16);
-      slotIdx += 1;
-    }
-    const lightDataUpload = internals.device.queue.writeBuffer(
-      hdrpBuffers.lightDataBuffer,
-      0,
-      lightDataPayload,
-    );
-    if (!lightDataUpload.ok) internals.errorRegistry.fire(lightDataUpload.error);
-
-    if (hdrpBuffers.storageBuffer) {
-      const clusterGridUpload = internals.device.queue.writeBuffer(
-        hdrpBuffers.clusterGridBuffer,
+  runHdrpClusterProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster/buffer-upload', () => {
+    if (hdrpPayload !== null) {
+      const { hdrpBuffers, lightDataUploadPayload, clusterUniformPayload } = hdrpPayload;
+      const lightDataUpload = internals.device.queue.writeBuffer(
+        hdrpBuffers.lightDataBuffer,
         0,
-        clusterGridBuf,
+        lightDataUploadPayload,
       );
-      if (!clusterGridUpload.ok) internals.errorRegistry.fire(clusterGridUpload.error);
+      if (!lightDataUpload.ok) internals.errorRegistry.fire(lightDataUpload.error);
 
-      const lightIndexListUpload = internals.device.queue.writeBuffer(
-        hdrpBuffers.lightIndexListBuffer,
+      if (hdrpBuffers.storageBuffer) {
+        if (gpuMembership) {
+          const lightBoundsUpload = internals.device.queue.writeBuffer(
+            hdrpBuffers.lightBoundsBuffer,
+            0,
+            frameState.hdrpClusterBinScratch.lightBounds.subarray(0, effectiveLightCount * 6),
+          );
+          if (!lightBoundsUpload.ok) internals.errorRegistry.fire(lightBoundsUpload.error);
+        }
+        const clusterGridUpload = internals.device.queue.writeBuffer(
+          hdrpBuffers.clusterGridBuffer,
+          0,
+          clusterGridBuf.subarray(0, gridX * gridY * gridZ * 2),
+        );
+        if (!clusterGridUpload.ok) internals.errorRegistry.fire(clusterGridUpload.error);
+
+        if (!gpuMembership && lightIndexCount > 0) {
+          const lightIndexListUpload = internals.device.queue.writeBuffer(
+            hdrpBuffers.lightIndexListBuffer,
+            0,
+            lightIndexListBuf.subarray(0, lightIndexCount),
+          );
+          if (!lightIndexListUpload.ok) internals.errorRegistry.fire(lightIndexListUpload.error);
+        }
+      }
+
+      const clusterUniformUpload = internals.device.queue.writeBuffer(
+        hdrpBuffers.clusterUniformBuffer,
         0,
-        lightIndexListBuf,
+        clusterUniformPayload,
       );
-      if (!lightIndexListUpload.ok) internals.errorRegistry.fire(lightIndexListUpload.error);
+      if (!clusterUniformUpload.ok) internals.errorRegistry.fire(clusterUniformUpload.error);
     }
 
-    // scope-amend-webgl2-ubo: SSAO intensity is folded into the
-    // cluster_uniform .w lane (formerly pad), removing the dedicated
-    // @binding(9) UBO that pushed fragment-stage UBO count past
-    // WebGL2's max_uniform_buffers_per_shader_stage=11. Disabled-SSAO
-    // path writes 0 so `mix(1.0, ssao*ao, 0.0) = 1.0` in the lighting
-    // shader (no PSO recompile across enable/disable).
-    const clusterSsaoConfig = frameState.installedPipelineConfig?.ssao;
-    const clusterSsaoIntensity =
-      clusterSsaoConfig !== undefined && clusterSsaoConfig.enabled === true
-        ? (clusterSsaoConfig.intensity ?? 1.0)
-        : 0;
-    const clusterUniformPayload = packClusterUniform(
-      { x: gridX, y: gridY, z: gridZ },
-      camera.near,
-      camera.far,
-      clusterSsaoIntensity,
-      Math.min(effectivePointLights.length + effectiveSpotLights.length, lightCapacity),
-    );
-    const clusterUniformUpload = internals.device.queue.writeBuffer(
-      hdrpBuffers.clusterUniformBuffer,
-      0,
-      new Uint8Array(clusterUniformPayload),
-    );
-    if (!clusterUniformUpload.ok) internals.errorRegistry.fire(clusterUniformUpload.error);
-  }
+    // ── feat-20260612-hdrp-ssao M1 / w6 + M7 / w33 ───────────────
+    // Per-frame SSAO uniform write (plan-strategy D-1 + D-C):
+    //   view + projection + inverseProjection at offsets 0/64/128 +
+    //   intensityPad (vec4 — x=intensity, yzw padding) at offset 192;
+    //   total 256 B (matches host SSAO_UNIFORM_BYTES + WGSL struct).
+    // Single writeBuffer covers all four fields so one queue entry
+    // updates the entire UBO.
+    // Separate from View UBO (592 B invariant); does not affect
+    // material PSO bytecode.
+    //
+    // Writes when HDRP is active; config.ssao?.enabled guard comes in
+    // M4 / w19 after the config.ssao type narrowing is added.
+    {
+      const ssaoBufs = getOrCreateSsaoBuffers(internals);
+      if (ssaoBufs !== null) {
+        const sProj = computeProjectionMatrix(camera);
+        const sView = computeViewMatrix(camera);
+        // inverseProjection = inverse(projection): NDC -> view-space.
+        const invProjOnly = mat4.create();
+        mat4.invert(invProjOnly, sProj);
 
-  // ── feat-20260612-hdrp-ssao M1 / w6 + M7 / w33 ───────────────
-  // Per-frame SSAO uniform write (plan-strategy D-1 + D-C):
-  //   view + projection + inverseProjection at offsets 0/64/128 +
-  //   intensityPad (vec4 — x=intensity, yzw padding) at offset 192;
-  //   total 256 B (matches host SSAO_UNIFORM_BYTES + WGSL struct).
-  // Single writeBuffer covers all four fields so one queue entry
-  // updates the entire UBO.
-  // Separate from View UBO (592 B invariant); does not affect
-  // material PSO bytecode.
-  //
-  // Writes when HDRP is active; config.ssao?.enabled guard comes in
-  // M4 / w19 after the config.ssao type narrowing is added.
-  {
-    const ssaoBufs = getOrCreateSsaoBuffers(internals);
-    if (ssaoBufs !== null) {
-      const sProj = computeProjectionMatrix(camera);
-      const sView = computeViewMatrix(camera);
-      // inverseProjection = inverse(projection): NDC -> view-space.
-      const invProjOnly = mat4.create();
-      mat4.invert(invProjOnly, sProj);
+        // Float32Array of 64 (256 B): 3 mat4 (48) + intensityPad vec4 (4)
+        // + 12 trailing padding floats. We only fill the declared region.
+        const ssaoUniformPayload = new Float32Array(64);
+        ssaoUniformPayload.set(sView as unknown as Float32Array, 0);
+        ssaoUniformPayload.set(sProj as unknown as Float32Array, 16);
+        ssaoUniformPayload.set(invProjOnly as unknown as Float32Array, 32);
+        // intensityPad.x = config.ssao.intensity ?? 1.0 (LO 5.9 default).
+        // yzw remain 0 from Float32Array zero-init.
+        const ssaoConfig = frameState.installedPipelineConfig?.ssao;
+        const intensity =
+          ssaoConfig !== undefined && ssaoConfig.enabled === true
+            ? (ssaoConfig.intensity ?? 1.0)
+            : 1.0;
+        ssaoUniformPayload[48] = intensity;
 
-      // Float32Array of 64 (256 B): 3 mat4 (48) + intensityPad vec4 (4)
-      // + 12 trailing padding floats. We only fill the declared region.
-      const ssaoUniformPayload = new Float32Array(64);
-      ssaoUniformPayload.set(sView as unknown as Float32Array, 0);
-      ssaoUniformPayload.set(sProj as unknown as Float32Array, 16);
-      ssaoUniformPayload.set(invProjOnly as unknown as Float32Array, 32);
-      // intensityPad.x = config.ssao.intensity ?? 1.0 (LO 5.9 default).
-      // yzw remain 0 from Float32Array zero-init.
-      const ssaoConfig = frameState.installedPipelineConfig?.ssao;
-      const intensity =
-        ssaoConfig !== undefined && ssaoConfig.enabled === true
-          ? (ssaoConfig.intensity ?? 1.0)
-          : 1.0;
-      ssaoUniformPayload[48] = intensity;
-
-      const ssaoUniformRes = internals.device.queue.writeBuffer(
-        ssaoBufs.uniformBuffer,
-        0,
-        ssaoUniformPayload,
-      );
-      if (!ssaoUniformRes.ok) internals.errorRegistry.fire(ssaoUniformRes.error);
+        const ssaoUniformRes = internals.device.queue.writeBuffer(
+          ssaoBufs.uniformBuffer,
+          0,
+          ssaoUniformPayload,
+        );
+        if (!ssaoUniformRes.ok) internals.errorRegistry.fire(ssaoUniformRes.error);
+      }
     }
-  }
-
-  void binResult;
+  });
 }
 
 /**

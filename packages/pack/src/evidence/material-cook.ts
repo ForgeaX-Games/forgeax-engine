@@ -7,7 +7,8 @@ import type {
   Result,
 } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
-import { sha256Hex } from './sha256.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 export interface MaterialCookRefs {
   readonly parent: readonly string[];
@@ -82,7 +83,7 @@ export function collectMaterialCookRefs(material: Partial<MaterialAsset>): Mater
 }
 
 export function createMaterialArtifactDigest(bytes: Uint8Array): string {
-  return `sha256:${sha256Hex(bytes)}`;
+  return `sha256:${bytesToHex(sha256(bytes))}`;
 }
 
 function jsonValue(value: unknown): unknown {

@@ -44,6 +44,11 @@ test('Dawn project bounds forks to protect the shared software Vulkan backend', 
   assert.match(dawnProject, /maxWorkers: 2/);
 });
 
+test('ECS performance project keeps benchmark contention inside a bounded timeout', () => {
+  const ecsPerfProject = vitestConfig.slice(vitestConfig.indexOf("name: 'ecs-perf'"));
+  assert.match(ecsPerfProject, /testTimeout: 30000/);
+});
+
 test('cold Ubuntu smoke and browser jobs keep their real runtime budget', () => {
   const smokeStart = workflow.indexOf('  smoke-fleet:\n');
   const smokeFleet = workflow.slice(

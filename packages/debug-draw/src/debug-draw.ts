@@ -568,6 +568,32 @@ export async function createDebugDraw(
   }
   const fsModule = fsResult.value;
 
+  const bglResult = device.createBindGroupLayout({
+    label: 'debug-draw-bind-group-layout',
+    entries: [
+      {
+        binding: 0,
+        visibility: 1,
+        buffer: { type: 'uniform', minBindingSize: 64 },
+      },
+    ],
+  });
+  if (!bglResult.ok) {
+    device.destroyBuffer(vbo);
+    device.destroyBuffer(uniformBuf);
+    return pipelineCreateFailed(`createBindGroupLayout: ${bglResult.error.code}`);
+  }
+
+  const pipelineLayoutResult = device.createPipelineLayout({
+    label: 'debug-draw-pipeline-layout',
+    bindGroupLayouts: [bglResult.value],
+  });
+  if (!pipelineLayoutResult.ok) {
+    device.destroyBuffer(vbo);
+    device.destroyBuffer(uniformBuf);
+    return pipelineCreateFailed(`createPipelineLayout: ${pipelineLayoutResult.error.code}`);
+  }
+
   // Build render pipeline descriptor.
   // For 'always' mode: no depthStencil — the overlay draws on top regardless of depth.
   // For 'less-equal' mode: depthStencil included so the overlay respects scene depth.
@@ -601,7 +627,7 @@ export async function createDebugDraw(
 
   const pipelineDesc = {
     label: 'debug-draw-pso',
-    layout: 'auto',
+    layout: pipelineLayoutResult.value,
     vertex: {
       module: vsModule,
       entryPoint: 'vs_main',
@@ -628,16 +654,9 @@ export async function createDebugDraw(
   }
   const pipeline = psoResult.value;
 
-  // Get the auto-generated bind group layout and create bind group
-  // biome-ignore lint/suspicious/noExplicitAny: forgeax PipelineLayout getBindGroupLayout
-  const bglResult = (pipeline as any).getBindGroupLayout(0);
-  if (!bglResult) {
-    device.destroyBuffer(vbo);
-    device.destroyBuffer(uniformBuf);
-    return pipelineCreateFailed('getBindGroupLayout(0) returned null — auto layout failed');
-  }
+  // Create the bind group from the same explicit RHI layout used by the pipeline.
   const bgResult = device.createBindGroup({
-    layout: bglResult,
+    layout: bglResult.value,
     entries: [
       {
         binding: 0,

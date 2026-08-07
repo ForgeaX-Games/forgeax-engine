@@ -23,6 +23,12 @@
 
 // ─── Device shim shapes ──────────────────────────────────────────────────────
 
+import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from '../gpu-stage';
+import {
+  GPU_TEXTURE_USAGE_COPY_DST,
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+} from '../gpu-texture-usage';
 import { cubemapCaptureProjection } from './cubemap-projection';
 
 /**
@@ -372,9 +378,6 @@ export const IRRADIANCE_SIZE = 32;
 export const PREFILTER_SIZE = 128;
 export const PREFILTER_MIP_LEVELS = 5;
 export const BRDF_LUT_SIZE = 256;
-
-const GPU_SHADER_STAGE_VERTEX = 0x1;
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 
 /**
  * Minimal device shape used by createIblPipelines + runIblPrecompute. The
@@ -813,14 +816,10 @@ export function runIblPrecompute(
   }
 
   // Allocate side textures (irradiance / prefilter / brdf-lut) lazily.
-  const TEXTURE_BINDING = 0x4;
-  const COPY_DST = 0x2;
-  const RENDER_ATTACHMENT = 0x10;
   // M5-amend Bug 1: dawn readback (t51 + reference baker) copies the
   // side textures back to a buffer via copyTextureToBuffer, which
   // requires the TextureUsage::CopySrc bit on the source. Without it
   // Dawn fails-fast "usage doesn't include CopySrc".
-  const COPY_SRC = 0x1;
 
   // M5-amend Bug 1: helper that normalises shim/raw texture-view creation.
   // Raw GPUDevice exposes `gpuTexture.createView(desc)` on the texture
@@ -853,7 +852,10 @@ export function runIblPrecompute(
       sampleCount: 1,
       dimension: '2d',
       format: outputFormat,
-      usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC,
+      usage:
+        GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING |
+        GPU_TEXTURE_USAGE_COPY_DST |
+        GPU_TEXTURE_USAGE_COPY_SRC,
       viewFormats: [],
     });
     const tVal = unwrap(tRaw);
@@ -889,7 +891,10 @@ export function runIblPrecompute(
       sampleCount: 1,
       dimension: '2d',
       format: outputFormat,
-      usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC,
+      usage:
+        GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING |
+        GPU_TEXTURE_USAGE_COPY_DST |
+        GPU_TEXTURE_USAGE_COPY_SRC,
       viewFormats: [],
     });
     const tVal = unwrap(tRaw);
@@ -934,7 +939,10 @@ export function runIblPrecompute(
       sampleCount: 1,
       dimension: '2d',
       format: outputFormat,
-      usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC,
+      usage:
+        GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING |
+        GPU_TEXTURE_USAGE_COPY_DST |
+        GPU_TEXTURE_USAGE_COPY_SRC,
       viewFormats: [],
     });
     const tVal = unwrap(tRaw);

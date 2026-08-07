@@ -69,6 +69,15 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
     const vsModule = device.createShaderModule({ label: 'dd-vs', code: VERTEX_SHADER });
     const fsModule = device.createShaderModule({ label: 'dd-fs', code: FRAGMENT_SHADER });
 
+    const bgl = device.createBindGroupLayout({
+      label: 'dd-bgl',
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform', minBindingSize: 64 } }],
+    });
+    const pipelineLayout = device.createPipelineLayout({
+      label: 'dd-pipeline-layout',
+      bindGroupLayouts: [bgl],
+    });
+
     const vertexBuffers: GPUVertexBufferLayout[] = [{
       arrayStride: VERTEX_STRIDE_BYTES,
       stepMode: 'vertex',
@@ -79,7 +88,7 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
     }];
 
     const pipelineDesc: GPURenderPipelineDescriptor = {
-      layout: 'auto',
+      layout: pipelineLayout,
       vertex: { module: vsModule, entryPoint: 'vs_main', buffers: [...vertexBuffers] },
       primitive: { topology: 'line-list' },
       fragment: {
@@ -90,8 +99,6 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
     };
 
     const pipeline = device.createRenderPipeline(pipelineDesc);
-    // getBindGroupLayout is only available after pipeline creation with 'auto' layout
-    const bgl = (pipeline as unknown as { getBindGroupLayout: (idx: number) => GPUBindGroupLayout }).getBindGroupLayout(0);
 
     const uniformBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const bgDesc: GPUBindGroupDescriptor = {
@@ -112,7 +119,7 @@ describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
 
     // --- Build less-equal mode PSO (depthMode='less-equal') ---
     const lessEqPipelineDesc: GPURenderPipelineDescriptor = {
-      layout: 'auto',
+      layout: pipelineLayout,
       vertex: { module: vsModule, entryPoint: 'vs_main', buffers: [...vertexBuffers] },
       primitive: { topology: 'line-list' },
       depthStencil: {

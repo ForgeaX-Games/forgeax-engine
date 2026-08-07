@@ -22,7 +22,6 @@ export {
   loadGameProject,
   loadGameProjectSync,
   resolveDefaultScene,
-  validateGameProject,
 } from './loader.js';
 // ── Bottom tier: constants + error types ────────────────────────────────────
 export { FORGE_JSON } from './paths.js';

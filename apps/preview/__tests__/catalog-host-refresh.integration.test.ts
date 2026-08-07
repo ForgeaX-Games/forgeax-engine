@@ -1,8 +1,8 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 
 import previewConfig from '../vite.config';
@@ -10,7 +10,6 @@ import previewConfig from '../vite.config';
 const previewRoot = dirname(fileURLToPath(new URL('../vite.config.ts', import.meta.url)));
 const templateAssets = join(previewRoot, '..', '..', 'templates', 'game-default', 'assets');
 const sourceMaterial = join(templateAssets, 'base-material.pack.json');
-const probeMaterial = join(templateAssets, 'catalog-host-refresh-probe.pack.json');
 
 async function loadPreviewConfig(): Promise<NonNullable<Parameters<typeof createServer>[0]>> {
   return await (typeof previewConfig === 'function'
@@ -27,13 +26,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
 }
 
 describe('preview host catalog refresh', () => {
-  afterEach(async () => {
-    await rm(probeMaterial, { force: true });
-  });
-
   it('observes a watched preview asset mutation and requests the configured host reload', async () => {
     const baseline = await readFile(sourceMaterial, 'utf8');
-    await writeFile(probeMaterial, baseline);
     const previewInlineConfig = await loadPreviewConfig();
     const server = await createServer({
       ...previewInlineConfig,
@@ -52,22 +46,19 @@ describe('preview host catalog refresh', () => {
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 250));
-      await writeFile(probeMaterial, `${baseline}\n`);
+      await writeFile(sourceMaterial, `${baseline}\n`);
       await waitFor(() => events.some((event) => (
         typeof event === 'object' && event !== null && 'type' in event && event.type === 'full-reload'
       )));
       expect(events).toContainEqual(expect.objectContaining({ type: 'full-reload' }));
     } finally {
       await server.close();
+      await writeFile(sourceMaterial, baseline);
     }
-  // Cold Preview startup scans the full template/submodule asset roots before
-  // the watcher can observe the probe mutation; keep the test's budget above
-  // the 10 s assertion wait without weakening that assertion.
-  }, 20_000);
+  });
 
   it('falsifies the host-refresh assertion when the preview watcher has no policy', async () => {
     const baseline = await readFile(sourceMaterial, 'utf8');
-    await writeFile(probeMaterial, baseline);
     const server = await createServer({
       configFile: false,
       root: previewRoot,
@@ -84,13 +75,14 @@ describe('preview host catalog refresh', () => {
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 250));
-      await writeFile(probeMaterial, `${baseline}\n`);
+      await writeFile(sourceMaterial, `${baseline}\n`);
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(events.some((event) => (
         typeof event === 'object' && event !== null && 'type' in event && event.type === 'full-reload'
       ))).toBe(false);
     } finally {
       await server.close();
+      await writeFile(sourceMaterial, baseline);
     }
   });
 });

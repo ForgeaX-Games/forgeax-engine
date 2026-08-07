@@ -33,6 +33,7 @@ function rOk<T>(value: T) {
 interface SnapshotMockEnv {
   copyBufferToBufferSpy: ReturnType<typeof vi.fn>;
   submitSpy: ReturnType<typeof vi.fn>;
+  queueDrainSpy: ReturnType<typeof vi.fn>;
 }
 
 function buildSnapshotMock(
@@ -66,13 +67,14 @@ function buildSnapshotMock(
     };
   }
 
+  const queueDrainSpy = vi.fn(() =>
+    stuckQueue ? new Promise<void>(() => {}) : Promise.resolve(undefined),
+  );
   const queue: any = {
     writeBuffer: vi.fn(() => rOk(undefined)),
     writeTexture: vi.fn(() => rOk(undefined)),
     submit: submitSpy,
-    onSubmittedWorkDone: vi.fn(() =>
-      stuckQueue ? new Promise<void>(() => {}) : Promise.resolve(undefined),
-    ),
+    onSubmittedWorkDone: queueDrainSpy,
   };
 
   const device: any = {
@@ -95,7 +97,7 @@ function buildSnapshotMock(
   };
   const inst: any = { requestAdapter: vi.fn(() => Promise.resolve(rOk(adapter))) };
 
-  return { inst, env: { copyBufferToBufferSpy, submitSpy } };
+  return { inst, env: { copyBufferToBufferSpy, submitSpy, queueDrainSpy } };
 }
 
 async function bootstrapSnapshot(
@@ -250,6 +252,34 @@ describe('snapshot isolation (w18)', () => {
     await debugInst.snapshotAllLiveResources();
     debugInst.onFrameEnd();
     device.destroyBuffer(bufferRes.value);
+
+    const tape = debugInst.getTape();
+    expect(tape).toBeDefined();
+    expect(tape).not.toHaveProperty('code');
+    expect((tape as Tape).events.some((event) => event.kind === 'initialData')).toBe(true);
+    expect((tape as Tape).events.some((event) => event.kind === 'createBuffer')).toBe(true);
+  });
+
+  it('retains the create event when a buffer is released while snapshotting', async () => {
+    const { debugInst, device, env } = await bootstrapSnapshot();
+    const bufferRes = device.createBuffer({ size: 8, usage: 0x20 });
+    expect(bufferRes.ok).toBe(true);
+
+    // The first queue drain is the frame-header fence. The second is the
+    // batched buffer readback: release the short-lived resource during that
+    // async window, as a per-frame render feature can do while capture is
+    // snapshotting. Before the fix destroyBuffer pruned bootstrapCreates here,
+    // yet the batch subsequently appended initialData for this handle.
+    let drains = 0;
+    env.queueDrainSpy.mockImplementation(async () => {
+      drains += 1;
+      if (drains === 2) device.destroyBuffer(bufferRes.value);
+    });
+
+    expect(debugInst.arm(1).ok).toBe(true);
+    const snapshot = await debugInst.snapshotAllLiveResources();
+    expect(snapshot.ok).toBe(true);
+    debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
     expect(tape).toBeDefined();

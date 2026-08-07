@@ -88,6 +88,9 @@ export interface PassDescriptor<Ctx = unknown> {
   readonly storageBuffer?: boolean;
 }
 
+/** Optional nested observer for per-pass execution attribution. */
+export type PassExecuteRunner = (passName: string, action: () => void) => void;
+
 // ── Query types (D-5) ────────────────────────────────────────────
 
 export interface PassInfo {
@@ -586,7 +589,7 @@ export class RenderGraph<Ctx = unknown> {
    * each pass's execute closure with the provided context. Passes without an
    * execute closure are silently skipped.
    */
-  execute(ctx: Ctx): void {
+  execute(ctx: Ctx, runPass?: PassExecuteRunner): void {
     const compiled = this.compiled;
     if (!compiled) return;
     const resolvedTextures: ReadonlyMap<string, unknown> = compiled.resolvedTextures;
@@ -599,7 +602,13 @@ export class RenderGraph<Ctx = unknown> {
       const entry = passByName.get(internalPass.name);
       const execute = entry?.descriptor.execute;
       if (execute) {
-        (execute as (ctx: Ctx, resolve: ResolveContext) => void)(ctx, resolveCtx);
+        if (runPass === undefined) {
+          (execute as (ctx: Ctx, resolve: ResolveContext) => void)(ctx, resolveCtx);
+        } else {
+          runPass(internalPass.name, () =>
+            (execute as (ctx: Ctx, resolve: ResolveContext) => void)(ctx, resolveCtx),
+          );
+        }
       }
     }
   }

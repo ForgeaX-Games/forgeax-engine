@@ -31,7 +31,18 @@ pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" build
 
 # Preview
 pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" preview
+
+# Dawn semantic RHI-debug smoke (60 frames; orange point-light witness)
+pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
+
+# Expected-red control: keep the lamp mesh but remove its PointLight
+FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
 ```
+
+The semantic smoke samples the cube center and requires a stable lit-orange channel ordering
+(`red > green > blue`) with a minimum brightness. The `FALSIFY_NO_LIGHT=1` control must reject the
+same witness; its non-zero exit is expected and proves the check is not merely a non-empty-pixel
+test.
 
 ## forgeax-vs-LearnOpenGL mapping
 

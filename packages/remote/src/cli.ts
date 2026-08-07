@@ -27,15 +27,14 @@ import type { RemoteError as RemoteErrorShape } from '@forgeax/engine-types';
 import {
   type ConnectFn,
   defaultConnect,
+  INSPECTOR_DEFAULT_HOST,
+  INSPECTOR_DEFAULT_PORT,
   type InspectorClient,
 } from '@forgeax/engine-types/inspector-client';
 import { defineSubcommand, renderHelp, type SubcommandSpec } from './defineSubcommand';
 
 export type { ConnectFn, InspectorClient };
 export { defaultConnect };
-
-const DEFAULT_PORT = 5732;
-const DEFAULT_HOST = 'localhost';
 
 // w8: LEGACY_INSPECT_TARGETS removed alongside plugin discovery deletion.
 // ─── Subcommand spec tree (sade utils.js form) ───────────────────────────────
@@ -46,9 +45,9 @@ export const FORGEAX_CLI_SPEC: SubcommandSpec = defineSubcommand({
   options: [
     {
       flag: '--port <n>',
-      description: `Inspector WebSocket port (default ${DEFAULT_PORT}; monitor uses 5731)`,
+      description: `Inspector WebSocket port (default ${INSPECTOR_DEFAULT_PORT}; monitor uses 5731)`,
     },
-    { flag: '--host <s>', description: `Host name (default ${DEFAULT_HOST})` },
+    { flag: '--host <s>', description: `Host name (default ${INSPECTOR_DEFAULT_HOST})` },
     { flag: '--help, -h', description: 'Show this help and exit 0' },
   ],
   subcommands: [
@@ -150,8 +149,8 @@ export async function dispatch(opts: DispatchOptions): Promise<number> {
     return 0;
   }
 
-  let port = DEFAULT_PORT;
-  let host = DEFAULT_HOST;
+  let port = INSPECTOR_DEFAULT_PORT;
+  let host = INSPECTOR_DEFAULT_HOST;
   const filteredRest: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];

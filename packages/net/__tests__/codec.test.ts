@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decodeReplicationBatch, encodeReplicationBatch } from '../src/replication/codec';
-import { DEFAULT_REPLICATION_LIMITS, REPLICATION_PROTOCOL_VERSION } from '../src/replication/constants';
+import { REPLICATION_PROTOCOL_VERSION } from '../src/replication/constants';
+import { DEFAULT_REPLICATION_LIMITS } from '../src/replication/profile';
 
 describe('canonical replication codec', () => {
   const batch = {

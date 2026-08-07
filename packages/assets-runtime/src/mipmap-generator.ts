@@ -295,146 +295,15 @@ export type MipmapBlitDevice = MipmapDevice & {
   };
 };
 
-/**
- * Per-mip render-pass blit-loop (research F-1 SSOT main template).
- *
- * For mip levels 1..levels-1: source view = previous mip {baseMipLevel:i-1,
- * mipLevelCount:1}; destination view = current mip {baseMipLevel:i,
- * mipLevelCount:1, usage: RENDER_ATTACHMENT}; oversized-triangle pipeline
- * draws 3 vertices, fragment shader samples source via linear sampler.
- *
- * Spec sRGB correctness (F-3): when format is `*-srgb`, both views inherit
- * the sRGB encoding so hardware decode -> bilinear in linear -> encode back
- * happens automatically; no special-casing required.
- *
- * `levels` defaults to `numMipLevels({ width, height })`. AI users that
- * already created the texture with explicit `mipLevelCount` should pass the
- * same value here.
- */
-export async function generateMipmaps(
+function recordMipmapBlit<E>(
   device: MipmapBlitDevice,
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture handle
   texture: any,
-  descriptor: {
-    readonly format: GPUTextureFormat;
-    readonly width: number;
-    readonly height: number;
-    readonly levels?: number;
-  },
-  asyncCreateShaderModule: MipmapShaderModuleFactory,
-): Promise<Result<void, unknown>> {
-  const levels = descriptor.levels ?? numMipLevels(descriptor);
-  if (levels <= 1) return ok(undefined);
-
-  const pipelineRes = await getOrCreateMipmapPipeline(
-    device,
-    descriptor.format,
-    asyncCreateShaderModule,
-  );
-  if (!pipelineRes.ok) return pipelineRes;
-  const cache = deviceCache.get(device);
-  if (cache === undefined) {
-    return err({ code: 'webgpu-runtime-error', message: 'mipmap cache missing after create' });
-  }
-
-  const encoderRes = device.createCommandEncoder({ label: 'mipmap-encoder' });
-  if (!encoderRes.ok) return encoderRes;
-  const encoder = encoderRes.value;
-
-  for (let i = 1; i < levels; i++) {
-    const srcViewRes = device.createTextureView(texture, {
-      baseMipLevel: i - 1,
-      mipLevelCount: 1,
-      dimension: '2d',
-    });
-    if (!srcViewRes.ok) return srcViewRes;
-
-    const dstViewRes = device.createTextureView(texture, {
-      baseMipLevel: i,
-      mipLevelCount: 1,
-      dimension: '2d',
-    });
-    if (!dstViewRes.ok) return dstViewRes;
-
-    const bindGroupRes = device.createBindGroup({
-      label: `mipmap-bg-${i}`,
-      layout: cache.layout,
-      entries: [
-        { binding: 0, resource: { kind: 'sampler', value: cache.sampler } },
-        { binding: 1, resource: { kind: 'textureView', value: srcViewRes.value } },
-      ],
-    });
-    if (!bindGroupRes.ok) return bindGroupRes;
-
-    const pass = encoder.beginRenderPass({
-      label: `mipmap-pass-${i}`,
-      colorAttachments: [
-        {
-          view: dstViewRes.value,
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
-          loadOp: 'clear',
-          storeOp: 'store',
-        },
-      ],
-    });
-    pass.setPipeline(pipelineRes.value);
-    pass.setBindGroup(0, bindGroupRes.value);
-    pass.draw(3, 1, 0, 0);
-    pass.end();
-  }
-
-  const finishRes = encoder.finish();
-  if (!finishRes.ok) return finishRes;
-  return device.queue.submit([finishRes.value]);
-}
-
-/**
- * Synchronous sibling of `generateMipmaps` (feat-20260601-gpu-resource-store
- * -extraction D-9). Identical per-mip blit loop, but reads the per-format
- * pipeline + shared sampler / layout from the prewarmed device cache instead
- * of building them. The pipeline MUST already be present (via a prior
- * `getOrCreateMipmapPipeline` / `prewarmMipmapPipeline` async call) -- an
- * un-prewarmed device or format returns a structured `RhiError` rather than
- * awaiting a build, so the synchronous `draw(world)` frame contract is never
- * broken. The async build itself does not affect the written bytes (same
- * shader, same encoder sequence), so prewarm + sync blit reproduces the
- * pre-extraction async `generateMipmaps` byte-for-byte (D-9 sub-contract 5).
- */
-export function blitMipmapsSync(
-  device: MipmapBlitDevice,
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture handle
-  texture: any,
-  descriptor: {
-    readonly format: GPUTextureFormat;
-    readonly width: number;
-    readonly height: number;
-    readonly levels?: number;
-  },
-): Result<void, RhiError> {
-  const levels = descriptor.levels ?? numMipLevels(descriptor);
-  if (levels <= 1) return ok(undefined);
-
-  const cache = deviceCache.get(device);
-  if (cache === undefined) {
-    return err(
-      new RhiError({
-        code: 'rhi-not-available',
-        expected: 'mipmap pipeline cache prewarmed for this device before blitMipmapsSync',
-        hint: 'call prewarmMipmapPipeline(device, formats) at renderer.ready before the synchronous record-stage mipmap blit',
-      }),
-    );
-  }
-  const pipeline = cache.pipelines.get(descriptor.format);
-  if (pipeline === undefined) {
-    return err(
-      new RhiError({
-        code: 'rhi-not-available',
-        expected: `mipmap pipeline for format ${descriptor.format} prewarmed`,
-        hint: `format ${descriptor.format} was not prewarmed; add it to the prewarmMipmapPipeline format list at renderer.ready`,
-      }),
-    );
-  }
-
+  levels: number,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
+  pipeline: any,
+  cache: MipmapPipelineCache,
+): Result<void, E> {
   const encoderRes = device.createCommandEncoder({ label: 'mipmap-encoder' });
   if (!encoderRes.ok) return encoderRes;
   const encoder = encoderRes.value;
@@ -484,4 +353,98 @@ export function blitMipmapsSync(
   const finishRes = encoder.finish();
   if (!finishRes.ok) return finishRes;
   return device.queue.submit([finishRes.value]);
+}
+
+/**
+ * Per-mip render-pass blit-loop (research F-1 SSOT main template).
+ *
+ * For mip levels 1..levels-1: source view = previous mip {baseMipLevel:i-1,
+ * mipLevelCount:1}; destination view = current mip {baseMipLevel:i,
+ * mipLevelCount:1, usage: RENDER_ATTACHMENT}; oversized-triangle pipeline
+ * draws 3 vertices, fragment shader samples source via linear sampler.
+ *
+ * Spec sRGB correctness (F-3): when format is `*-srgb`, both views inherit
+ * the sRGB encoding so hardware decode -> bilinear in linear -> encode back
+ * happens automatically; no special-casing required.
+ *
+ * `levels` defaults to `numMipLevels({ width, height })`. AI users that
+ * already created the texture with explicit `mipLevelCount` should pass the
+ * same value here.
+ */
+export async function generateMipmaps(
+  device: MipmapBlitDevice,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture handle
+  texture: any,
+  descriptor: {
+    readonly format: GPUTextureFormat;
+    readonly width: number;
+    readonly height: number;
+    readonly levels?: number;
+  },
+  asyncCreateShaderModule: MipmapShaderModuleFactory,
+): Promise<Result<void, unknown>> {
+  const levels = descriptor.levels ?? numMipLevels(descriptor);
+  if (levels <= 1) return ok(undefined);
+
+  const pipelineRes = await getOrCreateMipmapPipeline(
+    device,
+    descriptor.format,
+    asyncCreateShaderModule,
+  );
+  if (!pipelineRes.ok) return pipelineRes;
+  const cache = deviceCache.get(device);
+  if (cache === undefined) {
+    return err({ code: 'webgpu-runtime-error', message: 'mipmap cache missing after create' });
+  }
+  return recordMipmapBlit<unknown>(device, texture, levels, pipelineRes.value, cache);
+}
+
+/**
+ * Synchronous sibling of `generateMipmaps` (feat-20260601-gpu-resource-store
+ * -extraction D-9). Identical per-mip blit loop, but reads the per-format
+ * pipeline + shared sampler / layout from the prewarmed device cache instead
+ * of building them. The pipeline MUST already be present (via a prior
+ * `getOrCreateMipmapPipeline` / `prewarmMipmapPipeline` async call) -- an
+ * un-prewarmed device or format returns a structured `RhiError` rather than
+ * awaiting a build, so the synchronous `draw(world)` frame contract is never
+ * broken. The async build itself does not affect the written bytes (same
+ * shader, same encoder sequence), so prewarm + sync blit reproduces the
+ * pre-extraction async `generateMipmaps` byte-for-byte (D-9 sub-contract 5).
+ */
+export function blitMipmapsSync(
+  device: MipmapBlitDevice,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture handle
+  texture: any,
+  descriptor: {
+    readonly format: GPUTextureFormat;
+    readonly width: number;
+    readonly height: number;
+    readonly levels?: number;
+  },
+): Result<void, RhiError> {
+  const levels = descriptor.levels ?? numMipLevels(descriptor);
+  if (levels <= 1) return ok(undefined);
+
+  const cache = deviceCache.get(device);
+  if (cache === undefined) {
+    return err(
+      new RhiError({
+        code: 'rhi-not-available',
+        expected: 'mipmap pipeline cache prewarmed for this device before blitMipmapsSync',
+        hint: 'call prewarmMipmapPipeline(device, formats) at renderer.ready before the synchronous record-stage mipmap blit',
+      }),
+    );
+  }
+  const pipeline = cache.pipelines.get(descriptor.format);
+  if (pipeline === undefined) {
+    return err(
+      new RhiError({
+        code: 'rhi-not-available',
+        expected: `mipmap pipeline for format ${descriptor.format} prewarmed`,
+        hint: `format ${descriptor.format} was not prewarmed; add it to the prewarmMipmapPipeline format list at renderer.ready`,
+      }),
+    );
+  }
+
+  return recordMipmapBlit<RhiError>(device, texture, levels, pipeline, cache);
 }

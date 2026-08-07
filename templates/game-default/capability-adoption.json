@@ -56,8 +56,8 @@
         "packages/image/README.md",
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
-        "templates/game-default/src/jpeg-texture-swap.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/jpeg-texture-swap.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -84,7 +84,7 @@
         "apps/hello/sprite-atlas/src/main.ts",
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
-        "templates/game-default/src/sprite-atlas-loop.ts",
+        "templates/game-default/assets/plugins/sprite-atlas-loop.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -102,7 +102,7 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
         "apps/preview/vite.config.ts",
         "forgeax-engine-assets/sfx/dragon-studio-correct-472358.mp3.meta.json"
       ]
@@ -123,8 +123,8 @@
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-mesh-handle-swap.mjs",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
-        "templates/game-default/src/fbx-mesh-swap.ts",
-        "templates/game-default/src/fbx-skinned-target.ts",
+        "templates/game-default/assets/plugins/fbx-mesh-swap.ts",
+        "templates/game-default/assets/plugins/fbx-skinned-target.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-151307-classify-asset-fbx-candidate/REPORT.md",
@@ -147,7 +147,7 @@
         "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/BoxTextured.glb.meta.json",
         "packages/gltf/README.md",
         "apps/preview/vite.config.ts",
-        "templates/game-default/src/gltf-mesh-swap.ts",
+        "templates/game-default/assets/plugins/gltf-mesh-swap.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-153313-classify-asset-glb-candidate/REPORT.md"
@@ -169,7 +169,7 @@
         "forgeax-engine-assets/khronos-gltf-samples/BoxTextured/glTF/CesiumLogoFlat.png",
         "packages/gltf/README.md",
         "apps/preview/vite.config.ts",
-        "templates/game-default/src/gltf-mesh-swap.ts",
+        "templates/game-default/assets/plugins/gltf-mesh-swap.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-184438-classify-asset-gltf-candidate/REPORT.md"
@@ -195,13 +195,14 @@
         "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
-        "templates/game-default/src/world-score-text.ts",
+        "templates/game-default/assets/plugins/world-score-text.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/artifacts/preview-inspection-4/ttf-font-active.png",
-        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/artifacts/preview-inspection-4/report.json"
+        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/artifacts/preview-inspection-4/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-103000-font-asset-plugin-boundary-loop/REPORT.md"
       ],
       "reason": "The licensed DejaVuSansMono.ttf now has a Pack-v2 font sidecar with stable texture, sampler, and font GUIDs. Preview registers fontImporter, cooks the TTF to a raw RGBA8 MSDF atlas plus FontAsset pack, and game-default switches the existing pooled hit-score GlyphText between the legacy baked pack and the TTF-derived FontAsset with Y/R and inspection recovery. The focused hello text and M2 pipeline apps remain the standalone baked/Worker bake oracles; no second text scene is added.",
       "betterConsumer": "templates/game-default"
@@ -232,13 +233,14 @@
         "apps/preview/package.json",
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
-        "templates/game-default/src/world-score-text.ts",
+        "templates/game-default/assets/plugins/world-score-text.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
-        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/REPORT.md"
+        ".forgeax-harness/solo/game-default/experiments/20260805-002408-asset-ttf-font-plugin-gameplay-loop/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-103000-font-asset-plugin-boundary-loop/REPORT.md"
       ],
-      "reason": "The public font package is adopted at its real build/runtime boundary: Preview registers fontImporter, the existing pooled world-score owner loads the resulting FontAsset by declared GUID, and the same label can switch/reset between legacy and TTF sources. The importer publishes raw RGBA8 atlas bytes because Pack v2's runtime texture loader consumes non-Basis artifacts as pixels; the CLI PNG remains a standalone bake output."
+      "reason": "The public font package is adopted at its real build/runtime boundary: Preview registers fontImporter, the existing pooled world-score owner loads the resulting FontAsset by declared GUID, and the same label can switch/reset between legacy and TTF sources. The importer publishes raw RGBA8 atlas bytes because Pack v2's runtime texture loader consumes non-Basis artifacts as pixels; the CLI PNG remains a standalone bake output. The package, Preview dev/production, hello-text, and M2 Worker/Node recovery gates stay green without a second font registry or text owner."
     },
     {
       "id": "app:hello/audio",
@@ -247,7 +249,7 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
         "apps/hello/audio/src/main.ts"
       ]
     },
@@ -258,7 +260,7 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
         "apps/bevy/spatial-audio-3d/src/spatial-audio-3d.ts"
       ]
     },
@@ -269,8 +271,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/rotating-target.ts",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/rotating-target.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/bevy/3d-rotation/src/rotation.ts"
@@ -288,7 +290,7 @@
         "apps/bevy/3d-scene/package.json",
         "apps/bevy/3d-scene/src/main.ts",
         "templates/game-default/assets/scene.pack.json",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/AGENTS.md"
       ],
       "reason": "The candidate is a static direct-spawn cube/plane/PointLight introduction. game-default already teaches standard PBR, mesh/material/light composition through its authored pack and now has a moving target range; importing a second un-authored scene would duplicate the renderer lesson and bypass the template's asset boundary.",
@@ -316,8 +318,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/scoring-target.ts",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scoring-target.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/bevy/component-hooks/src/component-hooks.ts"
@@ -332,8 +334,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/animated-target-material.ts",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/animated-target-material.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/bevy/animated-material/src/animated-material.ts"
@@ -361,11 +363,11 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/animated-target.wgsl",
-        "templates/game-default/src/animated-target-material.ts",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/shaders/animated-target.wgsl",
+        "templates/game-default/assets/plugins/animated-target-material.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -382,7 +384,7 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/plugins/settings.ts",
         "templates/game-default/main.ts",
         "templates/game-default/assets/ui/settings.pack.json",
         "templates/game-default/AGENTS.md",
@@ -399,8 +401,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/hit-flash.wgsl",
-        "templates/game-default/src/hit-flash-material.ts",
+        "templates/game-default/assets/shaders/hit-flash.wgsl",
+        "templates/game-default/assets/plugins/hit-flash-material.ts",
         "apps/hello/custom-shader/src/index.ts",
         "apps/preview/vite.config.ts"
       ]
@@ -415,8 +417,8 @@
         "apps/bevy/shader-material-2d/package.json",
         "apps/bevy/shader-material-2d/src/main.ts",
         "apps/bevy/shader-material-2d/src/scene.ts",
-        "templates/game-default/src/hit-flash-material.ts",
-        "templates/game-default/src/hit-flash.wgsl",
+        "templates/game-default/assets/plugins/hit-flash-material.ts",
+        "templates/game-default/assets/shaders/hit-flash.wgsl",
         "templates/game-default/AGENTS.md"
       ],
       "reason": "The candidate is a static single-world 2D material and alpha-mask presentation with no authored asset identity, input, gameplay consequence, reset/re-entry owner, or state lifecycle. game-default already teaches custom WGSL/material behavior through its resettable 3D hit loop; importing a parallel 2D camera and scene would duplicate rather than compose. Its public material/alpha-mask contract remains canonical in the focused app.",
@@ -491,6 +493,33 @@
       "betterConsumer": "apps/bevy/mesh2d"
     },
     {
+      "id": "app:bevy/2d-shapes",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/2d-shapes/package.json",
+        "apps/bevy/2d-shapes/src/2d-shapes.ts",
+        "apps/bevy/2d-shapes/scripts/smoke-dawn.mjs",
+        "apps/bevy/2d-shapes/scripts/smoke-browser.mjs",
+        "packages/geometry/README.md",
+        "packages/geometry/src/dim2.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-121848-classify-2d-shapes-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-121848-classify-2d-shapes-candidate/artifacts/candidate/2d-shapes.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-121848-classify-2d-shapes-candidate/artifacts/candidate/2d-shapes-browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-121848-classify-2d-shapes-candidate/artifacts/preview-inspection/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-121848-classify-2d-shapes-candidate/artifacts/render-evidence/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-121848-classify-2d-shapes-candidate/artifacts/render-evidence-production/report.json"
+      ],
+      "reason": "The canonical app proves the public Shape2d and ring factories across filled, ring, segment, and polyline meshes with a visible orthographic gallery and 300-frame motion. It has no authored asset, gameplay consequence, input action, typed reset/re-entry owner, or recovery path; importing a second orthographic scene would duplicate the existing 3D target-range game. game-default already exercises @forgeax/engine-geometry through one procedural capsule and a resettable custom projectile, while its sprite projectile covers the 2D-facing gameplay representation. Revisit only when one Shape2d or ring mode replaces/enriches that existing projectile or target with a distinct visible outcome while reusing the same collider, hit, inspection, and R/Stop lifecycle and without adding a second camera.",
+      "betterConsumer": "apps/bevy/2d-shapes"
+    },
+    {
       "id": "app:bevy/transparency-2d",
       "classification": "not-template-fit",
       "frontDoors": [
@@ -503,6 +532,60 @@
       ],
       "reason": "The candidate is a standalone orthographic 2D layered-alpha sprite lesson; adding a parallel sprite blend queue, 2D camera, and alpha-ordering vocabulary to the coherent 3D target-range game would be an isolated rendering showcase rather than a composing gameplay slice.",
       "betterConsumer": "apps/bevy/transparency-2d"
+    },
+    {
+      "id": "app:bevy/mesh2d-arcs",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/mesh2d-arcs/package.json",
+        "apps/bevy/mesh2d-arcs/README.md",
+        "apps/bevy/mesh2d-arcs/src/mesh2d-arcs.ts",
+        "apps/bevy/mesh2d-arcs/scripts/smoke-dawn.mjs",
+        "apps/bevy/mesh2d-arcs/scripts/smoke-browser.mjs",
+        "packages/geometry/README.md",
+        "packages/render/README.md",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/artifacts/candidate-dawn/mesh2d-arcs.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/artifacts/mesh2d-arcs-browser-after-fix.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/artifacts/preview-inspection/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/artifacts/preview-custom-mesh/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/artifacts/preview-render-evidence/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-142148-classify-mesh2d-arcs-candidate/artifacts/preview-render-evidence-production/report.json"
+      ],
+      "reason": "The canonical app proves circular-sector and circular-segment MeshAsset factories, circular-mask UVs, uploaded TextureAsset alpha, orthographic rendering, and compute2dBounds/debug-draw overlays with reliable Dawn and browser evidence. It remains a static, code-spawned 2D geometry/material gallery with no authored asset/GUID, gameplay consequence, input action, typed reset/re-entry owner, cleanup/recovery path, or Preview owner. game-default already owns one procedural custom projectile plus sprite/material variants, a 3D target-range camera, physics/input/scoring, and one R/Stop lifecycle; adding this second orthographic gallery would duplicate the prior 2D-shapes lesson. Revisit only when one arc or segment mode replaces/enriches the existing projectile or target with a distinct visible gameplay outcome while reusing its collider, hit, inspection, and reset owners and without adding a second camera.",
+      "betterConsumer": "apps/bevy/mesh2d-arcs"
+    },
+    {
+      "id": "app:bevy/bounding-2d",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "apps/bevy/bounding-2d/package.json",
+        "apps/bevy/bounding-2d/src/bounding-2d.ts",
+        "apps/bevy/bounding-2d/scripts/smoke-dawn.mjs",
+        "packages/math/README.md",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/candidate-browser.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/candidate-browser-space.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/candidate-png/smoke-frame.png",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/preview-inspection/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/custom-mesh/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/render-evidence-dev/report.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-132221-classify-bounding-2d-candidate/artifacts/render-evidence-production/report.json"
+      ],
+      "reason": "The canonical app proves five public 2D volume modes (AABB, circle, ray, AABB cast, and circle cast) with deterministic hits, sweeps, and a visible browser overlay. It remains a code-spawned orthographic math/debug gallery with no authored asset, player-facing gameplay consequence, typed reset/re-entry, cleanup/recovery, or Preview owner. game-default already owns the 3D picking/debug-draw boundary, authored target/projectile colliders, physics/input/scoring, custom mesh and sprite representation, and one reset/Stop lifecycle; adding a second 2D camera or collision vocabulary would be parallel teaching rather than composition. Revisit only when one ray/cast mode enriches the existing projectile/target with a distinct visible gameplay outcome while preserving the current collider, hit, inspection, and R/Stop owners.",
+      "betterConsumer": "apps/bevy/bounding-2d"
     },
     {
       "id": "app:bevy/sprite-slice",
@@ -528,7 +611,7 @@
       "evidence": [
         "apps/bevy/rotate-to-cursor/package.json",
         "apps/bevy/rotate-to-cursor/src/rotate-to-cursor.ts",
-        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/assets/plugins/gameplay-input.ts",
         "templates/game-default/AGENTS.md"
       ],
       "reason": "The candidate is a standalone orthographic 2D cursor-facing sprite lesson; game-default already teaches cursor-to-world picking and pointer-lock mouse-look in its coherent 3D target-range loop, so adding a second sprite camera and rotation vocabulary would duplicate rather than compose.",
@@ -586,7 +669,7 @@
       "evidence": [
         "apps/bevy/2d-top-down-camera/package.json",
         "apps/bevy/2d-top-down-camera/src/top-down-camera.ts",
-        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/assets/plugins/gameplay-input.ts",
         "templates/game-default/AGENTS.md"
       ],
       "reason": "The candidate is a standalone orthographic 2D smooth-follow lesson; game-default already teaches a coherent 3D target-range camera and pointer-lock input, so adding a parallel 2D player/camera vocabulary would be an isolated showcase. Its smooth-follow contract remains a candidate for a future guided 3D camera mode.",
@@ -619,7 +702,7 @@
         "apps/bevy/audio/src/main.ts",
         "apps/bevy/audio/scripts/smoke-dawn.mjs",
         "apps/bevy/audio/scripts/smoke-browser.mjs",
-        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
         "templates/game-default/AGENTS.md"
       ],
       "reason": "The candidate is a canonical looping imported-clip scene with one AudioListener and a music AudioSource. game-default already teaches the same GUID-to-AudioSource path, listener attachment, one-shot re-arm, spatial SFX, and reset cleanup through its target-hit loop; importing a second static audio scene would duplicate the audio contract. The adjacent audio-control app remains the better consumer for bus mute/volume controls, which is a distinct future guided candidate.",
@@ -632,7 +715,7 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
         "apps/preview/vite.config.ts",
         "forgeax-engine-assets/collectathon-audio/bgm-loop.wav.meta.json"
       ],
@@ -645,8 +728,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/gameplay-audio.ts",
-        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/settings.ts",
         "templates/game-default/assets/ui/settings.pack.json",
         "templates/game-default/AGENTS.md",
         "apps/bevy/audio-control/src/main.ts"
@@ -661,7 +744,7 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/debug-axes.ts",
+        "templates/game-default/assets/plugins/debug-axes.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/preview/scripts/smoke-debug-axes.mjs",
@@ -677,9 +760,9 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/hit-flash-material.ts",
-        "templates/game-default/src/hit-flash.wgsl",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/hit-flash-material.ts",
+        "templates/game-default/assets/shaders/hit-flash.wgsl",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -695,10 +778,10 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/plugins/settings.ts",
         "templates/game-default/assets/ui/settings.pack.json",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
         "apps/bevy/bloom/src/main.ts"
@@ -713,12 +796,12 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/depth-of-field.ts",
-        "templates/game-default/src/depth-of-field.wgsl",
-        "templates/game-default/src/depth-of-field.wgsl.meta.json",
-        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/plugins/depth-of-field.ts",
+        "templates/game-default/assets/shaders/depth-of-field.wgsl",
+        "templates/game-default/assets/shaders/depth-of-field.wgsl.meta.json",
+        "templates/game-default/assets/plugins/settings.ts",
         "templates/game-default/assets/ui/settings.pack.json",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -736,11 +819,11 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/chromatic-aberration.ts",
-        "templates/game-default/src/chromatic-aberration.wgsl",
-        "templates/game-default/src/chromatic-aberration.wgsl.meta.json",
-        "templates/game-default/src/depth-of-field.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/chromatic-aberration.ts",
+        "templates/game-default/assets/shaders/chromatic-aberration.wgsl",
+        "templates/game-default/assets/shaders/chromatic-aberration.wgsl.meta.json",
+        "templates/game-default/assets/plugins/depth-of-field.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -759,9 +842,9 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/bevy/generate-custom-mesh/src/generate-custom-mesh.ts",
@@ -778,10 +861,10 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/camera-orbit.ts",
-        "templates/game-default/src/gameplay-input.ts",
-        "templates/game-default/src/hud.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/camera-orbit.ts",
+        "templates/game-default/assets/plugins/gameplay-input.ts",
+        "templates/game-default/assets/plugins/hud.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -798,8 +881,8 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/hud.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/hud.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -817,9 +900,9 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/camera-zoom.ts",
-        "templates/game-default/src/hud.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/camera-zoom.ts",
+        "templates/game-default/assets/plugins/hud.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -836,8 +919,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/change-detection.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/change-detection.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -856,8 +939,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/clear-color.ts",
-        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/plugins/clear-color.ts",
+        "templates/game-default/assets/plugins/settings.ts",
         "templates/game-default/main.ts",
         "templates/game-default/assets/ui/settings.pack.json",
         "templates/game-default/AGENTS.md",
@@ -875,8 +958,8 @@
         "preview"
       ],
       "evidence": [
-        "templates/game-default/src/clearcoat-material.ts",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/clearcoat-material.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/bevy/clearcoat/src/clearcoat.ts",
@@ -893,7 +976,7 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -911,8 +994,8 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/target-health.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/target-health.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -931,9 +1014,9 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/target-disabling.ts",
-        "templates/game-default/src/target-health.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/target-disabling.ts",
+        "templates/game-default/assets/plugins/target-health.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-render-evidence.mjs",
@@ -952,7 +1035,7 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-gamepad.mjs",
@@ -1032,7 +1115,7 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/gameplay-state.ts",
+        "templates/game-default/assets/plugins/gameplay-state.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-fixed-state.mjs",
@@ -1051,8 +1134,8 @@
         "apps/bevy/physics-fixed-loop/package.json",
         "apps/bevy/physics-fixed-loop/src/main.ts",
         "apps/bevy/physics-fixed-loop/src/physics-fixed-loop.ts",
-        "templates/game-default/src/gameplay-state.ts",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/gameplay-state.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/AGENTS.md"
       ],
       "reason": "The candidate is a standalone code-spawned movement scene with hand-rolled physical/previous translation components. Its fixed-step/interpolation lesson overlaps game-default's existing guided fixed-timestep state witness, while it bypasses the engine PhysicsWorld, authored scene/GUID boundary, typed Play/Reset lifecycle, and hit consequence; importing it wholesale would create a second movement owner. Keep the focused app as the canonical fixed-loop interpolation oracle.",
@@ -1070,8 +1153,8 @@
         "apps/preview/vite.config.ts",
         "apps/preview/package.json",
         "apps/preview/scripts/smoke-render-evidence.mjs",
-        "templates/game-default/src/world-score-text.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/world-score-text.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "packages/render/src/glyph-text-layout-system.ts",
         "packages/render/src/gpu-resource-store.ts",
         "packages/runtime/src/__tests__/text.unit.test.ts",
@@ -1103,9 +1186,9 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/free-camera.ts",
-        "templates/game-default/src/hud.ts",
-        "templates/game-default/src/__tests__/free-camera.test.ts",
+        "templates/game-default/assets/plugins/free-camera.ts",
+        "templates/game-default/assets/plugins/hud.ts",
+        "templates/game-default/tests/free-camera.test.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/bevy/free-camera/src/free-camera.ts",
@@ -1123,9 +1206,9 @@
       ],
       "evidence": [
         "templates/game-default/main.ts",
-        "templates/game-default/src/mesh-handle-swap.ts",
-        "templates/game-default/src/custom-projectile-mesh.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/mesh-handle-swap.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-mesh-handle-swap.mjs",
@@ -1334,7 +1417,7 @@
         "apps/hello/picking/src/main.ts",
         "apps/hello/picking/scripts/smoke-dawn.mjs",
         "apps/hello/picking/scripts/smoke-browser.mjs",
-        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/assets/plugins/gameplay-input.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-060802-classify-hello-picking-candidate/REPORT.md"
       ],
@@ -1593,8 +1676,8 @@
         "apps/bevy/soundtrack/src/soundtrack.ts",
         "apps/bevy/soundtrack/scripts/smoke-dawn.mjs",
         "apps/bevy/soundtrack/scripts/smoke-browser.mjs",
-        "templates/game-default/src/gameplay-audio.ts",
-        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/settings.ts",
         "templates/game-default/AGENTS.md",
         "forgeax-engine-assets/learn-opengl/audio/breakout.mp3.meta.json",
         ".forgeax-harness/solo/game-default/experiments/20260731-024923-classify-soundtrack-candidate/REPORT.md"
@@ -1614,7 +1697,7 @@
         "apps/bevy/spatial-audio-2d/scripts/smoke-dawn.mjs",
         "apps/bevy/spatial-audio-2d/scripts/smoke-browser.mjs",
         "templates/game-default/main.ts",
-        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/assets/plugins/gameplay-audio.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260731-031525-classify-spatial-audio-2d-candidate/REPORT.md"
       ],
@@ -1771,7 +1854,7 @@
       "evidence": [
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
-        "templates/game-default/src/animated-target-material.ts",
+        "templates/game-default/assets/plugins/animated-target-material.ts",
         "apps/bevy/time-elapsed/src/main.ts",
         "apps/bevy/time-elapsed/src/time-elapsed.ts",
         "apps/bevy/time-elapsed/scripts/smoke-dawn.mjs",
@@ -2021,7 +2104,7 @@
         "apps/hello/physics/src/main.ts",
         "apps/hello/physics/scripts/smoke.mjs",
         "apps/hello/physics/package.json",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
         "apps/preview/src/main.ts",
         ".forgeax-harness/solo/game-default/experiments/20260804-015731-classify-hello-physics-candidate/REPORT.md"
@@ -2034,9 +2117,9 @@
       "classification": "guided",
       "frontDoors": ["preview"],
       "evidence": [
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "apps/preview/src/main.ts",
         "apps/preview/scripts/smoke-character-controller.mjs",
         "apps/hello/character/src/main.ts",
@@ -2136,8 +2219,8 @@
         "apps/preview/package.json",
         "apps/preview/scripts/smoke-mesh-handle-swap.mjs",
         "forgeax-engine-assets/vendor/fbx-test/cube.fbx.meta.json",
-        "templates/game-default/src/fbx-mesh-swap.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/fbx-mesh-swap.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -2505,9 +2588,9 @@
         "apps/hello/multi-material/index.html",
         "templates/game-default/assets/multi-material-target.pack.json",
         "templates/game-default/assets/scene.pack.json",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "apps/preview/scripts/smoke-render-evidence.mjs",
         ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-010421-classify-hello-multi-material-candidate/artifacts/candidate-gates-final.txt",
@@ -2536,9 +2619,9 @@
         "packages/app/src/create-app.ts",
         "packages/app/src/__tests__/draw-source-single-world-regression.test.ts",
         "packages/app/README.md",
-        "templates/game-default/src/multi-world-overlay.ts",
+        "templates/game-default/assets/plugins/multi-world-overlay.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "apps/preview/scripts/smoke-render-evidence.mjs",
         ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-013802-classify-hello-multi-world-candidate/artifacts/candidate-gates.txt",
@@ -2560,8 +2643,8 @@
         "apps/hello/shadow-opt-out/scripts/smoke-dawn.mjs",
         "templates/game-default/assets/base-material.pack.json",
         "templates/game-default/assets/scene.pack.json",
-        "templates/game-default/src/custom-projectile-mesh.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-081231-classify-hello-shadow-opt-out-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-081231-classify-hello-shadow-opt-out-candidate/artifacts/candidate-gates.log",
@@ -2579,7 +2662,7 @@
         "apps/hello/scene-nesting/src/index.ts",
         "apps/hello/scene-nesting/scripts/smoke-dawn.mjs",
         "templates/game-default/assets/scene.pack.json",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "apps/preview/__tests__/preview.browser.test.ts",
@@ -2600,7 +2683,7 @@
         "apps/hello/room/src/index.ts",
         "apps/hello/room/scripts/smoke-dawn.mjs",
         "templates/game-default/assets/scene.pack.json",
-        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-064945-classify-hello-room-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-064945-classify-hello-room-candidate/artifacts/front-door.log",
@@ -2621,7 +2704,7 @@
         "apps/hello/skin/scripts/smoke-browser.mjs",
         "apps/hello/skin/vite.config.ts",
         "forgeax-engine-assets/khronos-gltf-samples/Fox/Fox.glb",
-        "templates/game-default/src/fbx-skinned-target.ts",
+        "templates/game-default/assets/plugins/fbx-skinned-target.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-084630-classify-hello-skin-candidate/artifacts/smoke-browser-final.log",
@@ -2645,7 +2728,7 @@
         "forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.json",
         "forgeax-engine-assets/demo-assets/hello-sprite-atlas/walk.atlas.png.meta.json",
         "templates/game-default/main.ts",
-        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-110004-classify-hello-sprite-atlas-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-110004-classify-hello-sprite-atlas-candidate/artifacts/typecheck.log",
@@ -2668,10 +2751,10 @@
         "apps/hello/sprite-lit/scripts/smoke-browser.mjs",
         "packages/render/README.md",
         ".forgeax-harness/knowledge-base/wiki/2d-lighting-unification-with-3d.md",
-        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
-        "templates/game-default/src/hud.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
+        "templates/game-default/assets/plugins/hud.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-projectile-sprite.mjs",
@@ -2696,9 +2779,9 @@
         "apps/hello/sprite/scripts/smoke-dawn.mjs",
         "packages/render/src/authoring.ts",
         "packages/render/README.md",
-        "templates/game-default/src/custom-projectile-mesh.ts",
+        "templates/game-default/assets/plugins/custom-projectile-mesh.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "apps/preview/scripts/smoke-projectile-sprite.mjs",
         ".forgeax-harness/solo/game-default/experiments/20260804-094111-classify-hello-sprite-candidate/REPORT.md"
@@ -2719,8 +2802,8 @@
         "apps/hello/text/scripts/smoke-dawn.mjs",
         "apps/hello/text/vite.config.ts",
         "packages/font/README.md",
-        "templates/game-default/src/world-score-text.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/world-score-text.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.font.pack.json",
         ".forgeax-harness/solo/game-default/experiments/20260804-121411-classify-hello-text-candidate/REPORT.md",
@@ -2746,7 +2829,7 @@
         "forgeax-engine-assets/demo-assets/hello-video-cutscene/cutscene.webm",
         "packages/graphics-extras/README.md",
         "templates/game-default/main.ts",
-        "templates/game-default/src/gameplay-lifecycle.ts",
+        "templates/game-default/assets/plugins/gameplay-lifecycle.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-150113-classify-hello-video-texture-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-150113-classify-hello-video-texture-candidate/artifacts/candidate-gates.txt",
@@ -2773,7 +2856,7 @@
         "apps/hello/video-cutscene/scripts/smoke-browser.mjs",
         "forgeax-engine-assets/demo-assets/hello-video-cutscene/cutscene.webm",
         "templates/game-default/main.ts",
-        "templates/game-default/src/gameplay-lifecycle.ts",
+        "templates/game-default/assets/plugins/gameplay-lifecycle.ts",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-140058-classify-hello-video-cutscene-candidate/REPORT.md",
         ".forgeax-harness/solo/game-default/experiments/20260804-140058-classify-hello-video-cutscene-candidate/artifacts/browser-console-headed.txt",
@@ -2903,9 +2986,9 @@
         "apps/hello/entity-visibility/scripts/smoke-dawn.mjs",
         "apps/hello/entity-visibility/scripts/smoke-browser.mjs",
         "packages/render/README.md",
-        "templates/game-default/src/visibility-loop.ts",
+        "templates/game-default/assets/plugins/visibility-loop.ts",
         "templates/game-default/main.ts",
-        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/assets/plugins/render-evidence.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
@@ -2933,7 +3016,7 @@
         "apps/hello/video-cutscene/README.md",
         "apps/hello/video-cutscene/scripts/smoke-browser.mjs",
         "apps/preview/vite.config.ts",
-        "templates/game-default/src/video-texture-panel.ts",
+        "templates/game-default/assets/plugins/video-texture-panel.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
@@ -2942,6 +3025,347 @@
       ],
       "reason": "The licensed WebM is a runtime-only URL descriptor, not a Pack-imported binary. game-default adopts the existing VideoAsset -> VideoPlayer -> host VideoElementProvider -> GPU texture route as one pooled camera-facing panel above the scored target. M or the inspection action toggles it, while the existing App/World, input, target-hit, inspection, typed reset, and Stop cleanup owners remain singular. Preview serves the submodule file through publicDir; no fake WebM importer or duplicate sidecar authority is introduced.",
       "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "package:@forgeax/engine-import",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/import/README.md",
+        "packages/import/src/index.ts",
+        "apps/hello/custom-importer/package.json",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260805-061828-asset-import-plugin-loop/REPORT.md",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "engine-import is a build-time ImporterRegistry/runImport protocol, not a runtime asset plugin. The template already owns the host plugin boundary and real image/glTF/FBX/font/audio GUID chains through its existing target-profile and authored scene rows; the canonical M2 and custom-importer apps are the better importer/recovery consumers. Adding another registry or runtime dependency would duplicate the source-to-pack lesson and split asset authority.",
+      "betterConsumer": "apps/hello/m2-content-pipeline"
+    },
+    {
+      "id": "package:@forgeax/engine-codec",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/codec/README.md",
+        "apps/hello/compressed-texture/package.json",
+        "apps/hello/compressed-texture/scripts/smoke-dawn.mjs",
+        "apps/hello/compressed-texture/scripts/smoke-browser.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260805-061828-codec-asset-delivery-loop/REPORT.md",
+        "templates/game-default/assets/plugins/asset-content-evidence.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "engine-codec is a runtime-safe decode/transcode and build-only encode layer already consumed by the image/pack/runtime owners. The canonical compressed-texture app proves KTX2/Basis capability selection, block upload, uncompressed parity, and browser/Dawn recovery, while game-default's landed JPEG row already teaches the same source/sidecar/GUID/material/reset composition. A second compressed texture or direct codec import would duplicate the owner, violate encode isolation, or introduce an orphan-prone generated artifact.",
+      "betterConsumer": "apps/hello/compressed-texture"
+    },
+    {
+      "id": "package:@forgeax/engine-fbx",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/fbx/README.md",
+        "packages/fbx/src/fbx-importer.ts",
+        "apps/hello/fbx-cube/package.json",
+        "apps/hello/fbx-cube/scripts/smoke-dawn.mjs",
+        "apps/hello/fbx-cube/scripts/smoke-browser.mjs",
+        "apps/hello/fbx-skin/package.json",
+        "apps/hello/fbx-skin/scripts/smoke-dawn.mjs",
+        "apps/hello/fbx-skin/scripts/smoke-browser.mjs",
+        "templates/game-default/assets/plugins/fbx-mesh-swap.ts",
+        "templates/game-default/assets/plugins/fbx-skinned-target.ts",
+        ".forgeax-harness/solo/game-default/experiments/20260805-064742-fbx-package-asset-plugin-loop/REPORT.md",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "engine-fbx is a build-time ufbx importer whose seven sub-asset outputs already arrive through the host plugin and the asset:fbx guided declaration. The canonical hello-fbx-cube and hello-fbx-skin apps prove source/sidecar -> importer -> Pack/GUID/catalog -> runtime SceneAsset, mesh, skin, and animation delivery with Dawn and browser evidence; game-default already composes cube mesh swap and humanoid skin into its single target/Play/hit/R reset owner. A direct package declaration or second runtime scene/importer boundary would duplicate the format lesson, so the canonical skin app remains the better package consumer.",
+      "betterConsumer": "apps/hello/fbx-skin"
+    },
+    {
+      "id": "package:@forgeax/engine-gltf",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/gltf/README.md",
+        "packages/gltf/src/bridge.ts",
+        "packages/gltf/src/gltf-importer.ts",
+        "apps/hello/gltf/package.json",
+        "apps/hello/gltf/scripts/smoke-dawn.mjs",
+        "apps/hello/gltf-instancing/package.json",
+        "apps/hello/gltf-instancing/scripts/smoke-dawn.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "templates/game-default/assets/plugins/gltf-mesh-swap.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-070752-gltf-package-asset-plugin-loop/REPORT.md"
+      ],
+      "reason": "engine-gltf is the build-time parser/bridge/importer for glTF PODs, not a runtime scene registry. The existing asset:glb and asset:gltf guided rows already cover embedded and external dependency delivery on one scored target with exact R reset; hello-gltf and hello-gltf-instancing remain the focused scene and instancing oracles, while M2 owns cross-format reimport/HMR/recovery. A direct package adoption or second scene/importer boundary would duplicate the format lesson and split asset authority.",
+      "betterConsumer": "apps/hello/gltf"
+    },
+    {
+      "id": "package:@forgeax/engine-image",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/image/README.md",
+        "packages/image/src/image-importer.ts",
+        "packages/image/src/ktx2-encode.ts",
+        "packages/image/src/reimport-reuse-meta.ts",
+        "apps/hello/sprite/package.json",
+        "apps/hello/sprite/scripts/smoke-dawn.mjs",
+        "apps/hello/sprite-atlas/package.json",
+        "apps/hello/sprite-atlas/scripts/smoke-dawn.mjs",
+        "apps/hello/compressed-texture/package.json",
+        "apps/hello/compressed-texture/scripts/smoke-dawn.mjs",
+        "apps/hello/compressed-texture/scripts/smoke-browser.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "templates/game-default/assets/plugins/jpeg-texture-swap.ts",
+        "templates/game-default/assets/plugins/sprite-atlas-loop.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-071208-image-package-asset-plugin-loop/REPORT.md"
+      ],
+      "reason": "engine-image is the build-time PNG/JPEG/HDR producer and compression-policy owner, not a runtime texture registry. The existing asset:jpg and asset:png guided rows already teach source/Meta -> importer/cook -> Pack/GUID/catalog -> TextureAsset delivery on one scored target with one typed R reset owner. hello-sprite-atlas remains the atlas scale oracle, hello-compressed-texture owns compressed/raw capability parity, and M2 owns cross-format reimport/HMR/recovery. A direct package dependency, second texture registry, or duplicate material/reset owner would split asset authority and teach less.",
+      "betterConsumer": "apps/hello/sprite-atlas"
+    },
+    {
+      "id": "package:@forgeax/engine-ddc",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/ddc/README.md",
+        "packages/ddc/src/key.ts",
+        "packages/ddc/src/entry-store.ts",
+        "packages/ddc/src/lifecycle.ts",
+        "packages/ddc/src/__tests__/key.unit.test.ts",
+        "packages/ddc/src/__tests__/entry-store.integration.test.ts",
+        "packages/ddc/src/__tests__/concurrency.integration.test.ts",
+        "packages/ddc/src/__tests__/crash-recovery.integration.test.ts",
+        "packages/ddc/src/__tests__/lifecycle.unit.test.ts",
+        "packages/ddc/src/__tests__/consumer-path.integration.test.ts",
+        "packages/import/src/import-runner.ts",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "asset-authority.schema.json",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-073200-ddc-asset-recovery-boundary-loop/REPORT.md"
+      ],
+      "reason": "engine-ddc is a Node-only immutable derived-data cache with semantic keys, receipt/integrity validation, atomic publication, concurrency conflict handling, and lifecycle recovery. It is disposable build evidence rather than a runtime asset plugin: Pack/import and the asset-authority contract keep source plus Meta and the Catalog as the authorities, while M2 proves the cold-rebuild, reimport, HMR, and recovery path. Adding DDC identity or cache files to game-default would ship build-only state, duplicate the import/Pack recovery boundary, and teach less than the existing asset rows.",
+      "betterConsumer": "apps/hello/m2-content-pipeline"
+    },
+    {
+      "id": "package:@forgeax/engine-vite-plugin-pack",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/vite-plugin-pack/README.md",
+        "packages/vite-plugin-pack/src/index.ts",
+        "packages/vite-plugin-pack/src/build-catalog.ts",
+        "packages/vite-plugin-pack/src/catalog-client.ts",
+        "packages/vite-plugin-pack/src/dev/import-publication.ts",
+        "packages/vite-plugin-pack/src/dev/watcher.ts",
+        "packages/vite-plugin-pack/src/__tests__/build-catalog.unit.test.ts",
+        "packages/vite-plugin-pack/src/__tests__/producer-contract.unit.test.ts",
+        "packages/vite-plugin-pack/src/__tests__/catalog-failure-result.unit.test.ts",
+        "packages/vite-plugin-pack/src/__tests__/ddc-cache.unit.test.ts",
+        "packages/vite-plugin-pack/src/__tests__/source-overrides-ddc-lifecycle.integration.test.ts",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/catalog-host-refresh.browser.mjs",
+        "apps/preview/scripts/smoke-ui-production.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "asset-authority.schema.json",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-080050-vite-pack-host-plugin-boundary-loop/REPORT.md"
+      ],
+      "reason": "engine-vite-plugin-pack is the Vite host seam for dev catalog/HMR/lazy import and production pack-index/artifact emission. apps/preview and M2 prove importer/native-cooker registration, DDC/catalog projection, structured diagnostics, re-enumeration, HMR, production Pack v2, and cleanup. game-default should consume the resulting GUID rows through its existing target/reset owners, not ship Vite transport, a second catalog registry, or cache identity; adding the package as a game dependency would duplicate host authority and teach less.",
+      "betterConsumer": "apps/preview"
+    },
+    {
+      "id": "package:@forgeax/engine-vite-plugin-shader",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/vite-plugin-shader/README.md",
+        "packages/vite-plugin-shader/src/index.ts",
+        "packages/vite-plugin-shader/src/__tests__/vite-plugin-shader.unit.test.ts",
+        "packages/shader-compiler/src/__tests__/material-source-catalog.unit.test.ts",
+        "apps/hello/triangle/vite.config.ts",
+        "apps/hello/triangle/scripts/smoke-dawn.mjs",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/preview/scripts/catalog-host-refresh.browser.mjs",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-091500-vite-shader-authored-module-boundary-loop/REPORT.md"
+      ],
+      "reason": "engine-vite-plugin-shader is the build/host boundary for authored WGSL: Preview owns one forgeaxShader instance for transform, reflection, dev HMR, and production manifest publication, while hello-triangle is the canonical minimal consumer. Package and shader-compiler tests cover malformed WGSL, missing modules/sidecars, variant reflection, transitive HMR, and structured RollupLog recovery; Preview Chromium dev/production render evidence and catalog re-entry pass. Adding the package or another shader registry to game-default would move build transport into the game and duplicate the existing hit-flash/animated-target material and reset owners. WebKit smoke remains an environment blocker because the local Playwright binary is absent.",
+      "betterConsumer": "apps/preview"
+    },
+    {
+      "id": "package:@forgeax/engine-vfx-compiler",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/vfx-compiler/README.md",
+        "packages/vfx-compiler/src/index.ts",
+        "packages/vfx-compiler/src/cook.ts",
+        "packages/vfx-compiler/src/importer.ts",
+        "packages/vfx-compiler/src/__tests__/cook-determinism.property.test.ts",
+        "packages/vfx-compiler/src/__tests__/importer-contract.integration.test.ts",
+        "packages/vfx-compiler/src/__tests__/backend-policy.unit.test.ts",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-inspection-recovery.mjs",
+        "apps/hello/boss-lightning/vite.config.ts",
+        "apps/hello/boss-lightning/scripts/smoke-dawn.mjs",
+        "apps/hello/boss-lightning/scripts/smoke-browser.mjs",
+        "apps/hello/boss-lightning/scripts/smoke-falsify.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "templates/game-default/assets/hit-vfx-effect.pack.json",
+        "templates/game-default/assets/charge-vfx-effect.pack.json",
+        "templates/game-default/assets/plugins/vfx-hit-loop.ts",
+        "templates/game-default/tests/vfx-effect-assets.test.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md",
+        "apps/preview/scripts/smoke-vfx-charge.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260805-110000-vfx-compiler-asset-plugin-boundary-loop/REPORT.md"
+      ],
+      "reason": "engine-vfx-compiler is a build-time definition-driven source cooker: its 14-file/40-test suite proves malformed/unknown-operator recovery, backend policy, deterministic artifacts, and the generic importer contract. Preview owns the single native cooker and production Pack-v2 projection; game-default now consumes two GUID-addressed effects through one CPU FixedUpdate ParticleEffectPlayer, scene-space resolver, late VFX RenderFeature, inspection, and typed reset owner. The finite hit effect preserves the gameplay outcome while the charge effect adds continuous-rate scheduling, delayed bursts, and box spawning without a second scene or compiler dependency. hello-boss-lightning remains the deeper operator/readiness oracle and its 300-frame Dawn plus normal browser paths pass. A direct template compiler dependency would cross build/runtime isolation or duplicate the registry; the candidate falsifier's aggregate polarity is a harness defect, not a missing first-game contract. Revisit only when a new source format or operator requires a distinct existing gameplay outcome.",
+      "betterConsumer": "apps/hello/boss-lightning"
+    },
+    {
+      "id": "package:@forgeax/engine-debug-draw",
+      "classification": "guided",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/debug-draw/README.md",
+        "packages/app/src/types.ts",
+        "packages/app/src/create-app.ts",
+        "templates/game-default/assets/plugins/debug-axes.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/preview/scripts/smoke-debug-axes.mjs",
+        "apps/hello/debug-draw/package.json",
+        "apps/hello/debug-draw/scripts/smoke-dawn.mjs",
+        "apps/hello/debug-draw/scripts/smoke-browser.mjs",
+        ".forgeax-harness/solo/game-default/experiments/20260805-160344-package-debug-draw-boundary-loop/REPORT.md"
+      ],
+      "reason": "The package is consumed through the public app.debugDraw auto-attach path, but the template overlay is query-gated rather than an always-on gameplay concept. game-default's one target/camera/reset owner teaches the reusable axes, AABB, and frustum shape contract; hello-debug-draw remains the low-path, depth, capacity, and visual oracle, so no second scene or renderer registry is justified.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "package:@forgeax/engine-pack",
+      "classification": "core",
+      "frontDoors": [
+        "preview",
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/pack/README.md",
+        "packages/pack/src/guid.ts",
+        "packages/pack/src/scanner.ts",
+        "packages/pack/src/cli-asset.ts",
+        "packages/pack/src/__tests__/guid-collision.unit.test.ts",
+        "packages/pack/src/__tests__/pack.unit.test.ts",
+        "packages/pack/src/__tests__/ai-recovery.unit.test.ts",
+        "packages/pack/src/__tests__/asset-evidence-lifecycle.test.ts",
+        "packages/pack/scripts/check-no-assets-load.mjs",
+        "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
+        "apps/preview/vite.config.ts",
+        "templates/game-default/package.json",
+        "templates/game-default/main.ts",
+        "templates/game-default/assets/plugins/scene-runtime.ts",
+        "templates/game-default/assets/scene.pack.json",
+        "templates/game-default/assets/shaders/animated-target.wgsl.meta.json",
+        "templates/game-default/assets/shaders/hit-flash.wgsl.meta.json",
+        "templates/game-default/AGENTS.md",
+        "asset-authority.schema.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-081500-pack-asset-authority-boundary-loop/REPORT.md"
+      ],
+      "reason": "engine-pack is the template's core asset identity seam: game-default directly imports AssetGuid for every GUID-backed loadByGuid path, while the host owns scanner, Pack v2, source/Meta, and catalog projection. Pack tests passed 29 files/251 tests, project-scoped template verification now passes with 17 material payloads, package-scope no-runtime-loading and error-narrowing gates pass, Preview builds, and M2 proves malformed GUID/catalog-miss recovery plus stable cross-format reimport. The two WGSL sidecars now have distinct shader GUIDs from their MaterialAsset packages; sourceKey preserves the relation without duplicating identity."
+    },
+    {
+      "id": "package:@forgeax/engine",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/engine/README.md",
+        "packages/engine/package.json",
+        "packages/runtime/README.md",
+        "AGENTS.md",
+        "templates/game-default/package.json",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-170128-package-engine-placeholder-boundary-loop/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-170128-package-engine-placeholder-boundary-loop/artifacts/capability-audit-pre.json",
+        ".forgeax-harness/solo/game-default/experiments/20260805-170128-package-engine-placeholder-boundary-loop/artifacts/build-engine.log"
+      ],
+      "reason": "@forgeax/engine is intentionally a private, files-only placeholder for the @forgeax/engine-* family: it has no exports, source entry, runtime artifact, or test surface. Its README and the root package map route first users to @forgeax/engine-runtime plus focused domain packages, and game-default already imports those focused owners directly. Adding the bare name would teach an unusable import or force a compatibility mega-barrel, increasing concepts without adding a feature. Revisit only if this package gains a documented shippable API representing a distinct first-game capability.",
+      "betterConsumer": "@forgeax/engine-runtime"
+    },
+    {
+      "id": "package:@forgeax/engine-naga",
+      "classification": "not-template-fit",
+      "frontDoors": [
+        "game-default:audit"
+      ],
+      "evidence": [
+        "packages/naga/package.json",
+        "packages/naga/README.md",
+        "packages/naga/src/index.ts",
+        "packages/naga/src/errors.ts",
+        "packages/naga/src/__tests__/naga.unit.test.ts",
+        "packages/naga/src/__tests__/reflect-uv-set-count.test.ts",
+        "packages/shader-compiler/package.json",
+        "packages/shader-compiler/README.md",
+        "packages/shader-compiler/src/index.ts",
+        "packages/shader-compiler/src/__tests__/material-source-catalog.unit.test.ts",
+        "packages/shader/src/ShaderRegistry.ts",
+        "apps/hello/triangle/README.md",
+        "apps/hello/triangle/src/main.ts",
+        "apps/hello/triangle/scripts/smoke-dawn.mjs",
+        "apps/hello/triangle/scripts/smoke-coverage-gate.mjs",
+        "apps/hello/triangle/scripts/check-dist-wasm-count.mjs",
+        "scripts/check-shader-no-naga-in-dist.mjs",
+        "scripts/check-shader-runtime-deps.mjs",
+        "scripts/check-shader-no-compiler-import.mjs",
+        "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "templates/game-default/main.ts",
+        "templates/game-default/assets/plugins/hit-flash-material.ts",
+        "templates/game-default/AGENTS.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/REPORT.md",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/naga-boundary-contract.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/naga-test.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/shader-compiler-test.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/gate-no-naga-in-dist.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/gate-runtime-deps.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/gate-no-compiler-import.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/hello-triangle-smoke.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/hello-triangle-no-wasm.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/hello-triangle-coverage.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/preview-render-evidence.log",
+        ".forgeax-harness/solo/game-default/experiments/20260805-180534-package-naga-shader-boundary-loop/artifacts/preview-render-evidence-production-retry.log"
+      ],
+      "reason": "engine-naga is a private TS-only shell over raw wgpu/naga WASM: parse, validate, and reflection are build-time substrate operations, not a runtime gameplay capability. The package is consumed by the focused shader-compiler, while hello-triangle and Preview prove the authored WGSL -> composed MaterialAsset path and the runtime package's three physical-isolation gates. game-default already exposes user-visible hit-flash and animated-target shader composition through its single material/target/reset owner; adding Naga or a compiler registry would leak build-core WASM into the template and split shader ownership. Revisit only if a stable gameplay-sized shader feature cannot be authored through the existing MaterialAsset/WGSL and host compiler path.",
+      "betterConsumer": "packages/shader-compiler"
     }
   ]
 }

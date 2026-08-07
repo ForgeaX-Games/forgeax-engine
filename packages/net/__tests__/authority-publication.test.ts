@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { createAuthorityCoordinator } from '../src/replication/authority';
+import { REPLICATION_PROTOCOL_VERSION } from '../src/replication/constants';
 import { defineReplication } from '../src/replication/profile';
 
 const NetworkedAuthority = defineComponent('NetworkedAuthority', { enabled: 'bool' });
@@ -31,6 +32,7 @@ describe('authority canonical publication', () => {
     expect(baseline.ok).toBe(true);
     expect(unchanged.ok).toBe(true);
     if (!baseline.ok || !unchanged.ok) return;
+    expect(baseline.value.version).toBe(REPLICATION_PROTOCOL_VERSION);
     expect(baseline.value.full).toBe(true);
     expect(baseline.value.entities[0]!.components).toHaveLength(2);
     expect(unchanged.value.full).toBe(false);

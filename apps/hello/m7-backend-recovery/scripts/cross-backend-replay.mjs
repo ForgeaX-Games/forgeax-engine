@@ -51,7 +51,11 @@ const dawnAdapterResult = await webgpuRhi.requestAdapter();
 if (!dawnAdapterResult.ok) {
   throw new Error(`Dawn adapter failed: ${dawnAdapterResult.error.code} (${dawnAdapterResult.error.hint})`);
 }
+const requiredFeatures = dawnAdapterResult.value.features.has('texture-compression-bc')
+  ? ['texture-compression-bc']
+  : [];
 const dawnDeviceResult = await dawnAdapterResult.value.requestDevice({
+  requiredFeatures,
   requiredLimits: { maxUniformBufferBindingSize: 262144 },
 });
 if (!dawnDeviceResult.ok) {

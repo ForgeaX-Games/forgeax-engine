@@ -8,6 +8,9 @@
   "scripts": {
     "smoke": "node scripts/smoke.mjs"
   },
+  "devDependencies": {
+    "pngjs": "^7.0.0"
+  },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-m3-programmable-rendering smoke",
     "gauntletScenario": {
@@ -67,6 +70,10 @@
           "[m3-programmable] inherited material depth post no-msaa reverse-pipeline-texture falsifier startup-true repeatability: PASS",
           "[m3-programmable] inherited material depth post msaa reverse-pipeline-texture falsifier startup-false repeatability: PASS",
           "[m3-programmable] inherited material depth post msaa reverse-pipeline-texture falsifier startup-true repeatability: PASS",
+          "[m3-programmable] inherited material inversion post no-msaa startup-false repeatability: PASS",
+          "[m3-programmable] inherited material inversion post no-msaa startup-true repeatability: PASS",
+          "[m3-programmable] inherited material inversion post msaa startup-false repeatability: PASS",
+          "[m3-programmable] inherited material inversion post msaa startup-true repeatability: PASS",
           "[m3-programmable] render graph seam: PASS",
           "[m3-programmable] depth-aware URP overlay: PASS",
           "[m3-programmable] fake-depth falsifier: PASS",

@@ -1,14 +1,37 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pixelmatch from 'pixelmatch';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(packageRoot, '..', '..', '..');
+const defaultChildTimeoutMs = 180_000;
+
+function resolveChildTimeoutMs(rawValue) {
+  if (rawValue === undefined) return defaultChildTimeoutMs;
+  const value = Number(rawValue);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`FORGEAX_M3_CHILD_TIMEOUT_MS must be a positive integer, received ${JSON.stringify(rawValue)}`);
+  }
+  return value;
+}
+
+const childTimeoutMs = resolveChildTimeoutMs(process.env.FORGEAX_M3_CHILD_TIMEOUT_MS);
+console.log(`[m3-programmable] selector child timeout: ${childTimeoutMs} ms`);
 const require = createRequire(resolve(repoRoot, 'package.json'));
 let PNG;
 try {
@@ -101,6 +124,24 @@ function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+function countLiveTextures(report, matches) {
+  const live = new Set();
+  for (const event of report.events) {
+    const handleId = event.handleId ?? event.id;
+    if (handleId === undefined || handleId === null) continue;
+    if (event.kind === 'createTexture' && matches(event.desc)) {
+      live.add(handleId);
+    } else if (event.kind === 'destroyTexture') {
+      live.delete(handleId);
+    }
+  }
+  return live.size;
+}
+
+function countLiveMsaaTextures(report) {
+  return countLiveTextures(report, (desc) => desc?.sampleCount === 4);
+}
+
 function readRepeatabilitySnapshot(root) {
   const capture = JSON.parse(readFileSync(resolve(root, 'capture.json'), 'utf8'));
   const summary = JSON.parse(readFileSync(resolve(root, 'rhi-summary.json'), 'utf8'));
@@ -144,12 +185,11 @@ function readRepeatabilitySnapshot(root) {
 function readComposedRhiSnapshot(root, label) {
   const report = JSON.parse(readFileSync(resolve(root, 'rhi', `${label}.report.json`), 'utf8'));
   return {
-    textureResourceCount: report.events.filter(
-      (event) => event.kind === 'createTexture' && event.desc?.size?.width === 2 && event.desc?.size?.height === 2,
-    ).length,
-    msaaTextureResourceCount: report.events.filter(
-      (event) => event.kind === 'createTexture' && event.desc?.sampleCount === 4,
-    ).length,
+    textureResourceCount: countLiveTextures(
+      report,
+      (desc) => desc?.size?.width === 2 && desc?.size?.height === 2,
+    ),
+    msaaTextureResourceCount: countLiveMsaaTextures(report),
     resolveTargetCount: report.events.filter(
       (event) =>
         event.kind === 'beginRenderPass' &&
@@ -220,9 +260,7 @@ function readLiveMaterialSnapshot(root) {
       const report = JSON.parse(readFileSync(leg.rhi.report, 'utf8'));
       const reportText = JSON.stringify(report);
       return {
-        msaaTextureResourceCount: report.events.filter(
-          (event) => event.kind === 'createTexture' && event.desc?.sampleCount === 4,
-        ).length,
+        msaaTextureResourceCount: countLiveMsaaTextures(report),
         resolveTargetCount: report.events.filter(
           (event) =>
             event.kind === 'beginRenderPass' &&
@@ -275,16 +313,38 @@ function repeatabilityDiff(first, second) {
 }
 
 function run(label, args, extraEnv = {}, cwd = repoRoot) {
-  const result = spawnSync('pnpm', args, {
-    cwd,
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 180_000,
-    env: { ...process.env, INIT_CWD: repoRoot, ...extraEnv },
-  });
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  const outputDir = mkdtempSync(resolve(tmpdir(), 'forgeax-m3-run-'));
+  const stdoutPath = resolve(outputDir, 'stdout.txt');
+  const stderrPath = resolve(outputDir, 'stderr.txt');
+  const stdoutFd = openSync(stdoutPath, 'w');
+  const stderrFd = openSync(stderrPath, 'w');
+  let result;
+  try {
+    result = spawnSync('pnpm', args, {
+      cwd,
+      detached: true,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ['ignore', stdoutFd, stderrFd],
+      timeout: childTimeoutMs,
+      env: { ...process.env, INIT_CWD: repoRoot, ...extraEnv },
+    });
+  } finally {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+  }
+  if (result.error?.code === 'ETIMEDOUT' && result.pid !== undefined) {
+    try {
+      process.kill(-result.pid, 'SIGKILL');
+    } catch {
+      // The detached process group may have already exited with the timeout.
+    }
+  }
+  const output = `${readFileSync(stdoutPath, 'utf8')}${readFileSync(stderrPath, 'utf8')}`;
+  rmSync(outputDir, { recursive: true, force: true });
   process.stdout.write(output);
-  if (result.error) {
+  if (result.error?.code === 'ETIMEDOUT') {
+    console.error(`[m3-programmable] ${label}: child timeout after ${childTimeoutMs} ms`);
+  } else if (result.error) {
     console.error(`[m3-programmable] ${label}: spawn failed: ${result.error.message}`);
   }
   return { status: result.status, output };
@@ -1433,11 +1493,17 @@ runComposedInheritancePipelineFalsifierRepeatability({ msaa: true, startVariant:
 function runComposedInheritancePostRepeatability({ msaa, startVariant, post = 'depth', falsifierKind = 'texture' }) {
   const mode = msaa ? 'msaa' : 'no-msaa';
   const depthPost = post === 'depth';
-  const pipelineFalsifier = falsifierKind !== 'texture';
+  const pipelineFalsifier =
+    falsifierKind === 'pipeline' ||
+    falsifierKind === 'pipeline-texture' ||
+    falsifierKind === 'reverse-pipeline' ||
+    falsifierKind === 'reverse-pipeline-texture';
   const reversePipelineFalsifier =
     falsifierKind === 'reverse-pipeline' || falsifierKind === 'reverse-pipeline-texture';
   const textureSlotFalsifier =
-    falsifierKind === 'texture' || falsifierKind === 'reverse-pipeline-texture';
+    falsifierKind === 'texture' ||
+    falsifierKind === 'pipeline-texture' ||
+    falsifierKind === 'reverse-pipeline-texture';
   const expectedPipeline = reversePipelineFalsifier ? 'standard' : 'custom';
   const passLabel = pipelineFalsifier ? `${mode} ${falsifierKind} falsifier` : mode;
   const artifactSuffix = pipelineFalsifier ? `-${falsifierKind}-falsifier` : '';
@@ -1523,12 +1589,20 @@ function runComposedInheritancePostRepeatability({ msaa, startVariant, post = 'd
     falsifier.delta.changed === 0 &&
     normal.dawn.sha256 !== falsifier.dawn.sha256 &&
     normal.draws !== falsifier.draws;
+  const pipelineTextureFalsifierOracle =
+    falsifier.afterEvidence.baseColorSlotChanged === false &&
+    falsifier.afterEvidence.detailSlotChanged === false &&
+    falsifier.afterEvidence.falsifierMarker === 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind' &&
+    falsifier.delta.changed === 0 &&
+    normal.dawn.sha256 !== falsifier.dawn.sha256 &&
+    normal.draws !== falsifier.draws;
   const pipelineFalsifierOracle =
     falsifier.afterEvidence.baseColorSlotChanged === true &&
     falsifier.afterEvidence.detailSlotChanged === true &&
     falsifier.afterEvidence.falsifierMarker === null &&
     falsifier.delta.changed >= 1000 &&
-    normal.dawn.sha256 !== falsifier.dawn.sha256;
+    normal.draws !== falsifier.draws &&
+    (post === 'passthrough' || normal.dawn.sha256 !== falsifier.dawn.sha256);
   if (
     normal.afterEvidence.inheritanceBacked !== true ||
     normal.afterEvidence.baseColorSlotChanged !== true ||
@@ -1536,8 +1610,10 @@ function runComposedInheritancePostRepeatability({ msaa, startVariant, post = 'd
     normal.afterEvidence.afterComponentMaterialMatchesAfter !== true ||
     normal.delta.changed < 1000 ||
     falsifier.afterEvidence.inheritanceBacked !== true ||
-    (falsifierKind === 'reverse-pipeline-texture'
-      ? !reversePipelineTextureFalsifierOracle
+    (falsifierKind === 'pipeline-texture'
+      ? !pipelineTextureFalsifierOracle
+      : falsifierKind === 'reverse-pipeline-texture'
+        ? !reversePipelineTextureFalsifierOracle
       : pipelineFalsifier
         ? !pipelineFalsifierOracle
         : !textureFalsifierOracle)
@@ -1566,6 +1642,10 @@ runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'false', fa
 runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
 runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
 runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'false', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: false, startVariant: 'true', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'false', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ msaa: true, startVariant: 'true', falsifierKind: 'pipeline-texture' });
 runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
 runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
 runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
@@ -1574,6 +1654,38 @@ runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startV
 runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
 runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
 runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'false', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'true', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'false', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'true', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'false', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'true', falsifierKind: 'pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'false', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'true', falsifierKind: 'reverse-pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'false', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'true', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'false', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'true', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'false', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: false, startVariant: 'true', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'false', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'passthrough', msaa: true, startVariant: 'true', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'false', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'true', falsifierKind: 'texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'false', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: false, startVariant: 'true', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'false', falsifierKind: 'pipeline-texture' });
+runComposedInheritancePostRepeatability({ post: 'inversion', msaa: true, startVariant: 'true', falsifierKind: 'pipeline-texture' });
 
 const resizeChurnComposed = run(
   'browser custom pipeline + multi-texture resize churn',

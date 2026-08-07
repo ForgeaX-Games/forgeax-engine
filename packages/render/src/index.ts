@@ -1,4 +1,25 @@
-export * from './components/camera';
+export type { CameraProjection, Tonemap } from './components/camera';
+export {
+  ANTIALIAS_FXAA,
+  ANTIALIAS_MSAA,
+  ANTIALIAS_NONE,
+  BLOOM_DISABLED,
+  BLOOM_ENABLED,
+  CAMERA_PROJECTION_ORTHOGRAPHIC,
+  CAMERA_PROJECTION_PERSPECTIVE,
+  Camera,
+  cameraProjectionFromF32,
+  orthographic,
+  perspective,
+  TONEMAP_ACES_FILMIC,
+  TONEMAP_AGX,
+  TONEMAP_CINEON,
+  TONEMAP_LINEAR,
+  TONEMAP_NEUTRAL,
+  TONEMAP_NONE,
+  TONEMAP_REINHARD_EXTENDED,
+  tonemapFromF32,
+} from './components/camera';
 export * from './components/directional-light';
 export { Instances, type InstancesData } from './components/instances';
 export { Layer } from './components/layer';
@@ -27,8 +48,19 @@ export {
   VisibilityStateValue,
   visibilityStateFromU32,
 } from './components/visibility';
-export * from './errors/index';
-export * from './errors/recover';
+export {
+  type EquirectProjectionFailedDetail,
+  type RenderError,
+  type RenderErrorCode,
+  RenderFeatureCapabilityMissingError,
+  RenderFeatureDrawRecordingFailedError,
+  RenderFeaturePassOrderConflictError,
+  RenderFeaturePreparationFailedError,
+  RenderFeaturePreparedStateMismatchError,
+  RenderFeatureRegistrationConflictError,
+  RenderFeatureStageFailedError,
+} from './errors/index';
+export { RecoverError, type RecoverErrorCode } from './errors/recover';
 export {
   resolveVisibility,
   type VisibilityResolution,
@@ -41,11 +73,32 @@ export {
  * construction details remain under the internal entry.
  */
 export * from './features';
-export * from './fullscreen-post-process-pass';
 export { Materials } from './materials';
-export * from './pipeline-errors';
-export * from './post-process-errors';
-export * from './render-graph-primitives';
+export { PipelineError, type PipelineErrorCode } from './pipeline-errors';
+export { PostProcessError, type PostProcessErrorCode } from './post-process-errors';
+export type {
+  AddBloomPassesOptions,
+  AddFullscreenPassOptions,
+  AddScenePassOptions,
+  AddShadowPassOptions,
+  AddSkyboxPassOptions,
+  AddSpotShadowPassOptions,
+  AddSsaoPassesOptions,
+  AddSsaoPassesParams,
+  AddTonemapPassOptions,
+} from './render-graph-primitives';
+export {
+  addBloomPasses,
+  addFullscreenPass,
+  addPointShadowPass,
+  addScenePass,
+  addShadowPass,
+  addSkyboxPass,
+  addSpotShadowPass,
+  addSsaoPasses,
+  addTonemapPass,
+  TONEMAP_POST_PROCESS_ID,
+} from './render-graph-primitives';
 export type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 export type { RenderPipelineContext } from './render-pipeline-context';
 export type {
@@ -68,4 +121,3 @@ export type {
   RenderResult,
 } from './renderer';
 export { RENDER_PHASE_CATALOG, resolveDrawOwners } from './renderer';
-export * from './surface-format';

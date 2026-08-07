@@ -1,11 +1,16 @@
 // @forgeax/engine-runtime - RenderSystem record stage: frame.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
-import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { HANDLE_NINESLICE_QUAD, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
-import { type RhiCommandEncoder, RhiError, type TextureView } from '@forgeax/engine-rhi';
+import {
+  type BindGroup,
+  type RhiCommandEncoder,
+  RhiError,
+  type TextureView,
+} from '@forgeax/engine-rhi';
 import type { MaterialRenderState, MeshAsset } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { handleSlot, toShared } from '@forgeax/engine-types';
 import { disposeTransientInstanceBuffers } from '../instance-buffer-cache';
 import type {
   _InternalRenderPipelineContext,
@@ -36,6 +41,7 @@ import {
   foldDispatchBuckets,
   incrementFoldedDrawsMetric,
 } from '../render-system-fold';
+import type { RenderRecordPhase } from '../renderer';
 import { getTransparentSortConfig } from '../systems/transparent-sort-config';
 import {
   buildPerFrameBindGroups,
@@ -68,10 +74,19 @@ import {
   warnMultiSkybox,
   warnMultiSkylight,
 } from './helpers';
-import { BUILTIN_MESH_ID_MAX, NINESLICE_QUAD_RAW_ID } from './main-pass-material';
 import { computeSplitLdrSprite } from './main-pass-sprite';
 import { cleanPerEntityCache, ensureMeshSsboCapacity, uploadMeshSsboBatch } from './mesh-ssbo';
 import { writeViewUbo } from './view-ubo';
+
+export type RecordProfileRunner = <T>(phase: RenderRecordPhase, action: () => T) => T;
+
+function runRecordProfilePhase<T>(
+  runner: RecordProfileRunner | undefined,
+  phase: RenderRecordPhase,
+  action: () => T,
+): T {
+  return runner === undefined ? action() : runner(phase, action);
+}
 
 export function recordFrame(
   internals: RenderSystemInternals,
@@ -96,6 +111,7 @@ export function recordFrame(
   // pre-split single-world identity path (worldId always 0) byte-for-byte and
   // the existing unit-test callers (which pass a single mock world) valid.
   worlds: readonly World[] = [world],
+  profilePhase?: RecordProfileRunner,
 ): boolean {
   // The `try / finally` wrapper advances `frameState.frameNumber` exactly
   // once per `recordFrame` invocation regardless of which early-return
@@ -139,77 +155,100 @@ export function recordFrame(
     }
     const camera = activeCameras[0];
     if (!camera) return false;
+    const pipelineState = internals.getPipelineState();
+    if (pipelineState === null) return false;
 
     // Record-stage fold operator linear scan (groups transparent-sort entries
     // into fold buckets + records the fold-eligible count metric). Extracted to
     // computeFoldBuckets (M3/w18).
-    const foldBuckets = computeFoldBuckets(world, frameState, transparentDispatch, renderables);
+    const { foldBuckets, light } = runRecordProfilePhase(profilePhase, 'record/scene-state', () => {
+      const foldBuckets = runRecordProfilePhase(
+        profilePhase,
+        'record/scene-state/fold-buckets',
+        () => computeFoldBuckets(world, frameState, transparentDispatch, renderables),
+      );
+
+      // Multi-light warnings + point/spot shadow-snapshot pin + point-shadow atlas
+      // ensure + ExtractedLights three-arm destructure (directional fallback,
+      // point/spot arrays, totalLightCount). Extracted to prepareFrameLighting
+      // (M3/w18) so recordFrame stays a skeleton.
+      const { light, pointLights, spotLights, totalLightCount } = runRecordProfilePhase(
+        profilePhase,
+        'record/scene-state/lighting-prep',
+        () => prepareFrameLighting(internals, frameState, lights),
+      );
+
+      runRecordProfilePhase(profilePhase, 'record/scene-state/ambient-resolution', () => {
+        // feat-20260520-skylight-ibl-cubemap M4 / t27 (AC-10 + F-4 nit):
+        // 0-light three-condition conjunction (plan-strategy D-5):
+        //   no Skylight (skylight === undefined)
+        //   AND 0 direct light (totalLightCount === 0)
+        //   AND StandardMaterial (renderables.some materialShaderId !== 'forgeax::default-unlit')
+        // All three true -> black + warn. Any one false -> no warn.
+        //
+        // Multi-Skylight warn (F-4 nit + feat-20260630 M3 / w19): >1 Skylight
+        // entity -> warn ONCE per RenderSystem lifetime (not per frame), naming the
+        // winning entity handle so the scene author can tell which Skylight is used
+        // (F-8: warn carries conflicting entity info). First Skylight (by archetype
+        // order) wins.
+        warnMultiSkylight(frameState, skylightCount, skylight?.entityHandle ?? 0);
+
+        // Multi-SkyboxBackground warn (feat-20260630 M3 / w19): mirror the Skylight
+        // once-warn + winning-entity-handle pattern. First SkyboxBackground (by
+        // archetype order) wins.
+        warnMultiSkybox(frameState, skyboxCount, skybox?.entityHandle ?? 0);
+
+        // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w18:
+        // lazy equirect-to-cubemap projection trigger (the single per-frame driver;
+        // plan-strategy D-4 + sequence diagram). The Skylight (or, when present
+        // without one, the SkyboxBackground) supplies the equirect handle; both
+        // reuse the same handle so a single projection serves IBL ambient + skybox.
+        //   - handle 0          -> no equirect (solid-color ambient); skip
+        //   - caps.rgba16float
+        //     Renderable false  -> permanent white fallback; never project (AC-06,
+        //                          the only IBL gate; no UA guard)
+        //   - status undefined  -> first sight: resolve POD + fire-and-forget launch
+        //                          (does NOT await; the store writes status:'pending'
+        //                          synchronously so this launches exactly once)
+        //   - status pending    -> projection in flight; white fallback this frame
+        //                          (normal transition, not an error -- no fire)
+        //   - status ready      -> real IBL bound by the recordMainPass cache check
+        //   - status failed     -> fire EquirectProjectionFailedError ONCE per
+        //                          handle (R-2/AC-09: store records failed
+        //                          permanently and never retries; the latch keeps
+        //                          the channel from flooding)
+        const lazyEquirectHandle = selectLazyEquirectHandle(skylight, skybox);
+        if (lazyEquirectHandle !== 0) {
+          driveLazyEquirectProjection(internals, world, frameState, lazyEquirectHandle);
+        }
+      });
+
+      // feat-20260608-cluster-lighting M5 / w21 + M6 / w23: HDRP per-frame CPU
+      // cluster binning + light-data / cluster-grid / SSAO buffer uploads. Runs
+      // only when the HDRP pipeline is active and there is at least one punctual
+      // light. Extracted to a sub-function (M3/w18) so recordFrame stays a
+      // skeleton; fail-soft error semantics are preserved verbatim.
+      runRecordProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster', () => {
+        writeHdrpClusterAndSsaoBuffers(
+          internals,
+          frameState,
+          camera,
+          pointLights,
+          spotLights,
+          profilePhase,
+          pipelineState.hdrpClusterMembershipPipeline !== null,
+          pipelineState.hdrpClusterMembershipBindGroupLayout,
+        );
+      });
+
+      // Zero-light standard-material once-warn (no Skylight + 0 direct light +
+      // >=1 lit material -> black). Extracted to warnZeroLightStandard (M3/w18).
+      warnZeroLightStandard(frameState, renderables, skylight, totalLightCount);
+
+      return { foldBuckets, light };
+    });
 
     void activeCameras; // referenced below
-
-    // Multi-light warnings + point/spot shadow-snapshot pin + point-shadow atlas
-    // ensure + ExtractedLights three-arm destructure (directional fallback,
-    // point/spot arrays, totalLightCount). Extracted to prepareFrameLighting
-    // (M3/w18) so recordFrame stays a skeleton.
-    const { light, pointLights, spotLights, totalLightCount } = prepareFrameLighting(
-      internals,
-      frameState,
-      lights,
-    );
-
-    // feat-20260520-skylight-ibl-cubemap M4 / t27 (AC-10 + F-4 nit):
-    // 0-light three-condition conjunction (plan-strategy D-5):
-    //   no Skylight (skylight === undefined)
-    //   AND 0 direct light (totalLightCount === 0)
-    //   AND StandardMaterial (renderables.some materialShaderId !== 'forgeax::default-unlit')
-    // All three true -> black + warn. Any one false -> no warn.
-    //
-    // Multi-Skylight warn (F-4 nit + feat-20260630 M3 / w19): >1 Skylight
-    // entity -> warn ONCE per RenderSystem lifetime (not per frame), naming the
-    // winning entity handle so the scene author can tell which Skylight is used
-    // (F-8: warn carries conflicting entity info). First Skylight (by archetype
-    // order) wins.
-    warnMultiSkylight(frameState, skylightCount, skylight?.entityHandle ?? 0);
-
-    // Multi-SkyboxBackground warn (feat-20260630 M3 / w19): mirror the Skylight
-    // once-warn + winning-entity-handle pattern. First SkyboxBackground (by
-    // archetype order) wins.
-    warnMultiSkybox(frameState, skyboxCount, skybox?.entityHandle ?? 0);
-
-    // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w18:
-    // lazy equirect-to-cubemap projection trigger (the single per-frame driver;
-    // plan-strategy D-4 + sequence diagram). The Skylight (or, when present
-    // without one, the SkyboxBackground) supplies the equirect handle; both
-    // reuse the same handle so a single projection serves IBL ambient + skybox.
-    //   - handle 0          -> no equirect (solid-color ambient); skip
-    //   - caps.rgba16float
-    //     Renderable false  -> permanent white fallback; never project (AC-06,
-    //                          the only IBL gate; no UA guard)
-    //   - status undefined  -> first sight: resolve POD + fire-and-forget launch
-    //                          (does NOT await; the store writes status:'pending'
-    //                          synchronously so this launches exactly once)
-    //   - status pending    -> projection in flight; white fallback this frame
-    //                          (normal transition, not an error -- no fire)
-    //   - status ready      -> real IBL bound by the recordMainPass cache check
-    //   - status failed     -> fire EquirectProjectionFailedError ONCE per
-    //                          handle (R-2/AC-09: store records failed
-    //                          permanently and never retries; the latch keeps
-    //                          the channel from flooding)
-    const lazyEquirectHandle = selectLazyEquirectHandle(skylight, skybox);
-    if (lazyEquirectHandle !== 0) {
-      driveLazyEquirectProjection(internals, world, frameState, lazyEquirectHandle);
-    }
-
-    // feat-20260608-cluster-lighting M5 / w21 + M6 / w23: HDRP per-frame CPU
-    // cluster binning + light-data / cluster-grid / SSAO buffer uploads. Runs
-    // only when the HDRP pipeline is active and there is at least one punctual
-    // light. Extracted to a sub-function (M3/w18) so recordFrame stays a
-    // skeleton; fail-soft error semantics are preserved verbatim.
-    writeHdrpClusterAndSsaoBuffers(internals, frameState, camera, pointLights, spotLights);
-
-    // Zero-light standard-material once-warn (no Skylight + 0 direct light +
-    // >=1 lit material -> black). Extracted to warnZeroLightStandard (M3/w18).
-    warnZeroLightStandard(frameState, renderables, skylight, totalLightCount);
 
     // Case E (this commit): 0 renderables = legitimate scene (LO §1.1
     // hello-window minimum semantic). Mirrors the Case C softening for
@@ -219,9 +258,6 @@ export function recordFrame(
     // MeshFilter + MeshRenderer. Geometry submission (mat4 uploads,
     // bind-group construction, vertex/index binding, drawIndexed) is
     // conditional on `validatedOrdered.length > 0` further down.
-
-    const pipelineState = internals.getPipelineState();
-    if (pipelineState === null) return false;
 
     // Point-shadow params UBO write (per-layer near/far/invSpan). Extracted to
     // writeShadowParamsBuffer (M3/w18).
@@ -239,7 +275,9 @@ export function recordFrame(
     // acquireSwapChainTarget (M3/w18); returns null on unrecoverable failure
     // (context null / double getCurrentTexture fail / view creation fail), in
     // which case recordFrame bails after the finally-block frame advance.
-    const swapTarget = acquireSwapChainTarget(internals, pipelineState);
+    const swapTarget = runRecordProfilePhase(profilePhase, 'record/swapchain', () =>
+      acquireSwapChainTarget(internals, pipelineState),
+    );
     if (swapTarget === null) return false;
     const currentTexture = swapTarget.currentTexture;
     const view = swapTarget.view;
@@ -270,18 +308,20 @@ export function recordFrame(
     // (buildGraph produced null, or recompile-on-resize failed), in which case
     // recordFrame bails after the finally-block frame advance.
     const effectiveShadowMapSize = resolveShadowMapSize(internals, lights);
-    const perFrameGraph = ensurePerFrameGraph(
-      internals,
-      frameState,
-      pipelineState,
-      camera,
-      lights,
-      skylight,
-      skylightCount,
-      skybox,
-      targetW,
-      targetH,
-      effectiveShadowMapSize,
+    const perFrameGraph = runRecordProfilePhase(profilePhase, 'record/render-graph', () =>
+      ensurePerFrameGraph(
+        internals,
+        frameState,
+        pipelineState,
+        camera,
+        lights,
+        skylight,
+        skylightCount,
+        skybox,
+        targetW,
+        targetH,
+        effectiveShadowMapSize,
+      ),
     );
     if (perFrameGraph === null) return false;
 
@@ -355,16 +395,18 @@ export function recordFrame(
       geometryDepthKey,
       geometryColorResolveView,
       ldrSpriteColorView,
-    } = resolveGeometryTargetViews(
-      internals,
-      frameState,
-      pipelineState,
-      camera,
-      view,
-      depthView,
-      tonemapActive,
-      targetW,
-      targetH,
+    } = runRecordProfilePhase(profilePhase, 'record/target-views', () =>
+      resolveGeometryTargetViews(
+        internals,
+        frameState,
+        pipelineState,
+        camera,
+        view,
+        depthView,
+        tonemapActive,
+        targetW,
+        targetH,
+      ),
     );
 
     // Validate renderable handles + collect render plan. Empty `renderables`
@@ -380,13 +422,15 @@ export function recordFrame(
     // build a renderableIndex -> renderState map from dispatch entries
     // so each ValidatedRenderable carries its per-material renderState
     // override without an O(n^2) back-scan in the draw loop.
-    const validated = validateRenderables(
-      internals,
-      world,
-      worlds,
-      pipelineState,
-      renderables,
-      transparentDispatch,
+    const validated = runRecordProfilePhase(profilePhase, 'record/validation', () =>
+      validateRenderables(
+        internals,
+        world,
+        worlds,
+        pipelineState,
+        renderables,
+        transparentDispatch,
+      ),
     );
 
     // Per-frame cache clean-up: drop per-entity BG cache entries + instance
@@ -397,7 +441,9 @@ export function recordFrame(
     // Dispatch-ordered render plan: reorder validated renderables to dispatch
     // order, run the mesh-SSBO capacity gate (graceful truncation), and build
     // the fold dispatch plan. Extracted to buildDispatchPlan (M3/w18).
-    const dispatchPlan = buildDispatchPlan(internals, validated, transparentDispatch, foldBuckets);
+    const dispatchPlan = runRecordProfilePhase(profilePhase, 'record/dispatch-plan', () =>
+      buildDispatchPlan(internals, validated, transparentDispatch, foldBuckets),
+    );
     const validatedOrdered = dispatchPlan.validatedOrdered;
     const foldDispatchPlan = dispatchPlan.foldDispatchPlan;
     const materialSlotStart = dispatchPlan.materialSlotStart;
@@ -443,33 +489,35 @@ export function recordFrame(
     // `validatedOrdered.length > 0` to include skybox-only frames
     // (plan-strategy D-3, R-3).
     if (validatedOrdered.length > 0 || skyboxActive) {
-      // View UBO + CSM/spot-shadow matrix pack: assembled + uploaded in one
-      // queue.writeBuffer round-trip. Extracted to view-ubo.ts (M3/w18) so
-      // recordFrame stays an orchestration skeleton (D-2).
-      writeViewUbo(
-        internals.device.queue,
-        pipelineState.viewUniformBuffer,
-        camera,
-        light,
-        lights,
-        frameState.spotShadowSnapshots,
-      );
+      runRecordProfilePhase(profilePhase, 'record/uploads', () => {
+        // View UBO + CSM/spot-shadow matrix pack: assembled + uploaded in one
+        // queue.writeBuffer round-trip. Extracted to view-ubo.ts (M3/w18) so
+        // recordFrame stays an orchestration skeleton (D-2).
+        writeViewUbo(
+          internals.device.queue,
+          pipelineState.viewUniformBuffer,
+          camera,
+          light,
+          lights,
+          frameState.spotShadowSnapshots,
+        );
 
-      // Per-frame full rewrite of the PointLight + SpotLight std430 storage
-      // buffers (header + first-slice cap N=4 slots). Extracted to
-      // writePointSpotLightBuffers (M3/w18).
-      writePointSpotLightBuffers(internals, pipelineState, lights);
+        // Per-frame full rewrite of the PointLight + SpotLight std430 storage
+        // buffers (header + first-slice cap N=4 slots). Extracted to
+        // writePointSpotLightBuffers (M3/w18).
+        writePointSpotLightBuffers(internals, pipelineState, lights);
 
-      // Per-renderable entity_world upload (batched): all N mat4+normalMatrix
-      // slots assembled into a single contiguous scratch buffer, then flushed
-      // as one writeBuffer call. Extracted to mesh-ssbo.ts (M3/w21) so its
-      // module-scoped scratch buffer co-locates with the other mesh-SSBO lets.
-      uploadMeshSsboBatch(
-        internals.device.queue,
-        pipelineState.meshStorageBuffer,
-        validatedOrdered,
-        foldDispatchPlan,
-      );
+        // Per-renderable entity_world upload (batched): all N mat4+normalMatrix
+        // slots assembled into a single contiguous scratch buffer, then flushed
+        // as one writeBuffer call. Extracted to mesh-ssbo.ts (M3/w21) so its
+        // module-scoped scratch buffer co-locates with the other mesh-SSBO lets.
+        uploadMeshSsboBatch(
+          internals.device.queue,
+          pipelineState.meshStorageBuffer,
+          validatedOrdered,
+          foldDispatchPlan,
+        );
+      });
     }
 
     const encoderResult = internals.device.createCommandEncoder({ label: 'render-system-frame' });
@@ -482,13 +530,16 @@ export function recordFrame(
     // Per-frame bind group cache resolution (view / mesh / HDRP-cluster).
     // Extracted to buildPerFrameBindGroups (M3/w18) so recordFrame stays a
     // skeleton; returns null groups on the Case E (0-validated) path.
-    const { viewBindGroup, meshBindGroup, hdrpClusterBindGroup } = buildPerFrameBindGroups(
-      internals,
-      frameState,
-      pipelineState,
-      validated.length > 0,
-      bindGroupCounts,
-    );
+    const { viewBindGroup, meshBindGroup, hdrpClusterBindGroup, hdrpClusterMembershipBindGroup } =
+      runRecordProfilePhase(profilePhase, 'record/bind-groups', () =>
+        buildPerFrameBindGroups(
+          internals,
+          frameState,
+          pipelineState,
+          validated.length > 0,
+          bindGroupCounts,
+        ),
+      );
 
     // ── feat-20260529-rendergraph-pass-abstraction M4 / w13b ───────────
     // Declarative render-graph drives the per-frame passes. The graph
@@ -544,9 +595,12 @@ export function recordFrame(
       postProcessParams,
       dispatch: transparentDispatch,
       hdrpClusterBindGroup,
+      hdrpClusterMembershipBindGroup,
       foldDispatchPlan,
       materialSlotStart,
       materialSlotCount,
+      materialBgAssemblyCache: new Map<number, BindGroup>(),
+      ...(profilePhase !== undefined ? { profilePhase } : {}),
     };
     // feat-20260601 M2 / w12 (D-B): the per-frame projected snapshot handed to
     // `buildGraph` as the second argument. Cross-frame-stable deps live on ctx;
@@ -580,7 +634,9 @@ export function recordFrame(
     // Build (memoized) + execute the per-frame graph, then finish + submit the
     // shared encoder + reclaim retired transients. Extracted to
     // executeFrameGraph (M3/w18).
-    return executeFrameGraph(internals, frameState, passCtx, passData, encoder);
+    return runRecordProfilePhase(profilePhase, 'record/graph-execute', () =>
+      executeFrameGraph(internals, frameState, passCtx, passData, encoder, profilePhase),
+    );
   } finally {
     frameState.frameNumber += 1;
     // feat-20260608-cluster-lighting M5 / w22: clear HDRP once-per-frame fired
@@ -663,7 +719,7 @@ function validateRenderables(
       continue;
     }
     // feat-20260601-gpu-resource-store-extraction M1 (D-1): builtin meshes
-    // (ids 1-4: CUBE/TRIANGLE/QUAD/SPHERE) keep the createRenderer step-3
+    // (slots through HANDLE_NINESLICE_QUAD) keep the createRenderer step-3
     // direct-upload + `pipelineState.meshes` path -- they are NOT routed
     // through `ensureResident`. User-registered meshes pull through the store
     // on first access (the register->upload push was severed in this M1);
@@ -672,7 +728,7 @@ function validateRenderables(
     // frames hit the O(1) cache.
     const meshAssetHandle = toShared<'MeshAsset'>(r.assetHandle);
     let meshHandles = internals.gpuStore.getMeshGpuHandles(meshAssetHandle, r.worldId);
-    if (meshHandles === undefined && r.assetHandle > BUILTIN_MESH_ID_MAX) {
+    if (meshHandles === undefined && r.assetHandle > handleSlot(HANDLE_NINESLICE_QUAD)) {
       const residentRes = internals.gpuStore.ensureResident(
         meshAssetHandle,
         assetRes.value,
@@ -728,7 +784,7 @@ function validateRenderables(
         slicesArr.length >= 4 &&
         (slicesArr[0] !== 0 || slicesArr[1] !== 0 || slicesArr[2] !== 0 || slicesArr[3] !== 0)
       ) {
-        const nineSliceHandles = pipelineState.meshes.get(NINESLICE_QUAD_RAW_ID);
+        const nineSliceHandles = pipelineState.meshes.get(handleSlot(HANDLE_NINESLICE_QUAD));
         if (nineSliceHandles !== undefined) {
           effectiveMeshHandles = nineSliceHandles;
         }

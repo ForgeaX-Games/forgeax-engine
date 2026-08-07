@@ -9,7 +9,7 @@ export interface ReplicationLimits {
   readonly maxBufferBytes: number;
   readonly maxArrayElements: number;
 }
-const DEFAULT_LIMITS: ReplicationLimits = {
+export const DEFAULT_REPLICATION_LIMITS: ReplicationLimits = {
   maxMessageBytes: 64 * 1024,
   maxEntities: 1024,
   maxComponentOperations: 4096,
@@ -90,7 +90,7 @@ export function defineReplication(
       }),
     );
   }
-  const limits: ReplicationLimits = { ...DEFAULT_LIMITS, ...options.limits };
+  const limits: ReplicationLimits = { ...DEFAULT_REPLICATION_LIMITS, ...options.limits };
   const signature = JSON.stringify({
     name: options.name,
     query: {

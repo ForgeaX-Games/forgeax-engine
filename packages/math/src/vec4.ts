@@ -17,7 +17,7 @@
 //          wiki/gl-matrix-overview Out-param four ironclad rules.
 
 import { EPS_NORMALIZE } from './_internal/epsilon';
-import { lerp as scalarLerp, smoothDecayFactor } from './_internal/scalar';
+import { lengthSq4, normalize4, lerp as scalarLerp, smoothDecayFactor } from './_internal/scalar';
 import type { Vec4, Vec4Like } from './types';
 
 /** Create a Vec4 (zero vector by default). */
@@ -144,20 +144,12 @@ export function dot(a: Vec4Like, b: Vec4Like): number {
 
 /** Squared length |a|² (avoids sqrt overhead). */
 export function lengthSq(a: Vec4Like): number {
-  const x = a[0] as number;
-  const y = a[1] as number;
-  const z = a[2] as number;
-  const w = a[3] as number;
-  return x * x + y * y + z * z + w * w;
+  return lengthSq4(a);
 }
 
 /** Euclidean length |a|. */
 export function length(a: Vec4Like): number {
-  const x = a[0] as number;
-  const y = a[1] as number;
-  const z = a[2] as number;
-  const w = a[3] as number;
-  return Math.sqrt(x * x + y * y + z * z + w * w);
+  return Math.sqrt(lengthSq4(a));
 }
 
 /** Distance between two points |a - b|. */
@@ -186,23 +178,7 @@ export function distance(a: Vec4Like, b: Vec4Like): number {
  * ```
  */
 export function normalize(out: Vec4, a: Vec4Like): Vec4 {
-  const x = a[0] as number;
-  const y = a[1] as number;
-  const z = a[2] as number;
-  const w = a[3] as number;
-  const lenSq = x * x + y * y + z * z + w * w;
-  if (lenSq < EPS_NORMALIZE) {
-    out[0] = 0;
-    out[1] = 0;
-    out[2] = 0;
-    out[3] = 0;
-    return out;
-  }
-  const inv = 1 / Math.sqrt(lenSq);
-  out[0] = x * inv;
-  out[1] = y * inv;
-  out[2] = z * inv;
-  out[3] = w * inv;
+  normalize4(out, a, EPS_NORMALIZE);
   return out;
 }
 

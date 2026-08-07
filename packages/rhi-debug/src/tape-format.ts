@@ -32,6 +32,8 @@ import type {
   RhiCallEventCreatePipelineLayout,
   RhiCallEventCreateRenderPipeline,
   RhiCallEventCreateTextureView,
+  RhiCallEventDestroyBuffer,
+  RhiCallEventDestroyTexture,
   RhiCallEventDispatchWorkgroups,
   RhiCallEventDraw,
   RhiCallEventDrawIndexed,
@@ -53,15 +55,14 @@ import type {
   Tape,
 } from './types';
 
-export const TAPE_FORMAT_VERSION = 3 as const;
+export const TAPE_FORMAT_VERSION = 4 as const;
 
 /**
  * Set of tape format versions accepted by this runtime's deserializer.
- * v2 tapes (with initialData events, without new v3 event kinds) are
- * accepted via backward-compat; new v3 events are naturally absent in
- * v2 data (D-9). serialize always writes `formatVersion = TAPE_FORMAT_VERSION` (3).
+ * v2/v3 tapes are accepted via backward-compat; destroy events are naturally
+ * absent in older data. serialize always writes `formatVersion = TAPE_FORMAT_VERSION` (4).
  */
-export const SUPPORTED_TAPE_VERSIONS = new Set<number>([2, 3]);
+export const SUPPORTED_TAPE_VERSIONS = new Set<number>([2, 3, 4]);
 
 // ============================================================================
 // Local Result factories (mirrors recorder.ts pattern)
@@ -309,6 +310,9 @@ function collectDeclaredHandleIds(event: RhiCallEvent, declared: Set<HandleId>):
     case 'createShaderModule':
       declared.add((event as RhiCallEventCreateBuffer).handleId);
       break;
+    case 'destroyBuffer':
+    case 'destroyTexture':
+      break;
     case 'createBindGroup':
       declared.add((event as RhiCallEventCreateBindGroup).handleId);
       break;
@@ -500,6 +504,16 @@ function findDanglingHandleId(event: RhiCallEvent, declared: Set<HandleId>): Han
     }
     case 'initialData': {
       const e = event as RhiCallEventInitialData;
+      if (!declared.has(e.handleId)) return e.handleId;
+      return null;
+    }
+    case 'destroyBuffer': {
+      const e = event as RhiCallEventDestroyBuffer;
+      if (!declared.has(e.handleId)) return e.handleId;
+      return null;
+    }
+    case 'destroyTexture': {
+      const e = event as RhiCallEventDestroyTexture;
       if (!declared.has(e.handleId)) return e.handleId;
       return null;
     }

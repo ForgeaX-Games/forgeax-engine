@@ -5,7 +5,7 @@
     {
       "guid": "019e7535-5e5e-45fe-a328-0b08e3a72747",
       "kind": "material",
-      "sourceKey": "../src/hit-flash.wgsl",
+      "sourceKey": "shaders/hit-flash.wgsl",
       "payload": {
         "kind": "material",
         "passes": [

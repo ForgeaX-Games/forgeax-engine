@@ -1,5 +1,7 @@
 import type { EndpointEvent } from '@forgeax/engine-net';
 
+export const DEFAULT_MAX_QUEUED_EVENTS = 1024;
+
 export class BoundedEventQueue {
   readonly #events: EndpointEvent[] = [];
   #closed = false;

@@ -6,7 +6,7 @@ Pure-function SoA-friendly Vec / Mat / Quat / Color / Euler math library for for
 ## 30-second self-introduction
 
 - **ABI**: `Float32Array & { readonly __<dim>: void }` 七件套（`Vec2 / Vec3 / Vec4 / Quat / Mat3 / Mat4 / Color`）+ `Euler` plain-object；branded 维度互斥（编译期）+ TypedArray 即时上传 GPU（运行期）。
-- **Surface**: 15 namespace × 168 函数（vec2:20 / vec3:21 / vec4:18 / mat3:10 / mat4:33 / quat:23 / euler:6 / color:6 / easing:4 / noise:1 / frustum:4 / ray:9 / box3:7 / sphere:5 / f32-to-f16-bytes:1）；单 entry `import { Vec3, vec3, ... } from '@forgeax/engine-math'`。
+- **Surface**: 18 namespace × 202 函数（vec2:20 / vec3:21 / vec4:18 / mat3:10 / mat4:33 / quat:23 / euler:6 / color:6 / easing:4 / noise:1 / frustum:4 / ray:9 / ray2:11 / box2:13 / box3:7 / circle2:10 / sphere:5 / f32-to-f16-bytes:1）；单 entry `import { Vec3, vec3, ... } from '@forgeax/engine-math'`。
 - **Style**: gl-matrix / wgpu-matrix 风纯函数 namespace + out-param-first（`func(out, ...args)`）；零分配；aliasing-safe（`add(v, v, v)` 合法）。
 - **Errors**: 全库静默回退（不抛错、不返回 `null`、不返回 `Result`、不 `console.warn`）；退化语义靠 JSDoc `@degrade` + 本 README §退化策略表 + `*.test-d.ts` 三层共担。
 
@@ -33,7 +33,7 @@ vec3.normalize(v, vec3.create(0, 0, 0));          // v = (0, 0, 0)
 
 > 上述代码覆盖 v0.1 PBR 渲染管线 90% 的典型 transform / projection / shader-uniform 准备路径——LLM 一次扫读即可拿到 "概念→签名→典型流程" 完整闭包（charter 命题 1）。
 
-## quick-ref：15 namespace × 168 函数
+## quick-ref：18 namespace × 202 函数
 
 每 namespace 内函数顺序粗略按 "构造 → 比较 → 算术 → 几何 → 高级" 分组。完整签名以 `.d.ts` JSDoc 为 SSOT。
 
@@ -51,7 +51,10 @@ vec3.normalize(v, vec3.create(0, 0, 0));          // v = (0, 0, 0)
 | **`noise`** (1) | `perlin1d` — 1D Perlin noise returning [-1,1]. Deterministic, smooth (nearby inputs → nearby outputs); canonical permutation table matching Bevy's `2d_screen_shake`. Growable home for 2D/3D/Simplex variants |
 | **`frustum`** (4) | `create / fromViewProjection / intersectsBox / intersectsSphere` |
 | **`ray`** (9) | `create / getOrigin / getDirection / setOrigin / setDirection / rayAabbIntersects / screenToRay / worldToScreen / rayTriangleIntersects` |
+| **`ray2`** (11) | `create / getOrigin / getDirection / getMaxDistance / setOrigin / setDirection / setMaxDistance / rayAabbIntersects / rayCircleIntersects / aabbCastIntersects / circleCastIntersects` |
+| **`box2`** (13) | `create / fromCenter / fromPoints / center / halfSize / closestPoint / containsPoint / containsBox / intersectsBox / intersectsCircle / merge / grow / shrink` |
 | **`box3`** (7) | `create / expandByPoint / containsPoint / intersectsBox / fromPoints / fromPositions / transformBox3` |
+| **`circle2`** (10) | `create / fromPoints / toBox / center / radius / closestPoint / containsPoint / intersectsCircle / intersectsBox / merge` |
 | **`sphere`** (5) | `create / expandByPoint / containsPoint / intersectsBox / fromPoints` |
 | **`f32-to-f16-bytes`** (1) | `f32ToF16Bytes` |
 
@@ -120,6 +123,37 @@ if (tri.hit) { /* intersection at origin + tri.t * dir */ }
 const res = ray.worldToScreen(pixelOut, worldPos, viewProj, canvasW, canvasH);
 if (!res.behind) { /* pixelOut holds screen-space (x,y) */ }
 ```
+
+## 2D bounding volumes (`box2` / `circle2` / `ray2`)
+
+The P12 `bounding_2d` surface maps Bevy's `Aabb2d` and `BoundingCircle` to the
+same branded `Float32Array` + out-param idiom as the existing 3D `box3` and
+`sphere` namespaces. `box2` stores `[minX, minY, maxX, maxY]`; `circle2` stores
+`[centerX, centerY, radius]`; empty point clouds use the same inverted-box or
+negative-radius sentinels as their 3D counterparts.
+
+```ts
+import { box2, circle2, ray2, vec2 } from '@forgeax/engine-math';
+
+const aabb = box2.fromCenter(box2.create(), [0, 0], [20, 20]);
+const circle = circle2.create(35, 0, 12);
+const ray = ray2.create(undefined, [-80, 0], [1, 0], 200);
+
+const aabbHit = ray2.rayAabbIntersects(ray, aabb);       // { hit, t }
+const circleHit = ray2.rayCircleIntersects(ray, circle); // { hit, t }
+const moving = box2.create();
+box2.fromCenter(moving, [0, 0], [8, 8]);
+const sweepHit = ray2.aabbCastIntersects(ray, moving, aabb);
+
+const center = vec2.create();
+box2.center(center, aabb);
+```
+
+`ray2.create` normalizes its direction and carries a finite `maxDistance` (the
+default is `Infinity`). `ray2.aabbCastIntersects` and
+`ray2.circleCastIntersects` use the Minkowski-sum reduction, so a moving volume
+is tested without allocating a temporary volume. All boundary contacts are
+inclusive; a ray that starts inside a volume returns `{ hit: true, t: 0 }`.
 
 ### 跨类型 transform 4 函数（M1 落地，K-1/K-2 撕毁 Three.js 风承诺后由 mat4 / quat 反向 surface 提供）
 
@@ -221,7 +255,7 @@ const projReverseZ = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 16 / 9
 
 | 版本 | 范围 |
 |:--|:--|
-| **v0.0 (本闭环)** | 15 namespace × 168 函数（含 mat4 / quat 反向 surface 跨类型 transform 4 函数，以及 easing 标量缓动 + noise 1D Perlin）；branded ABI；3 档 NDC 投影；M1-M6 全 19 AC pass |
+| **v0.0 (本闭环)** | 18 namespace × 202 函数（含 mat4 / quat 反向 surface 跨类型 transform 4 函数、2D bounds/raycast/cast，以及 easing 标量缓动 + noise 1D Perlin）；branded ABI；3 档 NDC 投影；M1-M6 全 19 AC pass |
 | v0.1 (PBR 闭环) | `mat3.fromMat4Scale` 法线矩阵优化路径；`Color.linearToSRGB` GPU 上传专用变体；高级 PBR 工具 |
 | v0.2 (动画闭环) | `quat.squad` Catmull-Rom 球面插值；`euler.lookAt` 自然映射；动画系统消费方向定 |
 | v1.0 (稳定 ABI) | 不再 breaking ABI；coverage 阈值不退步；`@forgeax/engine-math` 正式 `npm publish` |

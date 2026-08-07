@@ -23,6 +23,7 @@ export type {
 import type { FrameModel, FrameModelMeta } from '@forgeax/engine-rhi-debug/frame-model';
 
 export { buildFrameModel as buildViewModel } from '@forgeax/engine-rhi-debug/frame-model';
+export { buildResourceLifecycle } from '@forgeax/engine-rhi-debug/resource-lifecycle';
 
 /** The viewer's name for the shared {@link FrameModel}. */
 export type ViewModel = FrameModel;

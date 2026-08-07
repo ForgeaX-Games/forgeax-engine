@@ -14,10 +14,16 @@
 // consumers reach them only via the explicit
 // `@forgeax/engine-rhi-debug/capture-browser` subpath.
 //
-// Related: requirements AC-10; plan-strategy D-7/D-8; OOS-8 (v1 single-frame).
+// Related: requirements AC-10; plan-strategy D-7/D-8.
 
+import { RHI_DEBUG_DEV_ROUTES } from './dev-routes';
 import { DebugError, type SnapshotTimeoutDetail } from './errors';
-import { finalizeToMemory, SNAPSHOT_TIMEOUT_MS, waitForRecorderIdle } from './recorder-core';
+import {
+  captureIdleTimeoutMs,
+  finalizeToMemory,
+  SNAPSHOT_TIMEOUT_MS,
+  waitForRecorderIdle,
+} from './recorder-core';
 import type { PassOffset } from './tape-format';
 
 /**
@@ -92,8 +98,6 @@ export interface UploadTapeResult {
   readonly reportPath: string;
 }
 
-const TAPE_ROUTE = '/__forgeax-debug/tape';
-
 /**
  * Capture `frames` frames into an in-memory tape (zero fs, zero network).
  *
@@ -101,8 +105,7 @@ const TAPE_ROUTE = '/__forgeax-debug/tape';
  * for the host rAF loop to drive it back to idle, then finalize entirely in
  * memory. The caller uploads the result via `uploadTape`.
  *
- * OOS-8: v1 finalizes a single-frame tape; `frames` is accepted for forward
- * compatibility but the dev-server endpoint writes one tape file regardless.
+ * The dev-server writes one tape file containing all requested frame marks.
  */
 export async function captureFramesToMemory(
   debugInst: CaptureBrowserRecorder,
@@ -142,7 +145,7 @@ export async function captureFramesToMemory(
     throw error;
   }
 
-  await waitForRecorderIdle(debugInst, 30_000);
+  await waitForRecorderIdle(debugInst, captureIdleTimeoutMs(frames));
 
   const finalizeResult = finalizeToMemory(debugInst);
   if (!finalizeResult.ok) {
@@ -191,7 +194,7 @@ export async function uploadTape(
     passOffsets: tape.passOffsets,
     valid: tape.valid,
   };
-  const response = await fetch(TAPE_ROUTE, {
+  const response = await fetch(RHI_DEBUG_DEV_ROUTES.tape, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

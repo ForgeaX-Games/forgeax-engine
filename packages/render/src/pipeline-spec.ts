@@ -28,6 +28,7 @@ import {
   type PrimitiveTopology,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
+import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from './gpu-stage';
 import { createHdrpBindGroupLayoutDescriptor } from './hdrp-buffers';
 import {
   appendInjection,
@@ -38,6 +39,26 @@ import {
 
 // Re-export KNOWN_PASS_KINDS from @forgeax/engine-types for single-file discoverability (charter F1).
 export { KNOWN_PASS_KINDS };
+
+/**
+ * The engine-owned deferred material target layout. `fs_gbuffer` returns
+ * normal+roughness, albedo+metallic, and emissive+AO in this order.
+ */
+export const DEFERRED_COLOR_FORMATS: readonly GPUTextureFormat[] = [
+  'rgba16float',
+  'rgba8unorm',
+  'rgba16float',
+];
+
+/** Derive the color attachment shape for a material pass kind. */
+export function colorFormatsForPassKind(
+  passKind: string,
+  defaultColorFormat: GPUTextureFormat,
+): readonly GPUTextureFormat[] {
+  if (passKind === 'shadow-caster') return [];
+  if (passKind === 'deferred') return DEFERRED_COLOR_FORMATS;
+  return [defaultColorFormat];
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PipelineSpec — immutable 4-axis data description (D-7: business-agnostic)
@@ -502,11 +523,6 @@ export interface BindGroupLayoutDescriptorOutput {
   readonly entries: GPUBindGroupLayoutEntry[];
 }
 
-// WebGPU shader-stage flags — mirrors pbr-pipeline.ts constants. Re-declared
-// here so the dispatcher does not import bit-flag literals from a sibling
-// module (charter F1: pipeline-spec.ts is the SSOT for the dispatcher).
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
-
 /**
  * Build a `GPUBindGroupLayoutDescriptor` from a PipelineSpec, dispatching on
  * `options.kind` to one of 9 closed BGL shapes (D-13 round-2).
@@ -597,7 +613,7 @@ export function buildBindGroupLayoutDescriptor(
         entries: [
           {
             binding: 0,
-            visibility: 0x1 | 0x2,
+            visibility: GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
         ],
@@ -613,7 +629,7 @@ export function buildBindGroupLayoutDescriptor(
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
             buffer: { type: meshBufType, hasDynamicOffset: false },
           },
         ],
@@ -629,12 +645,12 @@ export function buildBindGroupLayoutDescriptor(
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
           {
             binding: 1,
-            visibility: 0x1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
         ],
@@ -852,19 +868,20 @@ export interface PassKindAttachmentPolicy {
 }
 
 /**
- * Closed map of passKind → attachment policy. Covers the 9 attachment shapes
+ * Closed map of passKind → attachment policy. Covers the 10 attachment shapes
  * the runtime ships (per plan-strategy M4):
  *
  * 1. `'forward'` — main geometry pass: color+depth(+stencil-gated)
- * 2. `'shadow-caster'` — directional shadow caster: depth-only
- * 3. `'point-shadow-caster'` — HDRP point-shadow caster: depth-only
- * 4. `'skybox'` — fullscreen skybox: color-only clear/store
- * 5. `'tonemap'` — HDR→LDR tonemap fullscreen: color-only clear/store
- * 6. `'bloom-bright'` / `'bloom-blur'` — bloom downsample/blur: color-only
+ * 2. `'deferred'` — HDRP G-Buffer geometry pass: MRT color+depth
+ * 3. `'shadow-caster'` — directional shadow caster: depth-only
+ * 4. `'point-shadow-caster'` — HDRP point-shadow caster: depth-only
+ * 5. `'skybox'` — fullscreen skybox: color-only clear/store
+ * 6. `'tonemap'` — HDR→LDR tonemap fullscreen: color-only clear/store
+ * 7. `'bloom-bright'` / `'bloom-blur'` — bloom downsample/blur: color-only
  *    clear/store
- * 7. `'bloom-composite'` — bloom add-back: color-only load/store (NOT clear)
- * 8. `'fxaa'` — fullscreen FXAA: color-only clear/store
- * 9. `'post-process'` — generic fullscreen primitive (SSAO, render-graph
+ * 8. `'bloom-composite'` — bloom add-back: color-only load/store (NOT clear)
+ * 9. `'fxaa'` — fullscreen FXAA: color-only clear/store
+ * 10. `'post-process'` — generic fullscreen primitive (SSAO, render-graph
  *    fullscreen-post-process-pass dispatcher, M2 tonemap pre-warm slot):
  *    color-only clear/store
  *
@@ -882,6 +899,15 @@ export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPoli
       loadOp: 'clear',
       storeOp: 'store',
       clearValue: { r: 0, g: 0, b: 0, a: 1 },
+    },
+    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 1 },
+  },
+  deferred: {
+    shape: 'color-and-depth',
+    defaultColorOps: {
+      loadOp: 'clear',
+      storeOp: 'store',
+      clearValue: { r: 0, g: 0, b: 0, a: 0 },
     },
     defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 1 },
   },

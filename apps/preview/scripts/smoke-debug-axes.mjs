@@ -70,10 +70,10 @@ writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, nu
 try {
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (report.consoleErrors.length > 0) throw new Error(`console errors: ${report.consoleErrors.join(' | ')}`);
-  if (!beforeReset.enabled || !beforeReset.available || beforeReset.axesCalls < beforeReset.liveTargets) {
+  if (!beforeReset.enabled || !beforeReset.available || beforeReset.axesCalls < beforeReset.liveTargets || beforeReset.aabbCalls < beforeReset.liveTargets || beforeReset.frustumCalls < 1 || !beforeReset.cameraReady) {
     throw new Error(`axes overlay did not draw live targets: ${JSON.stringify({ beforeReset })}`);
   }
-  if (afterReset.resetCount < 1 || afterReset.axesCalls < afterReset.liveTargets) {
+  if (afterReset.resetCount < 1 || afterReset.axesCalls < afterReset.liveTargets || afterReset.aabbCalls < afterReset.liveTargets || afterReset.frustumCalls < 1) {
     throw new Error(`axes overlay did not recover after reset: ${JSON.stringify({ afterReset })}`);
   }
   console.log(`[debug-axes] PASS enabled=${beforeReset.enabled} calls=${beforeReset.axesCalls} resetCount=${afterReset.resetCount} recoveredCalls=${afterReset.axesCalls}`);

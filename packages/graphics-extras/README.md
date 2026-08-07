@@ -4,7 +4,8 @@ Pure-logic modules for text glyph layout, tilemap bit encoding, and video
 playback. System entry points (`tilemapChunkExtractSystem`,
 `glyphTextLayoutSystem`) remain in `@forgeax/engine-runtime` -- see the package
 boundary declaration below. A **near-leaf** package: depends only on
-`@forgeax/engine-ecs` (`defineComponent` / `EntityHandle`), `@forgeax/engine-rhi`
+`@forgeax/engine-ecs` (`defineComponent` / `EntityHandle`),
+`@forgeax/engine-geometry` (`PROCEDURAL_FLOATS_PER_VERTEX`), `@forgeax/engine-rhi`
 (`Result`), and `@forgeax/engine-types` (`FontAsset` / `MeshAsset` / `Loader` /
 `Handle` / `VideoAsset`). It never imports the renderer or `@forgeax/engine-runtime`
 (AC-301: zero back-reference to runtime).
@@ -13,8 +14,9 @@ boundary declaration below. A **near-leaf** package: depends only on
 
 - **Surface**: three pure-logic clusters extracted from runtime (Tier 2.3):
   - **glyph** -- `layoutGlyphText` / `bakeGlyphMesh` / `buildGlyphMeshAsset` +
-    the layout POD types (`GlyphLayoutResult` / `GlyphMeshBakeResult`), stride
-    constants (`FloatsPerGlyphVertex` / `VERTEX_OFFSET`), and the per-frame
+    the layout POD types (`GlyphLayoutResult` / `GlyphMeshBakeResult`), the
+    shared geometry stride owner (`PROCEDURAL_FLOATS_PER_VERTEX`) and local
+    offsets (`VERTEX_OFFSET`), plus the per-frame
     font-concurrency tracker (`FONT_CONCURRENCY_LIMIT` / `resetFontConcurrency` /
     `trackFontConcurrency`) + `conservativeCubeAabb`.
   - **tile-bits** -- `encodeTileBits` / `decodeTileBits`, the packed-tile bit
@@ -117,7 +119,8 @@ axiom declaration; this package does not overstate the slimming it delivers).
 | `buildGlyphMeshAsset(layout)` | function | `MeshAsset` builder used by `bakeGlyphMesh` |
 | `conservativeCubeAabb(radius)` | function | `Float32Array` local AABB helper |
 | `GlyphLayoutResult` / `GlyphMeshBakeResult` | interface | layout / bake POD result types |
-| `FloatsPerGlyphVertex` (12) / `VERTEX_OFFSET` | const | interleaved vertex stride SSOT |
+| `PROCEDURAL_FLOATS_PER_VERTEX` | const | shared interleaved vertex stride SSOT from `@forgeax/engine-geometry` |
+| `VERTEX_OFFSET` | const | glyph-local offsets within the shared vertex layout |
 | `FONT_CONCURRENCY_LIMIT` (8) | const | per-frame distinct-font cap |
 | `resetFontConcurrency()` / `trackFontConcurrency(fontId)` | function | per-frame font-concurrency tracker |
 

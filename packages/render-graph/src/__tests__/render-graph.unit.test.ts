@@ -224,6 +224,33 @@ import { RenderGraph } from '../graph.js';
   }
 
   describe('w14: per-frame 4-pass graph barrier + encoder semantics', () => {
+    it('executes compiled pass closures in topological order', () => {
+      const calls: string[] = [];
+      const g = new RenderGraph<{ readonly frame: number }>();
+      g.addResource('X', { kind: 'texture', lifetime: 'transient' });
+      g.addPass('consumer', {
+        reads: ['X'],
+        writes: [],
+        execute: () => calls.push('consumer'),
+      });
+      g.addPass('producer', {
+        reads: [],
+        writes: ['X'],
+        execute: () => calls.push('producer'),
+      });
+
+      const compiled = g.compile({ backendKind: 'webgpu', caps: mockCaps() });
+      expect(compiled.ok).toBe(true);
+      const executedPasses: string[] = [];
+      g.execute({ frame: 1 }, (name, run) => {
+        executedPasses.push(name);
+        run();
+      });
+
+      expect(calls).toEqual(['producer', 'consumer']);
+      expect(executedPasses).toEqual(['producer', 'consumer']);
+    });
+
     it('wgpu-native plans an explicit barrier for the shadow -> main hazard', () => {
       const r = buildPerFrameGraph().compile({
         backendKind: 'wgpu-native',

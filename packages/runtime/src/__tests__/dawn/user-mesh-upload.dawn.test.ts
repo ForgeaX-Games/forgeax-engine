@@ -23,9 +23,8 @@
 // readback ε ≤ 0.05); this dawn-tier gate isolates the host-side derivation
 // + GPU-resource accounting that feeds the record stage.
 
-import { BUILTIN_FLOATS_PER_VERTEX } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { createBoxGeometry } from '@forgeax/engine-geometry';
+import { createBoxGeometry, PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { mat4 } from '@forgeax/engine-math';
 import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
@@ -190,11 +189,11 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       // Each register produces a distinct vbo (no accidental reuse).
       expect(seenVbos.size).toBe(16);
 
-      // Sanity ping: BUILTIN_FLOATS_PER_VERTEX is referenced so import
+      // Sanity ping: the canonical geometry stride is referenced so import
       // chain stays live (biome no-unused-imports gate). mat4 /
       // MaterialAsset references retained for type-only hint at
       // the record-stage consumer side (next milestone).
-      expect(BUILTIN_FLOATS_PER_VERTEX).toBe(12);
+      expect(PROCEDURAL_FLOATS_PER_VERTEX).toBe(12);
       const _matType: Float32Array = mat4.create();
       void _matType;
       const _matAsset: MaterialAsset | undefined = undefined;

@@ -18,7 +18,7 @@ Enable via `FORGEAX_ENGINE_RHI_DEBUG=1`. When unset, the entire package is tree-
 
 ### Layered progressive disclosure (L0 / L1 / L2a / L2c / L3a / L3b / L3c)
 
-The browser-to-CLI loop is: **one line in the browser console to capture a frame -> one line in the CLI to inspect it offline**. Seven layers (three added in PR3 for browser-side inspect without CLI), each usable on its own; the `tapePath` returned at L2a / L2c is the first argument the L3a CLI consumes. L3b and L3c run entirely in the browser -- no Node, no CLI, no dev-server round-trip for inspection.
+The browser-to-CLI loop is: **one line in the browser console to capture one or more frames -> one line in the CLI to inspect them offline**. Seven layers (three added in PR3 for browser-side inspect without CLI), each usable on its own; the `tapePath` returned at L2a / L2c is the first argument the L3a CLI consumes. L3b and L3c run entirely in the browser -- no Node, no CLI, no dev-server round-trip for inspection.
 
 | layer | surface | entry | output |
 |:--|:--|:--|:--|
@@ -29,7 +29,7 @@ The browser-to-CLI loop is: **one line in the browser console to capture a frame
 | **L3a** | offline CLI inspect | `forgeax-rhi-debug inspect-offline <tapePath> <drawIdx> [--fields=...]` | structured InspectReport JSON (bindings / drawCall / **pipelineState**) + RT PNG path |
 | **L3b** | browser per-draw JSON | `@forgeax/engine-rhi-debug/inspect-core` -> `inspectDrawJson(replay, idx, events, device, fields?)` | structured `InspectReport` (bindings + drawCall + pipelineState, no PNG path) |
 | **L3c** | browser RT to canvas | `@forgeax/engine-rhi-debug/rt-to-canvas` -> `renderRtToCanvas(replay, idx, device, canvas)` | RT pixels rendered onto external canvas (no fs/pngjs) |
-| **L3e** | whole-frame model | `forgeax-rhi-debug summary <tapePath>` (CLI) or `@forgeax/engine-rhi-debug/frame-model` -> `buildFrameModel(tape)` (pure, no GPU) | `FrameModel { meta, tree, draws[] (each with pipelineState), commands, resources }` -- the same model the RHI debug viewer (L3d) renders; the AI inspects the whole frame with the same operation the UI exposes |
+| **L3e** | whole-frame model | `forgeax-rhi-debug summary <tapePath>` (CLI) or `@forgeax/engine-rhi-debug/frame-model` -> `buildFrameModel(tape)` (pure, no GPU) | `FrameModel { meta, tree, draws[] (each with pipelineState), commands, resources }` -- the same model the RHI debug viewer (L3d) renders; the AI inspects the whole frame with the same operation the UI exposes. `summary <tapePath> --lifecycle-only` is the bounded long-tape attribution form. |
 
 L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `finalize()` tail both route through the single `assembleReport` writer, so a browser-captured tape and a Node-captured tape are indistinguishable on disk (D-3 / AC-05). L2a and L2c chain straight into L3a -- the `tapePath` they return is the first positional argument of `inspect-offline`. L2a is the Node-side equivalent of L2c: an AI user runs one CLI command instead of switching to the browser DevTools console to type `window.__forgeax.captureFrame(n)`.
 
@@ -45,7 +45,7 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 | `snapshotResource` | `(handleId: HandleId): Promise<Result<{handleId, dataHash}, DebugError>>` | Snapshot a resource's GPU bytes into the tape as an `initialData` event. Reads the resource descriptor from the internal registry, copies bytes via copyToBuffer/mapAsync, stores them in the blobPool with djb2 hash-dedup, and pushes an `RhiCallEventInitialData` into the event stream. Returns `snapshot-readback-failed` on any readback/storeBlob failure. Async because the GPU readback chain (copyToBuffer -> submit -> onSubmittedWorkDone -> mapAsync) is inherently asynchronous. |
 | `snapshotAllLiveResources` | `(timeoutMs = 30000): Promise<Result<void, DebugError>>` | Frame-header snapshot entry point: awaits all submitted GPU work (`onSubmittedWorkDone`), then iterates the live descriptor registry full-table, calling `snapshotResource` on every entry. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed (architecture section 5). A stalled GPU readback returns `snapshot-timeout`, invalidates the async snapshot generation, and enters `error`. This is the function AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
 | `wrapCreateShaderModule` | `(originalFn: CreateShaderModuleFn, debugInst: DebugRhiInstance): CreateShaderModuleFn` | Standalone wrapper for `createShaderModule` (which is not on `RhiDevice` in rhi-webgpu). Records `createShaderModule` events in the tape. |
-| `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
+| `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`; the structural `rhi-null` backend accepts compression formats without claiming compression hardware). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
 | `replay.commitThroughDraw` | `(drawIdx: number): Promise<Result<{committed: boolean}, DebugError>>` | **Per-draw cumulative RT.** Replays up to & including global draw #`drawIdx`, then synthesizes `endRenderPass` + `finish` + `submit` on the enclosing pass so its color attachment holds the **draws-0..N cumulative** pixels (selecting draw N shows the frame as it stood right after N, not the final composite). After `{committed:true}`, `readbackDrawRt(drawIdx)` / `inspectDrawJson(..., ['rt'])` read those pixels. `{committed:false}` = the draw is in a depth-only render pass or a compute pass (no color RT — render a "no-rt" state). Monotonic-forward like `stepTo`: `reset()` before re-targeting an earlier draw. Out-of-range/non-monotonic → `replay-step-out-of-range`. Use this (not `stepTo(end)`) whenever inspecting a *specific* draw; use `stepTo(events.length-1)` only for the whole composited frame. |
 | `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. Step the replay with `commitThroughDraw(drawIdx)` first for per-draw pixels (the CLI `inspect-at` path does this). |
 | `debugAdapter` | eval scope live root | `debugAdapter` is directly available inside `@forgeax/engine-remote` eval scope (no Registry wiring needed — `createApp` auto-injects it alongside `world`, `renderer`, `assets`). The live adapter uses `await debugAdapter.captureFrames(frames, label?)`, returning `{ tapes: [{ tapePath, reportPath, runId, frameIdx }] }`; Dawn/Node adapters additionally expose `await debugAdapter.inspectAt(tapePath, drawIdx, fields?)`. Browser capture uses `window.__forgeax.captureFrame(frames)` and the returned tape goes through offline `inspect-offline`. |
@@ -56,11 +56,17 @@ Node-free L0 entry, reached only via the explicit `/capture-browser` subpath -- 
 
 | export | signature | description |
 |:--|:--|:--|
-| `captureFramesToMemory` | `(debugInst: CaptureBrowserRecorder, frames: number, label?: string): Promise<CaptureBrowserTape>` | Drive a live recorder through `arm -> waitForRecorderIdle -> finalizeToMemory`, entirely in memory (zero fs, zero network). Returns `{ runId, json, blob, passOffsets, valid }`. OOS-8: v1 finalizes a single-frame tape; `frames` is accepted for forward compatibility. |
+| `captureFramesToMemory` | `(debugInst: CaptureBrowserRecorder, frames: number, label?: string): Promise<CaptureBrowserTape>` | Drive a live recorder through `arm -> waitForRecorderIdle -> finalizeToMemory`, entirely in memory (zero fs, zero network). Returns one tape containing all requested frame marks as `{ runId, json, blob, passOffsets, valid }`; the idle wait has a 30 s floor, a 50 ms/frame budget, and a 300 s cap. |
 | `uploadTape` | `(tape: CaptureBrowserTape, label?: string): Promise<UploadTapeResult>` | Base64-encode the blob (browser-safe `btoa`, no Node Buffer) and POST it to the dev-server `/__forgeax-debug/tape` endpoint. Returns `{ runId, tapePath, reportPath }`. Non-2xx throws an Error carrying the server `{error, hint}` envelope. |
 | `captureAndUpload` | `(debugInst: CaptureBrowserRecorder, frames: number, label?: string): Promise<UploadTapeResult>` | `captureFramesToMemory` then `uploadTape` in one call. This is what `window.__forgeax.captureFrame(n)` invokes. |
 
 The barrel (`@forgeax/engine-rhi-debug`) re-exports the node-free L0 primitives `finalizeToMemory` / `assembleReport` / `generateRunId` (shared by the Node finalize tail); the `capture-browser` symbols above are reachable **only** through the subpath.
+
+### Dev route subpath (`@forgeax/engine-rhi-debug/dev-routes`)
+
+`RHI_DEBUG_DEV_ROUTES` is the node-free route identity shared by the browser capture client, the
+Node CLI trigger, and `@forgeax/engine-vite-plugin-rhi-debug`. It contains `tape`, `trigger`, and
+`artifact`; endpoint behavior and reviewer CORS policy remain owned by their respective adapters.
 
 ### Browser inspect subpath (`@forgeax/engine-rhi-debug/inspect-core`)
 
@@ -162,7 +168,7 @@ replay.dispose();
 When `FORGEAX_ENGINE_RHI_DEBUG=1`, `createAppFromCanvas` (`@forgeax/engine-app`) installs:
 
 ```js
-window.__forgeax.captureFrame(n)  // Promise<{ runId, tapePath, reportPath }>
+window.__forgeax.captureFrame(n)  // Promise<{ runId, tapePath, reportPath }>, all n frames in one tape
 ```
 
 It dynamic-imports `@forgeax/engine-rhi-debug/capture-browser` -> `captureAndUpload(debugInst, n)`. Discoverable via DevTools console autocomplete. When the flag is unset the assignment never runs, so `window.__forgeax` does not exist and a caller hits a `TypeError` -- explicit failure (charter P3 / F-3 zero-injection), not a silent no-op.
@@ -220,7 +226,7 @@ Error envelopes (all `{ error, hint }`, never `DebugError` -- OOS-6, union stays
 | command (end-state shape) | description |
 |:--|:--|
 | `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` (L2a) | POST `/__forgeax-debug/trigger` to the dev-server (default `http://localhost:5173`), wait for a tab to capture + upload, print `{ runId, tapePath, reportPath }`. Ships today under the real `forgeax-rhi-debug` bin. |
-| `forgeax-rhi-debug summary <tapePath>` (L3d) | Read an on-disk tape and print the whole-frame `FrameModel` JSON (tree / per-draw pipelineState / bindings / drawCall / resources / commands / meta). Pure: no device, no replay. Ships today under the real `forgeax-rhi-debug` bin. |
+| `forgeax-rhi-debug summary <tapePath>` (L3d) | Read an on-disk tape and print the whole-frame `FrameModel` JSON (tree / per-draw pipelineState / bindings / drawCall / resources / commands / meta). Pure: no device, no replay. `--lifecycle-only` emits only event count and the resource ledger for long captures. Ships today under the real `forgeax-rhi-debug` bin. |
 
 #### Offline inspect (L3a) -- the canonical entry today
 
@@ -248,6 +254,8 @@ Outputs a structured `InspectReport` JSON (`frameIdx`, `drawIdx`, `passIdx`, `bi
 node packages/rhi-debug/dist/cli.mjs summary <tapePath>
 # example:
 node packages/rhi-debug/dist/cli.mjs summary .forgeax-debug/<runId>/frame-0.tape.bin
+# bounded long-capture attribution:
+node packages/rhi-debug/dist/cli.mjs summary .forgeax-debug/<runId>/frame-0.tape.bin --lifecycle-only
 ```
 
 `buildFrameModel` is also importable directly from the node-free `@forgeax/engine-rhi-debug/frame-model` subpath (zero `node:` / `pngjs` / GPU, tree-shake gated like `inspect-core`); the RHI debug viewer re-exports it as its `ViewModel` so the UI and the CLI share one analysis SSOT. The `resources` map and per-draw `vertexBuffers` map serialize to arrays in the CLI JSON (`Map` has no JSON form). **After M2 the `vertexBuffers` entries serialize as `[[slot, {handleId, offset, size}], ...]`** (previously `[[slot, handleId], ...]`) — `jq '.draws[0].vertexBuffers[0]'` now yields `[N, {"handleId": "...", "offset": 0, "size": ...}]` rather than a bare handleId string.
@@ -314,11 +322,11 @@ Each error object carries structured `.code` / `.expected` / `.hint` / `.detail`
 
 | constant | value | locked in |
 |:--|:--|:--|
-| `TAPE_FORMAT_VERSION` | `3` | bumped in v3 for 6 new event types + full-command capture |
-| `SUPPORTED_TAPE_VERSIONS` | `new Set([2, 3])` | deserialize accepts {2,3}; v2 tapes readable, missing new events naturally empty |
+| `TAPE_FORMAT_VERSION` | `4` | bumped in v4 for resource destroy-event capture |
+| `SUPPORTED_TAPE_VERSIONS` | `new Set([2, 3, 4])` | deserialize accepts {2,3,4}; older tapes remain readable |
 | `PER_EVENT_OVERHEAD` | `192` bytes | plan-strategy 5.3; m2-4 blob pool |
 
-Serialization: `serializeTape(tape) -> { json: string, bin: ArrayBuffer }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + events array. Binary blob pool contains hash-keyed `ArrayBuffer` data for `writeBuffer` / `writeTexture` / shader source. Newly recorded tapes always write `formatVersion = 3`. v2 tapes deserialize without version-mismatch error; missing new events produce natural empty state (commands array lacks those kinds, pipelineState fields are undefined) -- no separate error branch.
+Serialization: `serializeTape(tape) -> { json: string, bin: ArrayBuffer }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + events array. Binary blob pool contains hash-keyed `ArrayBuffer` data for `writeBuffer` / `writeTexture` / shader source. Newly recorded tapes always write `formatVersion = 4`. v2/v3 tapes deserialize without version-mismatch error; missing newer events produce natural empty state -- no separate error branch.
 
 ### v3 event additions
 
@@ -344,6 +352,12 @@ Six new event kinds were added to the `RhiCallEvent` closed union, plus 10 previ
 | Encoder-level debug group (3) | `pushDebugGroup`, `popDebugGroup`, `insertDebugMarker` |
 
 The recorder `_collectFrameReferencedHandleIds` explicitly collects `passHandleId` + `indirectBufferHandleId` for `drawIndirect`/`drawIndexedIndirect`, and the switch uses an exhaustive `default: void (e as never)` guard -- any future unhandled event kind becomes a compile error.
+
+### v4 resource lifecycle attribution
+
+v4 records successful `destroyBuffer` and `destroyTexture` calls. The pure `buildResourceLifecycle(tape.events)` analysis is included in `FrameModel.resourceLifecycle` and in the CLI `summary` output. It reports created, destroyed, and live resources in the captured tape closure, plus known descriptor-byte estimates for buffers and color textures. Texture bytes reuse the existing `computeTextureLayout` format/mip/layer rules; the result is a tight descriptor estimate, not a driver-reported allocation.
+
+The report keeps unavailable facts explicit: `availability.retire` is `unavailable` because RHI has no retire event, `availability.driverAllocation` is `unavailable` because WebGPU exposes no portable VRAM query, and depth/stencil or unsupported texture layouts are counted under `bytes.unavailable*` rather than treated as zero. This makes the summary suitable for attribution without turning a structural tape into a false GPU-memory measurement. For long tapes, `summary --lifecycle-only` uses the same ledger without materializing the full per-draw FrameModel JSON.
 
 ### Coverage invariant
 
@@ -497,8 +511,8 @@ The forgeax engine binds a `array<InstanceData>` buffer at `@group(3) @binding(0
 | OOS-2 | Per-pixel history | v2 |
 | OOS-3 | Timestamp trace (`writeTimestamp` / `resolveQuerySet`) | v2; in `DEFERRED_COMMANDS` |
 | OOS-4 | UI panel | shipped in v3 (four-panel dockview viewer at `apps/rhi-debug-viewer/`) |
-| OOS-5 | Destroy-event recording (`destroyBuffer` / `destroyTexture`) | add-only minor when destroy feat lands |
-| OOS-6 | Tape cross-version compatibility | shipped in v3 (`SUPPORTED_TAPE_VERSIONS = {2,3}`) |
+| OOS-5 | Destroy-event recording (`destroyBuffer` / `destroyTexture`) | shipped in v4; lifecycle summary also exposes known descriptor-byte estimates |
+| OOS-6 | Tape cross-version compatibility | shipped in v4 (`SUPPORTED_TAPE_VERSIONS = {2,3,4}`) |
 | OOS-7 | rhi-wgpu (wasm) backend capture/replay testing | v2 |
 | OOS-8 | Browser pixel-deterministic replay | dawn-node only epsilon <= 0.01; browser: non-zero + structural only |
 | OOS-9 | URL param `?forgeax-debug=1` trigger | v2 (`FORGEAX_ENGINE_RHI_DEBUG=1` env only) |

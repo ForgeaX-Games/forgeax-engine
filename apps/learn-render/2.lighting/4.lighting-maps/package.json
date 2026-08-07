@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:rhi-debug": "node scripts/smoke-dawn.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
@@ -39,7 +40,7 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "no smoke test yet for lighting-maps demo"
+        "reason": "app-owned Dawn and browser smoke commands are recorded in the RHI-debug evidence; aggregate gate remains off for LearnRender examples"
       },
       "spike-report": {
         "enabled": false,

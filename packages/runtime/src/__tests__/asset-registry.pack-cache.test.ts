@@ -907,7 +907,7 @@ describe('M5 real import patch preserves CatalogRecord facts', () => {
 
     const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(M5_GUID_A));
     expect(result.ok).toBe(true);
-    expect(importTransport.fetchPack).toHaveBeenCalledWith(M5_GUID_A);
+    expect(importTransport.fetchPack).toHaveBeenCalledWith(M5_GUID_A, undefined);
     expect(reg.listCatalog()).toContainEqual({
       ...entry,
       packageUrl: resolvedUrl,

@@ -8,7 +8,7 @@ import {
 } from '@forgeax/engine-net';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import WebSocket, { WebSocketServer } from 'ws';
-import { BoundedEventQueue } from './event-queue';
+import { BoundedEventQueue, DEFAULT_MAX_QUEUED_EVENTS } from './event-queue';
 import { createWebSocketClientEndpoint } from './websocket-client-core';
 
 export interface ListenWebSocketEndpointOptions {
@@ -21,8 +21,6 @@ export interface ListenWebSocketEndpointOptions {
 export interface ConnectWebSocketClientEndpointOptions {
   readonly maxQueuedEvents?: number | undefined;
 }
-
-const DEFAULT_MAX_QUEUED_EVENTS = 1024;
 
 export function connectWebSocketClientEndpoint(
   url: string,

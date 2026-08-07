@@ -25,13 +25,24 @@
 import type { HdrpBuffers, RenderSystemRuntime } from '@forgeax/engine-render/internal';
 import {
   createHdrpBindGroupLayoutDescriptor,
+  createHdrpClusterMembershipBindGroup,
+  createHdrpClusterMembershipBindGroupLayoutDescriptor,
   createHdrpUnifiedBindGroup,
   getOrCreateSsaoFallbackTexture,
+  packClusterUniform,
 } from '@forgeax/engine-render/internal';
-import type { Buffer, RhiCaps, RhiDevice, Texture, TextureView } from '@forgeax/engine-rhi';
+import type {
+  BindGroupLayout,
+  Buffer,
+  RhiCaps,
+  RhiDevice,
+  Texture,
+  TextureView,
+} from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
 
 const FRAGMENT_VISIBILITY = 0x2;
+const COMPUTE_VISIBILITY = 0x4;
 
 function mockTexture(label: string): Texture {
   return { label } as unknown as Texture;
@@ -128,6 +139,8 @@ function fakeHdrpBuffers(): HdrpBuffers {
     lightIndexListBytes: 4096,
     clusterUniformBuffer: mockBuffer('hdrp-cluster-uniform'),
     clusterUniformBytes: 32,
+    lightBoundsBuffer: mockBuffer('hdrp-light-bounds'),
+    lightBoundsBytes: 6144,
     grid: { x: 16, y: 9, z: 24 },
     unifiedBindGroupLayout: {
       label: 'hdrp-unified-bgl',
@@ -135,8 +148,57 @@ function fakeHdrpBuffers(): HdrpBuffers {
   };
 }
 
-// ── w28: BGL descriptor 7 entries (5 cluster + 2 ssao;
-//        scope-amend-webgl2-ubo dropped binding 9) ──────────────────────────
+describe('HDRP GPU membership producer bind-group contract', () => {
+  it('preserves the 256-light storage count while keeping the 128-light uniform default', () => {
+    const uniformPayload = new Uint32Array(
+      packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 50, 0, 256),
+    );
+    const storagePayload = new Uint32Array(
+      packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 50, 0, 256, 256),
+    );
+    expect(uniformPayload[3]).toBe(128);
+    expect(storagePayload[3]).toBe(256);
+  });
+
+  it('uses four compute-only bindings with read-write membership output', () => {
+    const desc = createHdrpClusterMembershipBindGroupLayoutDescriptor();
+    expect(desc.entries?.map((entry) => entry.binding)).toEqual([0, 1, 2, 3]);
+    expect(desc.entries?.every((entry) => entry.visibility === COMPUTE_VISIBILITY)).toBe(true);
+    expect(desc.entries?.find((entry) => entry.binding === 0)?.buffer?.type).toBe(
+      'read-only-storage',
+    );
+    expect(desc.entries?.find((entry) => entry.binding === 1)?.buffer?.type).toBe('storage');
+    expect(desc.entries?.find((entry) => entry.binding === 2)?.buffer?.type).toBe('uniform');
+    expect(desc.entries?.find((entry) => entry.binding === 3)?.buffer?.type).toBe(
+      'read-only-storage',
+    );
+  });
+
+  it('binds cluster grid, membership output, uniform, and CPU bounds in that order', () => {
+    const { runtime, createBindGroup } = makeMockRuntime();
+    const hdrp = fakeHdrpBuffers();
+    const layout = { label: 'membership-layout' } as unknown as BindGroupLayout;
+
+    const bindGroup = createHdrpClusterMembershipBindGroup(runtime, hdrp, layout);
+    expect(bindGroup).not.toBeNull();
+    const desc = createBindGroup.mock.calls[0]?.[0] as
+      | { layout?: BindGroupLayout; entries?: Array<{ binding: number; resource: unknown }> }
+      | undefined;
+    expect(desc?.layout).toBe(layout);
+    expect(desc?.entries?.map((entry) => entry.binding)).toEqual([0, 1, 2, 3]);
+    const resources = desc?.entries?.map(
+      (entry) => (entry.resource as { value?: { buffer?: Buffer } }).value?.buffer,
+    );
+    expect(resources).toEqual([
+      hdrp.clusterGridBuffer,
+      hdrp.lightIndexListBuffer,
+      hdrp.clusterUniformBuffer,
+      hdrp.lightBoundsBuffer,
+    ]);
+  });
+});
+
+// ── w28: BGL descriptor 7 entries (5 cluster + 2 ssao) ────────────────────
 
 describe('w28 — HDRP unified BGL SSAO entries (binding 7/8)', () => {
   it('descriptor entries.length === 7 (5 cluster + 2 ssao)', () => {
@@ -256,8 +318,7 @@ describe('w44 — createHdrpUnifiedBindGroup SSAO entries (binding 7/8)', () => 
     const b8 = desc?.entries?.find((e) => e.binding === 8);
     expect((b8?.resource as { kind?: string } | undefined)?.kind).toBe('sampler');
     // scope-amend-webgl2-ubo: binding 9 is gone; intensity flows via
-    // cluster_uniform.near_far_log.w on binding 6 (host write site is
-    // packClusterUniform — exercised by ssao-passes / cluster-uniform tests).
+    // cluster_uniform.near_far_log.w on binding 6.
     const bindings = new Set(desc?.entries?.map((e) => e.binding));
     expect(bindings).not.toContain(9);
   });

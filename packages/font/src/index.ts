@@ -4,7 +4,6 @@
 // glyph-metrics sidecar via @zappar/msdf-generator. The pure helpers
 // (bakeFont / encodePng / atlasToSidecar) are exported so consumers + tests
 // can drive the bake with an injected generator (real: @zappar; mock: tests).
-export const FONT_PACKAGE_VERSION = '0.0.0';
 
 export {
   atlasToSidecar,

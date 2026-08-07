@@ -40,6 +40,7 @@
 //   #13 quat.fromUnitVectors(v, v)                 → out = identity
 
 import { EPS_NORMALIZE, EPS_QUAT_PARALLEL, EPS_SLERP_DOT_LIMIT } from './_internal/epsilon';
+import { lengthSq4, normalize4 } from './_internal/scalar';
 import type { EulerOrder, Mat3Like, Quat, QuatLike, Vec3, Vec3Like } from './types';
 
 export type { Quat, QuatLike };
@@ -679,11 +680,7 @@ export function length(a: QuatLike): number {
 
 /** x² + y² + z² + w² (no sqrt). */
 export function lengthSq(a: QuatLike): number {
-  const x = a[0] as number;
-  const y = a[1] as number;
-  const z = a[2] as number;
-  const w = a[3] as number;
-  return x * x + y * y + z * z + w * w;
+  return lengthSq4(a);
 }
 
 /**
@@ -745,23 +742,7 @@ export function transformVec3(out: Vec3, q: QuatLike, v: Vec3Like): Vec3 {
  * ```
  */
 export function normalize(out: Quat, a: QuatLike): Quat {
-  const x = a[0] as number;
-  const y = a[1] as number;
-  const z = a[2] as number;
-  const w = a[3] as number;
-  const lenSq = x * x + y * y + z * z + w * w;
-  if (lenSq < EPS_NORMALIZE) {
-    out[0] = 0;
-    out[1] = 0;
-    out[2] = 0;
-    out[3] = 0;
-    return out;
-  }
-  const inv = 1 / Math.sqrt(lenSq);
-  out[0] = x * inv;
-  out[1] = y * inv;
-  out[2] = z * inv;
-  out[3] = w * inv;
+  normalize4(out, a, EPS_NORMALIZE);
   return out;
 }
 

@@ -1,6 +1,6 @@
-import { _setZstdImporter, _zstdInitCount, decompressZstd } from '@forgeax/engine-codec';
 import { compressZstd } from '@forgeax/engine-codec/encode';
 import { afterEach, describe, expect, it } from 'vitest';
+import { _setZstdImporter, _zstdInitCount, decompressZstd } from '../zstd.js';
 
 /**
  * zstd lazy-init singleton test (w5).

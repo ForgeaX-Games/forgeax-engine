@@ -983,7 +983,8 @@ import { toRollupLog } from '../wrap.js';
     identifier: string;
     sourcePath: string;
     paramSchema: string;
-    variants?: Array<{ definesKey: string }>;
+    composedWgsl: string;
+    variants?: Array<{ definesKey: string; composedWgsl: string }>;
   }
 
   describe('materialShaders[] manifest (w9)', () => {
@@ -1016,6 +1017,65 @@ import { toRollupLog } from '../wrap.js';
         manifest.materialShaders.length,
         'materialShaders[] must contain exactly 9 engine material-shader entries',
       ).toBe(9);
+
+      const standardPbr = manifest.materialShaders.find(
+        (entry) => entry.identifier === 'forgeax::default-standard-pbr',
+      );
+      expect(standardPbr).toBeDefined();
+      expect(
+        standardPbr?.variants?.find(
+          (variant) =>
+            variant.definesKey === 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+        ),
+        'the URP standard-PBR variant must be present',
+      ).toBeDefined();
+      expect(
+        standardPbr?.variants?.find(
+          (variant) =>
+            variant.definesKey === 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+        )?.composedWgsl,
+        'the default manifest must stay valid on software WebGPU profiles without cube-array shader support',
+      ).not.toContain('evalPointShadowed');
+      expect(
+        standardPbr?.variants?.find(
+          (variant) =>
+            variant.definesKey === 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+        )?.composedWgsl,
+        'the default manifest must omit the cube-array binding on software WebGPU profiles',
+      ).not.toContain('texture_depth_cube_array');
+
+      const pointShadowPlugin = forgeaxShader({ engineEntries: { pointShadows: true } });
+      const pointShadowContext = createMockContext();
+      await pointShadowPlugin.buildStart?.call(pointShadowContext as never);
+      pointShadowPlugin.generateBundle?.call(pointShadowContext as never);
+      const pointShadowManifestAsset = pointShadowContext.emitted.find(
+        (asset) => asset.fileName === 'shaders/manifest.json',
+      );
+      expect(pointShadowManifestAsset).toBeDefined();
+      if (!pointShadowManifestAsset) return;
+      const pointShadowManifest = JSON.parse(pointShadowManifestAsset.source) as {
+        materialShaders: MaterialShaderEntry[];
+      };
+      expect(
+        pointShadowManifest.materialShaders
+          .find((entry) => entry.identifier === 'forgeax::default-standard-pbr')
+          ?.variants?.find(
+            (variant) =>
+              variant.definesKey ===
+              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+          )?.composedWgsl,
+        'the point-shadow demo must opt into point-shadow evaluation explicitly',
+      ).toContain('evalPointShadowed');
+      expect(
+        pointShadowManifest.materialShaders
+          .find((entry) => entry.identifier === 'forgeax::default-standard-pbr')
+          ?.variants?.find(
+            (variant) =>
+              variant.definesKey ===
+              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+          )?.composedWgsl,
+        'the point-shadow demo must opt into the cube-array binding explicitly',
+      ).toContain('texture_depth_cube_array');
 
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
@@ -1059,7 +1119,7 @@ import { toRollupLog } from '../wrap.js';
           expect(parsed.length, `paramSchema must stay empty for '${ms.identifier}'`).toBe(0);
         }
       }
-    });
+    }, 15_000);
 
     it('(b) engine entry missing sidecar causes buildStart fail-fast with file path', async () => {
       const plugin = forgeaxShader({ engineEntries: true });
@@ -1198,6 +1258,37 @@ import { toRollupLog } from '../wrap.js';
         ms.identifier.toLowerCase().includes('bloom'),
       );
       expect(bloomAsMaterial, 'bloom must not appear in materialShaders[]').toBe(false);
+    });
+
+    async function manifestForPlugin(
+      plugin: ReturnType<typeof forgeaxShader>,
+    ): Promise<{ entries: Array<{ wgsl: string }> }> {
+      const ctx = createMockContext();
+      await plugin.buildStart?.call(ctx as never);
+      plugin.generateBundle?.call(ctx as never);
+
+      const manifestAsset = ctx.emitted.find((a) => a.fileName === 'shaders/manifest.json');
+      expect(manifestAsset).toBeDefined();
+      if (!manifestAsset) return { entries: [] };
+      return JSON.parse(manifestAsset.source) as { entries: Array<{ wgsl: string }> };
+    }
+
+    it('forgeaxShader default keeps optional SSAO out of generic manifests', async () => {
+      const manifest = await manifestForPlugin(forgeaxShader());
+      const ssao = manifest.entries.filter(
+        (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
+      );
+      expect(ssao, 'generic Vite manifests must not eagerly build optional SSAO').toHaveLength(0);
+    });
+
+    it('forgeaxShader opt-in includes the SSAO fullscreen entry', async () => {
+      const manifest = await manifestForPlugin(
+        forgeaxShader({ engineEntries: { hdrpSsao: true } }),
+      );
+      const ssao = manifest.entries.filter(
+        (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
+      );
+      expect(ssao, 'Vite manifest must carry both SSAO fragment entry points').toHaveLength(1);
     });
 
     it('buildEngineShaderManifest() preserves sprite instance-region variants', async () => {

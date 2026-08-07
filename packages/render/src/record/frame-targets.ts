@@ -49,8 +49,54 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
 } from '../render-system-extract';
+import type { RenderGraphExecutionPhase, RenderRecordPhase } from '../renderer';
 
 import { type RenderFrameState, retirePerFrameGraph } from './frame-snapshot';
+
+type RecordProfilePhase = (phase: RenderRecordPhase, action: () => void) => void;
+
+function graphExecutionPhase(passName: string): RenderGraphExecutionPhase {
+  switch (passName) {
+    case 'point-shadow':
+      return 'record/graph-execute/point-shadow';
+    case 'cluster-binner-upload':
+      return 'record/graph-execute/cluster-binner-upload';
+    case 'g-buffer':
+      return 'record/graph-execute/g-buffer';
+    case 'ssao-calc':
+      return 'record/graph-execute/ssao-calc';
+    case 'ssao-blur':
+      return 'record/graph-execute/ssao-blur';
+    case 'lighting':
+      return 'record/graph-execute/lighting';
+    case 'forward':
+      return 'record/graph-execute/forward';
+    case 'tonemap':
+      return 'record/graph-execute/tonemap';
+    case 'debug-overlay':
+      return 'record/graph-execute/debug-overlay';
+    case 'shadow':
+      return 'record/graph-execute/shadow';
+    case 'spot-shadow':
+      return 'record/graph-execute/spot-shadow';
+    case 'skybox':
+      return 'record/graph-execute/skybox';
+    case 'main':
+      return 'record/graph-execute/main';
+    case 'fxaa':
+      return 'record/graph-execute/fxaa';
+    case 'bloom-bright':
+      return 'record/graph-execute/bloom-bright';
+    case 'bloom-blur-h':
+      return 'record/graph-execute/bloom-blur-h';
+    case 'bloom-blur-v':
+      return 'record/graph-execute/bloom-blur-v';
+    case 'bloom-composite':
+      return 'record/graph-execute/bloom-composite';
+    default:
+      return 'record/graph-execute/other';
+  }
+}
 
 /**
  * Resolve a graph color target in the format required by a render attachment.
@@ -968,13 +1014,20 @@ export function executeFrameGraph(
   passCtx: _InternalRenderPipelineContext,
   passData: RenderPipelineData,
   encoder: RhiCommandEncoder,
+  profilePhase?: RecordProfilePhase,
 ): boolean {
   if (frameState.perFrameGraph === null) {
     frameState.perFrameGraph = frameState.activePipeline.buildGraph(passCtx, passData);
   }
   const graph = frameState.perFrameGraph;
   if (graph === null) return false;
-  graph.execute(passCtx);
+  if (profilePhase === undefined) {
+    graph.execute(passCtx);
+  } else {
+    graph.execute(passCtx, (passName, action) => {
+      profilePhase(graphExecutionPhase(passName), action);
+    });
+  }
 
   const finishResult = encoder.finish();
   if (!finishResult.ok) {

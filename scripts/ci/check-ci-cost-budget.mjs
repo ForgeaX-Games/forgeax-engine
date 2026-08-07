@@ -77,7 +77,13 @@ function checkAc06(errors, facts) {
           consumer: consumer.jobIdentity,
           artifactIds: consumer.artifactIds ?? [],
           lastRequiredArtifactReadyAt: consumer.lastRequiredArtifactReadyAt,
+          artifactProviderReadyAt: consumer.artifactProviderReadyAt ?? null,
+          lastPrerequisiteReadyAt: consumer.lastPrerequisiteReadyAt ?? null,
+          effectiveReadyAt: consumer.effectiveReadyAt ?? null,
           observedJobStartedAt: consumer.observedJobStartedAt,
+          observedArtifactReadyToJobStartDelaySeconds:
+            consumer.observedArtifactReadyToJobStartDelaySeconds ?? null,
+          unattributedStartDelaySeconds: consumer.unattributedStartDelaySeconds ?? null,
           actualSeconds: actual,
           expectedSeconds: limits.artifactReadyToJobStartSeconds,
         }),

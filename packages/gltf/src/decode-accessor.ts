@@ -96,6 +96,77 @@ export type DecodedAccessor =
   | { readonly kind: 'u16'; readonly data: Uint16Array }
   | { readonly kind: 'u32'; readonly data: Uint32Array };
 
+type F32AccessorJson = Omit<AccessorJson, 'bufferView'> & {
+  readonly bufferView?: number;
+};
+
+/**
+ * Decode an F32 accessor for parser-owned type subsets without duplicating
+ * buffer lookup and dense-range handling in each parser.
+ */
+export function decodeF32Accessor(
+  accessorIndex: number,
+  accessor: F32AccessorJson,
+  allowedTypes: readonly string[],
+  bufferViews: readonly BufferViewJson[],
+  buffers: readonly Uint8Array[],
+): Result<Float32Array, GltfError> {
+  if (accessor.componentType !== COMPONENT_TYPE.F32 || !allowedTypes.includes(accessor.type)) {
+    return err(
+      gltfErr('gltf-accessor-type-mismatch', { accessorIndex, reason: 'unknownComponentType' }),
+    );
+  }
+
+  const bufferViewIndex = accessor.bufferView;
+  if (bufferViewIndex === undefined) {
+    return err(
+      gltfErr('gltf-buffer-out-of-bounds', {
+        accessor: accessorIndex,
+        byteOffset: 0,
+        byteLength: 0,
+        bufferIndex: 0,
+      }),
+    );
+  }
+  const bufferView = bufferViews[bufferViewIndex];
+  if (bufferView === undefined) {
+    return err(
+      gltfErr('gltf-buffer-out-of-bounds', {
+        accessor: accessorIndex,
+        byteOffset: 0,
+        byteLength: 0,
+        bufferIndex: bufferViewIndex,
+      }),
+    );
+  }
+  const buffer = buffers[bufferView.buffer];
+  if (buffer === undefined) {
+    return err(
+      gltfErr('gltf-buffer-out-of-bounds', {
+        accessor: accessorIndex,
+        byteOffset: bufferView.byteOffset ?? 0,
+        byteLength: bufferView.byteLength,
+        bufferIndex: bufferView.buffer,
+      }),
+    );
+  }
+
+  const decoded = decodeAccessor({
+    accessor: { ...accessor, bufferView: bufferViewIndex },
+    bufferView,
+    buffer,
+    accessorIndex,
+    role: 'attribute',
+  });
+  if (!decoded.ok) return decoded;
+  if (decoded.value.kind !== 'f32') {
+    return err(
+      gltfErr('gltf-accessor-type-mismatch', { accessorIndex, reason: 'unknownComponentType' }),
+    );
+  }
+  return ok(decoded.value.data);
+}
+
 /**
  * Decode a dense glTF accessor into the typed array view of its values.
  * Rejects sparse / morph / interleaved / unknown-componentType variants

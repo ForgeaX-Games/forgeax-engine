@@ -82,6 +82,14 @@ describe('particle shader manifest and prepared pipeline contract', () => {
     }
   });
 
+  it('turns billboard quads into premultiplied soft discs', () => {
+    const shaderRoot = resolve(dirname(import.meta.dirname), 'shaders');
+    const source = readFileSync(resolve(shaderRoot, 'billboard.wgsl'), 'utf8');
+    expect(source).toContain('@location(1) local: vec2<f32>');
+    expect(source).toContain('smoothstep(0.55, 1.0, length(input.local))');
+    expect(source).toContain('input.color.rgb * alpha');
+  });
+
   it('requests the shader matching each output kind instead of default-unlit fallback', () => {
     const world = new World();
     const feature = particleRenderFeature({
@@ -99,12 +107,15 @@ describe('particle shader manifest and prepared pipeline contract', () => {
     expect(extracted.ok).toBe(true);
     if (!extracted.ok) return;
 
-    const shaderIds: string[] = [];
+    const pipelineDescriptors: { shader: string; renderState?: Record<string, unknown> }[] = [];
     const context = {
       graphics: {
         prepareIndexData: () => ok(ref('index-data')),
-        preparePipeline: (_name: string, descriptor: { shader: string }) => {
-          shaderIds.push(descriptor.shader);
+        preparePipeline: (
+          _name: string,
+          descriptor: { shader: string; renderState?: Record<string, unknown> },
+        ) => {
+          pipelineDescriptors.push(descriptor);
           return ok(ref('pipeline'));
         },
         prepareBindings: () => ok(ref('bindings')),
@@ -113,9 +124,19 @@ describe('particle shader manifest and prepared pipeline contract', () => {
     } as unknown as RenderFeaturePrepareContext;
 
     expect(feature.prepare(extracted.value, context).ok).toBe(true);
-    expect(shaderIds).toEqual([
+    expect(pipelineDescriptors.map((descriptor) => descriptor.shader)).toEqual([
       PARTICLE_SHADER_IDENTIFIERS.billboard,
       PARTICLE_SHADER_IDENTIFIERS.mesh,
     ]);
+    expect(pipelineDescriptors[0]?.renderState).toMatchObject({
+      cullMode: 'none',
+      depthCompare: 'less-equal',
+      depthWriteEnabled: false,
+      blend: {
+        color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      },
+    });
+    expect(pipelineDescriptors[1]?.renderState).toBeUndefined();
   });
 });

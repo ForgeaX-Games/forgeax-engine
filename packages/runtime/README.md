@@ -46,6 +46,14 @@ by `renderer.recover()`, and `disposed` is terminal. `dispose()` is
 idempotent. A pipeline switch preserves feature registration and rebuilds the
 active graph; use `renderer.registerPipeline(id, pipeline)` for that switch.
 
+Hosts that need World- or asset-dependent setup after `renderer.ready` can call
+`await renderer.installRenderFeature(feature)`. It appends the producer to the same
+feature host, keeps identity/capability/error ownership unified, and is
+idempotent for the same feature object. The await includes declared
+material-shader prewarm before the feature can enter the host. A duplicate identity from a different
+object returns `render-feature-registration-conflict`; there is no parallel
+feature registry.
+
 ## Assemble prepared graphics without a private seam
 
 Prepared graphics is still assembled by the runtime host. A producer imports

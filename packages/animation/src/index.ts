@@ -15,7 +15,13 @@ export type {
 } from './animation-diagnostic';
 export { AnimationPlayer } from './animation-player';
 /** Stable target identity, explicit ownership, and atomic batch binding. */
-export * from './animation-target';
+export {
+  AnimatedBy,
+  AnimationTargetId,
+  AnimationTargets,
+  type BindAnimationTargetsErrorCode,
+  bindAnimationTargets,
+} from './animation-target';
 /** Build the existing graph-to-player slot path; this is not an animation FSM. */
 export {
   type AnimationGraphNodeRef,
@@ -42,7 +48,6 @@ export {
 export {
   EvaluateAnimationGraph,
   evaluateAnimationGraph,
-  registerEvaluateAnimationGraph,
 } from './systems/evaluate-animation-graph';
 /** Derive or validate the canonical 32-lowercase-hex animation target wire. */
-export * from './target-id';
+export { deriveAnimationTargetId, isAnimationTargetId } from './target-id';

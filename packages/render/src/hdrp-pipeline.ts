@@ -45,7 +45,9 @@ import { RenderGraph, type ResolveContext } from '@forgeax/engine-render-graph';
 import { err, ok, type Result, RhiError, type TextureView } from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
 import { HdrpDeferredCapsInsufficientError } from './errors/render';
+import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from './gpu-texture-usage';
 import { getOrCreateHdrpBuffers } from './hdrp-buffers';
+import { DEFERRED_COLOR_FORMATS } from './pipeline-spec';
 import { recordMainPass } from './record';
 import { addPointShadowPass, addSsaoPasses, addTonemapPass } from './render-graph-primitives';
 import type { RenderPipeline, RenderPipelineData } from './render-pipeline';
@@ -229,6 +231,7 @@ export const hdrpPipeline: RenderPipeline = {
       lifetime: 'persistent',
       bufferRole: 'uniform',
     });
+    graph.addResource('hdrpLightBounds', { kind: 'buffer', lifetime: 'persistent' });
 
     // feat-20260609-hdrp-cluster-fragment-ggx M4 / w17: HDR colour + depth
     // targets so the cluster-forward pass can declare `writes: ['hdrColor']`
@@ -245,7 +248,7 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('hdrDepth', {
       format: 'depth24plus-stencil8',
@@ -255,7 +258,7 @@ export const hdrpPipeline: RenderPipeline = {
       // sample hdr_depth via the dedicated SSAO BGL @binding(5); a
       // depth-only view is constructed in render-graph-primitives.ts
       // (resolveHdrDepthDepthOnlyView) and bound at draw time.
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     // feat-20260609-hdrp-cluster-fragment-ggx [scope-amend graph-depth-target]:
     // `recordFrame` (render-system-record.ts:1539) hard-requires a graph color
@@ -278,19 +281,19 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('gbuf1', {
       format: 'rgba8unorm',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('gbuf2', {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // feat-20260612-hdrp-ssao M4 / w19: SSAO half-resolution transient targets
@@ -301,13 +304,13 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'r8unorm',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('ssaoBlurred', {
       format: 'r8unorm',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-1 (plan-strategy §D-1
@@ -326,21 +329,50 @@ export const hdrpPipeline: RenderPipeline = {
     // barrier; same as URP).
     addPointShadowPass(graph, 'point-shadow');
 
-    // Round-2 fix-up [w18-fix-r2] (F-1): producer pass for the 4 HDRP buffers.
+    // Round-2 fix-up [w18-fix-r2] (F-1): producer pass for the HDRP buffers.
     // The actual binner + writeBuffer happens earlier in recordFrame
     // (render-system-record.ts HDRP block; Round-2 fix-up [w21-fix-r2]) so the
     // host has access to camera + extract pipeline. This pass exists for graph
     // bookkeeping -- declares writes so the cluster-forward pass below has a
     // valid producer for its reads (no more dangling-read fail-fast every
-    // frame). execute is a no-op; barriers and topology are correct.
+    // frame). Storage-capable WebGPU adds a real compute producer below;
+    // fallback backends keep the existing CPU upload path.
+    const hasGpuMembershipProducer =
+      ctx.pipelineState.hdrpClusterMembershipPipeline !== null &&
+      (ctx as _InternalRenderPipelineContext).hdrpClusterMembershipBindGroup !== null;
     graph.addPass('cluster-binner-upload', {
       reads: [],
-      writes: ['hdrpLightData', 'hdrpClusterGrid', 'hdrpLightIndexList', 'hdrpClusterUniform'],
-      // No execute closure: the upload happens out-of-graph in recordFrame's
-      // HDRP block (see render-system-record.ts [w21-fix-r2]). The pass exists
-      // so that 'cluster-forward.reads' has a valid writer, satisfying
-      // render-graph dangling-read validation.
+      writes: [
+        'hdrpLightData',
+        'hdrpClusterGrid',
+        'hdrpClusterUniform',
+        'hdrpLightBounds',
+        ...(hasGpuMembershipProducer ? [] : ['hdrpLightIndexList']),
+      ],
+      // The upload happens out-of-graph in recordFrame's HDRP block (see
+      // render-system-record.ts [w21-fix-r2]). The pass exists so that
+      // 'cluster-forward.reads' has a valid writer, satisfying render-graph
+      // dangling-read validation.
     });
+    if (hasGpuMembershipProducer) {
+      graph.addPass('cluster-membership-producer', {
+        reads: ['hdrpClusterGrid', 'hdrpClusterUniform', 'hdrpLightBounds'],
+        writes: ['hdrpLightIndexList'],
+        execute: (ctx: RenderPipelineContext) => {
+          const pipeline = ctx.pipelineState.hdrpClusterMembershipPipeline;
+          const internal = ctx as _InternalRenderPipelineContext;
+          if (pipeline === null || internal.hdrpClusterMembershipBindGroup === null) return;
+          const grid = ctx.frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
+          const computePass = ctx.encoder.beginComputePass({
+            label: 'hdrp-cluster-membership',
+          });
+          computePass.setPipeline(pipeline);
+          computePass.setBindGroup(0, internal.hdrpClusterMembershipBindGroup);
+          computePass.dispatchWorkgroups(Math.ceil((grid.x * grid.y * grid.z) / 64));
+          computePass.end();
+        },
+      });
+    }
 
     // D-2 / D-6 / D-4 g-buffer pass: render opaque geometry via passKind='deferred'.
     // Filters dispatch entries by tags={LightMode:'Deferred'} so only entities
@@ -351,8 +383,22 @@ export const hdrpPipeline: RenderPipeline = {
     graph.addPass('g-buffer', {
       reads: [],
       writes: ['gbuf0', 'gbuf1', 'gbuf2', 'hdrDepth'],
-      execute: (ctx: RenderPipelineContext) => {
-        recordMainPass(ctx as _InternalRenderPipelineContext, { LightMode: ['Deferred'] });
+      execute: (ctx: RenderPipelineContext, resolveCtx: ResolveContext) => {
+        recordMainPass(
+          ctx as _InternalRenderPipelineContext,
+          { LightMode: ['Deferred'] },
+          {
+            colorViews: [
+              resolveCtx.resolve('gbuf0') as TextureView,
+              resolveCtx.resolve('gbuf1') as TextureView,
+              resolveCtx.resolve('gbuf2') as TextureView,
+            ],
+            colorFormats: DEFERRED_COLOR_FORMATS,
+            depthView: resolveCtx.resolve('hdrDepth') as TextureView,
+            passKind: 'deferred',
+            clearColor: [0, 0, 0, 0],
+          },
+        );
       },
     });
 

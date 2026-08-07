@@ -70,6 +70,11 @@ describe('AC-02: exports accessible', () => {
     expect(typeof mod.resolveDefaultScene).toBe('function');
   });
 
+  it('keeps the validation primitive owner-local', async () => {
+    const mod = await import('../index.js');
+    expect('validateGameProject' in mod).toBe(false);
+  });
+
   it('GameProjectError is importable', async () => {
     const mod = await import('../index.js');
     expect(mod.GameProjectError).toBeDefined();

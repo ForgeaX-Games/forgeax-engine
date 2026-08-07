@@ -5,7 +5,7 @@ import {
   type RenderFeaturePreparedRef,
   RenderFeatureStageFailedError,
 } from '@forgeax/engine-render';
-import { err, ok, type Result } from '@forgeax/engine-types';
+import { err, type MaterialRenderState, ok, type Result } from '@forgeax/engine-types';
 import type { ParticleOutputBatch } from '@forgeax/engine-vfx';
 import {
   createParticleRenderError,
@@ -25,6 +25,16 @@ export const PARTICLE_SHADER_IDENTIFIERS = Object.freeze({
 });
 
 const PARTICLE_MATERIAL_SHADERS = Object.freeze(Object.values(PARTICLE_SHADER_IDENTIFIERS));
+
+const PARTICLE_BILLBOARD_RENDER_STATE = Object.freeze({
+  cullMode: 'none',
+  depthCompare: 'less-equal',
+  depthWriteEnabled: false,
+  blend: {
+    color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+  },
+} satisfies MaterialRenderState);
 
 interface ParticlePreparedRefs {
   readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
@@ -238,6 +248,7 @@ function prepareRefs(
         shader: PARTICLE_SHADER_IDENTIFIERS[kind],
         vertexLayout: pipelineLayout(kind),
         colorFormats: ['rgba8unorm-srgb'],
+        ...(kind === 'billboard' ? { renderState: PARTICLE_BILLBOARD_RENDER_STATE } : {}),
       });
       if (!pipelineResult.ok) return assetNotReady(state, bucket, kind, buckets.length);
       pipeline = pipelineResult.value;

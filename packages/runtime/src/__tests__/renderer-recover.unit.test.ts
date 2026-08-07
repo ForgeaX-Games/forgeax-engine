@@ -16,9 +16,11 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { RenderError, RenderFeature } from '@forgeax/engine-render';
 import type { HealthSnapshot } from '@forgeax/engine-render/internal';
 import { RecoverError, type RecoverErrorCode } from '@forgeax/engine-render/internal';
 import type { Result, RhiInstance } from '@forgeax/engine-rhi';
+import { ok } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Controllable mock state (module-level so vi.mock factories can read) ──────
@@ -32,6 +34,8 @@ const recoverMock = {
   deviceThrows: false,
   requestAdapterCalls: 0,
   requestDeviceCalls: 0,
+  requestDeviceOptions: [] as unknown[],
+  shaderModuleLabels: [] as string[],
 };
 
 function resetRecoverMock(): void {
@@ -39,6 +43,8 @@ function resetRecoverMock(): void {
   recoverMock.deviceThrows = false;
   recoverMock.requestAdapterCalls = 0;
   recoverMock.requestDeviceCalls = 0;
+  recoverMock.requestDeviceOptions = [];
+  recoverMock.shaderModuleLabels = [];
 }
 
 let testDeviceLostResolve: ((info: unknown) => void) | null = null;
@@ -118,10 +124,11 @@ function makeFakeRhiDevice(): Record<string, unknown> {
 
 function makeExplicitRhi(): RhiInstance {
   const adapter = {
-    features: new Set<string>(),
+    features: new Set<string>(['texture-compression-bc']),
     limits: {},
-    requestDevice: async () => {
+    requestDevice: async (options?: unknown) => {
       recoverMock.requestDeviceCalls += 1;
+      recoverMock.requestDeviceOptions.push(options);
       if (recoverMock.deviceThrows) {
         throw new Error('mock requestDevice failure (recover-device-unavailable path)');
       }
@@ -147,7 +154,10 @@ function makeExplicitRhi(): RhiInstance {
         getCurrentTexture: () => ({ ok: true, value: { __brand: 'TextureView' } }),
       },
     }),
-    createShaderModule: async () => ({ ok: true, value: { __brand: 'ShaderModule' } }),
+    createShaderModule: async (_device: unknown, descriptor?: { readonly label?: string }) => {
+      if (descriptor?.label !== undefined) recoverMock.shaderModuleLabels.push(descriptor.label);
+      return { ok: true, value: { __brand: 'ShaderModule' } };
+    },
   } as unknown as RhiInstance;
 }
 
@@ -294,6 +304,7 @@ const RECOVER_TEST_MANIFEST_URL = (() => {
     materialShaders: [
       materialShaderStub('forgeax::default-standard-pbr'),
       materialShaderStub('forgeax::default-unlit'),
+      materialShaderStub('forgeax::late-recovery-test'),
     ],
   };
   return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
@@ -305,6 +316,8 @@ type TestRenderer = {
   store: { destroyAll: () => void };
   assets: { inspect?: () => unknown };
   ready: Promise<unknown>;
+  installRenderFeature: (feature: RenderFeature<unknown>) => Promise<Result<void, RenderError>>;
+  dispose: () => void;
 };
 
 async function makeRenderer(): Promise<TestRenderer> {
@@ -376,6 +389,54 @@ describe('recover() single idempotent rebuild (M3)', () => {
       expect(recoverMock.requestDeviceCalls).toBeGreaterThan(deviceCallsBefore);
       // pipeline rebuild completes; subsequent ready resolves ok.
       await renderer.ready;
+    },
+    RECOVER_BOOT_TIMEOUT_MS,
+  );
+
+  it(
+    'recovery preserves adapter compression features when requesting the replacement device',
+    async () => {
+      const renderer = await makeRenderer();
+      await renderer.ready;
+      await driveDeviceLost(renderer);
+
+      const result = await renderer.recover();
+      expect(result.ok).toBe(true);
+      expect(recoverMock.requestDeviceOptions.length).toBeGreaterThanOrEqual(2);
+      for (const options of recoverMock.requestDeviceOptions) {
+        expect(options).toEqual({ requiredFeatures: ['texture-compression-bc'] });
+      }
+    },
+    RECOVER_BOOT_TIMEOUT_MS,
+  );
+
+  it(
+    'recovery prewarms shader modules for a feature installed after boot',
+    async () => {
+      const renderer = await makeRenderer();
+      await renderer.ready;
+      const feature: RenderFeature<unknown> = {
+        identity: 'synthetic.late-recovery-shader',
+        requiredMaterialShaders: ['forgeax::late-recovery-test'],
+        extract: () => ok({}),
+        prepare: () => ok(undefined),
+        contribute: () => ok(undefined),
+      };
+
+      const installed = await renderer.installRenderFeature(feature);
+      expect(installed.ok).toBe(true);
+      const installCount = recoverMock.shaderModuleLabels.filter(
+        (label) => label === 'module-forgeax::late-recovery-test',
+      ).length;
+      expect(installCount).toBe(1);
+
+      await driveDeviceLost(renderer);
+      expect((await renderer.recover()).ok).toBe(true);
+      const recoveryCount = recoverMock.shaderModuleLabels.filter(
+        (label) => label === 'module-forgeax::late-recovery-test',
+      ).length;
+      expect(recoveryCount).toBeGreaterThan(installCount);
+      renderer.dispose();
     },
     RECOVER_BOOT_TIMEOUT_MS,
   );

@@ -12,9 +12,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:process-e2e": "vitest run src/__tests__/process-e2e.test.ts",
-    "e2e:browser": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs"
+    "e2e:browser": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs",
+    "smoke:rhi-debug": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs"
   },
   "forgeax": {
+    "rhiDebug": {
+      "riskFamilies": ["materials-textures"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

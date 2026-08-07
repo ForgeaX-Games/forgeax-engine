@@ -10,10 +10,14 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:rhi-debug": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/engine-shadertoy-fractal-pyramid smoke",
+    "rhiDebug": {
+      "riskFamilies": ["programmable-pipelines"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

@@ -49,7 +49,7 @@ import { posix, relative } from 'node:path';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
-import { scan } from '@forgeax/engine-pack/scanner';
+import { type ScanOptions, scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import type {
   AssetAuthoringCapability,
@@ -473,6 +473,38 @@ async function processMetaSidecar(
     return deriveAssetName(sourceAbsPath, subAssetCount, sub.name);
   }
 
+  function appendSceneSubAssets(sourceRel: string, normalizedUrl: string): void {
+    for (const sub of meta.subAssets) {
+      if (
+        sub.kind === 'mesh' ||
+        sub.kind === 'material' ||
+        sub.kind === 'scene' ||
+        sub.kind === 'sampler' ||
+        sub.kind === 'skeleton' ||
+        sub.kind === 'skin' ||
+        sub.kind === 'animation-clip'
+      ) {
+        out.push({
+          guid: sub.guid,
+          packageUrl: normalizedUrl,
+          kind: sub.kind,
+          sourcePath: sourceRel,
+          ...producerFields(meta, sub),
+          name: subName(sub),
+        });
+      } else if (sub.kind === 'texture') {
+        out.push({
+          guid: sub.guid,
+          packageUrl: normalizedUrl,
+          kind: 'texture',
+          sourcePath: sourceRel,
+          ...producerFields(meta, sub),
+          name: subName(sub),
+        });
+      }
+    }
+  }
+
   if (meta.importer === 'image') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     // Normalize `..` segments so the URL resolves against the Vite
@@ -556,40 +588,12 @@ async function processMetaSidecar(
     // Build a memoized metadata for texture rows in this sidecar. The gltf
     // sidecar does not carry per-texture colorSpace / mipmap, so we default
     // to linear + no mipmap; the importer enriches these at import time.
-    for (const sub of meta.subAssets) {
-      // tweak-20260611 M6: skeleton / skin / animation-clip are emitted by
-      // gltfImporter (M4) alongside the existing mesh / material / scene
-      // rows; they carry the same 4-field thin shape (metadata undefined)
-      // because the runtime loader resolves them via parseGlbFromFile at
-      // consumption time, same as mesh/material/scene.
-      if (
-        sub.kind === 'mesh' ||
-        sub.kind === 'material' ||
-        sub.kind === 'scene' ||
-        sub.kind === 'sampler' ||
-        sub.kind === 'skeleton' ||
-        sub.kind === 'skin' ||
-        sub.kind === 'animation-clip'
-      ) {
-        out.push({
-          guid: sub.guid,
-          packageUrl: normalizedUrl,
-          kind: sub.kind,
-          sourcePath: sourceRel,
-          ...producerFields(meta, sub),
-          name: subName(sub),
-        });
-      } else if (sub.kind === 'texture') {
-        out.push({
-          guid: sub.guid,
-          packageUrl: normalizedUrl,
-          kind: 'texture',
-          sourcePath: sourceRel,
-          ...producerFields(meta, sub),
-          name: subName(sub),
-        });
-      }
-    }
+    // tweak-20260611 M6: skeleton / skin / animation-clip are emitted by
+    // gltfImporter (M4) alongside the existing mesh / material / scene
+    // rows; they carry the same 4-field thin shape (metadata undefined)
+    // because the runtime loader resolves them via parseGlbFromFile at
+    // consumption time, same as mesh/material/scene.
+    appendSceneSubAssets(sourceRel, normalizedUrl);
   }
 
   // importer === 'fbx': fold each sub-asset kind (mesh / material / scene /
@@ -602,36 +606,7 @@ async function processMetaSidecar(
   if (meta.importer === 'fbx') {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     const normalizedUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
-
-    for (const sub of meta.subAssets) {
-      if (
-        sub.kind === 'mesh' ||
-        sub.kind === 'material' ||
-        sub.kind === 'scene' ||
-        sub.kind === 'sampler' ||
-        sub.kind === 'skeleton' ||
-        sub.kind === 'skin' ||
-        sub.kind === 'animation-clip'
-      ) {
-        out.push({
-          guid: sub.guid,
-          packageUrl: normalizedUrl,
-          kind: sub.kind,
-          sourcePath: sourceRel,
-          ...producerFields(meta, sub),
-          name: subName(sub),
-        });
-      } else if (sub.kind === 'texture') {
-        out.push({
-          guid: sub.guid,
-          packageUrl: normalizedUrl,
-          kind: 'texture',
-          sourcePath: sourceRel,
-          ...producerFields(meta, sub),
-          name: subName(sub),
-        });
-      }
-    }
+    appendSceneSubAssets(sourceRel, normalizedUrl);
   }
 
   // importer === 'font': the engine-font bake path emits a sidecar whose
@@ -846,6 +821,7 @@ export async function buildCatalogResult(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
+  scanOptions: ScanOptions = {},
 ): Promise<CatalogBuildResult> {
   if (roots.length === 0) {
     return { entries: [], authority: 'authoritative', diagnostics: [] };
@@ -853,7 +829,7 @@ export async function buildCatalogResult(
 
   const cwd = process.cwd();
   const { paths: assetPaths } = loadAssetConfig(cwd);
-  const result = await scan(roots);
+  const result = await scan(roots, scanOptions);
 
   const warnErrors = (errors: readonly CatalogBuildError[]): void => {
     for (const e of errors) {
@@ -886,7 +862,7 @@ export async function buildCatalogResult(
   const seen = new Set<string>();
   const errors: CatalogBuildError[] = [];
   for (const root of roots) {
-    const r = await scan([root]);
+    const r = await scan([root], scanOptions);
     if (!r.ok) {
       console.warn(
         `[forgeax-pack] per-root scan error @ ${root}: ${r.error.message} — dropping this root`,
@@ -931,8 +907,11 @@ export async function buildCatalogProjection(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
+  scanOptions: ScanOptions = {},
 ): Promise<CatalogLegacyProjection> {
-  return projectLegacyCatalog(await buildCatalogResult(roots, base, registeredImporterKeys));
+  return projectLegacyCatalog(
+    await buildCatalogResult(roots, base, registeredImporterKeys, scanOptions),
+  );
 }
 
 /**
@@ -944,8 +923,9 @@ export async function buildCatalog(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
+  scanOptions: ScanOptions = {},
 ): Promise<PackIndexEntry[]> {
-  const projection = await buildCatalogProjection(roots, base, registeredImporterKeys);
+  const projection = await buildCatalogProjection(roots, base, registeredImporterKeys, scanOptions);
   return projection.authority === 'authoritative' ? [...projection.entries] : [];
 }
 
@@ -958,12 +938,13 @@ export async function buildCatalogStrict(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
+  scanOptions: ScanOptions = {},
 ): Promise<{
   catalog: PackIndexEntry[];
   errors: CatalogBuildError[];
   projection: CatalogLegacyProjection;
 }> {
-  const result = await buildCatalogResult(roots, base, registeredImporterKeys);
+  const result = await buildCatalogResult(roots, base, registeredImporterKeys, scanOptions);
   return {
     catalog: [...result.entries],
     errors: [...result.diagnostics],

@@ -36,7 +36,7 @@ Pass the same `profiler` to `createApp({ renderer, world, profiler })` or to the
 | Finish and retain the artifact | `session.finish()` | `Result<ProfileCapture, ProfilerError>` |
 | Validate persisted JSON | `validateProfileCapture(value)` | schema and semantic validation |
 | Build an offline summary | `buildProfileModel(capture)` | frame and phase projections |
-| Query from a shell | `forgeax-engine-profiler summary --file artifact.json` | structured JSON on stdout |
+| Query from a shell | `pnpm --filter @forgeax/engine-profiler run cli summary --file artifact.json` | structured JSON on stdout |
 
 `ProfileCapture` is the portable boundary. It carries the fixed version, time unit, bounded frame and event evidence, owner phase catalog, and `completeness` status. `complete`, `partial`, and `overflow` are explicit outcomes; an overflow artifact remains useful and records its affected frame range.
 
@@ -51,12 +51,25 @@ const profiler = createProfiler({ allocationReport });
 
 The phase catalog is exposed as `profiler.phaseCatalog`. App and Render owners publish their catalogs; consumers should read that relation rather than copy phase names into another list.
 
+The default capture detail is `owner`, which records the stable App/Render phases with the normal
+profiler overhead budget. For a bounded attribution pass, opt into `nested`; Render then records
+producer-owned children such as `record/validation` and `record/graph-execute`, and each child carries
+its `parentSource` and `parentPhase` so offline totals do not double-count nested time.
+
+```ts
+const started = profiler.startCapture({
+  frameLimit: 120,
+  eventLimit: 2048,
+  detail: 'nested',
+});
+```
+
 ## Offline and CLI workflow
 
 ```sh
-forgeax-engine-profiler summary --file profile-capture.json
-forgeax-engine-profiler frame --file profile-capture.json --frame-id 12
-forgeax-engine-profiler phase --file profile-capture.json --source render --phase record
+pnpm --filter @forgeax/engine-profiler run cli summary --file profile-capture.json
+pnpm --filter @forgeax/engine-profiler run cli frame --file profile-capture.json --frame-id 12
+pnpm --filter @forgeax/engine-profiler run cli phase --file profile-capture.json --source render --phase record
 ```
 
 The CLI reads one `ProfileCapture` JSON object from `--file` or stdin and emits structured JSON. It does not reconnect to a live App. The same artifact can be checked before analysis:

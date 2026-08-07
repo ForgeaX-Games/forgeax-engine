@@ -17,6 +17,32 @@ await verifyDemoCapture({
   liveHook: '__captureSsao',
   rtIdx: 0,
   appDir: dirname(here),
+  assertCapture(report) {
+    const events = Array.isArray(report.events) ? report.events : [];
+    const pipelineEntries = new Set(
+      events
+        .filter((event) => event.kind === 'createRenderPipeline')
+        .map((event) => event.desc?.fragment?.entryPoint),
+    );
+    for (const entryPoint of ['fs_ssao_calc', 'fs_ssao_blur']) {
+      if (!pipelineEntries.has(entryPoint)) {
+        throw new Error(`capture is missing the ${entryPoint} pipeline`);
+      }
+    }
+    const renderPasses = events.filter((event) => event.kind === 'beginRenderPass');
+    const gBufferPass = renderPasses.find(
+      (event) => event.colorAttachmentViewHandleIds?.length === 3,
+    );
+    if (gBufferPass === undefined) {
+      throw new Error('capture is missing the deferred 3-attachment G-Buffer pass');
+    }
+    const singleTargetPasses = renderPasses.filter(
+      (event) => event.colorAttachmentViewHandleIds?.length === 1,
+    );
+    if (singleTargetPasses.length < 3) {
+      throw new Error('capture is missing the two SSAO targets and final forward target');
+    }
+  },
   // SSAO's HDRP pipeline + backpack.gltf load makes app.start()'s renderer.ready
   // chain (manifest -> pipeline -> asset upload) slower than the 3s default; a
   // short warmup armed capture before the rAF loop produced its first frame, so

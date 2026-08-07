@@ -44,7 +44,7 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_DELTA_THRESHOLD = Number.parseFloat(process.env.SMOKE_DELTA_THRESHOLD ?? '0.05');
@@ -56,6 +56,8 @@ const FALSIFY_HDR_BIN_EMPTY = process.env.FALSIFY === 'hdr-bin-empty';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const engineDist = (packageName, entry = 'index.mjs') =>
+  pathToFileURL(resolve(monorepoRoot, 'packages', packageName, 'dist', entry)).href;
 
 /**
  * Run the IBL smoke driver.
@@ -156,14 +158,19 @@ export async function runIblSmoke(opts) {
   };
 
   // --- 3. Engine + manifest ---
-  const { World } = await import('@forgeax/engine-ecs');
-  const { createSphereGeometry } = await import('@forgeax/engine-geometry');
-  const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
-const { createRenderer } = await import('@forgeax/engine-runtime');
-const { SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } = await import('@forgeax/engine-render');
-const { TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
-const { Transform } = await import('@forgeax/engine-scene');
-  const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
+  // This helper lives outside a workspace package, so Node cannot resolve a
+  // child's pnpm dependency symlinks while loading it from `_shared/`.
+  // Resolve the built package entries from the monorepo root instead.
+  const { World } = await import(engineDist('ecs'));
+  const { createSphereGeometry } = await import(engineDist('geometry'));
+  const { Camera, MeshFilter, MeshRenderer } = await import(engineDist('render'));
+  const { createRenderer } = await import(engineDist('runtime'));
+  const { SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } = await import(
+    engineDist('render'),
+  );
+  const { TONEMAP_REINHARD_EXTENDED } = await import(engineDist('render'));
+  const { Transform } = await import(engineDist('scene'));
+  const { buildEngineShaderManifest } = await import(engineDist('vite-plugin-shader'));
 
   const ENGINE_MANIFEST = await buildEngineShaderManifest();
   const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
@@ -190,7 +197,8 @@ const { Transform } = await import('@forgeax/engine-scene');
 
   // --- 4. Load newport_loft.hdr through REAL production loadByGuid path ---
   // AC-07: No decodeHdr / registerWithGuid HDR bypass. The smoke serves the
-  // pre-built pack-index.json + imported .bin from distDir via mock fetch.
+  // pre-built pack-index.json + Pack v2 package + asset-local body.bin from
+  // distDir via mock fetch.
   const packIndexPath = resolve(distDir, 'pack-index.json');
 
   let packIndexJson;
@@ -202,9 +210,24 @@ const { Transform } = await import('@forgeax/engine-scene');
 
   const hdrEntry = packIndexJson.find((e) => e.guid === NEWPORT_LOFT_GUID);
   if (!hdrEntry) fail(`newport_loft.hdr GUID ${NEWPORT_LOFT_GUID} not found in pack-index at ${packIndexPath}`);
-  console.log(`[${demoId}] pack-index HDR entry: kind=${hdrEntry.kind} format=${hdrEntry.metadata?.format} ${hdrEntry.metadata?.width}x${hdrEntry.metadata?.height}`);
+  const packagePath = resolve(distDir, hdrEntry.packageUrl.replace(/^\//, ''));
+  let packFileJson;
+  try {
+    packFileJson = JSON.parse(await readFile(packagePath, 'utf8'));
+  } catch (err) {
+    fail(`pack file unreadable at ${packagePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const packAsset = packFileJson.assets?.find((asset) => asset.guid === NEWPORT_LOFT_GUID);
+  const bodyDescriptor = packAsset?.artifacts?.body;
+  if (packAsset === undefined || bodyDescriptor?.path === undefined) {
+    fail(`Pack v2 body artifact missing for ${NEWPORT_LOFT_GUID} in ${packagePath}`);
+  }
+  const artifactUrl = `${hdrEntry.packageUrl.slice(0, hdrEntry.packageUrl.lastIndexOf('/') + 1)}${bodyDescriptor.path}`;
+  console.log(
+    `[${demoId}] pack-index HDR entry: kind=${hdrEntry.kind} payload=${packAsset.payload?.format} ${packAsset.payload?.width}x${packAsset.payload?.height}`,
+  );
 
-  const importedBinPath = resolve(distDir, hdrEntry.packageUrl.replace(/^\//, ''));
+  const importedBinPath = resolve(dirname(packagePath), bodyDescriptor.path);
   let importedBinBytes;
   try {
     const buf = await readFile(importedBinPath);
@@ -219,7 +242,7 @@ const { Transform } = await import('@forgeax/engine-scene');
     importedBinBytes.fill(0);
   }
 
-  // Mock fetch: serve pack-index.json and imported .bin from disk.
+  // Mock fetch: serve pack-index.json, the Pack v2 JSON, and its body.bin.
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     if (typeof url === 'string' && url === '/pack-index.json') {
@@ -230,16 +253,27 @@ const { Transform } = await import('@forgeax/engine-scene');
       };
     }
     if (typeof url === 'string' && url === hdrEntry.packageUrl) {
+      return {
+        ok: true,
+        json: () => Promise.resolve(packFileJson),
+        arrayBuffer: () => Promise.resolve(new TextEncoder().encode(JSON.stringify(packFileJson)).buffer),
+      };
+    }
+    if (typeof url === 'string' && url === artifactUrl) {
       const ab = new ArrayBuffer(importedBinBytes.byteLength);
       new Uint8Array(ab).set(importedBinBytes);
-      return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(ab) };
+      return {
+        ok: true,
+        json: () => Promise.resolve({}),
+        arrayBuffer: () => Promise.resolve(ab),
+      };
     }
     return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   };
 
   assets.configurePackIndex('/pack-index.json');
 
-  const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+  const { AssetGuid } = await import(engineDist('pack', 'guid.mjs'));
   const guidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
   if (!guidRes.ok)
     fail(`AssetGuid.parse failed for NEWPORT_LOFT_GUID: ${guidRes.error.code}`);

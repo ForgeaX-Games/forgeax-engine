@@ -12,6 +12,7 @@
 //   - plan-strategy D-11 (BindPose AABB importer-phase, per-frame zero cost)
 //   - charter P3 (fail-fast on invalid data)
 
+import { decodeF32Accessor } from './decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
@@ -62,6 +63,8 @@ interface BufferViewJson {
   readonly byteStride?: number;
 }
 
+const SKIN_ACCESSOR_TYPES = ['MAT4'] as const;
+
 /** Build a column-major mat4 identity Float32Array (16 floats). */
 function identityMat4(): Float32Array {
   const m = new Float32Array(16);
@@ -70,70 +73,6 @@ function identityMat4(): Float32Array {
   m[10] = 1;
   m[15] = 1;
   return m;
-}
-
-/** Decode a MAT4 F32 accessor into a Float32Array of N*16 floats. */
-function decodeMat4Accessor(
-  accessorIndex: number,
-  accessor: AccessorJson,
-  bufferViews: readonly BufferViewJson[],
-  buffers: readonly Uint8Array[],
-): Result<Float32Array, GltfError> {
-  if (accessor.type !== 'MAT4' || accessor.componentType !== 5126) {
-    return err(
-      gltfErr('gltf-accessor-type-mismatch', { accessorIndex, reason: 'unknownComponentType' }),
-    );
-  }
-  const bvIndex = accessor.bufferView;
-  if (bvIndex === undefined) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: 0,
-        byteLength: 0,
-        bufferIndex: 0,
-      }),
-    );
-  }
-  const bv = bufferViews[bvIndex];
-  if (bv === undefined) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: 0,
-        byteLength: 0,
-        bufferIndex: bvIndex,
-      }),
-    );
-  }
-  const buf = buffers[bv.buffer];
-  if (buf === undefined) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: bv.byteOffset ?? 0,
-        byteLength: bv.byteLength,
-        bufferIndex: bv.buffer,
-      }),
-    );
-  }
-  const elementSize = 16 * 4; // 16 floats * 4 bytes each
-  const totalBytes = elementSize * accessor.count;
-  const absoluteOffset = (bv.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
-  if (absoluteOffset + totalBytes > buf.byteLength) {
-    return err(
-      gltfErr('gltf-buffer-out-of-bounds', {
-        accessor: accessorIndex,
-        byteOffset: absoluteOffset,
-        byteLength: totalBytes,
-        bufferIndex: bv.buffer,
-      }),
-    );
-  }
-  const out = new Float32Array(accessor.count * 16);
-  const src = new Float32Array(buf.buffer, buf.byteOffset + absoluteOffset, out.length);
-  out.set(src);
-  return ok(out);
 }
 
 /**
@@ -219,7 +158,13 @@ export function parseSkin(
           }),
         );
       }
-      const ibmResult = decodeMat4Accessor(ibmAccIdx, ibmAcc, bufferViews, buffers);
+      const ibmResult = decodeF32Accessor(
+        ibmAccIdx,
+        ibmAcc,
+        SKIN_ACCESSOR_TYPES,
+        bufferViews,
+        buffers,
+      );
       if (!ibmResult.ok) return err(ibmResult.error);
       ibm = ibmResult.value;
     } else {

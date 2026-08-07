@@ -2,6 +2,7 @@
 // (feat-20260705-runtime-tier2-decomposition M1 / w4, D-4 F1 straight-cut).
 // Pure move from asset-registry.ts; zero identifier changes.
 
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import type {
   Asset,
   AssetErrorDetail,
@@ -17,9 +18,11 @@ import { ASSET_ERROR_HINTS, AssetError, countExtraUvSets } from '@forgeax/engine
  * Validation spec (plan-strategy D-3):
  *   (a) asset.kind !== 'mesh' -> return null immediately
  *   (b) vertices.length === 0 && indices.length === 0 -> return null (empty mesh legal)
- *   (c) vertices.length % 12 !== 0 -> `AssetError` with code='mesh-vertex-stride-mismatch',
- *       detail = { vertexCount: 0, floatsPerVertex: vertices.length / 12 } (non-integer)
- *   (d) otherwise compute vertexCount = vertices.length / 12; scan indices for maxIndex;
+ *   (c) vertices.length % PROCEDURAL_FLOATS_PER_VERTEX !== 0 -> `AssetError` with
+ *       code='mesh-vertex-stride-mismatch', detail = { vertexCount: 0,
+ *       floatsPerVertex: vertices.length / PROCEDURAL_FLOATS_PER_VERTEX } (non-integer)
+ *   (d) otherwise compute vertexCount = vertices.length / PROCEDURAL_FLOATS_PER_VERTEX;
+ *       scan indices for maxIndex;
  *       if maxIndex + 1 !== vertexCount -> same AssetError shape with
  *       detail = { vertexCount: maxIndex + 1, floatsPerVertex: vertices.length / (maxIndex + 1) }
  *
@@ -117,14 +120,15 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
   const isSkinned =
     attrs !== undefined && attrs.skinIndex !== undefined && attrs.skinWeight !== undefined;
   const extraUvSets = countExtraUvSets(attrs);
-  const floatsPerVertex = (isSkinned ? 18 : 12) + extraUvSets * 2;
+  const baseFloatsPerVertex = isSkinned ? 18 : PROCEDURAL_FLOATS_PER_VERTEX;
+  const floatsPerVertex = baseFloatsPerVertex + extraUvSets * 2;
 
   if (asset.vertices.length % floatsPerVertex !== 0) {
     return new AssetError({
       code: 'mesh-vertex-stride-mismatch',
       expected: isSkinned
         ? '18 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4 + skinIndex u16x4 + skinWeight vec4)'
-        : '12 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)',
+        : `${PROCEDURAL_FLOATS_PER_VERTEX} floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)`,
       hint: ASSET_ERROR_HINTS['mesh-vertex-stride-mismatch'],
       detail: {
         vertexCount: 0,
@@ -149,7 +153,7 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
       code: 'mesh-vertex-stride-mismatch',
       expected: isSkinned
         ? '18 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4 + skinIndex u16x4 + skinWeight vec4)'
-        : '12 floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)',
+        : `${PROCEDURAL_FLOATS_PER_VERTEX} floats per vertex (= position vec3 + normal vec3 + uv vec2 + tangent vec4)`,
       hint: ASSET_ERROR_HINTS['mesh-vertex-stride-mismatch'],
       detail: {
         vertexCount: maxIndex + 1,

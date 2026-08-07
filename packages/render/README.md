@@ -29,6 +29,22 @@ const ready = await renderer.ready;
 if (ready.ok) renderer.draw([world], { owner: 0 });
 ```
 
+When a host constructs a feature only after its World or asset catalogue is
+ready, use `await renderer.installRenderFeature(feature)`. The late path inserts into
+the same lifecycle host and RenderGraph ordering as boot-time features; it is
+not a second renderer. Installing the same object twice is idempotent, while a
+different object with the same identity returns the structured registration
+conflict. Awaiting also completes the feature's declared material-shader
+prewarm, so its first prepared draw observes the same ready barrier as a
+boot-time feature.
+
+This is the graph-only Wave 1 feature route; prepared graphics and late shader
+prewarm extend the same lifecycle for production asset features.
+
+When a late-installed feature remains registered through device loss, its declared material
+shaders remain part of the renderer's live prewarm set. `await renderer.recover()` therefore
+rebuilds those modules before the next prepared draw rather than relying on a one-frame retry.
+
 | This package owns | Excluded concepts |
 |:--|:--|
 | Camera/light/mesh vocabulary, `Renderer`, render errors, documented pipeline operations | Backend selection, asset import, ECS scheduling, animation playback, optional text/tile/sprite authoring |
@@ -175,7 +191,7 @@ consume the structured `error.detail` context.
 | `disabled` / `render-feature-capability-missing` | Provide the capability on a replacement device; after device-loss recovery call `await renderer.recover()`. On a live renderer, `recover()` returns `recover-not-needed`, so rebuild on a capable device instead. |
 | `render-feature-registration-conflict` | Fix identity/order at registration |
 | `render-feature-pass-order-conflict` | Reorder the declared dependency and retry contribution |
-| `render-feature-preparation-failed` | Repair the named prepared resource and retry on the action in `error.detail.recovery` |
+| `render-feature-preparation-failed` | Repair the named prepared resource and retry on the action in `error.detail.recovery`; after device loss, verify that the feature's declared shader was included in the recovery prewarm set |
 | `render-feature-prepared-state-mismatch` | Read the discriminated `error.detail.reason`, repair the generation/layout/format mismatch, and retry |
 | `render-feature-draw-recording-failed` | Read `error.detail.backendReason`, then retry after the host reports renderer recovery |
 | `disposed` | Terminal; create a new renderer/feature registration |

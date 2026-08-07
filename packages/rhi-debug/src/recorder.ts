@@ -367,6 +367,17 @@ function isRecordingActive(s: RecorderInternal): boolean {
 }
 
 /**
+ * A frame-header snapshot is not a normal render-recording phase, but it can
+ * already have copied a live resource and still need that resource's create
+ * event when it appends `initialData`. Keep bootstrap ownership through that
+ * async window: per-frame feature resources may be released while readback is
+ * awaiting GPU completion.
+ */
+function retainsCaptureBootstrap(s: RecorderInternal): boolean {
+  return isRecordingActive(s) || s.state === RecorderState.Snapshotting;
+}
+
+/**
  * @internal
  * The exact pushEvent gate as a predicate: record iff not suppressed AND in an
  * active recording state. Proxy methods that do pre-pushEvent work (storeBlob,
@@ -445,6 +456,7 @@ function ensureTextureCreateEvent(
   const event: RhiCallEvent = {
     kind: 'createTexture',
     handleId: textureId,
+    origin: 'swapchain',
     desc: {
       size: { width, height, depthOrArrayLayers },
       format: format as GPUTextureFormat,
@@ -702,6 +714,10 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
         for (const ref of _getCreateEventReferencedHandleIds(e)) refs.add(ref);
         break;
       }
+      case 'destroyBuffer':
+      case 'destroyTexture':
+        refs.add(e.handleId);
+        break;
       case 'frameMark':
       case 'createBuffer':
       case 'createTexture':
@@ -2652,6 +2668,8 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
 
       destroyBuffer(buf: Buffer) {
         const hId = s.handleMap.get(buf as unknown as object);
+        const res = realDevice.destroyBuffer(buf);
+        if (!res.ok) return res;
         if (hId !== undefined) {
           s.descriptorTable.delete(hId);
           // Bound bootstrapCreates growth: an idle-destroyed resource can never
@@ -2682,30 +2700,34 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           // spirit as handleMap's WeakMap, but keyed by handleId so it needs the
           // WeakRef wrapper) -- a finalization-semantics change, out of scope here.
           if (
-            !isRecordingActive(s) &&
+            !retainsCaptureBootstrap(s) &&
             !s.snapshotSeededHandles.has(hId) &&
             !hasBootstrapDependency(s, hId)
           ) {
             s.bootstrapCreates.delete(hId);
           }
+          pushEvent(s, { kind: 'destroyBuffer', handleId: hId });
         }
-        return realDevice.destroyBuffer(buf);
+        return res;
       },
 
       destroyTexture(tex: Texture) {
         const hId = s.handleMap.get(tex as unknown as object);
+        const res = realDevice.destroyTexture(tex);
+        if (!res.ok) return res;
         if (hId !== undefined) {
           s.descriptorTable.delete(hId);
           // Same gate + same bounded residual as destroyBuffer above.
           if (
-            !isRecordingActive(s) &&
+            !retainsCaptureBootstrap(s) &&
             !s.snapshotSeededHandles.has(hId) &&
             !hasBootstrapDependency(s, hId)
           ) {
             s.bootstrapCreates.delete(hId);
           }
+          pushEvent(s, { kind: 'destroyTexture', handleId: hId });
         }
-        return realDevice.destroyTexture(tex);
+        return res;
       },
 
       createCommandEncoder(desc?: CommandEncoderDescriptor | undefined) {

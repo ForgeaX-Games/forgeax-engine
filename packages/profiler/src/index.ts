@@ -14,7 +14,7 @@ export { buildProfileModel } from './model.js';
 export type { Profiler } from './profiler.js';
 /** Creates an opt-in bounded profiler with optional sink and allocation evidence. */
 export { createProfiler } from './profiler.js';
-export type { RecorderSession } from './recorder.js';
+export type { ProfileDetail, RecorderSession } from './recorder.js';
 /** Validates a persisted capture before model building or CLI-style analysis. */
 export { validateProfileCapture } from './schema.js';
 export type {

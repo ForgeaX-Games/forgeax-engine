@@ -7,7 +7,7 @@ import {
   type PeerId,
 } from '@forgeax/engine-net';
 import { err, ok, type Result } from '@forgeax/engine-types';
-import { BoundedEventQueue } from './event-queue';
+import { BoundedEventQueue, DEFAULT_MAX_QUEUED_EVENTS } from './event-queue';
 
 export interface WebSocketLike {
   readonly CONNECTING: number;
@@ -34,7 +34,6 @@ export interface WebSocketClientCoreOptions {
   readonly toBytes: (data: unknown) => Uint8Array | Promise<Uint8Array | undefined> | undefined;
 }
 
-const DEFAULT_MAX_QUEUED_EVENTS = 1024;
 const CLIENT_PEER_ID = 1 as PeerId;
 
 export function createWebSocketClientEndpoint(

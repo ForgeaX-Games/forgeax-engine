@@ -4,7 +4,7 @@
  * The five prepared kinds are declarative references only: the render owner
  * retains device, resource, graph, recording, and submission ownership.
  */
-import { err, ok, type Result } from '@forgeax/engine-types';
+import { err, type MaterialRenderState, ok, type Result } from '@forgeax/engine-types';
 import {
   type RenderError,
   RenderFeaturePreparationFailedError,
@@ -38,6 +38,12 @@ export interface RenderFeaturePipelineDescriptor {
   readonly vertexLayout: string;
   readonly colorFormats: readonly string[];
   readonly depthFormat?: string;
+  /**
+   * Declarative raster/depth/blend overrides for this pipeline. The render
+   * owner maps this portable material state onto the backend pipeline; a
+   * feature never receives a backend pipeline descriptor or device handle.
+   */
+  readonly renderState?: MaterialRenderState;
 }
 
 /** Declarative request for values bound through a prepared pipeline. */

@@ -17,7 +17,13 @@ import { DebugError } from '../errors';
 import { pixelDeltaAbsMean } from '../pixel-diff';
 import type { Replay } from '../replayer';
 import { adaptReplayFormat, createReplay } from '../replayer';
-import type { RhiCallEvent, RhiCallEventCreateBuffer, RhiCapsRecorded, Tape } from '../types';
+import type {
+  RhiCallEvent,
+  RhiCallEventCreateBuffer,
+  RhiCallEventCreateTexture,
+  RhiCapsRecorded,
+  Tape,
+} from '../types';
 
 // ============================================================================
 // Helpers
@@ -87,7 +93,7 @@ function makeMockDevice(overrides: Partial<RhiCaps>): {
 
   const mockDevice = {
     caps: {
-      backendKind: 'webgpu' as const,
+      backendKind: overrides.backendKind ?? ('webgpu' as const),
       compute: true,
       timestampQuery: overrides.timestampQuery ?? true,
       indirectDrawing: false,
@@ -139,6 +145,18 @@ function makeCreateBufferEvent(handleId: string): RhiCallEventCreateBuffer {
   };
 }
 
+function makeCreateTextureEvent(format: GPUTextureFormat): RhiCallEventCreateTexture {
+  return {
+    kind: 'createTexture',
+    handleId: `texture:${format}`,
+    desc: {
+      size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+      format,
+      usage: 0x06,
+    },
+  };
+}
+
 // ============================================================================
 // m5-3: caps mismatch — 5 direction (independent tests)
 // ============================================================================
@@ -175,14 +193,38 @@ describe('createReplay caps mismatch (m5-3)', () => {
     }
   });
 
-  it('fails when textureCompressionBc is required but missing', () => {
-    const tape = makeTape({ textureCompressionBc: true }, []);
-    const { device } = makeMockDevice({ textureCompressionBc: false });
+  it.each([
+    ['BC', 'bc7-rgba-unorm', 'textureCompressionBc'],
+    ['ETC2', 'etc2-rgba8unorm', 'textureCompressionEtc2'],
+    ['ASTC', 'astc-4x4-unorm', 'textureCompressionAstc'],
+  ] as const)('%s is required when the tape creates a compressed texture', (_name, format, cap) => {
+    const tape = makeTape({ [cap]: true }, [makeCreateTextureEvent(format as GPUTextureFormat)]);
+    const { device } = makeMockDevice({ [cap]: false });
     const result = createReplay(tape, device);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('caps-mismatch');
     }
+  });
+
+  it('allows compressed textures on the structural null backend', () => {
+    const tape = makeTape({ textureCompressionBc: true }, [
+      makeCreateTextureEvent('bc7-rgba-unorm'),
+    ]);
+    const { device } = makeMockDevice({ backendKind: 'null', textureCompressionBc: false });
+    const result = createReplay(tape, device);
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ['BC', 'textureCompressionBc'],
+    ['ETC2', 'textureCompressionEtc2'],
+    ['ASTC', 'textureCompressionAstc'],
+  ] as const)('%s is not required when the tape has no compressed texture', (_name, cap) => {
+    const tape = makeTape({ [cap]: true }, []);
+    const { device } = makeMockDevice({ [cap]: false });
+    const result = createReplay(tape, device);
+    expect(result.ok).toBe(true);
   });
 
   it('fails when storageBuffer is required but missing', () => {

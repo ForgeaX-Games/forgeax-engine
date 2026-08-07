@@ -32,7 +32,7 @@ test('private-repository CI has one trusted runner/control path', () => {
   assert.doesNotMatch(workflow, /fork PR/i);
   assert.match(
     jobSection('coverage-pnpm'),
-    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "standard"\]'\) \}\}/,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
   );
   assert.doesNotMatch(jobSection('coverage-pnpm'), /github\.event\.pull_request/);
 });
@@ -43,7 +43,9 @@ test('coverage and perf ownership are not duplicated in primary-pnpm', () => {
   assert.doesNotMatch(primary, /vitest-unit-out\.json/);
   assert.doesNotMatch(primary, /--project=ecs-perf/);
   assert.match(jobSection('coverage-pnpm'), /Vitest coverage \(v8\) \+ typecheck/);
-  assert.match(jobSection('coverage-pnpm'), /ECS performance ratio gates \(uninstrumented\)/);
+  assert.doesNotMatch(jobSection('coverage-pnpm'), /--project=ecs-perf/);
+  assert.match(jobSection('coverage-perf'), /ECS performance ratio gates \(uninstrumented\)/);
+  assert.match(jobSection('coverage-perf'), /--project=ecs-perf/);
 });
 
 test('required-checks retains PR-head validation as an input, not a fork guard', () => {
@@ -94,6 +96,7 @@ test('resource-intensive WebGPU/browser gates use the heavy capacity pool', () =
     'webkit-fallback',
     'metrics-validate',
     'collectathon-boot-e2e',
+    'coverage-pnpm',
   ]) {
     assert.match(jobSection(name), heavySelector, `${name} must use the heavy pool`);
   }

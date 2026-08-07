@@ -41,6 +41,7 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
 } from './render-system-extract';
+import type { RenderRecordPhase } from './renderer';
 
 /**
  * Narrow runtime-services carrier handed to pipeline pass closures (UE `FRDGBuilder`
@@ -243,6 +244,8 @@ export interface RenderPipelineData {
  * NOT cast — these fields are not part of the public contract.
  */
 export interface _StandardForwardSceneView {
+  /** @internal Opt-in nested CPU observer inherited from recordFrame. */
+  readonly profilePhase?: <T>(phase: RenderRecordPhase, action: () => T) => T;
   /**
    * @internal — feat-20260614 M8 (D-19): the live World the record stage
    * resolves user-tier asset handles against. Asset payloads moved off the
@@ -287,6 +290,8 @@ export interface _StandardForwardSceneView {
    * BGL is the same per-entity mesh SSBO.
    */
   readonly hdrpClusterBindGroup: BindGroup | null;
+  /** @internal Compute-only group for the optional HDRP membership producer. */
+  readonly hdrpClusterMembershipBindGroup: BindGroup | null;
   /**
    * @internal — feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 /
    * w4-record-swap (D-1).
@@ -314,6 +319,14 @@ export interface _StandardForwardSceneView {
   readonly materialSlotStart: readonly number[];
   /** @internal Cumulative material-slot count matching `materialSlotStart`. */
   readonly materialSlotCount: number;
+  /** @internal Same-frame material bind-group assembly cache shared by main passes. */
+  readonly materialBgAssemblyCache: Map<number, import('@forgeax/engine-rhi').BindGroup>;
+  /** @internal Per-frame material UBO bytes shared by repeated main passes. */
+  materialUboPayloadCache?: {
+    readonly validatedOrdered: readonly ValidatedRenderable[];
+    readonly materialSlotCount: number;
+    readonly payload: Uint8Array;
+  };
   /**
    * @internal — feat-20260612-hdrp-ssao wiring fix.
    *

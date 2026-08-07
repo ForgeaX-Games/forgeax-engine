@@ -41,7 +41,16 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // 2. scene constants
 
-const NUM_LIGHTS = 32;
+const DEFAULT_NUM_LIGHTS = 32;
+const NUM_LIGHTS = (() => {
+  if (typeof window !== 'undefined') {
+    const requested = Number(new URL(window.location.href).searchParams.get('lights'));
+    if (Number.isInteger(requested) && requested >= 1 && requested <= 128) {
+      return requested;
+    }
+  }
+  return DEFAULT_NUM_LIGHTS;
+})();
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
 const CUBE_SCALE = 0.5;
 const CUBE_SPACING = 3.0;
@@ -78,7 +87,7 @@ function randomColor(state: number): [number, number, number, number] {
   return [r, g, b, s3];
 }
 
-// Pre-compute the full 32-light set with deterministic seed=13.
+// Pre-compute the deterministic light set with seed=13; the default is 32 lights.
 function generateLightData(): Array<{
   pos: readonly [number, number, number];
   colorR: number; colorG: number; colorB: number;

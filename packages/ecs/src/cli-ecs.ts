@@ -23,10 +23,12 @@
 
 import { realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { type ConnectFn, defaultConnect } from '@forgeax/engine-types/inspector-client';
-
-const DEFAULT_PORT = 5732;
-const DEFAULT_HOST = 'localhost';
+import {
+  type ConnectFn,
+  defaultConnect,
+  INSPECTOR_DEFAULT_HOST,
+  INSPECTOR_DEFAULT_PORT,
+} from '@forgeax/engine-types/inspector-client';
 
 const SUBCOMMANDS = ['entities', 'components', 'systems', 'resources', 'world'] as const;
 export type EcsSubcommand = (typeof SUBCOMMANDS)[number];
@@ -154,8 +156,8 @@ export function helpBody(): string {
     '  --filter[=]<name>    alias of --with (entities only; repeatable; AC-29)',
     '  --without <name>     exclude archetypes that contain <name> (entities only; repeatable)',
     '  --component[=]<name> entities only: keep archetypes that include <name> (AC-29)',
-    '  --port <n>           inspector WebSocket port (default 5732)',
-    '  --host <s>           inspector host (default localhost)',
+    `  --port <n>           inspector WebSocket port (default ${INSPECTOR_DEFAULT_PORT})`,
+    `  --host <s>           inspector host (default ${INSPECTOR_DEFAULT_HOST})`,
     '  --help, -h           show this help and exit 0',
     '',
     'Examples:',
@@ -205,8 +207,8 @@ export function parseCliArgs(argv: readonly string[]): ParseResult | ParseError 
         withNames: [],
         withoutNames: [],
         componentName: undefined,
-        port: DEFAULT_PORT,
-        host: DEFAULT_HOST,
+        port: INSPECTOR_DEFAULT_PORT,
+        host: INSPECTOR_DEFAULT_HOST,
       },
     };
   }
@@ -221,8 +223,8 @@ export function parseCliArgs(argv: readonly string[]): ParseResult | ParseError 
   const withNames: string[] = [];
   const withoutNames: string[] = [];
   let componentName: string | undefined;
-  let port = DEFAULT_PORT;
-  let host = DEFAULT_HOST;
+  let port = INSPECTOR_DEFAULT_PORT;
+  let host = INSPECTOR_DEFAULT_HOST;
   // R2/F-1 (AC-29): support both space-separated and `=`-separated forms.
   // `--filter=<Name>` is an alias of `--with <Name>` (single-shot, replaces
   // the named-list semantic in the AC-29 phrasing); `--component=<Name>`

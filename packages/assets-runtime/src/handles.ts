@@ -53,10 +53,10 @@ export const HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsse
  *   layout discriminator (plan-strategy §3 RT4 + D-9 + charter P4
  *   consistent abstraction).
  *
- * @reuses {@link BUILTIN_FLOATS_PER_VERTEX} = 12 (the single layout SSOT;
- *   the procedural `createPlaneGeometry` factory already returns 12F via
- *   {@link meshFromInterleaved}). Reviewer can grep `BUILTIN_FLOATS_PER_VERTEX`
- *   to enumerate every consumer of this constant.
+ * @reuses `PROCEDURAL_FLOATS_PER_VERTEX` = 12 from
+ *   `@forgeax/engine-geometry` (the single layout SSOT; the procedural
+ *   `createPlaneGeometry` factory already returns 12F via
+ *   `meshFromInterleaved`).
  */
 export const HANDLE_QUAD: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsset'>(3);
 
@@ -110,8 +110,9 @@ export const HANDLE_CYLINDER: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsse
  *   declares non-zero `slices`. For the legacy zero-slice sprite path use
  *   {@link HANDLE_QUAD}.
  *
- * @reuses {@link BUILTIN_FLOATS_PER_VERTEX} = 12 (sprite-pipeline binding
- *   table / vertex layout untouched). plan-strategy §D-2 NOTE clarifies
+ * @reuses `PROCEDURAL_FLOATS_PER_VERTEX` = 12 from
+ *   `@forgeax/engine-geometry` (sprite-pipeline binding table / vertex layout
+ *   untouched). plan-strategy §D-2 NOTE clarifies
  *   the id=5 vs original-plan id=4 drift: HANDLE_SPHERE took id=4 in
  *   feat-20260529-fxaa-sphere-builtin before this feat landed.
  */

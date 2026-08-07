@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { TreePanel } from '../components/TreePanel';
 import type { ViewModel } from '../viewer-model';
+import { buildResourceLifecycle } from '../viewer-model';
 
 function fakeViewModel(): ViewModel {
   return {
@@ -34,6 +35,7 @@ function fakeViewModel(): ViewModel {
     meta: { totalDraws: 2, totalPasses: 1, hasCompute: false },
     commands: [],
     resources: new Map(),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 

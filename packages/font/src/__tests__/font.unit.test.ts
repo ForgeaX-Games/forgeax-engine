@@ -187,6 +187,17 @@ describe('font producer sourceKey', () => {
   });
 });
 
+describe('font package root surface', () => {
+  it('keeps the version authority in package metadata, not a root mirror', async () => {
+    const mod = await import('../index.js');
+    expect('FONT_PACKAGE_VERSION' in mod).toBe(false);
+    expect(typeof mod.bakeFont).toBe('function');
+    expect(typeof mod.encodePng).toBe('function');
+    expect(typeof mod.atlasToSidecar).toBe('function');
+    expect(typeof mod.runCliFont).toBe('function');
+  });
+});
+
 {
   // ─── from font-importer.test.ts ───
 

@@ -150,6 +150,11 @@ reads the same projection before and after `renderer.recover()`:
 FORGEAX_DEVICE_LOSS_DIR=<run>/artifacts pnpm --filter @forgeax/preview smoke:device-loss-reentry
 ```
 
+The companion enters the public game-default charge VFX action before loss and validates that the
+late particle RenderFeature's Pack GUID, ready billboard/mesh batches, and reset cleanup survive the
+recovery in both dev and production. It also fails on an actionable first-frame preparation error,
+so shader prewarm regressions cannot hide behind a later retry.
+
 This proves browser GPU-process recovery only; it does not claim physical hardware TDR coverage.
 
 The WebKit admission proof runs the same game through the existing WebGL2 fallback. It asserts the

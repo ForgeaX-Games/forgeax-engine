@@ -48,6 +48,13 @@ import { RenderGraph } from '@forgeax/engine-render-graph';
 import { RhiError } from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
 import {
+  GPU_TEXTURE_USAGE_COPY_DST,
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
+} from './gpu-texture-usage';
+import {
   addBloomPasses,
   addFullscreenPass,
   addPointShadowPass,
@@ -113,7 +120,7 @@ export const urpPipeline: RenderPipeline = {
       format: 'depth24plus-stencil8',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (plan-strategy D-6)
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // Shadow depth atlas target. ECS-driven size (DirectionalLight.mapSize
@@ -139,7 +146,7 @@ export const urpPipeline: RenderPipeline = {
       format: 'depth32float',
       size: { w: atlasSize, h: atlasSize },
       sample: 1,
-      usage: 0x10 | 0x04 | 0x01, // RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_SRC,
     });
 
     // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): independent spot
@@ -156,7 +163,7 @@ export const urpPipeline: RenderPipeline = {
       format: 'depth32float',
       size: { w: spotAtlasSize, h: spotAtlasSize },
       sample: 1,
-      usage: 0x10 | 0x04 | 0x01, // RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_SRC,
     });
 
     const fxaaActive = data.camera.antialias === 'fxaa';
@@ -170,7 +177,7 @@ export const urpPipeline: RenderPipeline = {
         format: supportsViewFormats ? swapChainStorageFormat : swapChainViewFormat,
         size: 'swapchain',
         sample: 1,
-        usage: 0x10 | 0x04,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
         ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
       });
     }
@@ -182,7 +189,7 @@ export const urpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     // hdrComposited holds the bloom-composited HDR scene that tonemap reads.
     // It MUST be a distinct physical texture from hdrColor, not an alias: the
@@ -197,7 +204,7 @@ export const urpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // Half-res bloom chain.
@@ -205,19 +212,19 @@ export const urpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('bloomBlurH', {
       format: 'rgba16float',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('bloomBlurV', {
       format: 'rgba16float',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // MSAA targets (count=4). The WebGL2 fallback reports its concrete
@@ -230,21 +237,21 @@ export const urpPipeline: RenderPipeline = {
         format: 'rgba16float',
         size: 'swapchain',
         sample: 4,
-        usage: 0x10,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
       });
     }
     graph.addColorTarget('hdrDepth', {
       format: 'depth24plus-stencil8',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (depth post-process)
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     if (msaaSupported) {
       graph.addColorTarget('hdrDepthMsaa', {
         format: 'depth24plus-stencil8',
         size: 'swapchain',
         sample: 4,
-        usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (depth post-process)
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
       });
     }
     // bug-20260610: aligned with createRenderer's RGBA swap-chain switch
@@ -270,14 +277,14 @@ export const urpPipeline: RenderPipeline = {
         format: swapChainStorageFormat,
         size: 'swapchain',
         sample: 4,
-        usage: 0x10,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
         ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
       });
       graph.addColorTarget('msaaDepth', {
         format: 'depth24plus-stencil8',
         size: 'swapchain',
         sample: 4,
-        usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (depth post-process)
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
       });
     }
 
@@ -404,7 +411,7 @@ export const urpPipeline: RenderPipeline = {
         format: swapChainStorageFormat,
         size: 'swapchain',
         sample: 1,
-        usage: 0x04 | 0x02, // TEXTURE_BINDING | COPY_DST
+        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
       });
       const passReads: string[] = [];
       // plan-strategy D-6: when the post-effect entry declares a depth read,

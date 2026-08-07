@@ -3,6 +3,11 @@ import { fileURLToPath } from 'node:url';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+import {
+  createParticleEffectNativeCooker,
+  createStockParticleOperatorRegistry,
+} from '@forgeax/engine-vfx-compiler';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { playwright } from '@vitest/browser-playwright';
@@ -11,7 +16,7 @@ import { websocketListenerCommands } from './packages/net-websocket/__tests__/su
 import materialContractInventory from './scripts/material-contract-inventory.json' with {
   type: 'json',
 };
-import { targetProfileImporter } from './templates/game-default/src/target-profile-importer';
+import { targetProfileImporter } from './templates/game-default/assets/plugins/target-profile-importer';
 
 // Monorepo-root anchor for pluginPack roots (see browser project below).
 // `new URL('.', import.meta.url)` already yields this file's directory
@@ -21,6 +26,24 @@ import { targetProfileImporter } from './templates/game-default/src/target-profi
 // charter F1 prefers the single-step explicit form for grep traceability.
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const materialPackages = materialContractInventory.materialPackages;
+// Keep authored WGSL sidecars under the template's single assets/ content
+// root without handing build-only shader sources to the runtime catalog. The
+// browser project must mirror apps/preview's explicit pack boundary so a
+// shader diagnostic cannot downgrade the scoped catalog and turn every GUID
+// load into a misleading ImportTransport miss.
+const templatePackRoots = [
+  'animated-target-material.pack.json',
+  'base-material.pack.json',
+  'charge-vfx-effect.pack.json',
+  'hit-flash-material.pack.json',
+  'hit-vfx-effect.pack.json',
+  'hit-vfx-materials.pack.json',
+  'multi-material-target.pack.json',
+  'scene.pack.json',
+  'target-profile.json.meta.json',
+  'ui/hud.pack.json',
+  'ui/settings.pack.json',
+].map((relativePath) => resolve(rootDir, 'templates/game-default/assets', relativePath));
 // The entity-visibility screenshot test gets a fresh browser process because
 // Chromium's shared GPU device can outlive a Vitest file but not its teardown.
 const entityVisibilityBrowserTest =
@@ -76,6 +99,9 @@ export default defineConfig({
       // -- unit layer: existing per-package + apps + scripts --
       'packages/*',
       'apps/*',
+      // game-default owns small pure contract tests for authored template
+      // assets; browser-marked HUD tests remain owned by the browser project.
+      'templates/game-default',
       // feat-20260515 M4 D-6: nested learn-render workspaces register
       // through the dual-segment glob (pnpm-workspace.yaml#packages
       // mirror). The vitest config form points at each workspace's
@@ -111,6 +137,10 @@ export default defineConfig({
         test: {
           name: 'ecs-perf',
           environment: 'node',
+          // The benchmark deliberately samples 31 rounds of 50k updates.
+          // Keep runner contention from turning a passing ratio into a
+          // default-5s timeout red while retaining a bounded CI budget.
+          testTimeout: 30000,
           include: ['packages/ecs/src/**/*.perf.test.ts'],
         },
       },
@@ -141,8 +171,8 @@ export default defineConfig({
       // configureServer (no build cost).
       {
         // tweak-20260521 D-1: mount pluginPack() alongside forgeaxShader() so
-        // vitest browser project tests reach `/pack-index.json` through the
-        // plugin's configureServer middleware (real texture fetch path) rather
+        // vitest browser project tests reach the binding's scoped catalog
+        // through the plugin's configureServer middleware (real texture fetch path) rather
         // than the silent untextured fallback. Roots are explicit 6-entry SSOT
         // (charter F1 single-grep): four learn-render section local assets/
         // dirs (1.4 / 1.5 / 1.6 / 1.7) plus the two shared NonCommercial
@@ -162,6 +192,7 @@ export default defineConfig({
         plugins: [
           forgeaxShader({ materialPackages }),
           pluginPack({
+            runtimeBinding: createStandaloneRuntimeAssetBinding('browser-tests'),
             roots: [
               resolve(rootDir, 'apps/learn-render/1.getting-started/4.textures/assets'),
               resolve(rootDir, 'apps/learn-render/1.getting-started/5.transformations/assets'),
@@ -185,7 +216,7 @@ export default defineConfig({
               // this middleware). Select its sidecar explicitly so the
               // mirrored UI sidecars are not scanned twice; explicit file
               // roots are supported by the pack scanner.
-              resolve(rootDir, 'templates/game-default/assets'),
+              ...templatePackRoots,
               resolve(
                 rootDir,
                 'forgeax-engine-assets/demo-assets/template-game-default/sky.hdr.meta.json',
@@ -199,10 +230,14 @@ export default defineConfig({
             // meta resolves to importer-not-registered (422). imageImporter also
             // covers any non-pre-baked image sidecars under the scanned roots.
             importers: [imageImporter, gltfImporter, audioImporter, targetProfileImporter()],
+            cookers: [createParticleEffectNativeCooker(createStockParticleOperatorRegistry())],
           }),
         ],
         server: {
           fs: { allow: [rootDir] },
+        },
+        define: {
+          'import.meta.env.FORGEAX_RUNTIME_SCOPE_ID': JSON.stringify('browser-tests'),
         },
         test: {
           name: 'browser',

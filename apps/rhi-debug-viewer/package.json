@@ -11,9 +11,16 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:rhi-debug": "node scripts/smoke-browser.mjs",
     "smoke:browser:no-webgpu": "node scripts/smoke-browser-no-webgpu.mjs"
   },
   "forgeax": {
+    "rhiDebug": {
+      "riskFamilies": [
+        "programmable-pipelines",
+        "raster-state"
+      ]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

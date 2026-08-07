@@ -6,7 +6,7 @@
 // interface shape. M2 baseline lands the structural shim — every method
 // returns a Result-wrapped placeholder that mirrors the @forgeax/engine-rhi-webgpu
 // behaviour. M3 / M4 (w22-w27) wires the real wasm bindings through the
-// `ensureRhiWgpuReady` + `getRhiWgpuModule` lazy-load contract (w13).
+// `ensureReady` + internal wasm-module accessor lazy-load contract (w13).
 //
 // w16 scope:
 //   - makeRhiAdapter(rawAdapter): RhiAdapter

@@ -194,14 +194,22 @@ if (DISCRIMINATION) {
     };
 
     const { createApp: createAppLocal } = await import('@forgeax/engine-app');
-    const runtimePkgLocal = await import('@forgeax/engine-runtime');
-    const { Transform: TransformLocal } = runtimePkgLocal;
-const { Camera: CameraLocal, DirectionalLight: DirectionalLightLocal, Materials: MaterialsLocal, MeshFilter: MeshFilterLocal, MeshRenderer: MeshRendererLocal, perspective: perspectiveLocal } = await import('@forgeax/engine-render');
-const { HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL } = await import('@forgeax/engine-render/internal');
-const {
-  HANDLE_CUBE: HANDLE_CUBE_LOCAL,
-  HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
-} = await import('@forgeax/engine-assets-runtime');
+    const { Transform: TransformLocal } = await import('@forgeax/engine-scene');
+    const {
+      Camera: CameraLocal,
+      DirectionalLight: DirectionalLightLocal,
+      Materials: MaterialsLocal,
+      MeshFilter: MeshFilterLocal,
+      MeshRenderer: MeshRendererLocal,
+      perspective: perspectiveLocal,
+    } = await import('@forgeax/engine-render');
+    const { HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL } = await import(
+      '@forgeax/engine-render/internal',
+    );
+    const {
+      HANDLE_CUBE: HANDLE_CUBE_LOCAL,
+      HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
+    } = await import('@forgeax/engine-assets-runtime');
 
     const appResult = await createAppLocal(canvas, {}, { shaderManifestUrl: MANIFEST_URL });
     globalThis.navigator.gpu.requestAdapter = originalReqAdapter;
@@ -271,8 +279,8 @@ const {
     ).unwrap();
     world.spawn(
       { component: TransformLocal, data: { pos: [1, 2, 1], quat: [0, 0, 0, 1]} },
-      { component: DirectionalLightLocal, data: { color: [1.0, 0.95, 0.85], intensity: 0.6 } },
-    );
+      { component: DirectionalLightLocal, data: { direction: [-0.3, -1, -0.5], color: [1.0, 0.95, 0.85], intensity: 0.6 } },
+    ).unwrap();
     world.spawn(
       { component: TransformLocal, data: { pos: [0, 1.8, 4.5], quat: [0, 0, 0, 1]} },
       { component: CameraLocal, data: { ...perspectiveLocal({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }), clearColor: [0.02, 0.02, 0.04, 1] } },

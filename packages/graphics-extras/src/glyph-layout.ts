@@ -22,24 +22,22 @@
 //     helper registers a 0-vertex mesh, which is legal; pick skips it).
 //
 // Vertex layout produced here is the 12-float canonical stride
-// (BUILTIN_FLOATS_PER_VERTEX): position(vec3) + normal(vec3) + uv(vec2) +
+// (PROCEDURAL_FLOATS_PER_VERTEX): position(vec3) + normal(vec3) + uv(vec2) +
 // tangent(vec4). This module writes position + uv as real values and leaves
 // normal/tangent as placeholder constants so the buffer is register-ready
 // without a second pass (R-2: 12-float stride is a hard register gate). The
 // per-vertex offsets are exported so the bake helper + tests share one SSOT.
 
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import type { FontAsset, GlyphMetric } from '@forgeax/engine-types';
 import { TextError } from '@forgeax/engine-types';
 
 /**
  * Canonical 12-float vertex stride (position vec3 + normal vec3 + uv vec2 +
- * tangent vec4). Mirrors `BUILTIN_FLOATS_PER_VERTEX` in asset-registry.ts;
- * duplicated as a local const so glyph-layout has no asset-registry import
- * cycle. R-2: the baked mesh must satisfy this stride or `register`
+ * tangent vec4) owned by `PROCEDURAL_FLOATS_PER_VERTEX` in
+ * `@forgeax/engine-geometry`. R-2: the baked mesh must satisfy this stride or `register`
  * fail-fasts with `mesh-vertex-stride-mismatch`.
  */
-export const FloatsPerGlyphVertex = 12;
-
 /** Byte-free float offsets within a single 12-float vertex. */
 export const VERTEX_OFFSET = {
   position: 0, // vec3
@@ -151,7 +149,7 @@ export function layoutGlyphText(
   }
 
   const glyphCount = quads.length;
-  const vertices = new Float32Array(glyphCount * 4 * FloatsPerGlyphVertex);
+  const vertices = new Float32Array(glyphCount * 4 * PROCEDURAL_FLOATS_PER_VERTEX);
   const indices = new Uint16Array(glyphCount * 6);
 
   for (let g = 0; g < glyphCount; g++) {
@@ -190,7 +188,7 @@ function writeVertex(
   u: number,
   v: number,
 ): void {
-  const o = vertexIndex * FloatsPerGlyphVertex;
+  const o = vertexIndex * PROCEDURAL_FLOATS_PER_VERTEX;
   // position (vec3)
   out[o + VERTEX_OFFSET.position + 0] = x;
   out[o + VERTEX_OFFSET.position + 1] = y;

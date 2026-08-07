@@ -80,11 +80,11 @@ const res = await assets.loadByGuid(guid); // -> Result<payload> (D-17: payload,
 |:--|:--|:--|
 | `AssetRegistry` | class | GUID -> payload catalogue + loader dispatch + scene instantiate |
 | `HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_QUAD` / `HANDLE_SPHERE` / `HANDLE_CYLINDER` / `HANDLE_NINESLICE_QUAD` | const | builtin mesh handles (ids 1-6) |
-| `BuiltinAssetRegistry` / `BUILTIN_*` / `BUILTIN_FLOATS_PER_VERTEX` / `BUILTIN_BASE` | const | process-static builtin payloads + vertex-layout SSOT |
+| `BuiltinAssetRegistry` / `BUILTIN_*` / `BUILTIN_BASE` | const | process-static builtin payloads and reserved slot boundary; the shared vertex-layout SSOT is `PROCEDURAL_FLOATS_PER_VERTEX` from `@forgeax/engine-geometry` |
 | `resolveAssetHandle` / `walkMaterialPassesOverSharedRefs` | fn | two-tier handle -> payload resolution |
 | `LoaderRegistry` | class | kind -> loader dispatch table |
 | `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire 10 engine loaders + caller `extraLoaders` |
-| `DynamicTextureStore` / `DynamicTextureDevice` | class/type | per-frame dynamic texture upload store |
+| `DynamicTextureStore` / `DynamicTextureDevice` | class/type | per-frame dynamic texture upload store; replacement devices invalidate stale transient textures before the next upload |
 | `unpackMeshBin` / `UnpackedMeshBin` | fn/type | `<guid>.bin` sidecar decode |
 | `validateTilesetPayload` / `TilesetValidateOptions` | fn/type | register-time tileset payload gate |
 | `PostSpawnHook` / `SkinJointResolver` | type | post-spawn hook contract (D-1; runtime injects `postSpawnResolveJoints`) |
@@ -189,10 +189,7 @@ has no continuing change transport and must not manufacture deltas.
 `AssetRuntimeErrorCode` is the package's closed error-code SSOT (exhaustive
 `switch (err.code)` without `default`; TS guards completeness). Read the source,
 don't duplicate the member list — `packages/assets-runtime/src/errors/asset.ts`
-(grep `export type AssetRuntimeErrorCode`). Members today:
-`material-resolved-empty-passes` / `mesh-ssbo-capacity-exceeded` /
-`mesh-ssbo-ceiling-reached` / `scene-collect-entity-ref-out-of-closure` /
-`scene-collect-asset-guid-unresolved`. Each error object carries
+(grep `export type AssetRuntimeErrorCode`). Each error object carries
 `.code` / `.expected` / `.hint` / `.detail`. `RendererError` (in
 `@forgeax/engine-runtime`) composes `AssetRuntimeError` into its onError fan-out
 union, so a dropped arm is a compile error.
@@ -296,12 +293,9 @@ if (!result.ok) {
   // .hint carries an executable recovery instruction (see IMAGE_ERROR_HINTS
   // SSOT in packages/types/src/index.ts); no string parsing needed.
   console.error(err.code, err.hint);
-  // NOTE: switch on `err.detail.code`, not `err.code`. `ImageError` carries
-  // two independent discriminants (`.code` on the envelope, `.code` on the
-  // `.detail` variant); TS does not cross-narrow between them, so per-arm
-  // access to `err.detail.<field>` only compiles when the switch scrutinee
-  // is the same discriminant as the union being narrowed.
-  switch (err.detail.code) {
+  // ImageError correlates the envelope code with its detail shape, so one
+  // discriminant drives both recovery routing and IDE narrowing.
+  switch (err.code) {
     case 'image-format-unsupported':
       // err.detail.actualMime -- rejected mime; convert offline
       console.error('bad mime:', err.detail.actualMime);

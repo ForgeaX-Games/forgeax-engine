@@ -16,13 +16,21 @@ import { DebugError } from './errors';
 import type { PassOffset } from './tape-format';
 import { computePassOffsets, serializeTape } from './tape-format';
 
-// Re-export PassOffset for consumers that import from recorder-core
-export type { PassOffset } from './tape-format';
-
-export { TAPE_FORMAT_VERSION } from './tape-format';
-
 /** Shared upper bound for the asynchronous frame-header GPU snapshot. */
 export const SNAPSHOT_TIMEOUT_MS = 30_000;
+
+/** Capture idle wait budget: enough for slow hosts without allowing an unbounded poll. */
+const CAPTURE_IDLE_BASE_TIMEOUT_MS = 30_000;
+const CAPTURE_IDLE_PER_FRAME_TIMEOUT_MS = 50;
+const CAPTURE_IDLE_MAX_TIMEOUT_MS = 300_000;
+
+export function captureIdleTimeoutMs(frames: number): number {
+  const normalizedFrames = Number.isFinite(frames) ? Math.max(1, Math.ceil(frames)) : 1;
+  return Math.min(
+    CAPTURE_IDLE_MAX_TIMEOUT_MS,
+    Math.max(CAPTURE_IDLE_BASE_TIMEOUT_MS, normalizedFrames * CAPTURE_IDLE_PER_FRAME_TIMEOUT_MS),
+  );
+}
 
 // ============================================================================
 // generateRunId -- dual-source (globalThis.crypto || Math.random fallback)

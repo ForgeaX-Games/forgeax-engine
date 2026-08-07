@@ -8,12 +8,36 @@ import { gltfImporter } from '@forgeax/engine-gltf';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
-import { targetProfileImporter } from '../../templates/game-default/src/target-profile-importer';
+import { targetProfileImporter } from '../../templates/game-default/assets/plugins/target-profile-importer';
+import {
+  createParticleEffectNativeCooker,
+  createStockParticleOperatorRegistry,
+} from '@forgeax/engine-vfx-compiler';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
 const templatesDir = resolve(monorepoRoot, 'templates');
+const templateAssetRoot = resolve(templatesDir, 'game-default', 'assets');
+// Keep the authored WGSL tree under assets/ so the template has one visible
+// content root, but do not hand build-only shader sidecars to vite-plugin-pack.
+// Pack is a runtime catalog; forgeaxShader owns WGSL compilation and manifest
+// publication. Explicit file roots make that boundary executable instead of
+// relying on a directory-name convention.
+const templatePackRoots = [
+  'animated-target-material.pack.json',
+  'base-material.pack.json',
+  'charge-vfx-effect.pack.json',
+  'hit-flash-material.pack.json',
+  'hit-vfx-effect.pack.json',
+  'hit-vfx-materials.pack.json',
+  'multi-material-target.pack.json',
+  'scene.pack.json',
+  'target-profile.json.meta.json',
+  'ui/hud.pack.json',
+  'ui/settings.pack.json',
+].map((relativePath) => resolve(templateAssetRoot, relativePath));
 // Binary demo-assets (sky.hdr, ...) live in the forgeax-engine-assets submodule
 // so the engine repo stays binary-free. Select the sky sidecar explicitly;
 // the submodule also mirrors the template UI sidecars, which must not be
@@ -75,12 +99,13 @@ export default defineConfig(({ command }) => ({
     // upload route, and debug-only browser chunk.
     ...(command === 'serve' ? [vitePluginRhiDebug()] : []),
     pluginPack({
+      runtimeBinding: createStandaloneRuntimeAssetBinding('preview'),
       refresh: reloadAssetHost(),
       roots: [
-        // game-default/assets/ holds the entry SceneAsset (scene.pack.json,
-        // GUID-discoverable via forge.json.defaultScene) + material packs;
-        // submodule holds binary demo assets.
-        resolve(templatesDir, 'game-default/assets'),
+        // game-default/assets/ holds the entry SceneAsset, material/VFX packs,
+        // and target-profile sidecar. WGSL stays beside them in
+        // game-default/assets/shaders but is intentionally build-only.
+        ...templatePackRoots,
         submoduleSkyMetaPath,
         submoduleJpegMetaPath,
         submoduleSfxDir,
@@ -93,6 +118,7 @@ export default defineConfig(({ command }) => ({
         submoduleSpriteAtlasDir,
       ],
       importers: [audioImporter, imageImporter, fbxImporter, gltfImporter, fontImporter, targetProfileImporter()],
+      cookers: [createParticleEffectNativeCooker(createStockParticleOperatorRegistry())],
     }) as never,
   ],
   server: {

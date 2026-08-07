@@ -22,6 +22,7 @@ import type { Profiler, RecorderSession } from '@forgeax/engine-profiler';
 import type {
   BindGroupLayout,
   Buffer,
+  ComputePipeline,
   PipelineLayout,
   RenderPipeline,
   RhiCanvasContext,
@@ -40,6 +41,7 @@ import {
   type RenderPipelineAsset,
   RenderQueue,
 } from '@forgeax/engine-types';
+import { createClusterBinScratch } from './cluster-binner';
 import type { EngineMetrics } from './engine-metrics';
 import { HdrpCapsInsufficientError, type RenderError } from './errors/render';
 import {
@@ -63,6 +65,12 @@ import {
 } from './fullscreen-post-process-pass';
 import type { GpuBuffer } from './gpu-resource';
 import type { GpuResourceStore } from './gpu-resource-store';
+import {
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
+  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
+} from './gpu-texture-usage';
+import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
 import { validateClusterGrid } from './hdrp-pipeline';
 import { disposeInstanceBuffers, disposeTransientInstanceBuffers } from './instance-buffer-cache';
 import type { RhiErrorListenerRegistry } from './lifecycle';
@@ -72,7 +80,12 @@ import {
   createPreparedGraphicsResolver,
   type PreparedGraphicsResolver,
 } from './prepare/prepared-graphics-resolver';
-import { type RenderFrameState, recordFrame, retirePerFrameGraph } from './record';
+import {
+  type RecordProfileRunner,
+  type RenderFrameState,
+  recordFrame,
+  retirePerFrameGraph,
+} from './record';
 import { buildPerFrameBindGroups } from './record/frame-lighting';
 // The forgeax-concept RenderPipeline (registrable / installable unit) - aliased to avoid
 // the name collision with the RHI opaque `RenderPipeline` handle imported above. The RHI
@@ -86,6 +99,7 @@ import {
   RENDER_PHASE_CATALOG,
   type RenderPhase,
   type RenderPhaseSkipReason,
+  type RenderRecordPhase,
   resolveDrawOwners,
 } from './renderer';
 import type { MaterialRenderProjection } from './renderer/material/assembly';
@@ -253,7 +267,9 @@ function sortTransparentDispatch(
  *   clearcoatRoughness : f32          76..80
  *   specularTint       : vec3<f32>    80..92
  *                                     = alignUp(92, 16) = 96
- * The engine-owned texture-coordinate records begin at byte 96.
+ *   texture coordinates : six records 96..288
+ *   normalScale        : f32          288..292
+ *                                     = alignUp(292, 16) = 304
  */
 const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color' },
@@ -279,8 +295,14 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
  */
 export const STANDARD_PBR_UBO_SIZE = Math.max(
   derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes,
-  288,
+  304,
 );
+
+/**
+ * Dynamic-offset stride for one material UBO slot. The 288-byte payload is
+ * rounded to the next 256-byte dynamic-offset boundary.
+ */
+export const MATERIAL_PER_ENTITY_STRIDE = 512;
 
 /**
  * Engine-internal Extract / Prepare / Record driver; constructed by createRenderer.
@@ -930,6 +952,10 @@ export interface PipelineState {
    * `pbrPipelineLayout` instead of hard-disabling the build path).
    */
   readonly hdrpPbrPipelineLayout: PipelineLayout | null;
+  /** WebGPU storage-path producer for ordered HDRP cluster memberships. */
+  readonly hdrpClusterMembershipPipeline: ComputePipeline | null;
+  /** Compute bind-group layout paired with the membership producer pipeline. */
+  readonly hdrpClusterMembershipBindGroupLayout: BindGroupLayout | null;
   /**
    * bug-20260611-skin-pipeline-layout: dedicated PipelineLayout for the
    * `forgeax::pbr-skin` material shader. Mirrors `pbrPipelineLayout` but
@@ -1147,7 +1173,10 @@ export function configureSurface(
     device,
     format: (supportsViewFormats ? format : colorAttachmentFormat) as unknown as GPUTextureFormat,
     alphaMode: 'opaque',
-    usage: 0x10 | (supportsViewFormats ? 0x04 : 0) | (supportsSurfaceCopy ? 0x01 : 0),
+    usage:
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
+      (supportsViewFormats ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
+      (supportsSurfaceCopy ? GPU_TEXTURE_USAGE_COPY_SRC : 0),
     ...(supportsViewFormats
       ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] }
       : {}),
@@ -1478,8 +1507,8 @@ export interface MeshGpuHandles {
    */
   readonly uvSetCount: number;
   /**
-   * Vertex count = `vertices.length / (layout === '18F' ? 18 : 12)`. The
-   * non-indexed draw path passes this to `pass.draw(vertexCount)`.
+   * Vertex count uses 18F for skin or the geometry-owned canonical base stride.
+   * The non-indexed draw path passes this to `pass.draw(vertexCount)`.
    */
   readonly vertexCount: number;
   /**
@@ -1527,6 +1556,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     perFrameGraphTopologyKey: null,
     retiredPerFrameGraphs: new Set(),
     instanceBuffers: new Map(),
+    hdrpClusterBinScratch: createClusterBinScratch(),
+    hdrpClusterGridScratch: null,
+    hdrpLightIndexListScratch: null,
+    hdrpClusterMembershipBindGroup: null,
     transientInstanceBuffers: [],
     warnedZeroLightStandard: false,
     warnedMultiLightDirectional: false,
@@ -1773,7 +1806,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         const preparedPipeline = internals.getMaterialShaderPipeline?.(
           descriptor.shader,
           false,
-          undefined,
+          descriptor.renderState,
           undefined,
           undefined,
           undefined,
@@ -2068,6 +2101,12 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // so the record stage can index worlds[renderable.worldId]. `resourceWorld`
         // stays the singleton-resource owner (skybox equirect / transparent-sort
         // config / video provider) — those ARE resource-owner reads.
+        const recordProfilePhase: RecordProfileRunner | undefined =
+          profileSession === undefined || profileSession.detail !== 'nested'
+            ? undefined
+            : function recordProfilePhase<T>(phase: RenderRecordPhase, action: () => T): T {
+                return runProfiledRenderPhase(profileSession, phase, action);
+              };
         const submitted = runProfiledRenderPhase(profileSession, 'record', () =>
           recordFrame(
             internals,
@@ -2085,6 +2124,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             skyboxCount,
             postProcessParams,
             worlds,
+            recordProfilePhase,
           ),
         );
         if (internals.featureHost !== undefined && preparedResourceBatches.length > 0) {
@@ -2214,7 +2254,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           const paramsBufferResult = internals.device.createBuffer({
             label: `post-process-params-${id}`,
             size: byteSize,
-            usage: 0x40 /* UNIFORM */ | 0x08 /* COPY_DST */,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
             mappedAtCreation: false,
           });
           if (!paramsBufferResult.ok) throw paramsBufferResult.error;
@@ -2236,7 +2276,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           const paramsBufferResult = internals.device.createBuffer({
             label: `post-process-params-${id}`,
             size: DEPTH_MIN_PARAMS_BYTE_SIZE,
-            usage: 0x40 /* UNIFORM */ | 0x08 /* COPY_DST */,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
             mappedAtCreation: false,
           });
           if (!paramsBufferResult.ok) throw paramsBufferResult.error;

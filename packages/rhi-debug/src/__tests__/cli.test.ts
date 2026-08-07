@@ -428,10 +428,11 @@ function makeSummaryTape(): Tape {
 describe('summary subcommand', () => {
   it('--help text contains usage, argument, example, and output sections', () => {
     const help = getSummaryHelp();
-    expect(help).toContain('Usage: summary <tapePath>');
+    expect(help).toContain('Usage: summary <tapePath> [--lifecycle-only]');
     expect(help).toContain('tapePath');
     expect(help).toContain('Example:');
     expect(help).toContain('FrameModel');
+    expect(help).toContain('--lifecycle-only');
   });
 
   it('runSummary emits a FrameModel with meta/tree/draws/resources for an on-disk tape', () => {
@@ -469,6 +470,29 @@ describe('summary subcommand', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('tape-format-version-mismatch');
     }
+  });
+
+  it('runSummary lifecycle-only emits a bounded resource ledger', () => {
+    const { json, blob } = serializeTape(makeSummaryTape());
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'summary-lifecycle-cli-'));
+    const tapePath = path.join(dir, 'frame-0.tape.bin');
+    const reportPath = path.join(dir, 'frame-0.report.json');
+    const parsed = JSON.parse(json) as { header: unknown; events: unknown };
+    fs.writeFileSync(tapePath, Buffer.from(blob));
+    fs.writeFileSync(reportPath, JSON.stringify(parsed));
+
+    const result = runSummary({ tapePath, lifecycleOnly: true });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const lifecycle = JSON.parse(result.value) as {
+      eventCount: number;
+      resourceLifecycle: { counts: { created: number; live: number } };
+    };
+    expect(lifecycle.eventCount).toBe(makeSummaryTape().events.length);
+    expect(lifecycle.resourceLifecycle.counts.created).toBe(2);
+    expect(lifecycle.resourceLifecycle.counts.live).toBe(2);
+
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

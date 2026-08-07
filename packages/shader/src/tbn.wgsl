@@ -17,6 +17,7 @@
 //
 // Exports:
 //   - decodeTangentSpaceNormalRg(rg)          -> vec3<f32>  (pure)
+//   - scaleTangentSpaceNormal(tn, scale)      -> vec3<f32>  (pure)
 //   - applyTBN(worldNormal, worldTangent, tn) -> vec3<f32>  (pure)
 
 // Decode a tangent-space normal from the RG channels of a normal-map sample.
@@ -24,6 +25,14 @@
 // against numerically-out-of-unit (x,y) producing NaN.
 fn decodeTangentSpaceNormalRg(rg: vec2<f32>) -> vec3<f32> {
   let xy = rg * 2.0 - vec2<f32>(1.0);
+  let z = sqrt(saturate(1.0 - dot(xy, xy)));
+  return vec3<f32>(xy, z);
+}
+
+// Scale the XY perturbation while reconstructing Z so normalScale=0 restores
+// the flat tangent normal and normalScale=1 preserves the sampled normal.
+fn scaleTangentSpaceNormal(tn: vec3<f32>, scale: f32) -> vec3<f32> {
+  let xy = tn.xy * scale;
   let z = sqrt(saturate(1.0 - dot(xy, xy)));
   return vec3<f32>(xy, z);
 }

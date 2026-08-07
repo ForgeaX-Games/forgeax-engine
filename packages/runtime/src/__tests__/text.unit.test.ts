@@ -15,8 +15,8 @@ import {
   walkMaterialPassesOverSharedRefs,
 } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import {
-  FloatsPerGlyphVertex,
   FONT_CONCURRENCY_LIMIT,
   layoutGlyphText,
   resetFontConcurrency,
@@ -324,7 +324,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       };
     }
 
-    const STRIDE = FloatsPerGlyphVertex; // 12
+    const STRIDE = PROCEDURAL_FLOATS_PER_VERTEX;
 
     describe('layoutGlyphText', () => {
       it('(a) N glyphs -> 4N vertices / 6N indices', () => {

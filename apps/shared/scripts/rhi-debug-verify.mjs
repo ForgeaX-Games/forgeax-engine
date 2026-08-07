@@ -49,10 +49,12 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  * @property {number} [epsilon]     max whole-frame pixelDeltaAbsMean (default 0.02)
  * @property {number} [maxChannelEpsilon] max RGB-channel abs delta over any pixel (default 0.10)
  * @property {number} [coveredEpsilon]    max mean RGB delta over non-background pixels (default 0.03)
+ * @property {(report: object) => void} [assertCapture] extra report-level contract gate
  * @property {string} [appDir]      the demo's own dir (dirname of its smoke script's parent);
  *                                  the dev endpoint writes .forgeax-debug relative to vite cwd
  *                                  (= the package dir), so artifacts are resolved against this.
  * @property {number} [warmupMs]    rAF warmup before capture (default 3000)
+ * @property {string} [urlSuffix]   query/hash suffix appended to the dev URL
  */
 
 /** @param {VerifyOptions} opts */
@@ -67,8 +69,10 @@ export async function verifyDemoCapture(opts) {
     epsilon = 0.02,
     maxChannelEpsilon = 0.1,
     coveredEpsilon = 0.03,
+    assertCapture,
     appDir = REPO_ROOT,
     warmupMs = 3000,
+    urlSuffix = '',
   } = opts;
 
   if (mode === 'pixel' && !liveHook) {
@@ -130,7 +134,8 @@ export async function verifyDemoCapture(opts) {
     if (msg.type() === 'error') errors.push(`CONSOLE-ERR: ${msg.text()}`);
   });
 
-  await page.goto(portUrl, { waitUntil: 'networkidle', timeout: 30000 });
+  const captureUrl = urlSuffix.length === 0 ? portUrl : new URL(urlSuffix, portUrl).toString();
+  await page.goto(captureUrl, { waitUntil: 'networkidle', timeout: 30000 });
   await page.waitForTimeout(warmupMs);
 
   const hasCapture = await page.evaluate(
@@ -225,6 +230,13 @@ export async function verifyDemoCapture(opts) {
     report = JSON.parse(readFileSync(reportAbs, 'utf-8'));
   } catch (e) {
     fail(1, `[${label}] RED -- report not valid JSON: ${e?.message ?? e}`);
+  }
+  if (assertCapture !== undefined) {
+    try {
+      assertCapture(report);
+    } catch (e) {
+      fail(1, `[${label}] RED -- capture contract failed: ${e?.message ?? e}`);
+    }
   }
 
   // --- 5. bootstrap dawn-node + replay ----------------------------------------

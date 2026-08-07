@@ -131,6 +131,24 @@ describe('DynamicTextureStore lifecycle (M4 / w15)', () => {
     expect(probe.created).toBe(2);
     expect(store.getView(clip(710))).not.toBe(store.getView(clip(711)));
   });
+
+  it('device swap destroys stale entries before reusing a clip', () => {
+    const first: DeviceProbe = { created: 0, destroyed: 0, copies: 0 };
+    const second: DeviceProbe = { created: 0, destroyed: 0, copies: 0 };
+    const store = new DynamicTextureStore();
+    const h = clip(740);
+
+    store.configureGpuDevice(makeMockDevice(first));
+    expect(store.uploadFrame(h, FAKE_SOURCE, 320, 240)?.ok).toBe(true);
+
+    store.configureGpuDevice(makeMockDevice(second));
+    expect(first.destroyed).toBe(1);
+    expect(store.getView(h)).toBeUndefined();
+
+    expect(store.uploadFrame(h, FAKE_SOURCE, 320, 240)?.ok).toBe(true);
+    expect(second.created).toBe(1);
+    expect(second.copies).toBe(1);
+  });
 });
 
 describe('DynamicTextureStore degrade paths (M4 / w15, charter P3)', () => {

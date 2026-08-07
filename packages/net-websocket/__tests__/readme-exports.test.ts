@@ -6,6 +6,11 @@ import type { EndpointErrorCode } from '@forgeax/engine-net';
 const packageRoot = resolve(import.meta.dirname, '..');
 
 describe('net-websocket README contract', () => {
+  it('does not publish an empty package root', async () => {
+    const packageName = '@forgeax/engine-net-websocket';
+    await expect(import(/* @vite-ignore */ packageName)).rejects.toThrow('is not exported');
+  });
+
   it('documents importable browser and node exports', async () => {
     const readme = await readFile(resolve(packageRoot, 'README.md'), 'utf8');
     const browser = await import('@forgeax/engine-net-websocket/browser');

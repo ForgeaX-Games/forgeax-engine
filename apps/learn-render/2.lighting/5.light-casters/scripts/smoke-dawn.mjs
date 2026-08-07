@@ -45,8 +45,10 @@ import { deflateSync } from 'node:zlib';
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const COMBINED_LIGHT_MIN_DELTA = Number.parseFloat(process.env.COMBINED_LIGHT_MIN_DELTA ?? '0.25');
 const SMOKE_WRITE_BASELINE = process.env.SMOKE_WRITE_BASELINE === '1';
 const FALSIFY = process.env.FALSIFY ?? '';
+const FALSIFY_NO_COMBINED_LIGHTS = FALSIFY === 'no-directional-point-lights';
 
 const WIDTH = 400;
 const HEIGHT = 300;
@@ -299,10 +301,14 @@ for (const pos of CUBE_POSITIONS) {
   );
 }
 
-world.spawn({
-  component: DirectionalLight,
-  data: { direction: [-0.2, -1, -0.3], color: [1, 1, 1], intensity: 0.5 },
-});
+if (!FALSIFY_NO_COMBINED_LIGHTS) {
+  world.spawn({
+    component: DirectionalLight,
+    data: { direction: [-0.2, -1, -0.3], color: [1, 1, 1], intensity: 0.5 },
+  });
+} else {
+  console.log('[smoke] FALSIFY=no-directional-point-lights -- directional and four point lights omitted');
+}
 
 const POINT_LIGHT_POSITIONS = [
   [0.7, 0.2, 2.0],
@@ -316,19 +322,21 @@ const POINT_LIGHT_COLORS = [
   [0.0, 1.0, 0.0],
   [0.0, 0.0, 1.0],
 ];
-for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
-  const plPos = POINT_LIGHT_POSITIONS[i];
-  const plColor = POINT_LIGHT_COLORS[i];
-  world.spawn(
-    {
-      component: Transform,
-      data: { pos: [plPos[0], plPos[1], plPos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
-    },
-    {
-      component: PointLight,
-      data: { color: [plColor[0], plColor[1], plColor[2]], intensity: 100, range: 50 },
-    },
-  );
+if (!FALSIFY_NO_COMBINED_LIGHTS) {
+  for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
+    const plPos = POINT_LIGHT_POSITIONS[i];
+    const plColor = POINT_LIGHT_COLORS[i];
+    world.spawn(
+      {
+        component: Transform,
+        data: { pos: [plPos[0], plPos[1], plPos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
+      },
+      {
+        component: PointLight,
+        data: { color: [plColor[0], plColor[1], plColor[2]], intensity: 100, range: 50 },
+      },
+    );
+  }
 }
 
 // w16 spot-shadow scene: floor + obstructing cube + fixed downward spot.
@@ -511,6 +519,7 @@ const SITES = {
   shadowFloor: { x: 185, y: 140 },
   litFloorLeft: { x: 130, y: 128 },
   litFloorBelow: { x: 175, y: 210 },
+  combinedLightsFloor: { x: 40, y: 150 },
 };
 const HALF = 5;
 const pixelSamples = {};
@@ -568,13 +577,19 @@ const litFloorLum = Math.max(lumSamples.litFloorLeft, lumSamples.litFloorBelow);
 const shadowDelta = Number((litFloorLum - lumSamples.shadowFloor).toFixed(4));
 console.log(`[smoke] shadowDelta=${shadowDelta} (litFloor=${litFloorLum}, shadowFloor=${lumSamples.shadowFloor})`);
 
+const CLEAR_LUM = 0.2126 * 0.02 + 0.7152 * 0.02 + 0.0722 * 0.04;
+const combinedLightLuminance = lumSamples.combinedLightsFloor;
+const combinedLightTypeWitness = combinedLightLuminance - CLEAR_LUM >= COMBINED_LIGHT_MIN_DELTA;
+console.log(
+  `[smoke] oracle=combined-directional-point-spot combinedLightsFloor=${combinedLightLuminance} deltaFromClear=${Number((combinedLightLuminance - CLEAR_LUM).toFixed(4))} witness=${combinedLightTypeWitness} threshold=${COMBINED_LIGHT_MIN_DELTA} falsifier=${FALSIFY_NO_COMBINED_LIGHTS ? 'no-directional-point-lights' : 'none'}`,
+);
+
 const failures = [];
 if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 
 // (c) the floor must actually be rendered (non-clear) at the lit site -- guards
 // against an empty / black frame falsely passing the shadow delta.
-const CLEAR_LUM = 0.2126 * 0.02 + 0.7152 * 0.02 + 0.0722 * 0.04;
 if (litFloorLum - CLEAR_LUM < SMOKE_PIXEL_THRESHOLD) {
   failures.push(
     `(c) lit floor luminance=${litFloorLum} ~= clear (${CLEAR_LUM.toFixed(4)}); floor not rendered / empty frame`,
@@ -589,9 +604,15 @@ if (shadowDelta < SMOKE_PIXEL_THRESHOLD) {
   );
 }
 
+if (!combinedLightTypeWitness) {
+  failures.push(
+    `(e) combined directional/point/spot witness rejected combinedLightsFloor=${combinedLightLuminance}; expected deltaFromClear>=${COMBINED_LIGHT_MIN_DELTA} outside the fixed spot's bright shadow sample region`,
+  );
+}
+
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
-  failures.push(`(e) Renderer.onError fired ${errors.length} times: [${codes}]`);
+  failures.push(`(f) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
 
 if (failures.length > 0) {
@@ -606,7 +627,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, floorRendered, spotShadowDelta=${shadowDelta} (>=${SMOKE_PIXEL_THRESHOLD}), RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, floorRendered, spotShadowDelta=${shadowDelta} (>=${SMOKE_PIXEL_THRESHOLD}), oracle=combined-directional-point-spot, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

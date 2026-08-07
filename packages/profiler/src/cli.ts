@@ -259,6 +259,9 @@ function projectModel(command: CliCommand, model: ProfileModel): Record<string, 
       frame: model.frames.find((entry) => entry.frameId === command.frameId) ?? null,
     };
   }
+  const phaseSummary = model.phases.find(
+    (entry) => entry.source === command.source && entry.phase === command.phase,
+  );
   return {
     query: 'phase',
     schemaVersion: model.summary.schemaVersion,
@@ -267,10 +270,10 @@ function projectModel(command: CliCommand, model: ProfileModel): Record<string, 
     source: command.source,
     phase: command.phase,
     completeness: model.completeness,
-    phaseSummary:
-      model.phases.find(
-        (entry) => entry.source === command.source && entry.phase === command.phase,
-      ) ?? null,
+    phaseSummary: phaseSummary ?? null,
+    children: model.phases.filter(
+      (entry) => entry.parentSource === command.source && entry.parentPhase === command.phase,
+    ),
   };
 }
 
@@ -298,7 +301,7 @@ export function readCliInput(args: readonly string[], readStdin: () => string): 
   return args.includes('--file') ? '' : readStdin();
 }
 
-function main(): void {
+export function main(): void {
   const args = process.argv.slice(2);
   const result = runProfilerCli(
     args,

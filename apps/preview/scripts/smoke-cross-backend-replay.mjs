@@ -118,7 +118,8 @@ try {
   }
 
   const after = await page.evaluate(async () => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  const report = { before, capture, runId, after, replayOutput, pageErrors, consoleErrors, badResponses, serverOutput };
+  const captureMode = 'pixel';
+  const report = { mode: 'pixel', before, capture, runId, after, replayOutput, pageErrors, consoleErrors, badResponses, serverOutput };
   writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (badResponses.length > 0) throw new Error(`bad responses: ${badResponses.join(' | ')}`);
@@ -126,7 +127,7 @@ try {
     (line) => !line.includes('favicon') && !line.includes('Failed to load resource'),
   );
   if (actionableConsoleErrors.length > 0) throw new Error(`console errors: ${actionableConsoleErrors.join(' | ')}`);
-  console.log(`[cross-backend-replay] PASS backend=${before.health.reason} capture=${runId} dawnPixelReplay=true nullReplay=true pageErrors=0 badResponses=0`);
+  console.log(`[cross-backend-replay] PASS mode=${captureMode} backend=${before.health.reason} capture=${runId} dawnPixelReplay=true nullReplay=true pageErrors=0 badResponses=0`);
   console.log(`[cross-backend-replay] artifacts=${ARTIFACT_DIR}`);
 } finally {
   await browser.close();

@@ -173,14 +173,12 @@ export async function buildEngineShaderManifest(): Promise<{
     for (const defines of variantDefines) {
       const effectiveDefines = {
         STORAGE_BUFFER_AVAILABLE: true,
-        POINT_SHADOW_AVAILABLE: true,
         PER_INSTANCE_REGION: false,
         ...defines,
+        ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
       };
       const r = await cookMaterialSource(
-        defines === undefined
-          ? stripPragmas(file.source)
-          : stripFalseImports(stripPragmas(file.source), defines),
+        defines === undefined ? file.source : stripFalseImports(file.source, defines),
         {
           id:
             defines === undefined || buildVariantKey(defines) === ''
@@ -190,8 +188,8 @@ export async function buildEngineShaderManifest(): Promise<{
             defines === undefined
               ? eng.imports
               : filterImportsByDefines(
-                  extractTransitiveImports(stripPragmas(file.source), eng.imports),
-                  stripPragmas(file.source),
+                  extractTransitiveImports(file.source, eng.imports),
+                  file.source,
                   defines,
                   axes,
                 ),
@@ -357,10 +355,11 @@ export interface ForgeaXShaderOptions {
    * `shaders/manifest.json` always contains the `pbr` + `unlit` entries the
    * runtime `ShaderRegistry` expects (feat-20260518-pbr-direct-lighting-mvp
    * M5 / w22.8 — replaces the legacy inline `PBR_FALLBACK_WGSL` path in
-   * `createRenderer.ts`). Set to `false` only in unit tests that mock the
+   * `createRenderer.ts`). Pass an object to opt into an optional fullscreen
+   * entry such as `hdrpSsao`; set to `false` only in unit tests that mock the
    * eager-compile pipeline.
    */
-  readonly engineEntries?: boolean;
+  readonly engineEntries?: boolean | EngineShaderEntriesOptions;
   /**
    * Directories to scan for engine-shipped ShaderModule *.wgsl files.
    * Each *.wgsl with a `#define_import_path <path>` header line is added
@@ -380,6 +379,14 @@ export interface ForgeaXShaderOptions {
    * same composed artifact.
    */
   readonly materialPackages?: readonly string[];
+}
+
+/** Optional engine fullscreen entries that a producer explicitly consumes. */
+export interface EngineShaderEntriesOptions {
+  /** Include the HDRP SSAO post-process module in the Vite manifest. */
+  readonly hdrpSsao?: boolean;
+  /** Compile the default PBR point-shadow cube-array path. */
+  readonly pointShadows?: boolean;
 }
 
 // === Internal state =================================================================
@@ -608,25 +615,25 @@ async function compileUserMaterialVariants(
   // pipeline layout (the old failure surfaced only at queue submit).
   const axes = scanUserMaterialVariantAxes(source);
   const combinations = axes.length > 0 ? cartesianDefines(axes) : [undefined];
-  const cleanSource = stripPragmas(source);
+  const sourceForRouting = source;
   const transitiveImports =
-    axes.length > 0 ? extractTransitiveImports(cleanSource, imports) : imports;
+    axes.length > 0 ? extractTransitiveImports(sourceForRouting, imports) : imports;
   const compiled: CompiledUserMaterialVariant[] = [];
 
   for (const defines of combinations) {
     const definesKey = defines === undefined ? '' : buildVariantKey(defines);
     const effectiveDefines = {
       STORAGE_BUFFER_AVAILABLE: true,
-      POINT_SHADOW_AVAILABLE: true,
       PER_INSTANCE_REGION: false,
       ...(defines ?? {}),
+      ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
     };
     const variantSource =
-      defines === undefined ? cleanSource : stripFalseImports(cleanSource, defines);
+      defines === undefined ? sourceForRouting : stripFalseImports(sourceForRouting, defines);
     const variantImports =
       defines === undefined
         ? imports
-        : filterImportsByDefines(transitiveImports, cleanSource, defines, axes);
+        : filterImportsByDefines(transitiveImports, sourceForRouting, defines, axes);
     const r = await cookMaterialSource(variantSource, {
       id: definesKey === '' ? id : `${id}#${definesKey}`,
       imports: variantImports,
@@ -699,9 +706,9 @@ async function prepareAuthoredMaterial(
       sources: catalog.value,
       defines: {
         STORAGE_BUFFER_AVAILABLE: true,
-        POINT_SHADOW_AVAILABLE: true,
         PER_INSTANCE_REGION: false,
         ...(defines ?? {}),
+        ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
       },
     });
     if (!cooked.ok) throw new Error(cooked.error.message);
@@ -884,13 +891,6 @@ function buildEntryVariantKey(axes: readonly string[]): string {
     defines[axis] = axis !== 'CLUSTER_FORWARD_AVAILABLE';
   }
   return buildVariantKey(defines);
-}
-
-const PRAGMA_RE = /^\s*#pragma\s+\S.*$/gm;
-
-/** Strip #pragma lines before passing to naga_oil -- they pass through compose and naga rejects `#` tokens. */
-function stripPragmas(source: string): string {
-  return source.replace(PRAGMA_RE, '');
 }
 
 /**
@@ -1665,6 +1665,7 @@ async function compileEngineEntry(
   file: EngineShaderFile,
   imports: Record<string, string>,
   serve: boolean,
+  pointShadows = false,
 ): Promise<void> {
   const isMaterialShader = file.reservedIdentifier !== undefined;
   // bug-20260610: non-material engine entries that declare a #pragma
@@ -1692,11 +1693,17 @@ async function compileEngineEntry(
   const variantBindingsJson: string[] = [];
   // feat-20260629 M4: uvSetCount from first variant compile result
   let engineUvSetCount = 0;
-  const cleanSource = stripPragmas(file.source);
+  const sourceForRouting = file.source;
   const allTransitiveImports =
-    variantAxes.length > 0 ? extractTransitiveImports(cleanSource, imports) : imports;
+    variantAxes.length > 0 ? extractTransitiveImports(sourceForRouting, imports) : imports;
 
   for (const defines of axisCombos) {
+    const effectiveDefines = {
+      STORAGE_BUFFER_AVAILABLE: true,
+      PER_INSTANCE_REGION: false,
+      ...defines,
+      ...(pointShadows ? { POINT_SHADOW_AVAILABLE: true } : {}),
+    };
     // feat-20260609-hdrp-cluster-fragment-ggx M1 / w4: per-variant import
     // filtering. naga_oil parses all modules in the imports map regardless
     // of whether the #import directive is gated behind an #ifdef. When a
@@ -1707,8 +1714,8 @@ async function compileEngineEntry(
     // whose condition is false for this variant.
     const perVariantImports = filterImportsByDefines(
       allTransitiveImports,
-      cleanSource,
-      defines,
+      sourceForRouting,
+      effectiveDefines,
       variantAxes,
     );
     const definesKey = buildVariantKey(defines);
@@ -1720,7 +1727,9 @@ async function compileEngineEntry(
     // remove them here so the false-variant import-not-found error is
     // eliminated at the TS layer.
     const perVariantSource =
-      variantAxes.length > 0 ? stripFalseImports(cleanSource, defines) : cleanSource;
+      variantAxes.length > 0
+        ? stripFalseImports(sourceForRouting, effectiveDefines)
+        : sourceForRouting;
     const r = await cookMaterialSource(perVariantSource, {
       id: uniqueId,
       imports: perVariantImports,
@@ -1738,15 +1747,7 @@ async function compileEngineEntry(
       // declare it gets a safe defined-as-false fallback. The variant's own
       // axis-declared value (true/false at cartesian product) overrides via
       // spread order.
-      ...(variantAxes.length > 0
-        ? { defines: { PER_INSTANCE_REGION: false, ...defines } }
-        : {
-            defines: {
-              STORAGE_BUFFER_AVAILABLE: true,
-              POINT_SHADOW_AVAILABLE: true,
-              PER_INSTANCE_REGION: false,
-            },
-          }),
+      defines: effectiveDefines,
     });
     if (!r.ok) {
       throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
@@ -1887,6 +1888,9 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     authoredMaterials: new Map(),
   };
   const wantEngineEntries = options.engineEntries ?? true;
+  const wantHdrpSsao = typeof wantEngineEntries === 'object' && wantEngineEntries.hdrpSsao === true;
+  const wantPointShadows =
+    typeof wantEngineEntries === 'object' && wantEngineEntries.pointShadows === true;
   let isServeMode = false;
 
   let engineShaderRoots: string[];
@@ -1977,12 +1981,26 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // content marker (unchanged); M6 host wiring calls
       // registry.installMaterialArtifact('forgeax::default-standard-pbr', ...)
       // off the manifest entry + default-standard-pbr.schema.json sidecar.
-      await compileEngineEntry(this, state, eng.defaultStandardPbr, eng.imports, isServeMode);
+      await compileEngineEntry(
+        this,
+        state,
+        eng.defaultStandardPbr,
+        eng.imports,
+        isServeMode,
+        wantPointShadows,
+      );
       // feat-20260523-skin-skeleton-animation M3 / T-34: pbr-skin entry compiled
       // at buildStart alongside default-standard-pbr; the composed WGSL is
       // surfaced in manifest.json for createRenderer to wire
       // registerDefaultStandardPbrSkin at engine boot.
-      await compileEngineEntry(this, state, eng.defaultStandardPbrSkin, eng.imports, isServeMode);
+      await compileEngineEntry(
+        this,
+        state,
+        eng.defaultStandardPbrSkin,
+        eng.imports,
+        isServeMode,
+        wantPointShadows,
+      );
       await compileEngineEntry(this, state, eng.unlit, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.tonemap, eng.imports, isServeMode);
       // feat-20260520-directional-light-shadow-mapping: shadow_caster.wgsl
@@ -2030,6 +2048,13 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // feat-20260531-skybox-env-background M3 / w14: skybox fullscreen
       // cubemap shader compiled at buildStart alongside tonemap/fxaa.
       await compileEngineEntry(this, state, eng.skybox, eng.imports, isServeMode);
+      // feat-20260612-hdrp-ssao M6 / w27: SSAO fullscreen post-process shader
+      // compiled at buildStart so Vite dev/prod manifests match the standalone
+      // buildEngineShaderManifest() path and createRenderer can build both
+      // fs_ssao_calc and fs_ssao_blur pipelines.
+      if (wantHdrpSsao) {
+        await compileEngineEntry(this, state, eng.hdrpSsao, eng.imports, isServeMode);
+      }
     },
 
     // hook 0.5: resolveId -- claim the virtual:forgeax/bundler id (TASK-019 /
@@ -2533,6 +2558,3 @@ function isEngineShaderPath(id: string, roots: readonly string[]): boolean {
     id.includes('/node_modules/@forgeax/engine-shader/src/')
   );
 }
-
-/** Package version string (debug tag). */
-export const VITE_PLUGIN_SHADER_PACKAGE_VERSION = '0.0.0';

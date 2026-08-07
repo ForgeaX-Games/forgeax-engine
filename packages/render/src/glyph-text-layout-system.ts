@@ -38,6 +38,7 @@ import {
   type Result,
   type World,
 } from '@forgeax/engine-ecs';
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import {
   bakeGlyphMesh,
   conservativeCubeAabb,
@@ -222,7 +223,7 @@ function processEntity(
       {
         indexOffset: 0,
         indexCount: layout.indices.length,
-        vertexCount: layout.vertices.length / 12,
+        vertexCount: layout.vertices.length / PROCEDURAL_FLOATS_PER_VERTEX,
         topology: 'triangle-list',
       },
     ] satisfies readonly Submesh[];

@@ -18,7 +18,9 @@ test('shared inputs preserve both raw source paths and Vite-emitted asset paths'
     const catalog = JSON.parse(readFileSync(join(output, 'assets', 'catalog.json'), 'utf8'));
     const bleep = catalog.find((entry) => entry.sourcePath.endsWith('audio/bleep.mp3'));
     assert.ok(bleep, 'shared catalog includes the raw audio entry');
-    assert.ok(existsSync(join(output, 'assets', 'payload', bleep.relativeUrl)));
+    const packagePath = bleep.packageUrl?.replace(/^\/+/, '');
+    assert.ok(packagePath, 'shared catalog includes the cooked package URL');
+    assert.ok(existsSync(join(output, 'assets', 'payload', packagePath)));
     assert.ok(existsSync(join(output, 'assets', 'payload', 'assets')));
   } finally {
     rmSync(output, { recursive: true, force: true });

@@ -11,12 +11,12 @@
 //
 // Public surface:
 //   bin(lights, view, proj, grid, near, far, clusterGrid, lightIndexList, capacity)
-//     -> Result<void, ClusterBinError>
+//     -> Result<writtenLightIndexCount, ClusterBinError>
 //
 //   deriveCullingRadius(range, intensity, threshold) — D-8 +Infinity fallback
 //
 // Constraints:
-//   D-3: pure function + Result<void, ClusterBinError> + out param + no throw
+//   D-3: pure function + Result<number, ClusterBinError> + out param + no throw
 //   D-8: spot uses sphere proxy (radius=range)
 //   D-binner: CPU main thread, no GPU compute / worker
 //   OOS-4: cone-AABB tight culling deferred
@@ -65,6 +65,92 @@ export interface Uvec3 {
 export interface ClusterBounds {
   readonly min: Uvec3;
   readonly max: Uvec3;
+}
+
+type MutableClusterBounds = {
+  min: { x: number; y: number; z: number };
+  max: { x: number; y: number; z: number };
+};
+
+/**
+ * Reusable typed scratch for cluster-major output. The binner must emit one
+ * contiguous light-index run per cluster, so counts and cursors replace the
+ * per-frame `number[][]` staging lists without changing output order.
+ */
+export interface ClusterBinScratch {
+  clusterCounts: Uint32Array;
+  clusterCursors: Uint32Array;
+  lightBounds: Int32Array;
+  clusterDeltas: Int32Array;
+  aabbOutput: ClusterAabb;
+  boundsOutput: MutableClusterBounds;
+}
+
+/**
+ * Selects the membership materialization owner after bounds and occupancy are
+ * derived. The default keeps the existing CPU list writer; the WebGPU
+ * producer uses the same CPU-owned scratch and leaves the ordered list to a
+ * later compute pass.
+ */
+export interface ClusterBinOptions {
+  readonly writeMembership?: boolean;
+}
+
+export type ClusterBinProfilePhase =
+  | 'light-bounds-and-occupancy'
+  | 'light-bounds-and-occupancy/light-aabb'
+  | 'light-bounds-and-occupancy/cluster-occupancy'
+  | 'cluster-reserve'
+  | 'light-index-write'
+  | 'light-index-write/bounds-read'
+  | 'light-index-write/cluster-write';
+
+export type ClusterBinProfileRunner = <T>(phase: ClusterBinProfilePhase, action: () => T) => T;
+
+function runClusterBinProfilePhase<T>(
+  runner: ClusterBinProfileRunner | undefined,
+  phase: ClusterBinProfilePhase,
+  action: () => T,
+): T {
+  return runner === undefined ? action() : runner(phase, action);
+}
+
+export function createClusterBinScratch(): ClusterBinScratch {
+  return {
+    clusterCounts: new Uint32Array(0),
+    clusterCursors: new Uint32Array(0),
+    lightBounds: new Int32Array(0),
+    clusterDeltas: new Int32Array(0),
+    aabbOutput: {
+      min: vec3.create(0, 0, 0),
+      max: vec3.create(0, 0, 0),
+    },
+    boundsOutput: {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 0, y: 0, z: 0 },
+    },
+  };
+}
+
+function ensureScratchCapacity(
+  scratch: ClusterBinScratch,
+  clusterCount: number,
+  lightCount: number,
+  gridX: number,
+  gridY: number,
+  gridZ: number,
+): void {
+  if (scratch.clusterCounts.length < clusterCount) {
+    scratch.clusterCounts = new Uint32Array(clusterCount);
+    scratch.clusterCursors = new Uint32Array(clusterCount);
+  }
+  if (scratch.lightBounds.length < lightCount * 6) {
+    scratch.lightBounds = new Int32Array(lightCount * 6);
+  }
+  const differenceVolumeSize = (gridX + 1) * (gridY + 1) * (gridZ + 1);
+  if (scratch.clusterDeltas.length < differenceVolumeSize) {
+    scratch.clusterDeltas = new Int32Array(differenceVolumeSize);
+  }
 }
 
 // ── deriveCullingRadius ────────────────────────────────────────────────────
@@ -127,7 +213,14 @@ export function clusterSpaceObjectAabb(
   radius: number,
   view: Mat4,
   proj: Mat4,
+  output?: ClusterAabb,
 ): ClusterAabb {
+  const result =
+    output ??
+    ({
+      min: vec3.create(0, 0, 0),
+      max: vec3.create(0, 0, 0),
+    } satisfies ClusterAabb);
   const cx = center[0] ?? 0;
   const cy = center[1] ?? 0;
   const cz = center[2] ?? 0;
@@ -184,10 +277,13 @@ export function clusterSpaceObjectAabb(
   // contributes nothing. Caller (calculateSphereClusterBounds) returns
   // min > max which the bin loop treats as cull.
   if (minViewZ > maxViewZ) {
-    return {
-      min: vec3.create(1, 1, -1e-5),
-      max: vec3.create(-1, -1, -1e-5),
-    };
+    result.min[0] = 1;
+    result.min[1] = 1;
+    result.min[2] = -1e-5;
+    result.max[0] = -1;
+    result.max[1] = -1;
+    result.max[2] = -1e-5;
+    return result;
   }
 
   let ndcMinX = Infinity;
@@ -195,23 +291,62 @@ export function clusterSpaceObjectAabb(
   let ndcMinY = Infinity;
   let ndcMaxY = -Infinity;
 
-  const corners: Array<[number, number]> = [
-    [vMinX, vMinY],
-    [vMinX, vMaxY],
-    [vMaxX, vMinY],
-    [vMaxX, vMaxY],
-  ];
+  const p00 = proj[0] ?? 0;
+  const p10 = proj[4] ?? 0;
+  const p20 = proj[8] ?? 0;
+  const p30 = proj[12] ?? 0;
+  const p01 = proj[1] ?? 0;
+  const p11 = proj[5] ?? 0;
+  const p21 = proj[9] ?? 0;
+  const p31 = proj[13] ?? 0;
+  const p23 = proj[11] ?? 0;
 
-  for (const zTest of [minViewZ, maxViewZ]) {
-    if (zTest <= 0) {
-      for (const corner of corners) {
-        const sx = corner[0];
-        const sy = corner[1];
-        const ndc = projectToNdc(sx, sy, zTest, proj);
-        ndcMinX = Math.min(ndcMinX, ndc[0]);
-        ndcMaxX = Math.max(ndcMaxX, ndc[0]);
-        ndcMinY = Math.min(ndcMinY, ndc[1]);
-        ndcMaxY = Math.max(ndcMaxY, ndc[1]);
+  // In the engine's perspective matrices clip.w depends only on view-space z.
+  // The XY extrema of each z face are therefore the interval of one linear
+  // form, avoiding eight corner projections and their temporary tuples.
+  const perspectiveWOnlyZ =
+    Math.abs(proj[3] ?? 0) < 1e-8 &&
+    Math.abs(proj[7] ?? 0) < 1e-8 &&
+    Math.abs(proj[15] ?? 0) < 1e-8 &&
+    Math.abs(p23) >= 1e-5;
+
+  if (perspectiveWOnlyZ) {
+    const xExtent = Math.abs(p00) * rx + Math.abs(p10) * ry;
+    const yExtent = Math.abs(p01) * rx + Math.abs(p11) * ry;
+    for (let face = 0; face < 2; face++) {
+      const zTest = face === 0 ? minViewZ : maxViewZ;
+      if (zTest > 0) continue;
+      const invW = 1 / (p23 * zTest);
+      const xCenter = p20 * zTest + p30;
+      const yCenter = p21 * zTest + p31;
+      const x0 = (xCenter - xExtent) * invW;
+      const x1 = (xCenter + xExtent) * invW;
+      const y0 = (yCenter - yExtent) * invW;
+      const y1 = (yCenter + yExtent) * invW;
+      ndcMinX = Math.min(ndcMinX, x0, x1);
+      ndcMaxX = Math.max(ndcMaxX, x0, x1);
+      ndcMinY = Math.min(ndcMinY, y0, y1);
+      ndcMaxY = Math.max(ndcMaxY, y0, y1);
+    }
+  } else {
+    const corners: Array<[number, number]> = [
+      [vMinX, vMinY],
+      [vMinX, vMaxY],
+      [vMaxX, vMinY],
+      [vMaxX, vMaxY],
+    ];
+
+    for (const zTest of [minViewZ, maxViewZ]) {
+      if (zTest <= 0) {
+        for (const corner of corners) {
+          const sx = corner[0];
+          const sy = corner[1];
+          const ndc = projectToNdc(sx, sy, zTest, proj);
+          ndcMinX = Math.min(ndcMinX, ndc[0]);
+          ndcMaxX = Math.max(ndcMaxX, ndc[0]);
+          ndcMinY = Math.min(ndcMinY, ndc[1]);
+          ndcMaxY = Math.max(ndcMaxY, ndc[1]);
+        }
       }
     }
   }
@@ -226,10 +361,13 @@ export function clusterSpaceObjectAabb(
   // viewZToZSlice all want view_z to do the log-z slice mapping; passing the
   // projected NDC z (>= 0) collapsed every light to slice 0 so cube/floor
   // fragments outside that slice received zero light.
-  return {
-    min: vec3.create(ndcMinX, ndcMinY, minViewZ),
-    max: vec3.create(ndcMaxX, ndcMaxY, maxViewZ),
-  };
+  result.min[0] = ndcMinX;
+  result.min[1] = ndcMinY;
+  result.min[2] = minViewZ;
+  result.max[0] = ndcMaxX;
+  result.max[1] = ndcMaxY;
+  result.max[2] = maxViewZ;
+  return result;
 }
 
 /**
@@ -318,25 +456,27 @@ export function calculateSphereClusterBounds(
   gridZ: number,
   near: number,
   far: number,
+  output?: MutableClusterBounds,
 ): ClusterBounds {
+  const result =
+    output ??
+    ({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 0, y: 0, z: 0 },
+    } satisfies MutableClusterBounds);
   const minZ = aabb.min[2] ?? 0;
   const maxZ = aabb.max[2] ?? 0;
 
   const idxMin = ndcPositionToCluster(aabb.min, minZ, gridX, gridY, gridZ, near, far);
   const idxMax = ndcPositionToCluster(aabb.max, maxZ, gridX, gridY, gridZ, near, far);
 
-  return {
-    min: {
-      x: Math.min(idxMin.x, idxMax.x),
-      y: Math.min(idxMin.y, idxMax.y),
-      z: Math.min(idxMin.z, idxMax.z),
-    },
-    max: {
-      x: Math.max(idxMin.x, idxMax.x),
-      y: Math.max(idxMin.y, idxMax.y),
-      z: Math.max(idxMin.z, idxMax.z),
-    },
-  };
+  result.min.x = Math.min(idxMin.x, idxMax.x);
+  result.min.y = Math.min(idxMin.y, idxMax.y);
+  result.min.z = Math.min(idxMin.z, idxMax.z);
+  result.max.x = Math.max(idxMin.x, idxMax.x);
+  result.max.y = Math.max(idxMin.y, idxMax.y);
+  result.max.z = Math.max(idxMin.z, idxMax.z);
+  return result;
 }
 
 // ── bin ─────────────────────────────────────────────────────────────────────
@@ -358,8 +498,10 @@ export function calculateSphereClusterBounds(
  *   Format: [offset, count] pairs. offset = start index in lightIndexList; count = number of lights.
  * @param lightIndexList — caller-owned Uint32Array for light index storage.
  * @param capacity — max entries in lightIndexList (hard cap, typically 65536).
+ * @param scratch — optional per-render-system typed scratch reused across frames.
  *
- * @returns `ok(void)` on success; `err(ClusterBinError)` with code 'index-overflow' on overflow.
+ * @returns `ok(written light-index entry count)` on success; `err(ClusterBinError)` with code
+ *   'index-overflow' on overflow. The count lets the upload owner avoid copying unused capacity.
  */
 export function bin(
   lights: ReadonlyArray<{ readonly position: Vec3; readonly range: number }>,
@@ -371,53 +513,126 @@ export function bin(
   clusterGrid: Uint32Array,
   lightIndexList: Uint32Array,
   capacity: number,
-): Result<void, ClusterBinError> {
+  scratch?: ClusterBinScratch,
+  profile?: ClusterBinProfileRunner,
+  options: ClusterBinOptions = {},
+): Result<number, ClusterBinError> {
   const gridX = grid.x;
   const gridY = grid.y;
   const gridZ = grid.z;
   const clusterCount = gridX * gridY * gridZ;
+  const binScratch = scratch ?? createClusterBinScratch();
+
+  ensureScratchCapacity(binScratch, clusterCount, lights.length, gridX, gridY, gridZ);
+  const { clusterCounts, clusterCursors, lightBounds, clusterDeltas } = binScratch;
 
   clusterGrid.fill(0, 0, clusterCount * 2);
-
-  // M4.5-followup w48: switched to cluster-major writes via per-cluster lists
-  // because the previous light-major append pattern produced non-contiguous
-  // light index runs per cluster (light0->cluster A, light0->cluster B,
-  // light1->cluster A scribbled "[A0, B0, A1, ...]" so cluster A's offset/
-  // count window pointed at "[A0, B0]" — every cluster after the first only
-  // ever read one correct entry). Bevy's reference implementation is
-  // cluster-major (cluster_assignment.rs); this matches.
-  const perCluster: number[][] = new Array(clusterCount);
-  for (let i = 0; i < clusterCount; i++) perCluster[i] = [];
+  clusterCounts.fill(0, 0, clusterCount);
 
   let attemptedTotal = 0;
 
-  for (let lightIdx = 0; lightIdx < lights.length; lightIdx++) {
-    const light = lights[lightIdx];
-    if (!light) continue;
-    const radius = deriveCullingRadius(light.range, 1);
+  runClusterBinProfilePhase(profile, 'light-bounds-and-occupancy', () => {
+    runClusterBinProfilePhase(profile, 'light-bounds-and-occupancy/light-aabb', () => {
+      for (let lightIdx = 0; lightIdx < lights.length; lightIdx++) {
+        const boundsOffset = lightIdx * 6;
+        lightBounds[boundsOffset] = -1;
+        const light = lights[lightIdx];
+        if (!light) continue;
+        const radius = deriveCullingRadius(light.range, 1);
 
-    if (radius <= 0) {
-      continue;
-    }
+        if (radius <= 0) {
+          continue;
+        }
 
-    const aabb = clusterSpaceObjectAabb(light.position, radius, view, proj);
+        const aabb = clusterSpaceObjectAabb(
+          light.position,
+          radius,
+          view,
+          proj,
+          binScratch.aabbOutput,
+        );
 
-    const bounds = calculateSphereClusterBounds(aabb, gridX, gridY, gridZ, near, far);
+        const bounds = calculateSphereClusterBounds(
+          aabb,
+          gridX,
+          gridY,
+          gridZ,
+          near,
+          far,
+          binScratch.boundsOutput,
+        );
+        if (
+          bounds.min.x > bounds.max.x ||
+          bounds.min.y > bounds.max.y ||
+          bounds.min.z > bounds.max.z
+        ) {
+          continue;
+        }
 
-    if (bounds.min.x > bounds.max.x || bounds.min.y > bounds.max.y || bounds.min.z > bounds.max.z) {
-      continue;
-    }
+        lightBounds[boundsOffset] = bounds.min.x;
+        lightBounds[boundsOffset + 1] = bounds.min.y;
+        lightBounds[boundsOffset + 2] = bounds.min.z;
+        lightBounds[boundsOffset + 3] = bounds.max.x;
+        lightBounds[boundsOffset + 4] = bounds.max.y;
+        lightBounds[boundsOffset + 5] = bounds.max.z;
+      }
+    });
 
-    for (let cz = bounds.min.z; cz <= bounds.max.z; cz++) {
-      for (let cy = bounds.min.y; cy <= bounds.max.y; cy++) {
-        for (let cx = bounds.min.x; cx <= bounds.max.x; cx++) {
-          const clusterIdx = cz * gridY * gridX + cy * gridX + cx;
-          attemptedTotal++;
-          perCluster[clusterIdx]?.push(lightIdx);
+    runClusterBinProfilePhase(profile, 'light-bounds-and-occupancy/cluster-occupancy', () => {
+      const diffX = gridX + 1;
+      const diffY = gridY + 1;
+      const diffRow = diffX * diffY;
+      clusterDeltas.fill(0, 0, diffRow * (gridZ + 1));
+
+      const addDifference = (x: number, y: number, z: number, delta: number): void => {
+        const index = z * diffRow + y * diffX + x;
+        clusterDeltas[index] = (clusterDeltas[index] ?? 0) + delta;
+      };
+
+      for (let lightIdx = 0; lightIdx < lights.length; lightIdx++) {
+        const boundsOffset = lightIdx * 6;
+        if ((lightBounds[boundsOffset] ?? -1) < 0) continue;
+        const minX = lightBounds[boundsOffset] ?? 0;
+        const minY = lightBounds[boundsOffset + 1] ?? 0;
+        const minZ = lightBounds[boundsOffset + 2] ?? 0;
+        const maxX = lightBounds[boundsOffset + 3] ?? -1;
+        const maxY = lightBounds[boundsOffset + 4] ?? -1;
+        const maxZ = lightBounds[boundsOffset + 5] ?? -1;
+        const endX = maxX + 1;
+        const endY = maxY + 1;
+        const endZ = maxZ + 1;
+        addDifference(minX, minY, minZ, 1);
+        addDifference(endX, minY, minZ, -1);
+        addDifference(minX, endY, minZ, -1);
+        addDifference(minX, minY, endZ, -1);
+        addDifference(endX, endY, minZ, 1);
+        addDifference(endX, minY, endZ, 1);
+        addDifference(minX, endY, endZ, 1);
+        addDifference(endX, endY, endZ, -1);
+      }
+      for (let cz = 0; cz < gridZ; cz++) {
+        for (let cy = 0; cy < gridY; cy++) {
+          for (let cx = 0; cx < gridX; cx++) {
+            const diffIdx = cz * diffRow + cy * diffX + cx;
+            let count = clusterDeltas[diffIdx] ?? 0;
+            if (cx > 0) count += clusterDeltas[diffIdx - 1] ?? 0;
+            if (cy > 0) count += clusterDeltas[diffIdx - diffX] ?? 0;
+            if (cz > 0) count += clusterDeltas[diffIdx - diffRow] ?? 0;
+            if (cx > 0 && cy > 0) count -= clusterDeltas[diffIdx - diffX - 1] ?? 0;
+            if (cx > 0 && cz > 0) count -= clusterDeltas[diffIdx - diffRow - 1] ?? 0;
+            if (cy > 0 && cz > 0) count -= clusterDeltas[diffIdx - diffRow - diffX] ?? 0;
+            if (cx > 0 && cy > 0 && cz > 0) {
+              count += clusterDeltas[diffIdx - diffRow - diffX - 1] ?? 0;
+            }
+            clusterDeltas[diffIdx] = count;
+            const clusterIdx = cz * gridY * gridX + cy * gridX + cx;
+            clusterCounts[clusterIdx] = count;
+            attemptedTotal += count;
+          }
         }
       }
-    }
-  }
+    });
+  });
 
   if (attemptedTotal > capacity) {
     return err({
@@ -428,21 +643,58 @@ export function bin(
     });
   }
 
-  // Flatten per-cluster lists into the SoA (offset, count) + lightIndexList
-  // arrays the GPU side reads. Each cluster's run is now contiguous.
-  let writeCount = 0;
-  for (let ci = 0; ci < clusterCount; ci++) {
-    const list = perCluster[ci];
-    if (!list || list.length === 0) continue;
-    const base = ci * 2;
-    clusterGrid[base] = writeCount;
-    clusterGrid[base + 1] = list.length;
-    for (let j = 0; j < list.length; j++) {
-      const idx = list[j];
-      if (idx !== undefined) lightIndexList[writeCount + j] = idx;
+  // Reserve one contiguous output run per cluster. The second light-major pass
+  // below preserves each cluster's original light ordering without allocating
+  // one JavaScript array per cluster.
+  const writeCount = runClusterBinProfilePhase(profile, 'cluster-reserve', () => {
+    let reserved = 0;
+    for (let ci = 0; ci < clusterCount; ci++) {
+      const base = ci * 2;
+      clusterGrid[base] = reserved;
+      clusterGrid[base + 1] = clusterCounts[ci] ?? 0;
+      clusterCursors[ci] = reserved;
+      reserved += clusterCounts[ci] ?? 0;
     }
-    writeCount += list.length;
+    return reserved;
+  });
+
+  if (options.writeMembership !== false) {
+    runClusterBinProfilePhase(profile, 'light-index-write', () => {
+      for (let lightIdx = 0; lightIdx < lights.length; lightIdx++) {
+        const boundsOffset = lightIdx * 6;
+        let valid = false;
+        let minX = 0;
+        let minY = 0;
+        let minZ = 0;
+        let maxX = -1;
+        let maxY = -1;
+        let maxZ = -1;
+        runClusterBinProfilePhase(profile, 'light-index-write/bounds-read', () => {
+          if ((lightBounds[boundsOffset] ?? -1) < 0) return;
+          valid = true;
+          minX = lightBounds[boundsOffset] ?? 0;
+          minY = lightBounds[boundsOffset + 1] ?? 0;
+          minZ = lightBounds[boundsOffset + 2] ?? 0;
+          maxX = lightBounds[boundsOffset + 3] ?? -1;
+          maxY = lightBounds[boundsOffset + 4] ?? -1;
+          maxZ = lightBounds[boundsOffset + 5] ?? -1;
+        });
+        if (!valid) continue;
+        runClusterBinProfilePhase(profile, 'light-index-write/cluster-write', () => {
+          for (let cz = minZ; cz <= maxZ; cz++) {
+            for (let cy = minY; cy <= maxY; cy++) {
+              for (let cx = minX; cx <= maxX; cx++) {
+                const clusterIdx = cz * gridY * gridX + cy * gridX + cx;
+                const cursor = clusterCursors[clusterIdx] ?? 0;
+                lightIndexList[cursor] = lightIdx;
+                clusterCursors[clusterIdx] = cursor + 1;
+              }
+            }
+          }
+        });
+      }
+    });
   }
 
-  return ok(undefined);
+  return ok(writeCount);
 }

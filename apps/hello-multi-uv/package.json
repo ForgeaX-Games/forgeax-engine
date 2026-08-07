@@ -14,10 +14,14 @@
     "smoke:browser-rhi": "node scripts/smoke-browser-rhi.mjs",
     "smoke:browser-pipeline": "node scripts/smoke-browser-pipeline.mjs",
     "smoke:browser-variant": "node scripts/smoke-browser-variant.mjs",
-    "smoke:browser-composed": "node scripts/smoke-browser-composed.mjs"
+    "smoke:browser-composed": "node scripts/smoke-browser-composed.mjs",
+    "smoke:rhi-debug": "node scripts/smoke-rhi-debug.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-multi-uv smoke",
+    "rhiDebug": {
+      "riskFamilies": ["programmable-pipelines"]
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

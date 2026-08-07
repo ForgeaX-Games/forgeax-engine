@@ -147,6 +147,10 @@ describe('ParityCaptureDetail — staged capture failure (D-P11 / EC-06)', () =>
 });
 
 describe('MetricErrorDetail — discriminated-union family (D-P11)', () => {
+  it('projects the complete non-optional detail family from MetricError', () => {
+    expectTypeOf<MetricErrorDetail>().toEqualTypeOf<NonNullable<MetricError['detail']>>();
+  });
+
   it('unifies legacy + threshold + capture variants', () => {
     expectTypeOf<ParityThresholdDetail>().toExtend<MetricErrorDetail>();
     expectTypeOf<ParityCaptureDetail>().toExtend<MetricErrorDetail>();

@@ -161,6 +161,13 @@ function normalizeDescriptor(
         vertexLayout: pipeline.vertexLayout,
         colorFormats: Object.freeze([...pipeline.colorFormats]),
         ...(pipeline.depthFormat === undefined ? {} : { depthFormat: pipeline.depthFormat }),
+        ...(pipeline.renderState === undefined
+          ? {}
+          : {
+              renderState: immutableValue(pipeline.renderState) as NonNullable<
+                RenderFeaturePipelineDescriptor['renderState']
+              >,
+            }),
       });
       break;
     }

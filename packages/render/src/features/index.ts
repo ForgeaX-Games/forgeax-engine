@@ -12,5 +12,46 @@ export type {
   RenderFeaturePassDependency,
   RenderFeaturePassOptions,
 } from './graph-contribution';
-export * from './prepared-graphics';
-export * from './types';
+export type {
+  PreparedKind,
+  RenderFeatureBindingsDescriptor,
+  RenderFeatureColorAttachment,
+  RenderFeatureDepthStencilAttachment,
+  RenderFeatureDrawCommand,
+  RenderFeatureDrawRecord,
+  RenderFeatureGraphicsContributionStaging,
+  RenderFeatureGraphicsPassAttachments,
+  RenderFeatureGraphicsPassDescriptor,
+  RenderFeatureGraphicsPrepare,
+  RenderFeatureIndexDataBinding,
+  RenderFeatureIndexDataDescriptor,
+  RenderFeatureIndexedDrawCommand,
+  RenderFeaturePipelineDescriptor,
+  RenderFeaturePreparedGraphicsState,
+  RenderFeaturePreparedRef,
+  RenderFeatureValidatedGraphicsPass,
+  RenderFeatureVertexDataBinding,
+  RenderFeatureVertexDataDescriptor,
+} from './prepared-graphics';
+export { RENDER_FEATURE_VERTEX_LAYOUTS } from './prepared-graphics';
+export type {
+  RenderFeature,
+  RenderFeatureCapabilityKey,
+  RenderFeatureContributeContext,
+  RenderFeatureDiagnostics,
+  RenderFeatureErrorCode,
+  RenderFeatureErrorDescriptor,
+  RenderFeatureErrorSink,
+  RenderFeatureExtractContext,
+  RenderFeatureFrameIdentity,
+  RenderFeatureHiddenEntityReport,
+  RenderFeaturePassContext,
+  RenderFeaturePrepareContext,
+  RenderFeatureRecoverInput,
+  RenderFeatureRecovery,
+  RenderFeatureResourceHandle,
+  RenderFeatureStage,
+  RenderFeatureStatus,
+  RenderFeatureTargetHandle,
+  RenderFeatureWorldVisibilitySnapshot,
+} from './types';

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
-import { Rotatable, stepRotatingTargets } from '../src/rotating-target.ts';
+import { Rotatable, stepRotatingTargets } from '../assets/plugins/rotating-target.ts';
 
 const world = new World();
 const entity = world.spawn(

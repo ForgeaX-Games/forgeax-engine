@@ -20,6 +20,8 @@ import {
   makePipelineState,
   scanPassStates,
 } from './inspect-core';
+import type { ResourceLifecycleSummary } from './resource-lifecycle';
+import { buildResourceLifecycle } from './resource-lifecycle';
 import type { PassOffset } from './tape-format';
 import { computePassOffsets, DRAW_KINDS } from './tape-format';
 import type {
@@ -121,6 +123,8 @@ export interface FrameModel {
   readonly commands: readonly CommandEntry[];
   /** handleId to parsed create descriptor. */
   readonly resources: ReadonlyMap<HandleId, CreateDescriptor>;
+  /** Ordered create/destroy attribution and descriptor-byte estimates. */
+  readonly resourceLifecycle: ResourceLifecycleSummary;
 }
 
 // ============================================================================
@@ -311,5 +315,6 @@ export function buildFrameModel(tape: Tape): FrameModel {
     },
     commands,
     resources,
+    resourceLifecycle: buildResourceLifecycle(events),
   };
 }

@@ -57,8 +57,7 @@
 // - rhi — singleton entry (charter proposition 1: progressive disclosure +
 //   plan-strategy §7.4 'import { rhi } from @forgeax/engine-rhi-wgpu' + Engine.create
 //   escape hatch injection shape).
-// - ensureRhiWgpuReady / ensureReady / getRhiWgpuModule — wasm lazy-load
-//   surface (w13).
+// - ensureReady — wasm lazy-load surface (w13).
 
 /// <reference types="@webgpu/types" />
 
@@ -519,10 +518,6 @@ export type {
   TextureViewDescriptor,
 } from '@forgeax/engine-rhi';
 export { err, ok, RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
-// wasm-loader surface (w13).
-export type { EnsureRhiWgpuReadyOptions, InitFn } from './internal/wasm-loader';
-export {
-  ensureRhiWgpuReady,
-  ensureRhiWgpuReady as ensureReady,
-  getRhiWgpuModule,
-} from './internal/wasm-loader';
+// wasm-loader surface (w13): keep the root front door canonical; the loader
+// implementation and its synchronous cache accessor remain internal.
+export { ensureRhiWgpuReady as ensureReady } from './internal/wasm-loader';

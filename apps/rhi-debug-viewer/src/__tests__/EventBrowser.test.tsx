@@ -15,6 +15,7 @@ import { EventBrowser } from '../components/EventBrowser';
 import { SelectionContext } from '../selection-context';
 import { ViewModelContext } from '../viewer-context';
 import type { CommandEntry, ViewModel } from '../viewer-model';
+import { buildResourceLifecycle } from '../viewer-model';
 
 const mockProps = {
   api: {},
@@ -67,6 +68,7 @@ function mockViewModel(commands: readonly CommandEntry[]): ViewModel {
     },
     commands,
     resources: new Map(),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 
@@ -389,6 +391,7 @@ describe('EventBrowser: empty / no-tape states', () => {
       meta: { totalDraws: 0, totalPasses: 0, hasCompute: false },
       commands: [],
       resources: new Map(),
+      resourceLifecycle: buildResourceLifecycle([]),
     };
 
     const { container } = render(

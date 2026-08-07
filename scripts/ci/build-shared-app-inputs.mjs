@@ -13,6 +13,8 @@ import {
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
+import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
+import { gltfImporter } from '@forgeax/engine-gltf';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { build } from 'vite';
@@ -121,7 +123,7 @@ try {
         },
       },
       forgeaxShader(),
-      pluginPack({ roots: [assetRoot], base: '' }),
+      pluginPack({ roots: [assetRoot], base: '', importers: [audioImporter, gltfImporter] }),
     ],
     build: {
       emptyOutDir: true,

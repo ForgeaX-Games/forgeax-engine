@@ -72,6 +72,14 @@ export interface DebugRhiAdapter {
   ): Promise<Record<string, unknown>>;
   replayDispose(tapePath: string): Promise<{ readonly ok: boolean }>;
 }
+export {
+  buildResourceLifecycle,
+  type ResourceByteEstimate,
+  type ResourceKind,
+  type ResourceLifecycleEntry,
+  type ResourceLifecycleSummary,
+  type ResourceOrigin,
+} from './resource-lifecycle';
 export type { PassOffset } from './tape-format';
 export {
   computePassOffsets,

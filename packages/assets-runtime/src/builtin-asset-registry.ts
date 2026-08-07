@@ -34,17 +34,6 @@ import { BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
 // re-exported from the runtime barrel here for AI-user discoverability.
 export { BUILTIN_BASE };
 
-/**
- * Floats per vertex for the builtin inline geometry:
- * position(3) + normal(3) + uv(2) + tangent(4) = 12. The builtin payloads are
- * 12-floats (bug-20260519): the prior 6-floats stride forced UVs to (0,0) via
- * a zero-stride dummy attribute buffer, so a textured builtin sampled a single
- * texel and looked flat-coloured. With 12-floats both builtin and procedural
- * meshes funnel through one vertex pipeline branch (`unlitPipeline` /
- * `standardPipeline`).
- */
-export const BUILTIN_FLOATS_PER_VERTEX = 12;
-
 // ─── Builtin geometry data (12F: position + normal + uv + tangent) ──────────
 // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu: every
 // builtin geometry payload keeps the local-space AABB produced by its geometry

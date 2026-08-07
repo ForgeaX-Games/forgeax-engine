@@ -19,7 +19,7 @@
 // fresh dawn-node device, replays to drawIdx, and emits a structured
 // InspectReport JSON + an RT PNG -- no live engine / WS connection. It composes
 // the existing deserializeTape + createReplay + inspector.inspectAt primitives;
-// the inspector / replayer cores are untouched (OOS-5). No new DebugErrorCode
+// the inspector / replayer cores are untouched. No new DebugErrorCode
 // is introduced (OOS-6 / C2): the entry returns the existing DebugError union.
 //
 // Related: requirements AC-22 / IS-7; m7-2.
@@ -29,6 +29,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { defaultConnect } from '@forgeax/engine-types/inspector-client';
+import { RHI_DEBUG_DEV_ROUTES } from './dev-routes';
 import { DebugError } from './errors';
 import { buildFrameModel } from './frame-model';
 import { findEventIdxForDraw } from './inspect-core';
@@ -36,6 +37,7 @@ import { inspectAt as inspectAtCore } from './inspector';
 import { analyzeMergeability } from './mergeability';
 import type { CreateShaderModuleFn } from './recorder';
 import { createReplay } from './replayer';
+import { buildResourceLifecycle } from './resource-lifecycle';
 import { deserializeTape } from './tape-format';
 import type { InspectFields, InspectReport, Tape } from './types';
 
@@ -176,7 +178,7 @@ export function getInspectOfflineHelp(): string {
  */
 export function getSummaryHelp(): string {
   return [
-    'Usage: summary <tapePath>',
+    'Usage: summary <tapePath> [--lifecycle-only]',
     '',
     'Print the whole-frame structural model of an on-disk tape WITHOUT a running',
     'engine and WITHOUT a GPU device. Reads frame-0.tape.bin + frame-0.report.json',
@@ -186,6 +188,7 @@ export function getSummaryHelp(): string {
     '',
     'Arguments:',
     '  tapePath     Path to the .tape.bin file (its .report.json sits alongside).',
+    '  --lifecycle-only  Emit only event count and resource lifecycle; bounded for long tapes.',
     '',
     'Example:',
     '  forgeax-rhi-debug summary .forgeax-debug/<runId>/frame-0.tape.bin',
@@ -429,7 +432,7 @@ export async function runInspectAt(options: {
 // ============================================================================
 
 // findEventIdxForDraw is the shared draw->event SSOT, imported from inspect-core
-// (drops the former local copy; the adapter.ts copy stays per OOS-5).
+// (drops the former local copy; the adapter.ts copy stays local to that seam).
 
 interface DawnDevicePack {
   readonly device: RhiDevice;
@@ -641,12 +644,30 @@ type SummaryResult =
  * Read an on-disk L1 tape and return the JSON of buildFrameModel(tape) — the
  * same whole-frame model the viewer renders. Pure: no GPU device, no replay
  * (D-1 SSOT: buildFrameModel is the shared analysis). The `resources` map is
- * serialized as a plain array of descriptors (Map has no JSON form).
+ * serialized as a plain array of descriptors (Map has no JSON form); the
+ * resourceLifecycle ledger is already JSON-safe.
  */
-export function runSummary(opts: { readonly tapePath: string }): SummaryResult {
+export function runSummary(opts: {
+  readonly tapePath: string;
+  readonly lifecycleOnly?: boolean;
+}): SummaryResult {
   const tapeLoad = loadTapeFromDisk(opts.tapePath);
   if (!tapeLoad.ok) {
     return { ok: false, error: tapeLoad.error };
+  }
+
+  if (opts.lifecycleOnly === true) {
+    return {
+      ok: true,
+      value: JSON.stringify(
+        {
+          eventCount: tapeLoad.tape.events.length,
+          resourceLifecycle: buildResourceLifecycle(tapeLoad.tape.events),
+        },
+        null,
+        2,
+      ),
+    };
   }
 
   const model = buildFrameModel(tapeLoad.tape);
@@ -661,6 +682,7 @@ export function runSummary(opts: { readonly tapePath: string }): SummaryResult {
     })),
     commands: model.commands,
     resources: Array.from(model.resources.values()),
+    resourceLifecycle: model.resourceLifecycle,
   };
   return { ok: true, value: JSON.stringify(wire, null, 2) };
 }
@@ -942,18 +964,23 @@ async function inspectOfflineDispatch(args: string[]): Promise<void> {
 /**
  * Parse summary arguments and dispatch.
  *
- * Single positional <tapePath>, no flags (pure read; no device, no fields
- * selector — the whole frame model is always emitted). Prints the FrameModel
- * JSON to stdout, or the DebugError code + hint to stderr (exit 1).
+ * Pure read; no device. The default emits the whole FrameModel. The bounded
+ * lifecycle-only form avoids materializing a huge per-draw JSON string for
+ * long captures.
  */
 function summaryDispatch(args: string[]): void {
   let tapePath: string | undefined;
+  let lifecycleOnly = false;
 
   for (const arg of args) {
     if (arg === '--help' || arg === '-h') {
       process.stdout.write(getSummaryHelp());
       process.stdout.write('\n');
       process.exit(0);
+    }
+    if (arg === '--lifecycle-only') {
+      lifecycleOnly = true;
+      continue;
     }
     if (!arg.startsWith('--')) {
       if (tapePath === undefined) {
@@ -972,7 +999,7 @@ function summaryDispatch(args: string[]): void {
     process.exit(1);
   }
 
-  const result = runSummary({ tapePath });
+  const result = runSummary({ tapePath, lifecycleOnly });
   if (!result.ok) {
     process.stderr.write(`Error: [${result.error.code}] ${result.error.hint}\n`);
     process.exit(1);
@@ -1020,7 +1047,7 @@ async function triggerBrowserDispatch(args: string[]): Promise<void> {
   }
 
   try {
-    const response = await fetch(`${devUrl}/__forgeax-debug/trigger`, {
+    const response = await fetch(`${devUrl}${RHI_DEBUG_DEV_ROUTES.trigger}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

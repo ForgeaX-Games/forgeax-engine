@@ -18,6 +18,7 @@ export default withRhiDebug({
   rootDepth: 4,
   port: 5180,
   keepBinExternal: true,
+  engineEntries: { hdrpSsao: true },
   extraPlugins: [
     pluginPack({
       refresh: reloadAssetHost(),

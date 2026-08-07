@@ -30,6 +30,8 @@ import { fileURLToPath } from 'node:url';
 const SMOKE_FRAMES_PER_T = Number.parseInt(process.env.SMOKE_FRAMES_PER_T ?? '8', 10);
 const MEAN_BRIGHTNESS_MIN = Number.parseFloat(process.env.MEAN_BRIGHTNESS_MIN ?? '0.002');
 const FRAME_DELTA_MIN = Number.parseFloat(process.env.FRAME_DELTA_MIN ?? '0.002');
+const captureEvidence = { mode: 'pixel' };
+const FALSIFY_NO_DRAW = process.env.FALSIFY_NO_DRAW === '1';
 
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -96,7 +98,7 @@ function ensureRenderTarget(device, format) {
   renderTarget = device.createTexture({
     size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
     format,
-    usage: 0x10 | 0x01,
+    usage: 0x10 | 0x02 | 0x01,
     viewFormats: ['rgba8unorm-srgb'],
   });
   return renderTarget;
@@ -262,6 +264,16 @@ if (!device) {
   process.exit(1);
 }
 
+if (FALSIFY_NO_DRAW) {
+  renderTarget = ensureRenderTarget(device, 'rgba8unorm');
+  device.queue.writeTexture(
+    { texture: renderTarget },
+    new Uint8Array(WIDTH * HEIGHT * 4),
+    { bytesPerRow: WIDTH * 4, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+}
+
 const bytesPerPixel = 4;
 const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
 const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
@@ -269,8 +281,10 @@ const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
 async function captureFrameAtT(t) {
   values.iTime = t;
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
-    const r = renderer.draw([world], { owner: 0 });
-    if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
+    if (!FALSIFY_NO_DRAW) {
+      const r = renderer.draw([world], { owner: 0 });
+      if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
+    }
   }
   await device.queue.onSubmittedWorkDone();
   const readbackBuffer = device.createBuffer({
@@ -337,7 +351,9 @@ console.log(
 
 const delta1 = frameDelta(frame0, frame1);
 const delta2 = frameDelta(frame0, frame2);
-console.log(`[smoke] frameDelta_1=${delta1.toFixed(5)} delta_2=${delta2.toFixed(5)}`);
+console.log(
+  `[smoke] frameDelta_1=${delta1.toFixed(5)} delta_2=${delta2.toFixed(5)} oracle=${captureEvidence.mode}`,
+);
 
 // --- 5. Verdict -------------------------------------------------------------
 
@@ -372,7 +388,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS -- backend=webgpu, frames=${framesObserved}, maxMeanBrightness=${maxBrightness.toFixed(5)}>=${MEAN_BRIGHTNESS_MIN}, maxFrameDelta=${maxDelta.toFixed(5)}>=${FRAME_DELTA_MIN}, RhiError count=0`,
+  `[smoke] PASS -- backend=webgpu, frames=${framesObserved}, maxMeanBrightness=${maxBrightness.toFixed(5)}>=${MEAN_BRIGHTNESS_MIN}, maxFrameDelta=${maxDelta.toFixed(5)}>=${FRAME_DELTA_MIN}, oracle=${captureEvidence.mode}, RhiError count=0`,
 );
 
 device.destroy?.();

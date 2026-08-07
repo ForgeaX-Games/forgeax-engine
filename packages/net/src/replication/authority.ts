@@ -13,9 +13,9 @@ import {
   type ReplicationComponentRecord,
   type ReplicationEntityRecord,
 } from './codec';
-import { DEFAULT_REPLICATION_LIMITS } from './constants';
+import { REPLICATION_PROTOCOL_VERSION } from './constants';
 import type { NetError } from './errors';
-import type { ReplicationProfile } from './profile';
+import { DEFAULT_REPLICATION_LIMITS, type ReplicationProfile } from './profile';
 
 export interface PublishedBatch extends ReplicationBatch {
   readonly bytes: Uint8Array;
@@ -130,7 +130,7 @@ export class AuthorityCoordinator {
     }
 
     const batch: ReplicationBatch = {
-      version: 1,
+      version: REPLICATION_PROTOCOL_VERSION,
       fingerprint: this.#profile.fingerprint,
       tick: this.#tick + 1,
       full,

@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   _basisTranscoderInitCount,
   _setBasisTranscoderImporter,
   initBasisTranscoder,
-  parseKtx2,
   transcodeKtx2,
-} from '@forgeax/engine-codec';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+} from '../basis-transcoder.js';
+import { parseKtx2 } from '../ktx2.js';
 import type { BasisEncoderModule, BasisModuleFactory } from '../wasm/basis-types.js';
 
 /**

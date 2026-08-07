@@ -38,12 +38,15 @@
   "dependencies": {
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-project": "workspace:*"
   },
   "devDependencies": {
     "@zappar/msdf-generator": "1.2.4",
-    "playwright": "^1.50.0"
+    "playwright": "^1.50.0",
+    "upng-js": "^2.1.0"
   }
 }

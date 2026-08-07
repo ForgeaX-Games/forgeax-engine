@@ -12,6 +12,7 @@ import { ResourceInspector } from '../components/ResourceInspector';
 import { SelectionContext } from '../selection-context';
 import { ViewModelContext } from '../viewer-context';
 import type { ViewModel } from '../viewer-model';
+import { buildResourceLifecycle } from '../viewer-model';
 
 const mockProps = {
   api: {},
@@ -70,6 +71,7 @@ function makeThreeBufferVM(): ViewModel {
         },
       ],
     ]),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 
@@ -176,6 +178,7 @@ function makeFourBufferVM(): ViewModel {
         },
       ],
     ]),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 
@@ -233,6 +236,7 @@ function makeNoBufferVM(): ViewModel {
         },
       ],
     ]),
+    resourceLifecycle: buildResourceLifecycle([]),
   };
 }
 

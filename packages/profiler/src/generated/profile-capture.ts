@@ -10,6 +10,8 @@ export interface ProfilePhaseRecord {
   readonly source: ProfileSource;
   readonly frameId: number;
   readonly phase: string;
+  readonly parentSource?: ProfileSource;
+  readonly parentPhase?: string;
   readonly startMicros: number;
   readonly endMicros: number;
   readonly durationMicros: number;

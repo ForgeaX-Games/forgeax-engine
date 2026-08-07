@@ -99,8 +99,13 @@ export class DynamicTextureStore {
   /**
    * Wire the GPU device the store uploads through. Called once after the
    * renderer captures its device (mirrors GpuResourceStore.configureGpuDevice).
+   * A replacement device invalidates every cached texture: the handles in the
+   * map belong to the old device and cannot be reused after renderer recovery.
    */
   configureGpuDevice(device: DynamicTextureDevice): void {
+    if (this.device !== undefined && this.device !== device) {
+      this.destroyAll();
+    }
     this.device = device;
   }
 

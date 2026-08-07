@@ -10,7 +10,10 @@ import type {
 export interface RecorderLimits {
   readonly frameLimit: number;
   readonly eventLimit: number;
+  readonly detail?: ProfileDetail;
 }
+
+export type ProfileDetail = 'owner' | 'nested';
 
 export interface RecorderPhaseCatalog {
   readonly app: readonly string[];
@@ -19,6 +22,7 @@ export interface RecorderPhaseCatalog {
 
 export interface RecorderSession {
   readonly captureId: string;
+  readonly detail: ProfileDetail;
   beginFrame(frameId: number): ProfilerResult<void>;
   beginPhase(input: ProfilePhaseStart): ProfilerResult<void>;
   endPhase(): ProfilerResult<void>;
@@ -155,6 +159,7 @@ export function createRecorder(
 
   const session: RecorderSession = {
     captureId,
+    detail: limits.detail ?? 'owner',
     beginFrame(frameId) {
       const stateCheck = stateResult(state, 'beginFrame');
       if (!stateCheck.ok) return stateCheck;
@@ -187,6 +192,7 @@ export function createRecorder(
       if (!stateCheck.ok) return stateCheck;
       const openPhase = state.openPhases.pop();
       if (openPhase === undefined) return { ok: false, error: stateError('endPhase') };
+      const parent = state.openPhases.at(-1);
       if (!state.overflow) {
         const endMicros = Math.max(openPhase.startMicros, clock.nowMicros());
         if (allocationReport !== undefined) allocationReport.profilerEventObjectAllocations += 1;
@@ -195,6 +201,9 @@ export function createRecorder(
           source: openPhase.source,
           frameId: openPhase.frameId,
           phase: openPhase.phase,
+          ...(parent === undefined
+            ? {}
+            : { parentSource: parent.source, parentPhase: parent.phase }),
           startMicros: openPhase.startMicros,
           endMicros,
           durationMicros: endMicros - openPhase.startMicros,

@@ -239,6 +239,15 @@ function iterToArray<T>(it: Iterable<T>): T[] {
   return out;
 }
 
+function textureSizeToArray(size: GPUExtent3DStrict): readonly number[] {
+  if (typeof size === 'number') return [size, 1, 1];
+  if (Array.isArray(size)) return [size[0] ?? 1, size[1] ?? 1, size[2] ?? 1];
+  if (typeof size === 'object' && size !== null && 'width' in size) {
+    return [size.width ?? 1, size.height ?? 1, size.depthOrArrayLayers ?? 1];
+  }
+  return Array.from(size as Iterable<number>);
+}
+
 /** Build the resources map (handleId -> descriptor) from all create* events. */
 export function buildResources(
   events: readonly RhiCallEvent[],
@@ -260,7 +269,7 @@ export function buildResources(
           kind: 'createTexture',
           handleId: event.handleId,
           format: event.desc.format,
-          size: [1, 1, 1] as const,
+          size: textureSizeToArray(event.desc.size),
           mipLevelCount: event.desc.mipLevelCount ?? 1,
           sampleCount: event.desc.sampleCount ?? 1,
           dimension: event.desc.dimension ?? '2d',

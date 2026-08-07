@@ -15,10 +15,8 @@
 // the (eventual) bind-group layout consumer (charter P5: one resource, one
 // owner; AC-13: 4 RHI buffers actually exist on slot 3..6 layout).
 //
-// Storage usage flag values mirror the pattern already in use in
-// `createRenderer.ts` (GPU_BUFFER_USAGE_STORAGE = 0x80 etc.) -- copied here
-// rather than imported because that file does not export them and this module
-// must stay decoupled from createRenderer.
+// Storage usage flags come from the render package's dependency-free buffer
+// usage owner; this module stays decoupled from renderer bootstrap.
 //
 // Sizes:
 //   - light_data        : 256 x 64 B  = 16 384 B
@@ -45,6 +43,17 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 import {
+  GPU_SHADER_STAGE_COMPUTE,
+  GPU_SHADER_STAGE_FRAGMENT,
+  GPU_SHADER_STAGE_VERTEX,
+} from './gpu-stage';
+import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
+import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
+} from './gpu-usage';
+import {
   CLUSTER_GRID_STRIDE_U32,
   DEFAULT_CLUSTER_GRID,
   LIGHT_INDEX_LIST_CAPACITY,
@@ -52,7 +61,7 @@ import {
 } from './hdrp-pipeline';
 import { BYTES_PER_LIGHT_SLOT } from './light-buffer-layout';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
-import { MESH_UBO_FULL_ARRAY_BYTES } from './record/mesh-ssbo';
+import { MESH_PER_ENTITY_STRIDE, MESH_UBO_FULL_ARRAY_BYTES } from './record/mesh-ssbo';
 import type { RenderSystemRuntime } from './render-system';
 
 // Stub PipelineSpec for the HDRP BGL site. The dispatcher's 'hdrp-7-slot'
@@ -65,22 +74,6 @@ const HDRP_BGL_SPEC_STUB: PipelineSpec = Object.freeze({
   geometry: { topology: 'triangle-list', vertexLayout: {} },
   renderState: undefined,
 }) as PipelineSpec;
-
-// WebGPU buffer-usage flag values (mirrors createRenderer.ts constants;
-// re-declared locally to keep this module decoupled from that file).
-const GPU_BUFFER_USAGE_UNIFORM = 0x40;
-const GPU_BUFFER_USAGE_STORAGE = 0x80;
-const GPU_BUFFER_USAGE_COPY_DST = 0x08;
-
-// WebGPU shader-stage visibility flags (mirrors pbr-pipeline.ts constants;
-// re-declared locally to keep this module decoupled).
-const GPU_SHADER_STAGE_VERTEX = 0x1;
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
-
-// WebGPU texture-usage flags (matching GPUTextureUsage enum). Mirrors
-// ssao-buffers.ts; re-declared locally to keep the module decoupled.
-const GPU_TEXTURE_USAGE_COPY_DST = 0x02;
-const GPU_TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
 
 /**
  * WebGL2 HDRP downlevel light-list capacity. 128 x 64 B = 8 KiB, below the
@@ -114,7 +107,7 @@ export const HDRP_UNIFORM_LIGHT_CAPACITY = 128;
  * (plan-strategy §D-B; charter P4 one consistent abstraction). Material
  * PSOs never recompile across enable / disable.
  *
- * scope-amend-webgl2-ubo: a dedicated @binding(9) intensity UBO would push
+ * scope-amend-webgl2-ubo: a dedicated intensity UBO would push
  * fragment-stage UBO count to 12, exceeding WebGL2's
  * `max_uniform_buffers_per_shader_stage = 11` budget on rhi-wgpu's
  * fallback path. Folding intensity into the existing cluster UBO pad
@@ -123,7 +116,7 @@ export const HDRP_UNIFORM_LIGHT_CAPACITY = 128;
  * When `storageBuffer=false` (no storage-buffer caps), bindings 0,3,4,5 fall
  * back to 'uniform' (same pattern as `buildPbrViewBglEntries` in pbr-pipeline.ts).
  *
- * Exported for unit-test access (w28: BGL 7-slot descriptor assertion).
+ * Exported for unit-test access.
  */
 export function createHdrpBindGroupLayoutDescriptor(
   storageBuffer: boolean = true,
@@ -168,6 +161,35 @@ export function createHdrpBindGroupLayoutDescriptor(
         binding: 8,
         visibility: GPU_SHADER_STAGE_FRAGMENT,
         sampler: { type: 'filtering' },
+      },
+    ],
+  };
+}
+
+/** Bind-group layout used only by the WebGPU cluster membership producer. */
+export function createHdrpClusterMembershipBindGroupLayoutDescriptor(): BindGroupLayoutDescriptor {
+  return {
+    label: 'hdrp-cluster-membership-bgl',
+    entries: [
+      {
+        binding: 0,
+        visibility: GPU_SHADER_STAGE_COMPUTE,
+        buffer: { type: 'read-only-storage', hasDynamicOffset: false },
+      },
+      {
+        binding: 1,
+        visibility: GPU_SHADER_STAGE_COMPUTE,
+        buffer: { type: 'storage', hasDynamicOffset: false },
+      },
+      {
+        binding: 2,
+        visibility: GPU_SHADER_STAGE_COMPUTE,
+        buffer: { type: 'uniform', hasDynamicOffset: false },
+      },
+      {
+        binding: 3,
+        visibility: GPU_SHADER_STAGE_COMPUTE,
+        buffer: { type: 'read-only-storage', hasDynamicOffset: false },
       },
     ],
   };
@@ -278,7 +300,7 @@ export function getOrCreateSsaoFallbackTexture(
 }
 
 /**
- * The 4 persistent HDRP GPU buffers (plan D-1, BGL slot 3..6) plus the unified
+ * The persistent HDRP GPU buffers (plan D-1, BGL slot 3..6) plus the unified
  * BGL layout for group(2) (plan D-6, feat-20260609-hdrp-cluster-fragment-ggx M3).
  *
  * AC-11: light_data stride = `BYTES_PER_LIGHT_SLOT` = 64 (double-sided lock with
@@ -304,9 +326,12 @@ export interface HdrpBuffers {
   /** cluster_uniform UBO -- 32 B (2 vec4 std140), BGL slot 6. */
   readonly clusterUniformBuffer: Buffer;
   readonly clusterUniformBytes: number;
+  /** CPU-produced light AABBs consumed by the optional WebGPU membership pass. */
+  readonly lightBoundsBuffer: Buffer;
+  readonly lightBoundsBytes: number;
   /** The grid the buffers were sized for; cluster_grid is sized by gridX*gridY*gridZ. */
   readonly grid: { readonly x: number; readonly y: number; readonly z: number };
-  /** Unified BGL layout for group(2) — 7 entries: binding 0 + 3..6 (plan D-6). */
+  /** Unified BGL layout for group(2). */
   readonly unifiedBindGroupLayout: BindGroupLayout;
 }
 
@@ -343,6 +368,7 @@ export function getOrCreateHdrpBuffers(
     ? clusterCells * CLUSTER_GRID_STRIDE_U32 * 4
     : clusterUniformBytes;
   const lightIndexListBytes = storageBuffer ? LIGHT_INDEX_LIST_CAPACITY * 4 : clusterUniformBytes;
+  const lightBoundsBytes = MAX_LIGHTS * 6 * 4;
 
   const lightData = device.createBuffer({
     label: 'hdrp-light-data',
@@ -390,6 +416,18 @@ export function getOrCreateHdrpBuffers(
     runtime.errorRegistry.fire(clusterUniform.error);
     return null;
   }
+  const lightBounds = device.createBuffer({
+    label: 'hdrp-light-bounds',
+    size: lightBoundsBytes,
+    usage:
+      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
+      GPU_BUFFER_USAGE_COPY_DST,
+    mappedAtCreation: false,
+  });
+  if (!lightBounds.ok) {
+    runtime.errorRegistry.fire(lightBounds.error);
+    return null;
+  }
 
   // Create the unified 7-entry BGL layout for group(2)
   // (plan D-6, feat-20260609-hdrp-cluster-fragment-ggx M3).
@@ -406,7 +444,6 @@ export function getOrCreateHdrpBuffers(
     runtime.errorRegistry.fire(unifiedBglRes.error);
     return null;
   }
-
   const buffers: HdrpBuffers = {
     storageBuffer,
     lightDataBuffer: lightData.value,
@@ -417,6 +454,8 @@ export function getOrCreateHdrpBuffers(
     lightIndexListBytes,
     clusterUniformBuffer: clusterUniform.value,
     clusterUniformBytes,
+    lightBoundsBuffer: lightBounds.value,
+    lightBoundsBytes,
     grid: { x: grid.x, y: grid.y, z: grid.z },
     unifiedBindGroupLayout: unifiedBglRes.value,
   };
@@ -430,7 +469,7 @@ export function getOrCreateHdrpBuffers(
  *   [0] gridX  u32 (cast in shader)
  *   [1] gridY  u32
  *   [2] gridZ  u32
- *   [3] pad1   u32 = 0 (vec4 alignment)
+ *   [3] lightCount u32 (vec4 alignment; capped by the active transport)
  *   [4] near   f32
  *   [5] far    f32
  *   [6] logFarOverNear  f32
@@ -451,6 +490,7 @@ export function packClusterUniform(
   far: number,
   ssaoIntensity: number = 0,
   lightCount: number = 0,
+  lightCapacity: number = HDRP_UNIFORM_LIGHT_CAPACITY,
 ): ArrayBuffer {
   const buf = new ArrayBuffer(32);
   const u32 = new Uint32Array(buf);
@@ -458,7 +498,7 @@ export function packClusterUniform(
   u32[0] = grid.x >>> 0;
   u32[1] = grid.y >>> 0;
   u32[2] = grid.z >>> 0;
-  u32[3] = Math.min(Math.max(lightCount, 0), HDRP_UNIFORM_LIGHT_CAPACITY) >>> 0;
+  u32[3] = Math.min(Math.max(lightCount, 0), lightCapacity) >>> 0;
   f32[4] = near;
   f32[5] = far;
   // logFarOverNear: log(far/near) used by the shader for log-z slice mapping.
@@ -470,20 +510,13 @@ export function packClusterUniform(
 }
 
 /**
- * Per-entity mesh-SSBO slice size in bytes (must match
- * `MESH_PER_ENTITY_STRIDE` in render-system-record.ts). Kept in sync via the
- * value used here; consumers pass the SAME mesh storage buffer + stride that
- * URP uses, so the dynamic offset (`i * stride`) at `setBindGroup(2, ...)`
+ * Consumers pass the same mesh storage buffer + stride that URP uses, so the
+ * dynamic offset (`i * MESH_PER_ENTITY_STRIDE`) at `setBindGroup(2, ...)`
  * stays valid across both pipelines.
- *
- * Re-declared as a local constant rather than imported to keep this module
- * decoupled from render-system-record.ts (charter P5: one resource owner).
  */
-const MESH_SSBO_PER_ENTITY_STRIDE = 256;
-
 /**
  * Build the unified group(2) BindGroup for HDRP — binding 0 = mesh SSBO
- * (dynamic offset, same buffer URP binds), bindings 3..6 = the 4 cluster
+ * (dynamic offset, same buffer URP binds), bindings 3..6 = the cluster
  * buffers from `getOrCreateHdrpBuffers`.
  *
  * feat-20260609-hdrp-cluster-fragment-ggx M4 / w19. Called per-frame from the
@@ -557,9 +590,7 @@ export function createHdrpUnifiedBindGroup(
           value: {
             buffer: meshStorageBuffer,
             offset: 0,
-            size: hdrpBuffers.storageBuffer
-              ? MESH_SSBO_PER_ENTITY_STRIDE
-              : MESH_UBO_FULL_ARRAY_BYTES,
+            size: hdrpBuffers.storageBuffer ? MESH_PER_ENTITY_STRIDE : MESH_UBO_FULL_ARRAY_BYTES,
           },
         },
       },
@@ -598,6 +629,47 @@ export function createHdrpUnifiedBindGroup(
       {
         binding: 8,
         resource: { kind: 'sampler', value: ssaoSampler },
+      },
+    ],
+  });
+  if (!result.ok) {
+    runtime.errorRegistry.fire(result.error);
+    return null;
+  }
+  return result.value;
+}
+
+/**
+ * Build the compute-only bind group for ordered cluster membership output.
+ * Its group is intentionally separate from the fragment group: the same
+ * light-index buffer is read-only in the fragment pipeline but read-write in
+ * the producer pipeline, which WebGPU represents with different binding
+ * types.
+ */
+export function createHdrpClusterMembershipBindGroup(
+  runtime: RenderSystemRuntime,
+  hdrpBuffers: HdrpBuffers,
+  layout: BindGroupLayout,
+): BindGroup | null {
+  const result = runtime.device.createBindGroup({
+    label: 'hdrp-cluster-membership-bg',
+    layout,
+    entries: [
+      {
+        binding: 0,
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.clusterGridBuffer } },
+      },
+      {
+        binding: 1,
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.lightIndexListBuffer } },
+      },
+      {
+        binding: 2,
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.clusterUniformBuffer } },
+      },
+      {
+        binding: 3,
+        resource: { kind: 'buffer', value: { buffer: hdrpBuffers.lightBoundsBuffer } },
       },
     ],
   });

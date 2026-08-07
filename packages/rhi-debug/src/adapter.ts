@@ -12,7 +12,7 @@ import { DebugError } from './errors';
 import type { DebugRhiAdapter } from './index';
 import { InspectorCache, inspectAt as runInspectAt } from './inspector';
 import type { DebugRhiInstance } from './recorder';
-import { waitForRecorderIdle } from './recorder-core';
+import { captureIdleTimeoutMs, waitForRecorderIdle } from './recorder-core';
 import { createReplay, type Replay } from './replayer';
 import { deserializeTape } from './tape-format';
 import type { InspectFields } from './types';
@@ -44,9 +44,9 @@ export interface CreateDebugRhiAdapterArgs {
  * to idle once `frames` frame-marks have been emitted. The adapter
  * polls `getState()` because the recorder does not (and should not)
  * carry an EventEmitter for this single internal transition; the poll
- * interval (16 ms) tracks one rAF tick. Times out after 30 seconds to
- * surface a `recorder-not-attached` style failure rather than hang the
- * RPC indefinitely.
+ * interval (16 ms) tracks one rAF tick. The bounded timeout scales with the
+ * requested frame count so long captures do not fail at the short-capture
+ * floor, while still surfacing a `recorder-not-attached` style failure.
  */
 export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhiAdapter {
   const { debugInst, device } = args;
@@ -77,7 +77,7 @@ export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhi
       // Wait until recorder finishes the requested frames. The host's
       // rAF loop drives onFrameEnd; the recorder transitions back to
       // idle once `frames` frame-marks have been emitted.
-      await waitForRecorderIdle(debugInst, 30_000);
+      await waitForRecorderIdle(debugInst, captureIdleTimeoutMs(frames));
 
       const finalizeResult = debugInst.finalize();
       if (!finalizeResult.ok) {
@@ -85,8 +85,8 @@ export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhi
       }
 
       const { runId, tapePath, reportPath } = finalizeResult.value;
-      // For v1 the recorder finalizes to a single tape file even when
-      // `frames > 1`; the report carries pass offsets per frame.
+      // The recorder finalizes one tape file; its report carries pass offsets
+      // and frame marks for every requested frame.
       return {
         tapes: [
           {

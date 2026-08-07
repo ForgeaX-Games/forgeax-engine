@@ -193,8 +193,9 @@ export {
 // feat-20260705-runtime-tier2-decomposition M1 / w14: AssetRegistry + the
 // HANDLE_* builtin mesh handles moved to @forgeax/engine-assets-runtime (AC-105).
 // feat-20260705-runtime-tier2-decomposition M1 / w14: the process-static
-// BuiltinAssetRegistry tier (BUILTIN_* payloads + BUILTIN_FLOATS_PER_VERTEX)
-// moved to @forgeax/engine-assets-runtime (AC-105).
+// BuiltinAssetRegistry tier (BUILTIN_* payloads) moved to
+// @forgeax/engine-assets-runtime (AC-105). Geometry owns the shared runtime
+// vertex layout.
 // Runtime-specific authoring components remain here. Domain authorities are
 // imported directly from @forgeax/engine-scene, @forgeax/engine-animation,
 // @forgeax/engine-skinning, and @forgeax/engine-render.
@@ -224,7 +225,7 @@ export {
 // vite-plugin-pack dev server. Aligned with the create*/wire* factory family.
 export { createDevImportTransport } from './dev-import-transport';
 // feat-20260705-runtime-tier2-decomposition M3 / w31: glyph-layout +
-// glyph-mesh-bake (FloatsPerGlyphVertex / FONT_CONCURRENCY_LIMIT /
+// glyph-mesh-bake (FONT_CONCURRENCY_LIMIT /
 // GlyphLayoutResult / layoutGlyphText / resetFontConcurrency /
 // trackFontConcurrency / VERTEX_OFFSET / bakeGlyphMesh / buildGlyphMeshAsset /
 // conservativeCubeAabb / GlyphMeshBakeResult) moved to

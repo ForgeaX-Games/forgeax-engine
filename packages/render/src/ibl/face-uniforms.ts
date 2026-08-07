@@ -15,14 +15,12 @@
 //   face       = 0..5
 //   prefilter  = mip * 6 + face   (mip 0..4, face 0..5)
 
+import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from '../gpu-usage';
 import { CAPTURE_VIEW_PROJS, PREFILTER_MIP_LEVELS, PREFILTER_SIZE } from './IblPipelineCache';
 
 const DYNAMIC_OFFSET_STRIDE = 256;
 const FACE_COUNT = 6;
 const PREFILTER_SUBPASS_COUNT = PREFILTER_MIP_LEVELS * FACE_COUNT;
-
-const GPU_BUFFER_USAGE_UNIFORM = 0x40;
-const GPU_BUFFER_USAGE_COPY_DST = 0x08;
 
 /**
  * Minimal device shape consumed by the helpers -- mirrors

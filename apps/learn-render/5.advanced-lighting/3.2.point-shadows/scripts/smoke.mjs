@@ -4,13 +4,14 @@ import { Update } from '@forgeax/engine-ecs';
 // feat-20260621-learn-render-5-3-production-shadow-demos M3 / M3-T-SMOKE-DAWN.
 //
 // LearnOpenGL section 5.3.2 point-light cube-map shadows dawn-node smoke
-// (structural-only). Spawns a cullMode:none room cube + 5 inner cubes +
-// DirectionalLight fill + PointLight + PointLightShadow + orbit system,
-// renders 300 frames, and asserts no RhiError / no unknown onError codes.
+// Spawns a cullMode:none room cube (scale=10 contains every witness cube) + 5 inner cubes + DirectionalLight fill +
+// PointLight + PointLightShadow + orbit system, renders 300 frames, reads back
+// the final render target, and asserts a producer-owned point-light witness.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-3-2-point-shadows] backend=<backend>`
 //   - `[smoke] frames observed=<N>`
+//   - `[smoke] pixelSamples=<json>`
 //   - `[smoke] PASS`
 //   - `[smoke] FAIL`
 
@@ -19,9 +20,13 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const POINT_LIGHT_MIN_DELTA = Number.parseFloat(process.env.POINT_LIGHT_MIN_DELTA ?? '0.05');
 const FALSIFY = process.env.FALSIFY ?? '';
+const FALSIFY_NO_POINT_LIGHT = FALSIFY === 'no-point-light';
 const WIDTH = 512;
 const HEIGHT = 512;
+const SMOKE_WALL_BUDGET_MS = Number.parseInt(process.env.SMOKE_WALL_BUDGET_MS ?? '45000', 10);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(here, '..');
@@ -204,11 +209,11 @@ if (roomCullMode === 'none') {
   console.log('[smoke] FALSIFY=force-backface-cull -- cullMode set to back (walls culled)');
 }
 
-// Room cube: scale=5.
+// Room cube: scale=10 so the unit cube's half-extent contains every witness object.
 world.spawn(
   {
     component: Transform,
-    data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [5, 5, 5]},
+      data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [10, 10, 10]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [roomMat] } },
@@ -252,22 +257,27 @@ world.spawn(
 ).unwrap();
 
 // Orbiting point light with shadow.
-const lightEntity = world.spawn(
-  {
-    component: Transform,
-    data: { pos: [0, 4, 0]},
-  },
-  {
-    component: PointLight,
-    data: { range: 25, intensity: 8 },
-  },
-  {
-    component: PointLightShadow,
-    data: {},
-  },
-).unwrap();
+let lightEntity = null;
+if (!FALSIFY_NO_POINT_LIGHT) {
+  lightEntity = world.spawn(
+    {
+      component: Transform,
+      data: { pos: [0, 4, 0]},
+    },
+    {
+      component: PointLight,
+      data: { range: 25, intensity: 8 },
+    },
+    {
+      component: PointLightShadow,
+      data: {},
+    },
+  ).unwrap();
+} else {
+  console.log('[smoke] FALSIFY=no-point-light -- PointLight and PointLightShadow omitted');
+}
 
-// Camera at origin, facing -Z.
+// Camera at origin, facing -Z into the room.
 const cameraEntity = world.spawn(
   {
     component: Transform,
@@ -283,48 +293,139 @@ const cameraEntity = world.spawn(
 ).unwrap();
 
 // Per-frame light orbit.
-let elapsed = 0;
-world.addSystem(Update, {
-  name: 'point-light-orbit-smoke',
-  queries: [],
-  fn: () => {
-    elapsed += 1 / 60;
-    const t = elapsed;
-    world.set(lightEntity, Transform, {
-      pos: [Math.sin(t) * 3, 0, Math.cos(t) * 3],});
-  },
-});
+if (lightEntity !== null) {
+  let elapsed = 0;
+  world.addSystem(Update, {
+    name: 'point-light-orbit-smoke',
+    queries: [],
+    fn: () => {
+      elapsed += 1 / 60;
+      const t = elapsed;
+      world.set(lightEntity, Transform, {
+        pos: [Math.sin(t) * 3, 4, Math.cos(t) * 3],});
+    },
+  });
+}
 
 // --- 6. Render 300 frames ---
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;
 
-const startResult = app.start();
-if (!startResult.ok) {
-  console.error(`[smoke] FAIL - app.start() returned err: ${startResult.error.code}`);
-  process.exit(1);
-}
-
+const frameStart = Date.now();
 let totalFrames = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const due = rafQueue.shift();
-  if (!due) break;
-  fakeNow += 16.67;
-  due.cb(fakeNow);
+  world.update(1 / 60).unwrap();
+  const drawResult = app.renderer.draw([world], { owner: 0 });
+  if (!drawResult.ok) console.error(`[smoke] draw frame ${i} error: ${drawResult.error.code}`);
   totalFrames++;
+  // Await each frame so async shadow/material PSOs can resolve before the
+  // final readback; a tight rAF drain otherwise records only skip-draw frames.
+  if (sharedDevice) await sharedDevice.queue.onSubmittedWorkDone();
   if (i % 16 === 15) await delay(1);
-}
-
-const stopResult = app.stop();
-if (!stopResult.ok) {
-  console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
-  process.exit(1);
 }
 
 console.log(`[smoke] frames observed=${totalFrames}`);
 
-// --- 7. Verdict (structural-only) ---
+// --- 7. Pixel readback ------------------------------------------------------
+
+const device = sharedDevice;
+if (!device) {
+  console.error('[smoke] FAIL - no shared device captured for readback');
+  process.exit(1);
+}
+await device.queue.onSubmittedWorkDone();
+if (!renderTarget) {
+  console.error('[smoke] FAIL - renderTarget never allocated');
+  process.exit(1);
+}
+const bytesPerPixel = 4;
+const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
+const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+{
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([enc.finish()]);
+}
+try {
+  await readbackBuffer.mapAsync(0x01);
+} catch (err) {
+  console.error(`[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+const mapped = readbackBuffer.getMappedRange();
+const bytes = new Uint8Array(mapped.slice(0));
+readbackBuffer.unmap();
+readbackBuffer.destroy();
+
+const readRgba = (px, py) => {
+  const off = py * bytesPerRow + px * bytesPerPixel;
+  return [
+    (bytes[off + 0] ?? 0) / 255,
+    (bytes[off + 1] ?? 0) / 255,
+    (bytes[off + 2] ?? 0) / 255,
+  ];
+};
+const sites = [
+  { name: 'cubeCenter', x: Math.floor(WIDTH / 2), y: Math.floor(HEIGHT / 2) },
+  { name: 'cubeLower', x: Math.floor(WIDTH * 0.48), y: Math.floor(HEIGHT * 0.62) },
+  { name: 'roomWall', x: Math.floor(WIDTH * 0.08), y: Math.floor(HEIGHT * 0.12) },
+  { name: 'topCenter', x: Math.floor(WIDTH / 2), y: Math.floor(HEIGHT * 0.08) },
+  { name: 'topLeft', x: Math.floor(WIDTH * 0.12), y: Math.floor(HEIGHT * 0.08) },
+];
+const pixelSamples = {};
+for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
+console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
+
+let maxChannel = 0;
+let maxPixel = [0, 0];
+for (let y = 0; y < HEIGHT; y++) {
+  for (let x = 0; x < WIDTH; x++) {
+    const sample = readRgba(x, y);
+    const channel = Math.max(...sample);
+    if (channel > maxChannel) {
+      maxChannel = channel;
+      maxPixel = [x, y];
+    }
+  }
+}
+console.log(`[smoke] maxChannel=${maxChannel.toFixed(4)} at=${JSON.stringify(maxPixel)}`);
+const maxGrid = [];
+for (let gy = 0; gy < 4; gy++) {
+  const row = [];
+  for (let gx = 0; gx < 4; gx++) {
+    let cellMax = 0;
+    for (let y = gy * HEIGHT / 4; y < (gy + 1) * HEIGHT / 4; y += 1) {
+      for (let x = gx * WIDTH / 4; x < (gx + 1) * WIDTH / 4; x += 1) {
+        cellMax = Math.max(cellMax, ...readRgba(x, y));
+      }
+    }
+    row.push(Number(cellMax.toFixed(4)));
+  }
+  maxGrid.push(row);
+}
+console.log(`[smoke] maxGrid=${JSON.stringify(maxGrid)}`);
+
+const luminance = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+const lumSamples = Object.fromEntries(
+  Object.entries(pixelSamples).map(([name, sample]) => [name, Number(luminance(sample).toFixed(4))]),
+);
+console.log(`[smoke] lumSamples=${JSON.stringify(lumSamples)}`);
+const clearLuminance = luminance([0.02, 0.02, 0.04]);
+const pointLightSite = Math.max(lumSamples.cubeCenter, lumSamples.topCenter, lumSamples.topLeft);
+const pointLightWitness = pointLightSite - clearLuminance >= POINT_LIGHT_MIN_DELTA;
+const wallTotalMs = Date.now() - frameStart;
+console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
+console.log(
+  `[smoke] oracle=point-light-shadow siteLuminance=${pointLightSite} deltaFromClear=${Number((pointLightSite - clearLuminance).toFixed(4))} witness=${pointLightWitness} threshold=${POINT_LIGHT_MIN_DELTA} falsifier=${FALSIFY_NO_POINT_LIGHT ? 'no-point-light' : 'none'}`,
+);
+
+// --- 8. Verdict -------------------------------------------------------------
 
 const failures = [];
 if (app.renderer.backend !== 'webgpu')
@@ -332,17 +433,35 @@ if (app.renderer.backend !== 'webgpu')
 if (totalFrames < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 
+if (roomCullMode !== 'none') {
+  failures.push(`(c) room cullMode=${roomCullMode}; expected cullMode=none for inner-wall visibility`);
+}
+
+if (pointLightSite - clearLuminance < SMOKE_PIXEL_THRESHOLD) {
+  failures.push(
+    `(d) brightest semantic site luminance=${pointLightSite} ~= clear (${clearLuminance.toFixed(4)}); room/cube not rendered`,
+  );
+}
+if (!pointLightWitness) {
+  failures.push(
+    `(e) point-light shadow witness rejected siteLuminance=${pointLightSite}; expected deltaFromClear>=${POINT_LIGHT_MIN_DELTA}`,
+  );
+}
+if (wallTotalMs > SMOKE_WALL_BUDGET_MS) {
+  failures.push(`(f) wallTotalMs=${wallTotalMs} > ${SMOKE_WALL_BUDGET_MS}`);
+}
+
 const unknownErrors = onErrorEvents.filter((e) => !KNOWN_NOISE_CODES.has(e.code));
 if (unknownErrors.length > 0) {
   failures.push(
-    `(c) app.onError fired ${unknownErrors.length} unknown-code times: ${JSON.stringify(unknownErrors.slice(0, 3))}`,
+    `(g) app.onError fired ${unknownErrors.length} unknown-code times: ${JSON.stringify(unknownErrors.slice(0, 3))}`,
   );
 }
 
 const unexpectedConsoleErrors = consoleErrors.filter((e) => !e.includes('[smoke]'));
 if (unexpectedConsoleErrors.length > 0) {
   failures.push(
-    `(d) console.error fired ${unexpectedConsoleErrors.length} times: ${JSON.stringify(unexpectedConsoleErrors.slice(0, 3))}`,
+    `(h) console.error fired ${unexpectedConsoleErrors.length} times: ${JSON.stringify(unexpectedConsoleErrors.slice(0, 3))}`,
   );
 }
 
@@ -360,7 +479,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${totalFrames}, cullMode=${roomCullMode}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
+  `[smoke] PASS - 8 criteria GREEN: backend=webgpu, frames=${totalFrames}, cullMode=${roomCullMode}, cubeRendered, oracle=point-light-shadow, wallTotalMs=${wallTotalMs}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

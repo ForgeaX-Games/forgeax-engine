@@ -13,6 +13,6 @@
   },
   "include": [
     "src/**/*",
-    "../../templates/game-default/src/**/*"
+    "../../templates/game-default/**/*.ts"
   ]
 }

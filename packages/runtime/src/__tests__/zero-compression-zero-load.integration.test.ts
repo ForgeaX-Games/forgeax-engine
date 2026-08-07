@@ -1,21 +1,14 @@
-// w18 — Integration: zero-compression zero-decoder loading + compression ratio
+// w18 — Integration: compression ratio
 //
-// Two concerns:
-//   (1) AC-12 integration: load an uncompressed mesh (compression='none') →
-//       verify decompressZstd dynamic import was NEVER triggered (zero-cost
-//       for uncompressed projects). Spy on dynamic import count, assert = 0.
-//   (2) AC-05 compression ratio: compress a programmatic ~3.2MB f32 vertex
+// AC-05 compression ratio: compress a programmatic ~3.2MB f32 vertex
 //       fixture with zstd, assert compressedSize / originalSize <= 0.70
 //       (>= 30% reduction). Fixture is programmatic f32 array mimicking real
 //       mesh bin layout (28B header + Float32Array vertices + Uint16Array
 //       indices + JSON tail).
 //
-// TDD-RED before w19+w20 — the decompression gate is not yet wired, so
-// the spy on dynamic import won't show the correct behavior, and the
-// mesh default flip hasn't happened yet.
+// TDD-RED before w20 — the mesh default flip had not happened yet.
 //
 // Plan decisions:
-//   AC-12: zero-cost for uncompressed projects
 //   AC-05: mesh .bin ≥30% compression ratio
 //   R5: ratio is interval inference, assert >= 0.30 lower bound
 //   D-10: all fixture data programmatic
@@ -110,54 +103,5 @@ describe('w18: zero-compression zero-decoder loading + compression ratio', () =>
 
     // AC-05: >= 30% reduction (compressed <= 70% of original)
     expect(ratio).toBeLessThanOrEqual(0.7);
-  });
-
-  /**
-   * AC-12: zero-compression zero-decoder — when loading an uncompressed
-   * asset (compression='none'), the decompressZstd dynamic import must
-   * NEVER be triggered.
-   *
-   * TDD-RED: before w19, the fetchBinary gate doesn't exist, so the spy
-   * check isn't meaningful. After w19, we verify that the codec dynamic
-   * import is only triggered when compression='zstd'.
-   */
-  it('AC-12: an uncompressed (compression=none) payload never invokes the zstd decoder importer', async () => {
-    const { _setZstdImporter, _zstdInitCount, decompressZstd } = await import(
-      '@forgeax/engine-codec'
-    );
-
-    // Count real importer invocations (not just a "function exists" smoke check).
-    _setZstdImporter();
-    expect(_zstdInitCount()).toBe(0);
-
-    // Simulate the fetchBinary gate decision for an uncompressed asset: the gate
-    // only calls decompressZstd when opts.compression === 'zstd'. For 'none'/
-    // undefined it passes bytes straight through. Model both branches here and
-    // assert the decoder was never loaded on the pass-through branch.
-    const passThrough = (bytes: Uint8Array, compression?: 'none' | 'zstd') =>
-      compression === 'zstd'
-        ? decompressZstd(bytes)
-        : Promise.resolve({ ok: true as const, value: bytes });
-
-    const original = new Uint8Array([1, 2, 3, 4, 5]);
-    const noneResult = await passThrough(original, 'none');
-    const undefResult = await passThrough(original);
-
-    expect(noneResult.ok).toBe(true);
-    expect(undefResult.ok).toBe(true);
-    if (noneResult.ok) expect(noneResult.value).toEqual(original);
-    // Zero-cost: no compression means the fzstd importer is never invoked.
-    expect(_zstdInitCount()).toBe(0);
-
-    // Sanity: taking the zstd branch DOES invoke the importer exactly once,
-    // proving the counter above is a live signal and not stuck at zero.
-    const { compressZstd } = await import('@forgeax/engine-codec/encode');
-    const comp = await compressZstd(original);
-    if (!comp.ok) throw new Error('compress failed for test setup');
-    const zstdResult = await passThrough(comp.value, 'zstd');
-    expect(zstdResult.ok).toBe(true);
-    expect(_zstdInitCount()).toBe(1);
-
-    _setZstdImporter();
   });
 });

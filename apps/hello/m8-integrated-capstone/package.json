@@ -11,10 +11,14 @@
     "build": "vite build",
     "smoke": "node scripts/smoke.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
-    "smoke:dawn": "node scripts/smoke-dawn.mjs"
+    "smoke:dawn": "node scripts/smoke-dawn.mjs",
+    "smoke:rhi-debug": "node scripts/smoke-rhi-debug.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-m8-integrated-capstone smoke",
+    "rhiDebug": {
+      "riskFamilies": ["programmable-pipelines"]
+    },
     "gauntletScenario": {
       "id": "hello-m8-integrated-capstone",
       "script": "smoke",

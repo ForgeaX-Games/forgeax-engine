@@ -29,6 +29,7 @@ test('nightly materializes the authenticated harness before documentation tests'
   assert.doesNotMatch(setup, /--ignore-scripts/);
   assert.match(harness, /shell: bash/);
   assert.match(harness, /FORGEAX_HARNESS_TOKEN: \$\{\{ secrets\.GHA \}\}/);
+  assert.match(harness, /FORGEAX_HARNESS_SPARSE_DOCS: ['"]1['"]/);
   assert.match(harness, /pnpm harness:sync/);
   for (const document of [
     'material-asset-migration.md',

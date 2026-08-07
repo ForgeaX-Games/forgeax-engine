@@ -13,6 +13,8 @@ export interface ProfileFrameModel {
 export interface ProfilePhaseModel {
   readonly source: ProfilePhaseRecord['source'];
   readonly phase: string;
+  readonly parentSource?: ProfilePhaseRecord['source'];
+  readonly parentPhase?: string;
   readonly count: number;
   readonly skipCount: number;
   readonly p95DurationMicros: number | null;
@@ -50,6 +52,10 @@ function cloneRecord(record: ProfileRecord): ProfileRecord {
   return { ...record };
 }
 
+function isRootPhase(record: ProfileRecord): record is ProfilePhaseRecord {
+  return record.kind === 'phase' && record.parentPhase === undefined;
+}
+
 function buildFrames(records: readonly ProfileRecord[]): ProfileFrameModel[] {
   const frameMap = new Map<number, ProfileRecord[]>();
   for (const record of records) {
@@ -63,7 +69,7 @@ function buildFrames(records: readonly ProfileRecord[]): ProfileFrameModel[] {
     phaseCount: frameRecords.filter((record) => record.kind === 'phase').length,
     skipCount: frameRecords.filter((record) => record.kind === 'skip').length,
     durationMicros: frameRecords.reduce(
-      (total, record) => total + (record.kind === 'phase' ? record.durationMicros : 0),
+      (total, record) => total + (isRootPhase(record) ? record.durationMicros : 0),
       0,
     ),
     records: frameRecords,
@@ -76,27 +82,42 @@ function buildPhases(records: readonly ProfileRecord[]): ProfilePhaseModel[] {
     {
       source: ProfilePhaseRecord['source'];
       phase: string;
+      parentSource: ProfilePhaseRecord['source'] | undefined;
+      parentPhase: string | undefined;
       durations: number[];
       skipCount: number;
     }
   >();
   for (const record of records) {
-    const key = `${record.source}:${record.phase}`;
+    const parentSource = record.kind === 'phase' ? record.parentSource : undefined;
+    const parentPhase = record.kind === 'phase' ? record.parentPhase : undefined;
+    const key = `${record.source}:${parentSource ?? ''}:${parentPhase ?? ''}:${record.phase}`;
     let entry = phaseMap.get(key);
     if (entry === undefined) {
-      entry = { source: record.source, phase: record.phase, durations: [], skipCount: 0 };
+      entry = {
+        source: record.source,
+        phase: record.phase,
+        parentSource,
+        parentPhase,
+        durations: [],
+        skipCount: 0,
+      };
       phaseMap.set(key, entry);
     }
     if (record.kind === 'phase') entry.durations.push(record.durationMicros);
     else entry.skipCount += 1;
   }
-  return [...phaseMap.values()].map(({ source, phase, durations, skipCount }) => ({
-    source,
-    phase,
-    count: durations.length,
-    skipCount,
-    p95DurationMicros: nearestRankP95(durations),
-  }));
+  return [...phaseMap.values()].map(
+    ({ source, phase, parentSource, parentPhase, durations, skipCount }) => ({
+      source,
+      phase,
+      ...(parentSource === undefined ? {} : { parentSource }),
+      ...(parentPhase === undefined ? {} : { parentPhase }),
+      count: durations.length,
+      skipCount,
+      p95DurationMicros: nearestRankP95(durations),
+    }),
+  );
 }
 
 export function buildProfileModel(
@@ -107,9 +128,7 @@ export function buildProfileModel(
   const capture = validated.value;
   const frames = buildFrames(capture.records);
   const phases = buildPhases(capture.records);
-  const durations = capture.records
-    .filter((record): record is ProfilePhaseRecord => record.kind === 'phase')
-    .map((record) => record.durationMicros);
+  const durations = capture.records.filter(isRootPhase).map((record) => record.durationMicros);
   const completeness = { ...capture.completeness };
   const phaseCount = capture.records.filter((record) => record.kind === 'phase').length;
   const skipCount = capture.records.length - phaseCount;

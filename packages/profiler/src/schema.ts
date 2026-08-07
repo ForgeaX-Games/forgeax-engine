@@ -55,6 +55,29 @@ function validateSemanticRules(
         'phase is absent from its source catalog',
       );
     }
+    if (record.kind === 'phase' && record.parentPhase !== undefined) {
+      const parentCatalog = catalog[record.parentSource ?? record.source];
+      if (!parentCatalog.includes(record.parentPhase)) {
+        return error(
+          'profile-artifact-invalid',
+          `/records/${index}/parentPhase`,
+          'parentPhase is absent from its source catalog',
+        );
+      }
+      if (record.parentPhase === record.phase) {
+        return error(
+          'profile-artifact-invalid',
+          `/records/${index}/parentPhase`,
+          'parentPhase must differ from phase',
+        );
+      }
+    } else if (record.kind === 'phase' && record.parentSource !== undefined) {
+      return error(
+        'profile-artifact-invalid',
+        `/records/${index}/parentSource`,
+        'parentSource requires parentPhase',
+      );
+    }
     if (record.kind === 'phase') {
       if (record.endMicros < record.startMicros) {
         return error(

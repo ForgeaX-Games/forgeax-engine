@@ -107,6 +107,7 @@
   },
   "dependencies": {
     "@forgeax/engine-types": "workspace:*",
+    "@noble/hashes": "^2.2.0",
     "fast-glob": "^3.3.3",
     "upng-js": "^2.1.0",
     "uuidv7": "^1.2.1"

@@ -18,6 +18,7 @@ const REPO_ROOT = resolve(APP_ROOT, '..', '..');
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm3-composed'),
 );
+const RHI_CAPTURE_SETTLE_MS = 1000;
 const resizeChurn = process.env.FORGEAX_M3_RESIZE_CHURN === '1';
 const doubleResizeChurn = process.env.FORGEAX_M3_DOUBLE_RESIZE_CHURN === '1';
 const useMsaa = process.env.FORGEAX_M3_MSAA === '1';
@@ -28,7 +29,7 @@ const inheritanceLiveMaterialScenario = process.env.FORGEAX_M3_INHERITANCE_LIVE_
 const requestedInheritancePost =
   process.env.FORGEAX_M3_INHERITANCE_POST ??
   (process.env.FORGEAX_M3_INHERITANCE_DEPTH_POST === '1' ? 'depth' : 'inversion');
-if (requestedInheritancePost !== 'depth' && requestedInheritancePost !== 'inversion') {
+if (requestedInheritancePost !== 'depth' && requestedInheritancePost !== 'inversion' && requestedInheritancePost !== 'passthrough') {
   throw new Error(`unsupported inherited post effect: ${requestedInheritancePost}`);
 }
 const inheritancePost = inheritanceLiveMaterialScenario ? requestedInheritancePost : 'inversion';
@@ -40,15 +41,20 @@ if (
   inheritanceLiveMaterialScenario &&
   inheritanceFalsifierKind !== 'texture' &&
   inheritanceFalsifierKind !== 'pipeline' &&
+  inheritanceFalsifierKind !== 'pipeline-texture' &&
   inheritanceFalsifierKind !== 'reverse-pipeline' &&
   inheritanceFalsifierKind !== 'reverse-pipeline-texture'
 ) {
   throw new Error(`unsupported inheritance falsifier kind: ${inheritanceFalsifierKind}`);
 }
+const pipelineFalsifier =
+  inheritanceFalsifierKind === 'pipeline' || inheritanceFalsifierKind === 'pipeline-texture';
 const reversePipelineFalsifier =
   inheritanceFalsifierKind === 'reverse-pipeline' || inheritanceFalsifierKind === 'reverse-pipeline-texture';
 const textureSlotFalsifier =
-  inheritanceFalsifierKind === 'texture' || inheritanceFalsifierKind === 'reverse-pipeline-texture';
+  inheritanceFalsifierKind === 'texture' ||
+  inheritanceFalsifierKind === 'pipeline-texture' ||
+  inheritanceFalsifierKind === 'reverse-pipeline-texture';
 const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1' || inheritanceLiveMaterialScenario;
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
@@ -239,6 +245,11 @@ async function capture(page, label) {
 }
 
 async function captureRhi(page, label) {
+  // Resize-driven render-graph retirement may finish after the canvas-size
+  // assertion and several animation frames. Let the async graph rebuild settle
+  // before arming the recorder, so the tape describes one topology rather than
+  // a resize transition carrying retired and replacement MSAA targets.
+  await page.waitForTimeout(RHI_CAPTURE_SETTLE_MS);
   const result = await page.evaluate(async () => {
     if (typeof globalThis.__forgeax?.captureFrame !== 'function') {
       throw new Error('window.__forgeax.captureFrame is unavailable');
@@ -338,6 +349,20 @@ async function captureRhi(page, label) {
   return { tape, report, draws: summary.draws?.length ?? 0, inspectedDraw, inspect, dawnReadback };
 }
 
+function countLiveTextures(report, matches) {
+  const live = new Set();
+  for (const event of report.events) {
+    const handleId = event.handleId ?? event.id;
+    if (handleId === undefined || handleId === null) continue;
+    if (event.kind === 'createTexture' && matches(event.desc)) {
+      live.add(handleId);
+    } else if (event.kind === 'destroyTexture') {
+      live.delete(handleId);
+    }
+  }
+  return live.size;
+}
+
 async function runLiveMaterialScenario(baseUrl, page) {
   const expectedVariant = `M3_MULTI_UV_VARIANT=${startVariant}`;
   const expectedPost = inheritanceLiveMaterialScenario ? inheritancePost : 'inversion';
@@ -351,8 +376,10 @@ async function runLiveMaterialScenario(baseUrl, page) {
   const runLeg = async (falsified, label) => {
     const falsifierQuery = falsified
       ? inheritanceLiveMaterialScenario
-        ? inheritanceFalsifierKind === 'pipeline'
-          ? '&falsify-pipeline'
+        ? pipelineFalsifier
+          ? inheritanceFalsifierKind === 'pipeline-texture'
+            ? '&falsify-pipeline&falsify-live-inheritance'
+            : '&falsify-pipeline'
           : reversePipelineFalsifier
             ? inheritanceFalsifierKind === 'reverse-pipeline-texture'
               ? '&falsify-reverse-pipeline&falsify-live-inheritance'
@@ -462,7 +489,9 @@ async function runLiveMaterialScenario(baseUrl, page) {
   }
   if (
     inheritanceLiveMaterialScenario &&
-    (inheritanceFalsifierKind === 'texture' || inheritanceFalsifierKind === 'reverse-pipeline-texture')
+    (inheritanceFalsifierKind === 'texture' ||
+      inheritanceFalsifierKind === 'pipeline-texture' ||
+      inheritanceFalsifierKind === 'reverse-pipeline-texture')
   ) {
     if (falsifier.delta === null || falsifier.delta.changed !== 0) {
       throw new Error(`inheritance live-material falsifier changed pixels: ${JSON.stringify(falsifier.delta)}`);
@@ -500,16 +529,16 @@ async function runLiveMaterialScenario(baseUrl, page) {
         throw new Error(`inheritance live material texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
       }
       if (
-        reversePipelineFalsifier &&
+        (reversePipelineFalsifier || inheritanceFalsifierKind === 'pipeline-texture') &&
         (falsifier.rhi.draws === normal.rhi.draws || falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256)
       ) {
-        throw new Error(`inheritance reverse pipeline texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
+        throw new Error(`inheritance joint pipeline texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
       }
     } else if (
       !falsifierMaterialCausality ||
       falsifiedLive.falsifierMarker !== null ||
       falsifier.rhi.draws === normal.rhi.draws ||
-      falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256
+      (inheritancePost !== 'passthrough' && falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256)
     ) {
       throw new Error(`inheritance pipeline falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
     }
@@ -523,7 +552,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
   if (inheritanceDepthPost) {
     const normalHasDepth = hasDepthBinding(normal.rhi.report);
     const falsifierHasDepth = hasDepthBinding(falsifier.rhi.report);
-    const expectedFalsifierHasDepth = !reversePipelineFalsifier && inheritanceFalsifierKind !== 'pipeline';
+    const expectedFalsifierHasDepth = !reversePipelineFalsifier && !pipelineFalsifier;
     if (!normalHasDepth || falsifierHasDepth !== expectedFalsifierHasDepth) {
       throw new Error(
         `inherited depth post binding topology mismatch: normal=${normalHasDepth} falsifier=${falsifierHasDepth} expectedFalsifier=${expectedFalsifierHasDepth}`,
@@ -784,6 +813,7 @@ const viteProc = spawn(process.execPath, [
 });
 
 let browser;
+let page;
 try {
   const baseUrl = await waitForVite(viteProc);
   browser = await chromium.launch({
@@ -791,7 +821,7 @@ try {
     channel: 'chrome',
     args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
   });
-  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const pageErrors = [];
   const consoleErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -950,7 +980,7 @@ try {
   if (useMsaa) {
     const reports = [rhi.report, falsifierRhi.report].map((path) => JSON.parse(readFileSync(path, 'utf8')));
     for (const [index, report] of reports.entries()) {
-      const msaaTextureResourceCount = report.events.filter((event) => event.kind === 'createTexture' && event.desc?.sampleCount === 4).length;
+      const msaaTextureResourceCount = countLiveTextures(report, (desc) => desc?.sampleCount === 4);
       const resolveTargetCount = report.events.filter((event) => event.kind === 'beginRenderPass' && event.colorAttachmentResolveTargetHandleIds?.some((handleId) => handleId !== undefined && handleId !== null)).length;
       if (msaaTextureResourceCount < 2 || resolveTargetCount < 1) throw new Error(`MSAA topology missing for ${index === 0 ? 'normal' : 'falsifier'}: resources=${msaaTextureResourceCount} resolves=${resolveTargetCount}`);
     }
@@ -962,7 +992,8 @@ try {
   console.error(`[m3-composed] FAIL - ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
+  await page?.close().catch(() => {});
+  await browser?.close().catch(() => {});
   viteProc.kill('SIGTERM');
   await sleep(300);
-  await browser?.close();
 }

@@ -1378,6 +1378,29 @@ describe('descriptor registry (w16)', () => {
     expect(debugInst._getDescriptorTable().size).toBe(0);
   });
 
+  it('records successful destroyBuffer during an active capture', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+    const res = device.createBuffer({ size: 64, usage: 16 });
+    expect(res.ok).toBe(true);
+    const handleId = [...debugInst._getDescriptorTable().keys()][0];
+    expect(handleId).toBeDefined();
+
+    debugInst.arm(2);
+    debugInst.onFrameEnd();
+    device.destroyBuffer((res as any).value);
+    debugInst.onFrameEnd();
+
+    expect(debugInst.getEvents()).toContainEqual({
+      kind: 'destroyBuffer',
+      handleId,
+    });
+    const tape = debugInst.getTape() as Tape;
+    expect(tape.events.some((event) => event.kind === 'createBuffer')).toBe(true);
+    expect(tape.events).toContainEqual({ kind: 'destroyBuffer', handleId });
+  });
+
   it('destroyTexture removes the entry for that handleId', async () => {
     const { debugInst } = await bootstrap();
     const adapter = await getAdapter(debugInst);

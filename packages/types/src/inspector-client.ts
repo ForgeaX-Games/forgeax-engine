@@ -79,8 +79,11 @@ export type InspectorClientResult =
  */
 export type ConnectFn = (url: string) => Promise<InspectorClientResult>;
 
-const CONNECT_HINT =
-  'start the demo first: pnpm --filter inspector-demo dev; verify the host called startConsoleServer({ port, registry }) before the cli-ecs spawn; pass --port to override default 5732';
+/** Default inspector listener target used by the Node-only CLI clients. */
+export const INSPECTOR_DEFAULT_PORT = 5732;
+export const INSPECTOR_DEFAULT_HOST = 'localhost';
+
+const CONNECT_HINT = `start the demo first: pnpm --filter inspector-demo dev; verify the host called startConsoleServer({ port, registry }) before the cli-ecs spawn; pass --port to override default ${INSPECTOR_DEFAULT_PORT}`;
 
 function makeConnectError(url: string, detail?: string): RemoteError {
   const expected = `console server is reachable at ${url}`;

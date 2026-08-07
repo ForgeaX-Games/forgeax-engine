@@ -10,8 +10,9 @@
 // or the buffer count would grow across repeated calls. This test
 // validates the structural invariants on a real GPU device.
 
-import { BUILTIN_FLOATS_PER_VERTEX, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { mat4 } from '@forgeax/engine-math';
 import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
@@ -47,7 +48,7 @@ const mockCaps = {
 const dawnReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 
 function makeSmallMesh(): MeshAsset {
-  const vertices = new Float32Array(4 * BUILTIN_FLOATS_PER_VERTEX);
+  const vertices = new Float32Array(4 * PROCEDURAL_FLOATS_PER_VERTEX);
   const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
   return {
     kind: 'mesh',
@@ -67,7 +68,7 @@ function makeSmallMesh(): MeshAsset {
 }
 
 function makeLargerMesh(): MeshAsset {
-  const vertices = new Float32Array(8 * BUILTIN_FLOATS_PER_VERTEX);
+  const vertices = new Float32Array(8 * PROCEDURAL_FLOATS_PER_VERTEX);
   const indices = new Uint16Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
   return {
     kind: 'mesh',
@@ -234,7 +235,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       expect(after.indexBuffer).toBe(iboFirst);
 
       // Sanity pings to keep import chains live.
-      expect(BUILTIN_FLOATS_PER_VERTEX).toBe(12);
+      expect(PROCEDURAL_FLOATS_PER_VERTEX).toBe(12);
       const _matType: Float32Array = mat4.create();
       void _matType;
     },

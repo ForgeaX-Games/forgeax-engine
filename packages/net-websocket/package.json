@@ -7,10 +7,6 @@
   "sideEffects": false,
   "description": "WebSocket transport adapters for the forgeax NetEndpoint contract.",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs"
-    },
     "./browser": {
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.mjs"
@@ -22,8 +18,6 @@
     },
     "./package.json": "./package.json"
   },
-  "main": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
   "files": [
     "dist",
     "src",
@@ -36,7 +30,7 @@
   },
   "forgeax": {
     "metrics": {
-      "bundle-size": { "enabled": true, "path": "dist/index.mjs", "compression": "gzip" },
+      "bundle-size": { "enabled": true, "path": "dist/browser.mjs", "compression": "gzip" },
       "fps": { "enabled": false, "reason": "library package, no canvas" },
       "bench": { "enabled": false, "reason": "no performance benchmarks" },
       "gate": { "enabled": true, "command": "pnpm -F @forgeax/engine-net-websocket test" },

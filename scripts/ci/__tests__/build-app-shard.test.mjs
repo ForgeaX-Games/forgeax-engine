@@ -50,6 +50,11 @@ test('shared producer builds both plugin dependency closures before invoking Vit
     producer.slice(build, invoke),
     /pnpm --filter @forgeax\/engine-vite-plugin-shader\.\.\. build/,
   );
+  assert.match(
+    producer.slice(build, invoke),
+    /pnpm --filter @forgeax\/engine-audio-webaudio\.\.\. build/,
+  );
+  assert.match(producer.slice(build, invoke), /pnpm --filter @forgeax\/engine-gltf\.\.\. build/);
 });
 
 test('shared producer provisions wgpu-wasm before plugin closure', () => {
@@ -339,9 +344,13 @@ test('repair: bounds each shard build with the shared machine-adaptive runner', 
   const runner = readFileSync(join(repoRoot, 'scripts', 'build-apps.mjs'), 'utf8');
   assert.match(planner, /sharedInputManifest/);
   assert.match(planner, /--shared-input-manifest/);
-  assert.match(runner, /const sharedManifestIndex = process\.argv\.indexOf/);
-  assert.match(runner, /apps\.flatMap\(\(app\) => \['--filter', `\.\/apps\/\$\{app\}`\]\)/);
-  assert.match(runner, /--workspace-concurrency=\$\{n\}/);
+  assert.match(runner, /process\.argv\.indexOf\('--shared-input-manifest'\)/);
+  assert.match(
+    runner,
+    /workspaceConcurrency\(\{ cpus, memoryBytes, reserveGB: 2, workerGB: 2 \}\)/,
+  );
+  assert.match(runner, /running\.size < maxConcurrent/);
+  assert.match(runner, /createViteBuildInvocation/);
   const workflow = readFileSync(workflowPath, 'utf8');
   for (const shardIndex of [0, 1, 2]) {
     assert.match(
@@ -509,18 +518,26 @@ test('repair: aggregate producers use exact artifact IDs with bounded retry tran
 
 test('repair: trusted coverage owns the perf ratio gate outside instrumentation', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
-  const start = workflow.indexOf('  coverage-pnpm:');
-  const remaining = workflow.slice(start);
-  const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
-  const section = remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
-  assert.match(section, /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64"\]'\) \}\}/);
-  assert.doesNotMatch(section, /github\.event\.pull_request\.head\.repo/);
+  const sectionFor = (job) => {
+    const start = workflow.indexOf(`  ${job}:`);
+    const remaining = workflow.slice(start);
+    const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
+    return remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
+  };
+  const coverage = sectionFor('coverage-pnpm');
+  const perf = sectionFor('coverage-perf');
   assert.match(
-    section,
+    coverage,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
+  );
+  assert.doesNotMatch(coverage, /github\.event\.pull_request\.head\.repo/);
+  assert.match(
+    coverage,
     /--coverage --project='@forgeax\/\*' --project=hello-triangle --project=unit/,
   );
-  assert.match(section, /name: ECS performance ratio gates \(uninstrumented\)/);
-  assert.match(section, /--project=ecs-perf/);
+  assert.doesNotMatch(coverage, /--project=ecs-perf/);
+  assert.match(perf, /name: ECS performance ratio gates \(uninstrumented\)/);
+  assert.match(perf, /--project=ecs-perf/);
 });
 
 test('repair: core-only consumers hydrate exact IDs without the app aggregate barrier', () => {

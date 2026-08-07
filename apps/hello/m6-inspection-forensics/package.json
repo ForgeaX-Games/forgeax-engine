@@ -8,6 +8,11 @@
   "scripts": {
     "smoke": "node scripts/smoke.mjs"
   },
+  "devDependencies": {
+    "@forgeax/engine-rhi-debug": "workspace:*",
+    "pngjs": "^7.0.0",
+    "playwright": "^1.50.0"
+  },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-m6-inspection-forensics smoke",
     "gauntletScenario": {

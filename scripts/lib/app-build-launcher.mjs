@@ -53,3 +53,17 @@ export function createViteBuildInvocation({
     },
   };
 }
+
+export function createPrebuildInvocation({ app, baseEnv = process.env }) {
+  if (app.manifest.scripts?.prebuild === undefined) return null;
+  return {
+    command: 'pnpm',
+    args: ['run', 'prebuild'],
+    options: {
+      cwd: app.directory,
+      stdio: 'inherit',
+      shell: false,
+      env: baseEnv,
+    },
+  };
+}

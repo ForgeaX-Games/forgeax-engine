@@ -7,7 +7,7 @@
 // halves must agree on the 28-byte header v2 layout.
 //
 // Bin layout (little-endian, 28-byte header v2):
-//   u32 version        -- must be 2
+//   u32 version        -- must be MESH_BIN_VERSION
 //   u32 uvSetCount     -- number of UV sets (1..8)
 //   u32 floatsPerVertex -- explicit stride (12..26)
 //   u32 vlen           -- Float32Array element count
@@ -23,7 +23,8 @@
 // keys and the file ends at the JSON tail (legacy layout, byte-identical
 // to pre-feat output).
 
-const HEADER_V2_BYTES = 28;
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
+import { MESH_BIN_HEADER_V2_BYTES, MESH_BIN_VERSION } from '@forgeax/engine-pack';
 
 export interface UnpackedMeshBin {
   vertices: Float32Array;
@@ -39,14 +40,14 @@ export interface UnpackedMeshBin {
 }
 
 export function unpackMeshBin(bytes: Uint8Array): UnpackedMeshBin | undefined {
-  if (bytes.byteLength < HEADER_V2_BYTES) return undefined;
+  if (bytes.byteLength < MESH_BIN_HEADER_V2_BYTES) return undefined;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const version = view.getUint32(0, true);
   const uvSetCount = view.getUint32(4, true);
   const floatsPerVertex = view.getUint32(8, true);
 
   // Fail Fast: decode entry contract validation (architecture-principles #5)
-  if (version !== 2) return undefined; // unknown version
+  if (version !== MESH_BIN_VERSION) return undefined; // unknown version
   if (uvSetCount < 1 || uvSetCount > 8) return undefined; // uvSetCount out of range
 
   const vlen = view.getUint32(12, true);
@@ -58,7 +59,7 @@ export function unpackMeshBin(bytes: Uint8Array): UnpackedMeshBin | undefined {
   if (floatsPerVertex > 0 && vlen % floatsPerVertex !== 0) return undefined;
   // Self-consistency: floatsPerVertex must be in valid range for given uvSetCount.
   // Allow floatsPerVertex=0 only when vlen=0 (empty mesh, no vertex payload to validate).
-  const expectedFpvNoSkin = 12 + (uvSetCount - 1) * 2;
+  const expectedFpvNoSkin = PROCEDURAL_FLOATS_PER_VERTEX + (uvSetCount - 1) * 2;
   const expectedFpvSkin = 18 + (uvSetCount - 1) * 2;
   if (vlen > 0) {
     if (floatsPerVertex !== expectedFpvNoSkin && floatsPerVertex !== expectedFpvSkin) {
@@ -68,10 +69,10 @@ export function unpackMeshBin(bytes: Uint8Array): UnpackedMeshBin | undefined {
 
   const vBytes = vlen * 4;
   const iBytes = ilen * iwidth;
-  const minExpected = HEADER_V2_BYTES + vBytes + iBytes + jsonlen;
+  const minExpected = MESH_BIN_HEADER_V2_BYTES + vBytes + iBytes + jsonlen;
   if (bytes.byteLength < minExpected) return undefined;
 
-  let offset = HEADER_V2_BYTES;
+  let offset = MESH_BIN_HEADER_V2_BYTES;
   const vertices = new Float32Array(vlen);
   if (vlen > 0) {
     new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength).set(

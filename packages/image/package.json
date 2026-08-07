@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Disk-to-memory image importer for forgeax-engine: parseImage / decodeImageFromFile / toAssetPack three pure functions + sub-asset-key + reimport-reuse-meta + ImageError four-member closed union.",
+  "description": "Disk-to-memory image importer for forgeax-engine: parseImage / decodeImageFromFile / toAssetPack three pure functions + sub-asset-key + reimport-reuse-meta + correlated ImageError closed union.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

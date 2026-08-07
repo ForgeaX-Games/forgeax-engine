@@ -8,7 +8,7 @@
 // runtime can decode without taking a build-time dep.
 //
 // Bin layout (little-endian, 28-byte header v2):
-//   u32 version        -- 2 (hardcoded)
+//   u32 version        -- MESH_BIN_VERSION
 //   u32 uvSetCount     -- number of UV sets (1..8)
 //   u32 floatsPerVertex -- explicit stride (12..26)
 //   u32 vlen           -- Float32Array element count
@@ -25,6 +25,9 @@
 // trailing region. Back-compat: unskinned meshes omit both keys and emit
 // zero trailing skin bytes -- identical to pre-feat byte stream.
 
+import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
+import { MESH_BIN_HEADER_V2_BYTES, MESH_BIN_VERSION } from '@forgeax/engine-pack';
+
 interface MeshPayloadInAttributes {
   skinIndex?: unknown;
   skinWeight?: unknown;
@@ -38,8 +41,6 @@ interface MeshPayloadIn {
   attributes?: MeshPayloadInAttributes | unknown;
   aabb?: unknown;
 }
-
-const HEADER_V2_BYTES = 28;
 
 function detectUvSetCount(attrsIn: MeshPayloadInAttributes): number {
   // Check for uv1..uv7 keys; uv (set 0) is always present.
@@ -82,9 +83,9 @@ export function packMeshBin(payload: MeshPayloadIn): Uint8Array {
   let vertexCount = 0;
   let floatsPerVertex = 0;
   if (vertices.length > 0) {
-    // Detect stride: base (no skin) = 12 + (uvSetCount - 1) * 2
+    // Detect stride: base (no skin) = geometry owner + (uvSetCount - 1) * 2
     //                  base (skin)    = 18 + (uvSetCount - 1) * 2
-    const candNoSkin = 12 + (uvSetCount - 1) * 2;
+    const candNoSkin = PROCEDURAL_FLOATS_PER_VERTEX + (uvSetCount - 1) * 2;
     const candSkin = 18 + (uvSetCount - 1) * 2;
     if (candNoSkin > 0 && vertices.length % candNoSkin === 0) {
       floatsPerVertex = candNoSkin;
@@ -101,7 +102,7 @@ export function packMeshBin(payload: MeshPayloadIn): Uint8Array {
     throw new Error(
       `[AssetError mesh-bin-contract-violation] expected: floatsPerVertex in [12,26] ` +
         `matching vertex count; actual: vertices.length=${vertices.length} not divisible ` +
-        `by (12 + (uvSetCount-1)*2)=${12 + (uvSetCount - 1) * 2} or ` +
+        `by (${PROCEDURAL_FLOATS_PER_VERTEX} + (uvSetCount-1)*2)=${PROCEDURAL_FLOATS_PER_VERTEX + (uvSetCount - 1) * 2} or ` +
         `(18 + (uvSetCount-1)*2)=${18 + (uvSetCount - 1) * 2}; ` +
         `hint: re-cook the asset via importer`,
     );
@@ -167,7 +168,7 @@ export function packMeshBin(payload: MeshPayloadIn): Uint8Array {
   const skinWeightBytes = skinWeight?.byteLength ?? 0;
 
   const total =
-    HEADER_V2_BYTES +
+    MESH_BIN_HEADER_V2_BYTES +
     vertices.byteLength +
     indexBytes +
     jsonBytes.byteLength +
@@ -175,7 +176,7 @@ export function packMeshBin(payload: MeshPayloadIn): Uint8Array {
     skinWeightBytes;
   const out = new Uint8Array(total);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
-  view.setUint32(0, 2, true); // version = 2
+  view.setUint32(0, MESH_BIN_VERSION, true);
   view.setUint32(4, uvSetCount, true);
   view.setUint32(8, floatsPerVertex, true);
   view.setUint32(12, vertices.length, true); // vlen
@@ -183,7 +184,7 @@ export function packMeshBin(payload: MeshPayloadIn): Uint8Array {
   view.setUint32(20, iwidth, true);
   view.setUint32(24, jsonBytes.byteLength, true);
 
-  let offset = HEADER_V2_BYTES;
+  let offset = MESH_BIN_HEADER_V2_BYTES;
   if (vertices.byteLength > 0) {
     out.set(new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength), offset);
     offset += vertices.byteLength;

@@ -34,6 +34,7 @@ import type {
 } from '@forgeax/engine-rhi';
 import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
 import { derive, type ParamSchemaEntry } from '@forgeax/engine-types';
+import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from './gpu-stage';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
 
 // Stub PipelineSpec used by the BGL-only call sites. The dispatcher only reads
@@ -49,11 +50,6 @@ const BGL_ONLY_SPEC_STUB: PipelineSpec = Object.freeze({
   geometry: { topology: 'triangle-list', vertexLayout: {} },
   renderState: undefined,
 }) as PipelineSpec;
-
-// WebGPU spec literal constants. The runtime never imports `GPUShaderStage`
-// from `@webgpu/types` because the rhi shim accepts raw u32 bitmask values.
-const GPU_SHADER_STAGE_VERTEX = 0x1;
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 
 // ─── Device shim ────────────────────────────────────────────────────────────
 //
@@ -546,6 +542,15 @@ export function buildPbrPipelineLayouts(
  * `LayoutKind = 'pbr-skin'` upstream.
  */
 export const SKIN_MATERIAL_SHADER_ID = 'forgeax::pbr-skin' as const;
+
+/** Returns true for the engine-shipped standard-PBR material shader family. */
+export function isStandardPbrMaterialShader(shaderId: string | undefined): boolean {
+  return (
+    shaderId === 'forgeax::default-standard-pbr' ||
+    shaderId === SKIN_MATERIAL_SHADER_ID ||
+    shaderId === 'forgeax::default-standard-pbr-skin'
+  );
+}
 
 // ─── PBR skin pipeline layout factory (bug-20260611) ───────────────────────
 //

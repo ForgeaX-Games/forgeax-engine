@@ -1,13 +1,15 @@
+import { writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { performance } from 'node:perf_hooks';
 
 const GROUP_COUNT = 5;
 const WARMUP_FRAMES = 30;
 const FRAMES_PER_GROUP = 2000;
-const EVENT_LIMIT = FRAMES_PER_GROUP * 10;
+const EVENT_LIMIT = FRAMES_PER_GROUP * 20;
 const THRESHOLD_PERCENT = 1;
 const QUANTILE = 0.95;
 const FORMULA = '(p95On - p95Off) / p95Off * 100';
+const PROFILE_DETAIL = process.env.FORGEAX_PROFILE_DETAIL === 'nested' ? 'nested' : 'owner';
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null;
@@ -216,6 +218,7 @@ async function runBenchmark() {
   const onDurations = [];
   let onAllocationCount = 0;
   let lastOverflow;
+  let lastCapture;
   for (let group = 0; group < GROUP_COUNT; group += 1) {
     for (let index = 0; index < FRAMES_PER_GROUP; index += 1) {
       offDurations.push(scheduler.pump());
@@ -224,6 +227,7 @@ async function runBenchmark() {
     const started = profiler.startCapture({
       frameLimit: FRAMES_PER_GROUP,
       eventLimit: EVENT_LIMIT,
+      detail: PROFILE_DETAIL,
     });
     if (!started.ok) throw new Error(`profiler capture failed: ${started.error.code}`);
     const groupDurations = [];
@@ -237,10 +241,15 @@ async function runBenchmark() {
     if (capture.value.completeness.status !== 'complete') {
       throw new Error(`profiler capture was ${capture.value.completeness.status}`);
     }
+    lastCapture = capture.value;
     onAllocationCount += allocationReport.profilerEventObjectAllocations - allocationBefore;
     lastOverflow = groupDurations.length;
   }
   app.stop();
+  const capturePath = process.env.FORGEAX_PROFILE_CAPTURE_PATH;
+  if (capturePath !== undefined && lastCapture !== undefined) {
+    writeFileSync(capturePath, `${JSON.stringify(lastCapture)}\n`);
+  }
 
   const relation = (await import('./check-profiler-phase-catalog.mjs')).readPhaseCatalogRelation();
   const overflow = await runOverflowProbe();
@@ -251,6 +260,7 @@ async function runBenchmark() {
     benchmark: 'profiler-overhead-d6',
     backend: 'rhi-null',
     workload: 'deterministic-app-render',
+    detail: PROFILE_DETAIL,
     environment: {
       node: process.version,
       os: process.platform,

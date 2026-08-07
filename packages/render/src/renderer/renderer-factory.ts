@@ -38,15 +38,17 @@ import {
   MeshSsboCeilingReachedError,
 } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
-import { deriveVertexBufferLayout } from '@forgeax/engine-geometry';
+import { deriveVertexBufferLayout, PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   BindGroupLayout,
   Buffer,
+  ComputePipeline,
   PipelineLayout,
   RenderPipeline,
   Result,
+  RhiAdapter,
   RhiCanvasContext,
   RhiDevice,
   RhiInstance,
@@ -83,16 +85,41 @@ import type {
 import { derive, handleSlot } from '@forgeax/engine-types';
 import { createEngineMetrics } from '../engine-metrics';
 import { RecoverError } from '../errors/recover';
+import { type RenderError, RenderFeatureStageFailedError } from '../errors/render';
 import { createRenderFeatureHost, type RenderFeatureHost } from '../features/host';
 import { RENDER_FEATURE_VERTEX_LAYOUTS } from '../features/prepared-graphics';
+import type { RenderFeature } from '../features/types';
 import type { PostProcessShaderEntry } from '../fullscreen-post-process-pass';
 import { glyphTextLayoutSystem } from '../glyph-text-layout-system';
 import { GpuBuffer } from '../gpu-resource';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { createHdrpBindGroupLayoutDescriptor } from '../hdrp-buffers';
+import { GPU_SHADER_STAGE_FRAGMENT } from '../gpu-stage';
+import {
+  GPU_TEXTURE_USAGE_COPY_DST,
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
+} from '../gpu-texture-usage';
+import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_INDEX,
+  GPU_BUFFER_USAGE_MAP_READ,
+  GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
+  GPU_BUFFER_USAGE_VERTEX,
+} from '../gpu-usage';
+import {
+  createHdrpBindGroupLayoutDescriptor,
+  createHdrpClusterMembershipBindGroupLayoutDescriptor,
+} from '../hdrp-buffers';
+import { HDRP_CLUSTER_MEMBERSHIP_WGSL } from '../hdrp-cluster-membership';
 import { HDRP_PIPELINE_ID, hdrpPipeline } from '../hdrp-pipeline';
 import { clearIblCacheForDevice, setIblComposedShaders } from '../ibl/IblPipelineCache';
-import { createSkylightFallback, type SkylightFallback } from '../ibl/skylight-bind-group';
+import {
+  createSkylightFallback,
+  FALLBACK_BYTES_PER_ROW,
+  type SkylightFallback,
+} from '../ibl/skylight-bind-group';
 import {
   HealthListenerRegistry,
   LostListenerRegistry,
@@ -115,6 +142,7 @@ import {
   buildBindGroupLayoutDescriptor,
   buildSpecConstTable,
   cacheKeyOf,
+  colorFormatsForPassKind,
   getOrBuildPipeline,
   type PipelineCache,
   type PipelineDeviceProvider,
@@ -125,6 +153,7 @@ import { TONEMAP_POST_PROCESS_ID } from '../render-graph-primitives';
 import {
   configureSurface,
   createRenderSystem,
+  MATERIAL_PER_ENTITY_STRIDE,
   type MeshGpuHandles,
   type PipelineState,
   type RenderSystem,
@@ -137,6 +166,7 @@ import {
   type RendererErrorListener,
   type RendererLostListener,
   type RendererOptions,
+  type RenderResult,
   resolveDrawOwners,
 } from '../renderer';
 import {
@@ -887,6 +917,23 @@ type WebGPUOutcome =
   | { kind: 'rhi-err'; error: RhiError }
   | { kind: 'throw'; error: Error };
 
+// Optional compression is exposed on a device only when it is requested from
+// the adapter. Keep this capability projection shared by initial construction
+// and device-loss recovery; otherwise recovery silently drops BC/ETC2/ASTC
+// and already-catalogued compressed textures fail on the first new frame.
+const COMPRESSION_FEATURES: GPUFeatureName[] = [
+  'texture-compression-bc',
+  'texture-compression-etc2',
+  'texture-compression-astc',
+];
+
+function deviceOptionsForAdapter(
+  adapter: Pick<RhiAdapter, 'features'>,
+): { requiredFeatures: GPUFeatureName[] } | undefined {
+  const requiredFeatures = COMPRESSION_FEATURES.filter((feature) => adapter.features.has(feature));
+  return requiredFeatures.length > 0 ? { requiredFeatures } : undefined;
+}
+
 /**
  * Goes through the strict two-step path injected by `@forgeax/engine-rhi-webgpu`:
  *   `rhi.requestAdapter()` -> `adapter.requestDevice()`
@@ -931,22 +978,9 @@ async function tryCreateWebGPURenderer(
     return { kind: 'rhi-err', error: adapterResult.error };
   }
   const adapter = adapterResult.value;
-  // M4 w28: filter compression features from adapter.features (AC-07).
-  // D-7: RequestDeviceOptions already has requiredFeatures (Pick<
-  // GPUDeviceDescriptor, 'label' | 'requiredFeatures' | 'requiredLimits'>).
-  // Only request features the adapter actually supports — no blind request.
-  // Typed as GPUFeatureName[] so `adapter.features.has(f)` needs no cast:
-  // RhiAdapter.features is ReadonlySet<GPUFeatureName> and requiredFeatures folds
-  // straight into RequestDeviceOptions.requiredFeatures. A single-step `as
-  // GPUFeatureName` / `as GPUFeatureName[]` cast is forbidden by the RHI-surface
-  // gate (ac-08 gate (j)) -- it would leak shim internals past the RHI surface.
-  const COMPRESSION_FEATURES: GPUFeatureName[] = [
-    'texture-compression-bc',
-    'texture-compression-etc2',
-    'texture-compression-astc',
-  ];
-  const requiredFeatures = COMPRESSION_FEATURES.filter((f) => adapter.features.has(f));
-  const deviceOpts = requiredFeatures.length > 0 ? { requiredFeatures } : undefined;
+  // M4 w28: filter compression features from adapter.features (AC-07). The
+  // same helper is used by recover() below so both paths share one profile.
+  const deviceOpts = deviceOptionsForAdapter(adapter);
   const result = await adapter.requestDevice(deviceOpts);
   if (!result.ok) {
     return { kind: 'rhi-err', error: result.error };
@@ -1105,11 +1139,16 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const featureHostResult = createRenderFeatureHost(internals.options?.features ?? []);
   if (!featureHostResult.ok) throw featureHostResult.error;
   internals.featureHost = featureHostResult.value;
-  const requiredMaterialShaders = Object.freeze([
-    ...new Set(
-      featureHostResult.value.features.flatMap((feature) => feature.requiredMaterialShaders ?? []),
-    ),
-  ]);
+  // Keep producer-declared shader identities live across the renderer
+  // lifetime. Features can be installed after boot (the public late-install
+  // seam used by asset-driven hosts), so a recovery rebuild must include their
+  // modules in the same prewarm set as boot. A boot-only snapshot would let the
+  // first recovered frame observe a cold async shader adapter and emit a
+  // spurious prepared-pipeline failure before the next-frame retry succeeds.
+  const requiredMaterialShaderSet = new Set(
+    featureHostResult.value.features.flatMap((feature) => feature.requiredMaterialShaders ?? []),
+  );
+  let requiredMaterialShaders = Object.freeze([...requiredMaterialShaderSet]);
   // Lazy ShaderRegistry instance (plan-strategy section S-10 / D-R10 / OQ-5
   // close): constructed on first access; subsequent accesses return the
   // same instance.
@@ -1887,7 +1926,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const spec: PipelineSpec = {
       shader: { id: materialShaderId, passKind, variantSet: effectiveVariantSet },
       attachments: {
-        colorFormats: passKind === 'shadow-caster' ? [] : [colorFormat],
+        colorFormats: colorFormatsForPassKind(passKind, colorFormat),
         depthFormat:
           passKind === 'shadow-caster'
             ? ('depth32float' as unknown as GPUTextureFormat)
@@ -2276,6 +2315,13 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const renderer: RendererInternal = {
     backend: 'webgpu',
     device: internals.device,
+    // Keep engine-owned shader consumers on the exact backend pack selected
+    // for this renderer. Importing @forgeax/engine-rhi-webgpu again from a
+    // feature glue module can produce a second bundled module instance whose
+    // RAW_DEVICE_MAP does not contain this opaque RhiDevice handle.
+    _internal_createShaderModule:
+      internals.pack.createShaderModule ??
+      ((device, desc) => invokeDeviceCreateShaderModule(device, desc)),
     get shader(): ShaderRegistry {
       return getShader();
     },
@@ -2298,6 +2344,60 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     },
     renderFeatureDiagnostics() {
       return internals.featureHost?.diagnostics() ?? [];
+    },
+    async installRenderFeature(
+      feature: RenderFeature<unknown>,
+    ): Promise<RenderResult<void, RenderError>> {
+      if (disposed) {
+        return err(
+          new RenderFeatureStageFailedError(feature.identity, -1, 'extract', 'registration'),
+        );
+      }
+      const host = internals.featureHost;
+      if (host === undefined) {
+        return err(
+          new RenderFeatureStageFailedError(feature.identity, -1, 'extract', 'registration'),
+        );
+      }
+      for (const materialShaderId of feature.requiredMaterialShaders ?? []) {
+        const lookup = getShader().findMaterialArtifact(materialShaderId);
+        if (!lookup.ok) {
+          const error = new RhiError({
+            code: 'shader-compile-failed',
+            expected: `declared render feature material shader '${materialShaderId}' is present in the loaded manifest`,
+            hint: `add material shader '${materialShaderId}' to the shader manifest or remove it from the feature declaration`,
+          });
+          internals.errorRegistry.fire(error);
+          return err(
+            new RenderFeatureStageFailedError(feature.identity, -1, 'prepare', 'registration'),
+          );
+        }
+        const label = `module-${materialShaderId}`;
+        const moduleResult = internals.pack.createShaderModule
+          ? await internals.pack.createShaderModule(internals.device, {
+              code: lookup.value.source,
+              label,
+            })
+          : await invokeDeviceCreateShaderModule(internals.device, {
+              code: lookup.value.source,
+              label,
+            });
+        if (!moduleResult.ok) {
+          internals.errorRegistry.fire(moduleResult.error);
+          return err(
+            new RenderFeatureStageFailedError(feature.identity, -1, 'prepare', 'registration'),
+          );
+        }
+        getShaderModuleAdapter().seedModule(label, moduleResult.value);
+      }
+      const installed = host.install(feature);
+      if (installed.ok) {
+        for (const materialShaderId of feature.requiredMaterialShaders ?? []) {
+          requiredMaterialShaderSet.add(materialShaderId);
+        }
+        requiredMaterialShaders = Object.freeze([...requiredMaterialShaderSet]);
+      }
+      return installed;
     },
     draw(worlds: World[], options: DrawOwnerOptions): Result<void, RhiError> {
       // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21
@@ -2629,7 +2729,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       }
       let device: RhiDevice;
       try {
-        const deviceResult = await adapterResult.value.requestDevice();
+        const deviceResult = await adapterResult.value.requestDevice(
+          deviceOptionsForAdapter(adapterResult.value),
+        );
         if (!deviceResult.ok) {
           return err(new RecoverError('recover-device-unavailable'));
         }
@@ -2678,6 +2780,14 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           return ok(handle);
         },
         internals.device.caps,
+      );
+      // A device loss invalidates the transient video textures too. Rebind
+      // through the store owner so its cached textures are destroyed before
+      // the first post-recovery upload; unlike CPU asset payloads, these
+      // handles cannot survive a device replacement.
+      dynamicTextureStore.configureGpuDevice(
+        // biome-ignore lint/suspicious/noExplicitAny: DynamicTextureDevice is a structural subset of RhiDevice
+        internals.device as any,
       );
       try {
         await prepareMaterialShaders(
@@ -3034,13 +3144,10 @@ async function debugReadbackShadowDepth(
   const alignedRowBytes = ((rowBytes + 255) >> 8) << 8;
   const totalBytes = alignedRowBytes * atlasSize;
 
-  // COPY_DST = 0x08, MAP_READ = 0x01
-  const COPY_DST = 0x08;
-  const MAP_READ = 0x01;
   const bufResult = internals.device.createBuffer({
     label: 'shadow-readback-staging',
     size: totalBytes,
-    usage: COPY_DST | MAP_READ,
+    usage: GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_MAP_READ,
     mappedAtCreation: false,
   });
   if (!bufResult.ok) {
@@ -3328,14 +3435,6 @@ function makeRhiNotAvailableError(): RhiError {
 // standardPipeline.module` GPU handles back to `RenderSystem` per-frame
 // dispatch (D-P4 + AGENTS.md `MeshRenderer` shader-identity discriminant).
 
-const GPU_BUFFER_USAGE_MAP_READ = 0x01;
-const GPU_BUFFER_USAGE_VERTEX = 0x20;
-const GPU_BUFFER_USAGE_INDEX = 0x10;
-const GPU_BUFFER_USAGE_UNIFORM = 0x40;
-const GPU_BUFFER_USAGE_STORAGE = 0x80;
-const GPU_BUFFER_USAGE_COPY_DST = 0x08;
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
-
 // Per-pipeline buffer sizes consumed by the manifest-shipped pbr / unlit
 // shaders (D-S2 + plan-strategy; w22.9 retired the inline fallback shader
 // constant in favor of the @forgeax/engine-vite-plugin-shader manifest path):
@@ -3362,14 +3461,12 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 // §2.D-1; spec floor of 128 MiB / 256 B stride = 524288 slots theoretical
 // max).
 //
-// `PER_ENTITY_STRIDE = 256` is retained for the material UBO path
-// (D-P9 trade-off; material binding still uses per-entity dynamic
-// offsets, supersede in OOS-02 `feat-future-render-world`). The mesh
-// storage buffer is allocated at `PER_ENTITY_STRIDE * slotCount` size
-// during initial build (slotCount = INITIAL_MESH_SSBO_SLOT_COUNT) and
-// pow2-doubled per grow event; the new path writes the leading
-// `instanceCount * 64 B` (tight-packed) per renderable into the
-// allocated slot.
+// `MATERIAL_PER_ENTITY_STRIDE` is the larger stride required by the material
+// UBO and is used for the shared mesh/material capacity allocation. Mesh
+// payload offsets remain independently owned by `MESH_PER_ENTITY_STRIDE` in
+// the record path; the shared buffer simply reserves the material-sized slot
+// for each renderable. The mesh path writes the leading `instanceCount * 64 B`
+// (tight-packed) payload into each reserved slot.
 // feat-20260518-pbr-direct-lighting-mvp M3 / w13 + AC-07 std140 layout:
 //   View    UBO  : worldViewProj (64 B mat4) + lightDir (16 B vec3+pad) +
 //                  lightColor (16 B vec3+pad) + cameraPos (16 B vec3+pad)
@@ -3684,15 +3781,14 @@ const COMPOSITE_PARAMS_BYTES = 16;
 // faces showed as a wood-coloured rim outside the front-face footprint.
 const DEPTH_TEXTURE_FORMAT: GPUTextureFormat = 'depth24plus-stencil8';
 
-const PER_ENTITY_STRIDE = 512;
 // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 / T-M2-05:
 // the legacy MESH_SSBO_SLOT_COUNT / MATERIAL_UBO_TOTAL_BYTES /
 // MESH_SSBO_TOTAL_BYTES literal-1024 module constants are gone. The
 // renderer now starts at INITIAL_MESH_SSBO_SLOT_COUNT and grows on demand
 // via `createMeshSsboGrowController` (pow2 doubling, ceiling =
-// device.limits.maxStorageBufferBindingSize / PER_ENTITY_STRIDE per
-// plan-strategy §2.D-1). PER_ENTITY_STRIDE stays at 256 B (OOS-10:
-// stride is unchanged; only slotCount grows).
+// device.limits.maxStorageBufferBindingSize / MATERIAL_PER_ENTITY_STRIDE per
+// plan-strategy §2.D-1). The shared allocation stride remains the material
+// owner; only slotCount grows.
 const INITIAL_MESH_SSBO_SLOT_COUNT = 1024;
 
 // ── createMeshSsboGrowController ───────────────────────────────────────────
@@ -3950,12 +4046,12 @@ export function createMeshSsboGrowController(
 //   emissiveIntensity  : f32           +4 B (offset 60)
 //   occlusionStrength  : f32           +4 B (offset 64)
 //                                      = 96 B  (alignUp 16)
-// The dynamic-offset stride of `PER_ENTITY_STRIDE = 256` is unchanged
-// (D-P9 256-byte minimum dynamic-offset alignment); only the BindGroup
-// entry's `size` matches the 128 B bind window. The trailing 256 - 128 = 128 B
-// per entity slot stays unread by the shader. SSOT lives in
-// `./render-system.ts` so `render-system-record.ts` can import the same
-// value without a createRenderer cycle (charter P5 consistent abstraction).
+// The material dynamic-offset stride is `MATERIAL_PER_ENTITY_STRIDE = 512`;
+// the mesh dynamic-offset stride remains `MESH_PER_ENTITY_STRIDE = 256` in the
+// record path. The material BindGroup entry's `size` matches the 128 B bind
+// window, so the trailing 512 - 128 = 384 B of the reserved material slot is
+// unread by the shader. The material SSOT lives in `./render-system.ts` so
+// record consumers can import it without a createRenderer cycle (charter P5).
 
 /**
  * Build the `Renderer.ready` Promise (D-S3 three-step strict-serial chain).
@@ -5035,6 +5131,56 @@ async function buildReadyWebGPU(
     }
   }
 
+  // The storage path can move the repeated light/cluster membership materializer
+  // into the same command buffer as the deferred lighting pass. This is an
+  // optional producer: module or pipeline creation failure leaves the CPU
+  // binner active, and non-storage backends never attempt the path.
+  let hdrpClusterMembershipPipeline: ComputePipeline | null = null;
+  let hdrpClusterMembershipBindGroupLayout: BindGroupLayout | null = null;
+  if (
+    storageBufferCapable &&
+    rhiDevice.caps.compute &&
+    pbrModule !== null &&
+    unlitModule !== null
+  ) {
+    const producerBgl = rhiDevice.createBindGroupLayout(
+      createHdrpClusterMembershipBindGroupLayoutDescriptor(),
+    );
+    if (producerBgl.ok) {
+      hdrpClusterMembershipBindGroupLayout = producerBgl.value;
+    }
+    const membershipModule = asyncCreateShaderModule
+      ? await asyncCreateShaderModule(rhiDevice, {
+          code: HDRP_CLUSTER_MEMBERSHIP_WGSL,
+          label: 'hdrp-cluster-membership',
+        })
+      : await invokeDeviceCreateShaderModule(rhiDevice, {
+          code: HDRP_CLUSTER_MEMBERSHIP_WGSL,
+          label: 'hdrp-cluster-membership',
+        });
+    if (membershipModule.ok && hdrpClusterMembershipBindGroupLayout !== null) {
+      const producerLayout = rhiDevice.createPipelineLayout({
+        label: 'hdrp-cluster-membership-pl',
+        bindGroupLayouts: [hdrpClusterMembershipBindGroupLayout],
+      });
+      if (producerLayout.ok) {
+        const membershipPipeline = rhiDevice.createComputePipeline({
+          label: 'hdrp-cluster-membership',
+          layout: producerLayout.value,
+          compute: {
+            module: membershipModule.value,
+            entryPoint: 'cs_cluster_membership',
+          },
+        });
+        if (membershipPipeline.ok) {
+          hdrpClusterMembershipPipeline = membershipPipeline.value;
+        }
+      } else {
+        hdrpClusterMembershipBindGroupLayout = null;
+      }
+    }
+  }
+
   // bug-20260611-skin-pipeline-layout-mesh-array-bgl-2bindings: boot-time
   // build of the skin-variant PipelineLayout. Mirrors the HDRP block above
   // (D-2 / D-3 in plan-strategy): reuse view / material / instances BGLs
@@ -5275,7 +5421,7 @@ async function buildReadyWebGPU(
       layout: '12F',
       // BUILTIN_CUBE / BUILTIN_TRIANGLE are single-UV (set 0 only).
       uvSetCount: 1,
-      vertexCount: asset.vertices.length / 12,
+      vertexCount: asset.vertices.length / PROCEDURAL_FLOATS_PER_VERTEX,
       indexed: meshIndices !== undefined,
       topology: asset.submeshes[0]?.topology ?? 'triangle-list',
       submeshes: asset.submeshes,
@@ -5338,8 +5484,8 @@ async function buildReadyWebGPU(
   // both buffers in lock-step (AC-06). Initial allocation lands at
   // `INITIAL_MESH_SSBO_SLOT_COUNT = 1024` slots (parity with the pre-feat
   // legacy literal); subsequent grow events pow2-double in one shot
-  // (AC-05). PER_ENTITY_STRIDE stays at 256 B — only slot count grows
-  // (OOS-10). Wrapper-object identity (`meshSsboState.mesh` /
+  // (AC-05). MATERIAL_PER_ENTITY_STRIDE stays at 512 B for the shared
+  // allocation — only slot count grows (OOS-10). Wrapper-object identity (`meshSsboState.mesh` /
   // `meshSsboState.material`) is stable across grow so PipelineState
   // fields below reference these wrappers once and survive grow events
   // (research §F8 R1).
@@ -5368,7 +5514,7 @@ async function buildReadyWebGPU(
     device: meshSsboGrowDeviceAdapter,
     errorRegistry: errorRegistry,
     initialSlotCount: INITIAL_MESH_SSBO_SLOT_COUNT,
-    perEntityStride: PER_ENTITY_STRIDE,
+    perEntityStride: MATERIAL_PER_ENTITY_STRIDE,
     // bug-20260610: WebGL2 fallback uses uniform-buffer for the mesh array
     // (matches the STORAGE_BUFFER_AVAILABLE=false shader variant which
     // declares `var<uniform> meshes : array<Mesh, 128>` instead of
@@ -5559,11 +5705,6 @@ async function buildReadyWebGPU(
   );
   if (!shadowSamplerResult.ok) throw shadowSamplerResult.error;
 
-  // GPUTextureUsage flags spec literals: TEXTURE_BINDING (0x4) | COPY_DST
-  // (0x2) -- the fallback white texture only needs sampler binding +
-  // queue.writeTexture for the seed white pixel.
-  const TEXTURE_BINDING_USAGE = 0x4;
-  const TEXTURE_COPY_DST_USAGE = 0x2;
   const fallbackTextureResult = runShimSyncStep(
     () =>
       rhiDevice.createTexture({
@@ -5573,7 +5714,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'rgba8unorm',
-        usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
+        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
         viewFormats: [],
         textureBindingViewDimension: undefined,
       }),
@@ -5588,7 +5729,6 @@ async function buildReadyWebGPU(
   // normative for multi-row copies, but the shim is uniformly strict).
   // Pad the source buffer to a 256-byte row stride; the upload still
   // writes only 1x1 because the destination size is 1x1.
-  const FALLBACK_BYTES_PER_ROW = 256;
   const fallbackPixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
   fallbackPixel[0] = 255;
   fallbackPixel[1] = 255;
@@ -5641,7 +5781,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'rgba8unorm',
-        usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
+        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
         viewFormats: [],
         textureBindingViewDimension: undefined,
       }),
@@ -5692,8 +5832,6 @@ async function buildReadyWebGPU(
   // or allocation failed). Cleared to 1.0 (far plane) via a minimal
   // render pass so textureSampleCompareLevel always returns 1.0 (fully lit).
   // Uses RENDER_ATTACHMENT for the clear pass + TEXTURE_BINDING for sampling.
-  const RENDER_ATTACHMENT_USAGE = 0x10;
-  const SHADOW_FALLBACK_USAGE = TEXTURE_BINDING_USAGE | RENDER_ATTACHMENT_USAGE;
   const shadowFallbackTexResult = runShimSyncStep(
     () =>
       rhiDevice.createTexture({
@@ -5703,7 +5841,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'depth32float',
-        usage: SHADOW_FALLBACK_USAGE,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
         viewFormats: [],
         textureBindingViewDimension: undefined,
       }),
@@ -5765,7 +5903,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'depth32float',
-        usage: SHADOW_FALLBACK_USAGE,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
         viewFormats: [],
         textureBindingViewDimension: 'cube',
       }),
@@ -6304,8 +6442,8 @@ async function buildReadyWebGPU(
     // copyTextureToBuffer source; RENDER_ATTACHMENT for the probe pass
     // colour target; TEXTURE_BINDING is unused but cheap and keeps the
     // texture symmetric with the shadow RT for future debug taps.
-    const TEXTURE_COPY_SRC_USAGE = 0x01;
-    const PROBE_RT_USAGE = TEXTURE_BINDING_USAGE | RENDER_ATTACHMENT_USAGE | TEXTURE_COPY_SRC_USAGE;
+    const PROBE_RT_USAGE =
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_SRC;
     const probeOutputTexResult = runShimSyncStep(
       () =>
         rhiDevice.createTexture({
@@ -7400,6 +7538,8 @@ async function buildReadyWebGPU(
     // `selectPipelineLayoutForVariant` based on the caller's variantSet.
     hdrpPbrPipelineLayout:
       unlitModule !== null && pbrModule !== null ? hdrpPbrPipelineLayoutHandle : null,
+    hdrpClusterMembershipPipeline,
+    hdrpClusterMembershipBindGroupLayout,
     // bug-20260611-skin-pipeline-layout: skin-variant PipelineLayout (4-BGL
     // chain with 2-entry mesh-array BGL substituted for the standard 1-entry
     // mesh-array BGL). Built at boot above (see pbrSkinPipelineLayoutHandle);
