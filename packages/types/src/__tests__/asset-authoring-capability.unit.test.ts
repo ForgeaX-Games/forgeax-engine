@@ -55,6 +55,31 @@ describe('producer-owned asset authoring capability', () => {
     });
   });
 
+  it('publishes a versioned UI runtime contract instead of an unavailable kind fallback', () => {
+    const capability = authoringCapabilityForAssetKind('ui');
+    expect(capability.placement.operation).toBe('unavailable');
+    expect(capability.binding.operation).toBe('unavailable');
+    expect(capability.ui).toEqual({
+      contractVersion: '1',
+      profileVersion: '1',
+      preview: { operation: 'createUiPreviewSession', lifecycle: 'open-rebuild-retry-dispose' },
+      mount: { operation: 'mountUi', lifecycle: 'mount-dispose', actionPort: 'onAction' },
+      state: { status: 'supported', operation: 'gameProjection', contractVersion: '1' },
+      actions: { status: 'supported', operation: 'gameProjection', contractVersion: '1' },
+      reads: { status: 'supported', operation: 'gameProjection', contractVersion: '1' },
+      input: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
+      navigation: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
+      font: { status: 'supported', operation: 'ui-artifact-companion', contractVersion: '1' },
+      localization: {
+        status: 'unavailable',
+        reason: {
+          code: 'missing-producer-capability',
+          hint: expect.stringContaining('localization'),
+        },
+      },
+    });
+  });
+
   it('fails closed with a structured reason for a new kind without a producer fact', () => {
     const capability = authoringCapabilityForAssetKind('host/new-kind');
     expect(capability.placement).toEqual({

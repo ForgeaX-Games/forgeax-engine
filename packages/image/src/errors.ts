@@ -1,4 +1,4 @@
-import type { ImageError, ImageErrorCode, ImageErrorDetail } from '@forgeax/engine-types';
+import type { ImageErrorCode, ImageErrorDetailFor, ImageErrorFor } from '@forgeax/engine-types';
 import { IMAGE_ERROR_HINTS } from '@forgeax/engine-types';
 
 // Per-code .expected string literals SSOT.
@@ -27,26 +27,17 @@ const IMAGE_ERROR_EXPECTED: Readonly<Record<ImageErrorCode, string>> = {
   'atlas-region-mismatch': 'sum(regions[i].w x regions[i].h) <= atlasWidth x atlasHeight',
 };
 
-/**
- * Runtime ImageError class -- 4-field surface (.code / .expected / .hint /
- * .detail) parallel to RhiError + AssetError + MetricError (charter P5
- * consistent abstraction; AGENTS.md "Errors are structured. Return Result,
- * never throw for expected failures.").
- *
- * The class implements the `ImageError` interface from
- * `@forgeax/engine-types` (T-M2-04 SSOT). AI users perform a single
- * `switch (err.code)` over the 4 ImageErrorCode members and pick up
- * `err.detail.<per-code-field>` with full IDE autocomplete (charter P3
- * machine-readable union > prose; T-M2-04 ImageErrorDetail discriminated
- * union narrows `.detail` per `.code`).
- */
-export class ImageErrorImpl extends Error implements ImageError {
-  readonly code: ImageErrorCode;
+/** Runtime implementation of the correlated `ImageErrorFor<C>` envelope. */
+export class ImageErrorImpl<C extends ImageErrorCode = ImageErrorCode>
+  extends Error
+  implements ImageErrorFor<C>
+{
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: ImageErrorDetail;
+  readonly detail: ImageErrorDetailFor<C>;
 
-  constructor(detail: ImageErrorDetail) {
+  constructor(detail: ImageErrorDetailFor<C>) {
     const code = detail.code;
     const expected = IMAGE_ERROR_EXPECTED[code];
     const hint = IMAGE_ERROR_HINTS[code];
@@ -59,14 +50,11 @@ export class ImageErrorImpl extends Error implements ImageError {
   }
 }
 
-/**
- * Construct a structured ImageError from a discriminated detail variant.
- * Producer call sites pass the typed detail directly so the `.code` field
- * narrows ImageErrorDetail to the matching variant (charter P4 explicit
- * failure: TypeScript guards completeness at construction time).
- */
-export function imageError(detail: ImageErrorDetail): ImageError {
-  return new ImageErrorImpl(detail);
+/** Construct a structured image error while preserving its code/detail pair. */
+export function imageError<C extends ImageErrorCode>(
+  detail: ImageErrorDetailFor<C>,
+): ImageErrorFor<C> {
+  return new ImageErrorImpl<C>(detail);
 }
 
 export { IMAGE_ERROR_EXPECTED };

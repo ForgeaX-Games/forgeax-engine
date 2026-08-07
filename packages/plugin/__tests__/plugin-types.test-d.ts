@@ -12,7 +12,12 @@
 
 import { ok, type World } from '@forgeax/engine-ecs';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { Plugin } from '@forgeax/engine-plugin';
+import type {
+  Plugin,
+  PluginDetailBuildFailed,
+  PluginDetailDuplicatePlugin,
+  PluginErrorDetail,
+} from '@forgeax/engine-plugin';
 
 describe('Plugin interface exported from @forgeax/engine-plugin (AC-01)', () => {
   it('Plugin is exported as a type', () => {
@@ -63,5 +68,13 @@ describe('Plugin shape matches AC-01 contract', () => {
       },
     };
     void asyncPlugin;
+  });
+});
+
+describe('PluginErrorDetail derives from its code resolver', () => {
+  it('preserves the complete detail union', () => {
+    expectTypeOf<PluginErrorDetail>().toEqualTypeOf<
+      PluginDetailDuplicatePlugin | PluginDetailBuildFailed
+    >();
   });
 });

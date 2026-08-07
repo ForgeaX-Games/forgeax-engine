@@ -45,14 +45,7 @@ import {
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
 } from './errors/render';
-
-/**
- * WebGPU texture usage flags duplicated as numeric literals so the runtime
- * does not depend on the global `GPUTextureUsage` enum (which is undefined in
- * dawn-node before a device is created). Mirrors the values WebGPU specifies.
- */
-const TEXTURE_USAGE_RENDER_ATTACHMENT = 0x10;
-const TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
+import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from './gpu-texture-usage';
 
 /**
  * Construction options for {@link ShadowAtlas}.
@@ -143,7 +136,7 @@ export class ShadowAtlas {
    */
   ensure(): void {
     if (this.texture !== null) return;
-    const usage = TEXTURE_USAGE_RENDER_ATTACHMENT | TEXTURE_USAGE_TEXTURE_BINDING;
+    const usage = GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING;
     const texDesc = cubeArrayDepthDescriptor(this.faceSize, this.layers, usage);
     const texRes = this.device.createTexture(texDesc);
     if (!texRes.ok) throw texRes.error;

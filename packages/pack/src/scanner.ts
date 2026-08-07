@@ -4,6 +4,7 @@ import type { ImportedOutputDeclaration, PackErrorCode } from '@forgeax/engine-t
 import { PACK_ERROR_HINTS } from '@forgeax/engine-types';
 import { loadAssetConfig } from './config.js';
 import { PackError } from './errors.js';
+import { isValidAssetGuidString } from './guid.js';
 import { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import { validateMeta, validatePack } from './schema-compiled.js';
@@ -20,6 +21,11 @@ function ok<T>(value: T): ScanResult<T, never> {
 
 function packErr<E>(error: E): ScanResult<never, E> {
   return { ok: false, error };
+}
+
+/** Host-owned source paths that should not enter the Pack catalog. */
+export interface ScanOptions {
+  readonly ignorePath?: (path: string) => boolean;
 }
 
 /**
@@ -44,12 +50,6 @@ const BLACKLIST = new Set([
 ]);
 
 export const SCANNER_BLACKLIST: ReadonlySet<string> = BLACKLIST;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidGuid(value: unknown): value is string {
-  return typeof value === 'string' && UUID_RE.test(value);
-}
 
 function makePackError(
   code: PackErrorCode,
@@ -107,7 +107,7 @@ function* extractMountSourceGuids(asset: {
  */
 export async function scan(
   roots: readonly string[],
-  _opts?: Record<string, unknown>,
+  opts: ScanOptions = {},
 ): Promise<ScanResult<string[], PackError>> {
   // Step 1: collect all .meta.json and .pack.json paths
   const rawPaths: string[] = [];
@@ -123,6 +123,8 @@ export async function scan(
 
     for (const entry of entries) {
       const fullPath = join(dir, entry.name);
+
+      if (opts.ignorePath?.(fullPath) === true) continue;
 
       if (entry.isDirectory()) {
         // Skip blacklisted subdirectories unless the subdir is itself an explicit root
@@ -146,6 +148,7 @@ export async function scan(
     try {
       const rootStat = await stat(root);
       if (rootStat.isFile()) {
+        if (opts.ignorePath?.(root) === true) continue;
         if (root.endsWith('.meta.json') || root.endsWith('.pack.json')) rawPaths.push(root);
         continue;
       }
@@ -263,7 +266,7 @@ export async function scan(
       }
     }
     for (const asset of packObj.assets) {
-      if (!isValidGuid(asset.guid)) {
+      if (!isValidAssetGuidString(asset.guid)) {
         return packErr(
           makePackError('pack-guid-malformed', {
             raw: asset.guid,
@@ -272,7 +275,7 @@ export async function scan(
         );
       }
       for (const ref of asset.refs) {
-        if (!isValidGuid(ref)) {
+        if (!isValidAssetGuidString(ref)) {
           return packErr(
             makePackError('pack-guid-malformed', {
               raw: ref,
@@ -370,7 +373,7 @@ export async function scan(
       sourceOverrides?: unknown;
     };
     for (const sub of metaObj.subAssets) {
-      if (!isValidGuid(sub.guid)) {
+      if (!isValidAssetGuidString(sub.guid)) {
         return packErr(
           makePackError('pack-guid-malformed', {
             raw: sub.guid,

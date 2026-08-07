@@ -1,7 +1,7 @@
 import { defineProject } from 'vitest/config';
 
 // engine-image unit tests (vitest unit project). Typecheck enabled at the
-// project scope so *.test-d.ts assertions on the 4-member ImageErrorCode
+// project scope so *.test-d.ts assertions on the ImageErrorCode
 // exhaustive switch + ImageErrorDetail discriminated narrowing are
 // surfaced by the same `pnpm test:unit` invocation (TDD red-green path
 // per plan-strategy section 5.1 / 5.4; mirrors packages/input/

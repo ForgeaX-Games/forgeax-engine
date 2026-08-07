@@ -3176,6 +3176,16 @@ function makeStubGPU(): unknown {
 {
   // --- from dev-import-transport.test.ts ---
   const GUID = 'aaaaaaaa-aaaa-4aaa-baaa-aaaaaaaaaaaa';
+  const RUNTIME_BINDING = {
+    schemaVersion: 'runtime-asset-binding-v1' as const,
+    gameId: 'game-a',
+    scopeId: 'game-a',
+    generation: 4,
+    status: 'ready' as const,
+    catalogUrl: '/preview/__pack/scopes/game-a/4/catalog.json',
+    importUrlBase: '/preview/__pack/scopes/game-a/4/import',
+    packageUrlBase: '/preview',
+  };
 
   function mockGlobalFetch(impl: (url: string, init?: RequestInit) => Promise<unknown>) {
     // biome-ignore lint/suspicious/noExplicitAny: test mock needs unsafe globalThis cast
@@ -3194,7 +3204,7 @@ function makeStubGPU(): unknown {
       expect(typeof transport.fetchPack).toBe('function');
     });
 
-    it('POSTs to /__import/<guid>', async () => {
+    it('POSTs to the current scoped import endpoint', async () => {
       let seenUrl: string | undefined;
       let seenMethod: string | undefined;
       mockGlobalFetch((url, init) => {
@@ -3203,16 +3213,19 @@ function makeStubGPU(): unknown {
         return Promise.resolve({ ok: true, status: 200 });
       });
 
-      await createDevImportTransport().fetchPack(GUID);
+      await createDevImportTransport(RUNTIME_BINDING).fetchPack(GUID, RUNTIME_BINDING);
 
       expect(seenMethod).toBe('POST');
-      expect(seenUrl).toBe(`/__import/${GUID}`);
+      expect(seenUrl).toBe(`/preview/__pack/scopes/game-a/4/import/${GUID}`);
     });
 
     it('2xx response -> { ok: true } (two-state, no payload read)', async () => {
       mockGlobalFetch(() => Promise.resolve({ ok: true, status: 200 }));
 
-      const result = await createDevImportTransport().fetchPack(GUID);
+      const result = await createDevImportTransport(RUNTIME_BINDING).fetchPack(
+        GUID,
+        RUNTIME_BINDING,
+      );
 
       expect(result.ok).toBe(true);
       // C1 two-state: no value field, only the ok boolean.
@@ -3222,7 +3235,10 @@ function makeStubGPU(): unknown {
     it('non-2xx response -> { ok: false }', async () => {
       mockGlobalFetch(() => Promise.resolve({ ok: false, status: 404 }));
 
-      const result = await createDevImportTransport().fetchPack(GUID);
+      const result = await createDevImportTransport(RUNTIME_BINDING).fetchPack(
+        GUID,
+        RUNTIME_BINDING,
+      );
 
       expect(result.ok).toBe(false);
       // C1 two-state: no error field, only the ok boolean.
@@ -3232,9 +3248,29 @@ function makeStubGPU(): unknown {
     it('network failure (fetch rejects) -> { ok: false }', async () => {
       mockGlobalFetch(() => Promise.reject(new Error('network down')));
 
-      const result = await createDevImportTransport().fetchPack(GUID);
+      const result = await createDevImportTransport(RUNTIME_BINDING).fetchPack(
+        GUID,
+        RUNTIME_BINDING,
+      );
 
       expect(result.ok).toBe(false);
+    });
+
+    it('fails closed without a binding or with a stale scope', async () => {
+      const fetchSpy = vi.fn();
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      globalThis.fetch = fetchSpy as any;
+
+      expect((await createDevImportTransport().fetchPack(GUID)).ok).toBe(false);
+      expect(
+        (
+          await createDevImportTransport(RUNTIME_BINDING).fetchPack(GUID, {
+            ...RUNTIME_BINDING,
+            generation: 3,
+          })
+        ).ok,
+      ).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 }

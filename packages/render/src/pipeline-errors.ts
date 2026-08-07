@@ -66,7 +66,7 @@ export type PipelineErrorDetailFor<C extends PipelineErrorCode> =
  * Tagged union of `.detail` payloads. The variants are unique by structural fields
  * (`{ id }` vs `{ handle }`).
  */
-export type PipelineErrorDetail = PipelinePreviouslyRegisteredDetail | PipelineNotFoundDetail;
+export type PipelineErrorDetail = PipelineErrorDetailFor<PipelineErrorCode>;
 
 const PIPELINE_EXPECTED: { readonly [C in PipelineErrorCode]: string } = {
   'pipeline-already-registered': 'each pipeline id is registered at most once',

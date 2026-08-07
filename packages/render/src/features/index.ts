@@ -35,6 +35,16 @@ export type {
 } from './prepared-graphics';
 export { RENDER_FEATURE_VERTEX_LAYOUTS } from './prepared-graphics';
 export type {
+  RenderFeatureTargetHandle,
+  RenderFeatureTargetInput,
+  RenderFeatureTargetKind,
+} from './targets';
+export {
+  createRenderFeatureTarget,
+  isRenderFeatureTargetHandle,
+  renderFeatureAttachmentResource,
+} from './targets';
+export type {
   RenderFeature,
   RenderFeatureCapabilityKey,
   RenderFeatureContributeContext,
@@ -52,6 +62,5 @@ export type {
   RenderFeatureResourceHandle,
   RenderFeatureStage,
   RenderFeatureStatus,
-  RenderFeatureTargetHandle,
   RenderFeatureWorldVisibilitySnapshot,
 } from './types';

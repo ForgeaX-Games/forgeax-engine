@@ -95,10 +95,7 @@ export type LoadGameErrorDetailFor<C extends LoadGameErrorCode> = C extends 'mod
 /**
  * Tagged union of `.detail` payloads carried by structured LoadGameError.
  */
-export type LoadGameErrorDetail =
-  | LoadGameDetailModuleNotFound
-  | LoadGameDetailInvalidFormat
-  | LoadGameDetailImportFailed;
+export type LoadGameErrorDetail = LoadGameErrorDetailFor<LoadGameErrorCode>;
 
 class LoadGameErrorClass extends Error {
   readonly code: LoadGameErrorCode;

@@ -126,6 +126,8 @@ interface StandardOpts {
   readonly baseColor: readonly [number, number, number, number];
   readonly metallic?: number;
   readonly roughness?: number;
+  /** Texture channel used for the metallic factor; glTF defaults to B (2). */
+  readonly metallicChannel?: number;
   readonly clearcoat?: number;
   readonly clearcoatRoughness?: number;
   readonly specularTint?: readonly [number, number, number];
@@ -154,6 +156,16 @@ function standard(opts: StandardOpts): MaterialAsset {
   if (opts.alphaCutoff !== undefined && (opts.alphaCutoff < 0 || opts.alphaCutoff > 1)) {
     throw new Error(`Materials.standard: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
   }
+  if (
+    opts.metallicChannel !== undefined &&
+    (!Number.isInteger(opts.metallicChannel) ||
+      opts.metallicChannel < 0 ||
+      opts.metallicChannel > 3)
+  ) {
+    throw new Error(
+      `Materials.standard: metallicChannel must be an integer in [0, 3], got ${opts.metallicChannel}`,
+    );
+  }
   const values: Record<string, MaterialValue> = {
     baseColor: opts.baseColor,
     metallic: opts.metallic ?? 0,
@@ -161,6 +173,7 @@ function standard(opts: StandardOpts): MaterialAsset {
     occlusionStrength,
     specularTint: opts.specularTint ?? [1, 1, 1],
   };
+  if (opts.metallicChannel !== undefined) values.metallicChannel = opts.metallicChannel;
   if (opts.clearcoat !== undefined) values.clearcoat = opts.clearcoat;
   if (opts.clearcoatRoughness !== undefined) values.clearcoatRoughness = opts.clearcoatRoughness;
   if (opts.emissive !== undefined) values.emissive = opts.emissive;
