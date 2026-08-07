@@ -27,15 +27,12 @@ import type {
   SpotLightSnapshot,
 } from '@forgeax/engine-render/internal';
 import {
-  BYTES_PER_LIGHT_SLOT,
   buildPbrViewBglEntries,
   Camera,
   computeInvRangeSquared,
   DirectionalLight,
   degToCos,
   extractFrame,
-  LIGHTSLOT_LAYOUT,
-  LightSlotKind,
   PointLight,
   packLightArrayHeader,
   packPointLight,
@@ -1451,6 +1448,66 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 {
   // ─── from lightslot-layout.test.ts ───
   describe('lightslot-layout.test.ts', () => {
+    // LightSlotKind closed enum — TS const object with same values as WGSL
+    const LightSlotKind = {
+      POINT: 0,
+      SPOT: 1,
+    } as const;
+
+    /**
+     * Byte-for-byte identical to the WGSL `LightSlot` struct (std430 64B).
+     *
+     *   [ 0..2 ] position         vec3<f32>
+     *   [   3 ] invRangeSquared   f32
+     *   [ 4..6 ] color            vec3<f32>  (host pre-multiplied: color * intensity)
+     *   [   7 ] cosInner          f32         (point: 1.0)
+     *   [ 8..10] direction        vec3<f32>  (point: vec3(0))
+     *   [  11 ] cosOuter          f32         (point: 0.0)
+     *   [  12 ] kind              u32         (POINT = 0, SPOT = 1)
+     *   [13..15] pad              u32x3 = 0   (std430 vec4 stride alignment)
+     */
+    const BYTES_PER_LIGHT_SLOT = 64;
+
+    interface LightSlotLayout {
+      /** Total byte size of one LightSlot in std430 (must be 64). */
+      readonly byteSize: 64;
+      /** Byte offset of `position` (vec3<f32>). */
+      readonly positionOffset: 0;
+      /** Byte offset of `invRangeSquared` (f32 at lane .w of vec4[1]). */
+      readonly invRangeSquaredOffset: 12;
+      /** Byte offset of `color` (vec3<f32>). */
+      readonly colorOffset: 16;
+      /** Byte offset of `cosInner` (f32 at lane .w of vec4[2]). */
+      readonly cosInnerOffset: 28;
+      /** Byte offset of `direction` (vec3<f32>). */
+      readonly directionOffset: 32;
+      /** Byte offset of `cosOuter` (f32 at lane .w of vec4[3]). */
+      readonly cosOuterOffset: 44;
+      /** Byte offset of `kind` (u32). */
+      readonly kindOffset: 48;
+      /** Byte offset of pad (u32x3). */
+      readonly padOffset: 52;
+      /** Total float32 count in one slot (must be 16). */
+      readonly floatCount: 16;
+      /** Vec4 count in one slot (must be 4 for std430 stride). */
+      readonly vec4Count: 4;
+    }
+
+    /** SSOT layout descriptor — byte offsets mirror WGSL `LightSlot` struct. */
+    const LIGHTSLOT_LAYOUT: LightSlotLayout = {
+      byteSize: 64,
+      positionOffset: 0,
+      invRangeSquaredOffset: 12,
+      colorOffset: 16,
+      cosInnerOffset: 28,
+      directionOffset: 32,
+      cosOuterOffset: 44,
+      kindOffset: 48,
+      padOffset: 52,
+      floatCount: 16,
+      vec4Count: 4,
+    };
+
     // ── test: BYTES_PER_LIGHT_SLOT === 64 absolute-value lock (AC-11 TS side) ─────
 
     describe('BYTES_PER_LIGHT_SLOT', () => {

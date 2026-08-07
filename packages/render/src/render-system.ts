@@ -65,12 +65,6 @@ import {
 } from './fullscreen-post-process-pass';
 import type { GpuBuffer } from './gpu-resource';
 import type { GpuResourceStore } from './gpu-resource-store';
-import {
-  GPU_TEXTURE_USAGE_COPY_SRC,
-  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from './gpu-texture-usage';
-import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
 import { validateClusterGrid } from './hdrp-pipeline';
 import { disposeInstanceBuffers, disposeTransientInstanceBuffers } from './instance-buffer-cache';
 import type { RhiErrorListenerRegistry } from './lifecycle';
@@ -267,9 +261,7 @@ function sortTransparentDispatch(
  *   clearcoatRoughness : f32          76..80
  *   specularTint       : vec3<f32>    80..92
  *                                     = alignUp(92, 16) = 96
- *   texture coordinates : six records 96..288
- *   normalScale        : f32          288..292
- *                                     = alignUp(292, 16) = 304
+ * The engine-owned texture-coordinate records begin at byte 96.
  */
 const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color' },
@@ -295,7 +287,7 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
  */
 export const STANDARD_PBR_UBO_SIZE = Math.max(
   derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes,
-  304,
+  288,
 );
 
 /**
@@ -1173,10 +1165,7 @@ export function configureSurface(
     device,
     format: (supportsViewFormats ? format : colorAttachmentFormat) as unknown as GPUTextureFormat,
     alphaMode: 'opaque',
-    usage:
-      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
-      (supportsViewFormats ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
-      (supportsSurfaceCopy ? GPU_TEXTURE_USAGE_COPY_SRC : 0),
+    usage: 0x10 | (supportsViewFormats ? 0x04 : 0) | (supportsSurfaceCopy ? 0x01 : 0),
     ...(supportsViewFormats
       ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] }
       : {}),
@@ -1805,14 +1794,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
         const preparedPipeline = internals.getMaterialShaderPipeline?.(
           descriptor.shader,
-          descriptor.colorFormats[0] === 'rgba16float',
+          false,
           descriptor.renderState,
           undefined,
           undefined,
           undefined,
           'forward',
           undefined,
-          descriptor.sampleCount ?? 1,
+          1,
           undefined,
           undefined,
           descriptor.depthFormat === undefined
@@ -2026,14 +2015,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
         lastVisibilityStats.explicitlyHidden = visibilityStats.explicitlyHidden;
-        const featureTargets =
-          preparedPipelineState === null || cameras[0] === undefined
-            ? []
-            : (frameState.activePipeline.getRenderFeatureTargets?.({
-                camera: cameras[0],
-                colorAttachmentFormat: preparedPipelineState.colorAttachmentFormat,
-                backendKind: internals.device.caps.backendKind,
-              }) ?? []);
         const preparedResourceBatches = runProfiledRenderPhase(profileSession, 'features', () => {
           if (internals.featureHost === undefined) return [];
           const featureFrame = runRenderFeatureFrame(internals.featureHost, {
@@ -2042,7 +2023,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             frameNumber: frameState.frameNumber,
             visibilitySnapshots: frame.featureVisibilitySnapshots,
             hiddenEntityReports: frame.hiddenEntityReports,
-            targets: featureTargets,
             generation: 0,
             caps: internals.device.caps,
             createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
@@ -2263,7 +2243,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           const paramsBufferResult = internals.device.createBuffer({
             label: `post-process-params-${id}`,
             size: byteSize,
-            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            usage: 0x40 /* UNIFORM */ | 0x08 /* COPY_DST */,
             mappedAtCreation: false,
           });
           if (!paramsBufferResult.ok) throw paramsBufferResult.error;
@@ -2285,7 +2265,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           const paramsBufferResult = internals.device.createBuffer({
             label: `post-process-params-${id}`,
             size: DEPTH_MIN_PARAMS_BYTE_SIZE,
-            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            usage: 0x40 /* UNIFORM */ | 0x08 /* COPY_DST */,
             mappedAtCreation: false,
           });
           if (!paramsBufferResult.ok) throw paramsBufferResult.error;

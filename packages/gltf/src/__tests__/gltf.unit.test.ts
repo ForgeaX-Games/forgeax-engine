@@ -25,7 +25,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Shared helper: encode float array as base64 data URI (used by multi-primitive, pbr-material, texture-load)
 function buildBase64Buffer(floats: number[]): string {
@@ -62,13 +62,7 @@ function unwrap(result: {
 import { meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
 import { checkExtensions, EXTENSION_ALLOWLIST } from '../check-extensions.js';
 import { runCliGltf } from '../cli-gltf.js';
-import {
-  GLTF_ERROR_HINTS,
-  type GltfError,
-  type GltfErrorCode,
-  type GltfErrorDetail,
-  gltfErr,
-} from '../errors.js';
+import { GLTF_ERROR_HINTS, type GltfError, type GltfErrorCode, gltfErr } from '../errors.js';
 import { gltfImporter } from '../gltf-importer.js';
 import { deriveTextureColorSpace } from '../image-color-space.js';
 import type { GltfDoc } from '../parse-gltf.js';
@@ -312,10 +306,6 @@ import {
   }
 
   describe('errors.test.ts', () => {
-    it('GltfErrorDetail projects the complete error detail surface', () => {
-      expectTypeOf<GltfErrorDetail>().toEqualTypeOf<GltfError['detail']>();
-    });
-
     describe('GltfErrorCode roster', () => {
       it('GLTF_ERROR_HINTS exposes exactly 16 keys', () => {
         expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(16);

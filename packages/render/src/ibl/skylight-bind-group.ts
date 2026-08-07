@@ -45,17 +45,29 @@ import type {
   TextureView,
   TextureViewDescriptor,
 } from '@forgeax/engine-rhi';
-import { GPU_SHADER_STAGE_FRAGMENT } from '../gpu-stage';
-import {
-  GPU_TEXTURE_USAGE_COPY_DST,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from '../gpu-texture-usage';
-import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from '../gpu-usage';
+
+// WebGPU spec literal constants -- spec-aligned with @webgpu/types
+// (GPUShaderStage.FRAGMENT === 0x2). We use literals here rather than
+// importing from createRenderer.ts to keep this module self-contained
+// (it's the canonical place for skylight bind group construction).
+const GPU_SHADER_STAGE_FRAGMENT = 0x2;
+// GPUTextureUsage spec: TEXTURE_BINDING = 0x4, COPY_DST = 0x2.
+const TEXTURE_BINDING_USAGE = 0x4;
+const TEXTURE_COPY_DST_USAGE = 0x2;
+// GPUBufferUsage spec: UNIFORM = 0x40, COPY_DST = 0x8.
+const BUFFER_UNIFORM_USAGE = 0x40;
+const BUFFER_COPY_DST_USAGE = 0x8;
 
 // The rhi shim enforces bytesPerRow % 256 === 0 uniformly (see
 // fallback-white texture upload in createRenderer.ts). Pad each 1x1 face
 // upload to a 256-byte row stride.
-export const FALLBACK_BYTES_PER_ROW = 256;
+const FALLBACK_BYTES_PER_ROW = 256;
+
+// Skylight binding layout (D-5 round-4): binding 7..13 inside the PBR
+// material BGL. Order locked: irrTex / irrSampler / prefTex / prefSampler
+// / brdfTex / brdfSampler / uniform.
+const SKYLIGHT_BINDING_START = 7;
+const SKYLIGHT_ENTRY_COUNT = 7;
 
 // Local alias for the @webgpu/types BindGroupLayoutEntry shape. Used at
 // object-literal push sites below to dodge the AC-08 (j) `as GPU<Type>`
@@ -367,7 +379,7 @@ export function createSkylightFallback(
     sampleCount: 1,
     dimension: '2d',
     format: 'rgba16float',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
+    usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
     viewFormats: [],
     textureBindingViewDimension: 'cube',
   });
@@ -384,7 +396,7 @@ export function createSkylightFallback(
     sampleCount: 1,
     dimension: '2d',
     format: 'rgba16float',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
+    usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
     viewFormats: [],
     textureBindingViewDimension: 'cube',
   });
@@ -401,7 +413,7 @@ export function createSkylightFallback(
     sampleCount: 1,
     dimension: '2d',
     format: 'rg16float',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
+    usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
     viewFormats: [],
     textureBindingViewDimension: undefined,
   });
@@ -492,7 +504,7 @@ export function createSkylightFallback(
   const intensityBufResult = device.createBuffer({
     label: 'skylight-fallback-intensity',
     size: 32,
-    usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+    usage: BUFFER_UNIFORM_USAGE | BUFFER_COPY_DST_USAGE,
   });
   if (!intensityBufResult.ok) throw intensityBufResult.error;
   const intensityBuffer = intensityBufResult.value;
@@ -509,3 +521,9 @@ export function createSkylightFallback(
     intensityBuffer,
   };
 }
+
+// Exported binding constants so the createRenderer + render-system-record
+// consumers reference D-5 ordering through a single SSOT rather than
+// re-typing literal indices.
+export const SKYLIGHT_BINDING_OFFSET = SKYLIGHT_BINDING_START;
+export const SKYLIGHT_MERGED_ENTRY_COUNT = 7 + SKYLIGHT_ENTRY_COUNT; // 14

@@ -30,17 +30,6 @@ import {
   type Submesh,
   type TextureAsset,
 } from '@forgeax/engine-types';
-import {
-  GPU_TEXTURE_USAGE_COPY_DST,
-  GPU_TEXTURE_USAGE_COPY_SRC,
-  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from './gpu-texture-usage';
-import {
-  GPU_BUFFER_USAGE_COPY_DST,
-  GPU_BUFFER_USAGE_INDEX,
-  GPU_BUFFER_USAGE_VERTEX,
-} from './gpu-usage';
 
 // AssetError without importing AssetRegistry: build the 4-field surface
 // (.code / .expected / .hint) directly against the @forgeax/engine-types SSOT
@@ -65,6 +54,16 @@ function projectionError(fields: {
 }): AssetError {
   return new ProjectionAssetError(fields);
 }
+
+// GPU usage-flag constants (spec values; mirror the inline literals the store's
+// pre-M2 upload paths carried).
+const GPU_BUFFER_USAGE_VERTEX = 0x20;
+const GPU_BUFFER_USAGE_INDEX = 0x10;
+const GPU_BUFFER_USAGE_COPY_DST = 0x08;
+const GPU_TEXTURE_USAGE_COPY_SRC = 0x1;
+const GPU_TEXTURE_USAGE_COPY_DST = 0x2;
+const GPU_TEXTURE_USAGE_TEXTURE_BINDING = 0x4;
+const GPU_TEXTURE_USAGE_RENDER_ATTACHMENT = 0x10;
 
 /** Descriptor for a mesh's GPU vertex + index buffers (projected from POD). */
 export interface MeshRenderData {
@@ -339,7 +338,9 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
   // mip-gen). Uncompressed textures keep RENDER_ATTACHMENT for the blit path.
   const usage = compressed
     ? GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST
-    : GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST;
+    : GPU_TEXTURE_USAGE_TEXTURE_BINDING |
+      GPU_TEXTURE_USAGE_COPY_DST |
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
 
   return ok({
     width: tex.width,
@@ -387,8 +388,9 @@ export function deriveRenderDataCubemap(source: TextureAsset): Result<CubeRender
     outputFormat: 'rgba16float',
     needsHalfConversion: source.format === 'rgba32float',
     cubeUsage:
-      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING |
+      GPU_TEXTURE_USAGE_TEXTURE_BINDING |
       GPU_TEXTURE_USAGE_COPY_DST |
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
       GPU_TEXTURE_USAGE_COPY_SRC,
   });
 }

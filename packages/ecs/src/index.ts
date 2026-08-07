@@ -495,6 +495,15 @@ export {
   validateComponentDataKeys,
 } from './component-default-fallback';
 
+/**
+ * feat-20260713 M2 / w9 — P3 shared-field value gate. Validates that every
+ * `shared<T>` scalar / `array<shared<T>>` element in a raw payload is a
+ * resolved numeric Handle (not a raw GUID string / sidecar object). Consumed
+ * by all three World write entries (spawn / addComponent / set).
+ */
+export { validateSharedFieldValues } from './component-value-validate';
+export { validateEnumFieldValues } from './errors/validation-errors';
+
 // ────────────────────────────────────────────────────────────────────────────
 // Column / storage internals (for advanced use: custom archetype tooling)
 // ────────────────────────────────────────────────────────────────────────────
@@ -599,9 +608,14 @@ export { ENTITY_MAX_GENERATION, ENTITY_MAX_INDEX, ENTITY_NULL_RAW } from './enti
 
 export {
   classifyEntityField,
+  createEntityRemap,
   type EntityFieldKind,
+  isComponentFullyTransient,
+  isComponentPortable,
+  isFieldPortable,
   type ProfileComponentError,
   projectComponentData,
+  remapEntityFieldValue,
   validateProfileComponents,
 } from './externalization/index';
 

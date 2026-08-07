@@ -152,6 +152,8 @@ import {
   hasIblCache,
   mergeSkylightIntoMaterialBgl,
   prepareExtractContext,
+  SKYLIGHT_BINDING_OFFSET,
+  SKYLIGHT_MERGED_ENTRY_COUNT,
   setTransparentSortConfig,
   TRANSPARENT_SORT_CONFIG_KEY,
   TRANSPARENT_SORT_MODE_LAYER_Y,
@@ -2415,6 +2417,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const materialEntries = makeMaterialBglEntries();
       const merged = mergeSkylightIntoMaterialBgl(materialEntries);
 
+      expect(merged).toHaveLength(SKYLIGHT_MERGED_ENTRY_COUNT);
       expect(merged).toHaveLength(14);
 
       // binding 0..6 preserved verbatim
@@ -2425,7 +2428,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       }
 
       // binding 7: irradianceMap (texture_cube)
-      expect(merged[7]?.binding).toBe(7);
+      expect(merged[7]?.binding).toBe(SKYLIGHT_BINDING_OFFSET);
       expect((merged[7] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
         'cube',
       );

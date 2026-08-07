@@ -55,9 +55,4 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   buildTextureWorld(app.world, texId);
-
-  const started = app.start();
-  if (!started.ok) {
-    console.error('[bevy-texture] app.start failed:', started.error);
-  }
 }

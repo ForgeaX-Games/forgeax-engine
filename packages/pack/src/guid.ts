@@ -27,10 +27,6 @@ function bytesToDashForm(bytes: Uint8Array): string {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function isValidAssetGuidString(value: unknown): value is string {
-  return typeof value === 'string' && UUID_RE.test(value);
-}
-
 function dashFormToBytes(dashForm: string): Uint8Array {
   const hex = dashForm.replace(/-/g, '');
   const bytes = new Uint8Array(16);
@@ -52,7 +48,7 @@ export const AssetGuid = {
    * Never throws for expected failures (requirements §4.2 / §14 / charter proposition 4).
    */
   parse(dashForm: string): GuidResult<AssetGuid, PackError> {
-    if (!isValidAssetGuidString(dashForm)) {
+    if (!UUID_RE.test(dashForm)) {
       return {
         ok: false,
         error: new PackError({

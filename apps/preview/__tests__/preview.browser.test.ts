@@ -33,17 +33,12 @@ import { physicsPlugin } from '@forgeax/engine-physics';
 import { Camera, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { bootstrap } from '../../../templates/game-default/main';
 import { HUD_UI_GUID } from '../../../templates/game-default/assets/plugins/hud';
 import { SETTINGS_UI_GUID } from '../../../templates/game-default/assets/plugins/settings';
 import { HIT_FLASH_SHADER_ID } from '../../../templates/game-default/assets/plugins/hit-flash-material';
-
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'preview',
-);
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -96,7 +91,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const appRes = await createApp(
       canvas,
       { input: inputBackend, plugins: [audioPlugin(), physicsPlugin('rapier-3d')] },
-      { importTransport: createDevImportTransport(runtimeBinding) },
+      { importTransport: createDevImportTransport() },
     );
     expect(appRes.ok).toBe(true);
     if (!appRes.ok) return;
@@ -116,7 +111,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     });
 
     const assets = app.renderer.assets;
-    assets.configureRuntimeBinding(runtimeBinding);
+    assets.configurePackIndex('/pack-index.json');
 
     const uiRoot = document.createElement('div');
     uiRoot.dataset.testUiRoot = 'preview-bootstrap';

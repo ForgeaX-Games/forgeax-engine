@@ -101,19 +101,6 @@ flowchart LR
   behavior --> dispose["dispose on Stop/pagehide"]
 ```
 
-## Producer authoring descriptor
-
-Every `kind: 'ui'` catalog row publishes the versioned `AssetAuthoringCapability.ui` descriptor from
-`@forgeax/engine-types`. It is the discovery contract for AI and editor consumers: `preview` names
-`createUiPreviewSession`, `mount` names the `mountUi` lifecycle and `onAction` port, and the state,
-action, and read projections point to the host's JSON-shaped `gameProjection` seam. Input and
-navigation use the DOM-native focus/ownership contract; font files remain producer-owned UI artifact
-companions; localization currently reports a structured `missing-producer-capability` result.
-
-This descriptor exposes existing producer seams. It does not give an editor permission to inspect a
-game World or invent a second binding registry. Runtime action/read IDs and their semantic bodies stay
-owned by the game bootstrap, while the Gateway and Content Browser project the catalog facts unchanged.
-
 ## Authoring and resources
 
 ### Profile and diagnostics
@@ -158,5 +145,4 @@ Interactive asset elements opt in with `pointer-events: auto`. The input package
 
 Handle `UiError` by its closed `code` union and machine-readable `detail`; do not parse message strings. Do not silently mount to `document.body`, create a second UI manager, inject stable markup from TS, or hide a missing asset behind an empty root.
 
-The independent Gallery/Preview Workbench, scenario matrix, visual baseline workflow, external design
-adapters, and AI iteration workbench remain follow-up design: [`2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/specs/2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md).
+The independent Gallery/Preview Workbench, scenario matrix, visual baseline workflow, external design adapters, AI iteration workbench, and editor Content Browser integration belong to the follow-up design: [`2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/specs/2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md).

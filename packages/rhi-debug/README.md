@@ -62,12 +62,6 @@ Node-free L0 entry, reached only via the explicit `/capture-browser` subpath -- 
 
 The barrel (`@forgeax/engine-rhi-debug`) re-exports the node-free L0 primitives `finalizeToMemory` / `assembleReport` / `generateRunId` (shared by the Node finalize tail); the `capture-browser` symbols above are reachable **only** through the subpath.
 
-### Dev route subpath (`@forgeax/engine-rhi-debug/dev-routes`)
-
-`RHI_DEBUG_DEV_ROUTES` is the node-free route identity shared by the browser capture client, the
-Node CLI trigger, and `@forgeax/engine-vite-plugin-rhi-debug`. It contains `tape`, `trigger`, and
-`artifact`; endpoint behavior and reviewer CORS policy remain owned by their respective adapters.
-
 ### Browser inspect subpath (`@forgeax/engine-rhi-debug/inspect-core`)
 
 Node-free L3b entry, reached only via the explicit `/inspect-core` subpath -- **deliberately not re-exported from the barrel** so the `FORGEAX_ENGINE_RHI_DEBUG=0` tree-shake gate stays intact. Imports only `./readback` + `./tape-format` + `./errors`; no `node:` builtin, no `pngjs`, no `ws`.

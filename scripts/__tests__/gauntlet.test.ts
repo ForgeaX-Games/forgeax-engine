@@ -72,8 +72,7 @@ describe('gauntlet runner', () => {
     expect(result.status, result.stderr).toBe(0);
     const audit = JSON.parse(result.stdout);
     expect(audit.scenarios).toContain('hello-level-switch-dawn');
-    expect(audit.risks.dynamic).toBeGreaterThanOrEqual(1);
-    expect(audit.risks.churn).toBeGreaterThanOrEqual(1);
+    expect(audit.risks).toMatchObject({ dynamic: 1, churn: 1 });
     expect(audit.risks.recovery).toBeGreaterThanOrEqual(1);
   });
 
@@ -83,9 +82,7 @@ describe('gauntlet runner', () => {
     expect(result.status, result.stderr).toBe(0);
     const audit = JSON.parse(result.stdout);
     expect(audit.scenarios).toContain('hello-custom-importer-dawn');
-    expect(audit.risks.build).toBeGreaterThanOrEqual(1);
-    expect(audit.risks.content).toBeGreaterThanOrEqual(1);
-    expect(audit.risks.delivery).toBeGreaterThanOrEqual(1);
+    expect(audit.risks).toMatchObject({ build: 1, content: 1, delivery: 1 });
   });
 
   it('retains custom-importer malformed-GUID recovery evidence', () => {

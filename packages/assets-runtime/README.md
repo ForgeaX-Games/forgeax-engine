@@ -189,7 +189,10 @@ has no continuing change transport and must not manufacture deltas.
 `AssetRuntimeErrorCode` is the package's closed error-code SSOT (exhaustive
 `switch (err.code)` without `default`; TS guards completeness). Read the source,
 don't duplicate the member list — `packages/assets-runtime/src/errors/asset.ts`
-(grep `export type AssetRuntimeErrorCode`). Each error object carries
+(grep `export type AssetRuntimeErrorCode`). Members today:
+`material-resolved-empty-passes` / `mesh-ssbo-capacity-exceeded` /
+`mesh-ssbo-ceiling-reached` / `scene-collect-entity-ref-out-of-closure` /
+`scene-collect-asset-guid-unresolved`. Each error object carries
 `.code` / `.expected` / `.hint` / `.detail`. `RendererError` (in
 `@forgeax/engine-runtime`) composes `AssetRuntimeError` into its onError fan-out
 union, so a dropped arm is a compile error.
@@ -293,9 +296,12 @@ if (!result.ok) {
   // .hint carries an executable recovery instruction (see IMAGE_ERROR_HINTS
   // SSOT in packages/types/src/index.ts); no string parsing needed.
   console.error(err.code, err.hint);
-  // ImageError correlates the envelope code with its detail shape, so one
-  // discriminant drives both recovery routing and IDE narrowing.
-  switch (err.code) {
+  // NOTE: switch on `err.detail.code`, not `err.code`. `ImageError` carries
+  // two independent discriminants (`.code` on the envelope, `.code` on the
+  // `.detail` variant); TS does not cross-narrow between them, so per-arm
+  // access to `err.detail.<field>` only compiles when the switch scrutinee
+  // is the same discriminant as the union being narrowed.
+  switch (err.detail.code) {
     case 'image-format-unsupported':
       // err.detail.actualMime -- rejected mime; convert offline
       console.error('bad mime:', err.detail.actualMime);

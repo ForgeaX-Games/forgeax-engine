@@ -8,7 +8,6 @@ export type TargetProfile = {
   readonly version: 1;
   readonly title: string;
   readonly scoreMultiplier: number;
-  readonly rotationSpeed: number;
   readonly baseColor: readonly [number, number, number, number];
 };
 
@@ -23,9 +22,6 @@ export function isTargetProfile(value: unknown): value is TargetProfile {
     && typeof record.scoreMultiplier === 'number'
     && Number.isFinite(record.scoreMultiplier)
     && record.scoreMultiplier > 0
-    && typeof record.rotationSpeed === 'number'
-    && Number.isFinite(record.rotationSpeed)
-    && record.rotationSpeed > 0
     && Array.isArray(color)
     && color.length === 4
     && color.every((channel) => typeof channel === 'number' && Number.isFinite(channel) && channel >= 0 && channel <= 1);

@@ -249,12 +249,12 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
       gltfMeshSwap: args.gltfMeshSwap?.() === undefined
         ? { available: false, active: 'original', swaps: 0 }
         : { available: true, ...args.gltfMeshSwap()! },
-      fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0, companionActive: false, targetEntity: null },
+      fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
       gamepad: readGamepadEvidence(args.input),
       characterController: args.characterController?.() ?? null,
       targetHealth: args.targetHealth?.() ?? { contiguousSupported: false, contiguousCalls: 0, rows: 0, lengthsEqual: true, totalCurrent: 0, totalMax: 0, damageEvents: 0 },
       targetDisabling: args.targetDisabling?.() ?? { activeCount: 0, disabledCount: 0, disableEvents: 0 },
-      worldScoreText: args.worldScoreText?.() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0], fontSource: 'legacy-pack', fontGuid: null, fontSize: 0, color: [1, 1, 1, 1], toggles: 0 },
+      worldScoreText: args.worldScoreText?.() ?? { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0], fontSource: 'legacy-pack', fontGuid: null, toggles: 0 },
       multiMaterial: args.multiMaterial?.() ?? { available: false, materialCount: 0, submeshCount: 0, topologies: [], slotsAligned: false },
       multiWorld: args.multiWorld?.() ?? { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 },
       visibility: args.visibility?.() ?? {
