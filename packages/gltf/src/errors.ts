@@ -167,23 +167,7 @@ export interface GltfAnimationTargetInvalidDetail {
 }
 
 /** Discriminated detail family unifying all 15 GltfError variants. */
-export type GltfErrorDetail =
-  | GltfMalformedHeaderDetail
-  | GltfVersionUnsupportedDetail
-  | GltfBufferOutOfBoundsDetail
-  | GltfExtensionUnsupportedDetail
-  | GltfAccessorTypeMismatchDetail
-  | GltfTextureLoadFailedDetail
-  | GltfMetaMissingDetail
-  | GltfInstancingCountMismatchDetail
-  | GltfImageMimeUnsupportedDetail
-  | GltfSkinJointCountExceededDetail
-  | GltfAnimationCubicsplineUnsupportedDetail
-  | GltfMorphUnsupportedDetail
-  | GltfSkinJointNameMissingDetail
-  | GltfImageExtractFailedDetail
-  | GltfSkinAttrAsymmetricDetail
-  | GltfAnimationTargetInvalidDetail;
+export type GltfErrorDetail = DetailFor[GltfErrorCode];
 
 // === GltfError discriminated union (15 variants) ===
 

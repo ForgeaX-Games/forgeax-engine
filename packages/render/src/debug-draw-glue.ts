@@ -94,9 +94,13 @@ export async function createDebugDrawOnReady(
 export function attachDebugOverlayPass(
   graph: RenderGraph<RenderPipelineContext>,
   getViewProj: (ctx: RenderPipelineContext) => Mat4,
+  options: { readonly reads?: readonly string[] } = {},
 ): void {
   graph.addPass('debug-overlay', {
-    reads: [],
+    // The overlay draws to ctx.view, but it still needs a graph edge so a
+    // producer that targets the scene color cannot be appended after it.
+    // The caller supplies the active pipeline's final scene-color token.
+    reads: options.reads ?? [],
     writes: [],
     execute: (ctx: RenderPipelineContext) => {
       const dd = registeredDebugDraw;

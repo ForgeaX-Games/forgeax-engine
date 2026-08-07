@@ -174,7 +174,7 @@ import { INITIAL_VERTEX_CAPACITY, MAX_VERTEX_CAPACITY, VERTEX_STRIDE_BYTES } fro
 
 ## Error codes
 
-`DebugDrawErrorCode` is a **closed union** of 4 members. Exhaustive `switch (err.code)` needs no default fallback. Each error carries `.code` / `.expected` / `.hint` / `.detail` (per [AGENTS.md](../AGENTS.md) Error model).
+`DebugDrawErrorCode` is a **closed union**. Exhaustive `switch (err.code)` needs no default fallback. Each error carries `.code` / `.expected` / `.hint` / `.detail` (per [AGENTS.md](../AGENTS.md) Error model).
 
 | `err.code` | When | `.hint` | `.detail` |
 |:--|:--|:--|:--|

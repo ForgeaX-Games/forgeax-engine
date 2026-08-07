@@ -136,10 +136,18 @@ test('t20: enforces AC-06 per consumer and rejects invalid evidence', () => {
   exceeded.ac06.status = 'fail';
   exceeded.ac06.perConsumer[0].status = 'fail';
   exceeded.ac06.perConsumer[0].observedArtifactReadyToJobStartDelaySeconds = 61;
+  exceeded.ac06.perConsumer[0].artifactProviderReadyAt = '2026-07-16T00:00:15Z';
+  exceeded.ac06.perConsumer[0].lastPrerequisiteReadyAt = '2026-07-16T00:00:16Z';
+  exceeded.ac06.perConsumer[0].effectiveReadyAt = '2026-07-16T00:00:16Z';
+  exceeded.ac06.perConsumer[0].unattributedStartDelaySeconds = 61;
   exceeded.ac06.perConsumer[0].actualSeconds = 61;
   const exceededResult = run(exceeded);
   assert.notEqual(exceededResult.exitCode, 0);
   assert.match(exceededResult.stdout, /ci-cost-artifact-ready-to-job-start-budget-exceeded/);
+  assert.match(exceededResult.stdout, /"artifactProviderReadyAt":"2026-07-16T00:00:15Z"/);
+  assert.match(exceededResult.stdout, /"effectiveReadyAt":"2026-07-16T00:00:16Z"/);
+  assert.match(exceededResult.stdout, /"observedArtifactReadyToJobStartDelaySeconds":61/);
+  assert.match(exceededResult.stdout, /"unattributedStartDelaySeconds":61/);
 
   const invalid = facts();
   invalid.ac06.status = 'invalid';

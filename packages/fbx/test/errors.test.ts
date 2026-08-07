@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { fbxErr, FBX_ERROR_HINTS, type FbxErrorCode } from '../src/errors.js';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import {
+  fbxErr,
+  FBX_ERROR_HINTS,
+  type FbxError,
+  type FbxErrorCode,
+  type FbxErrorDetail,
+} from '../src/errors.js';
 
 function exhaustiveSwitch(code: FbxErrorCode): string {
   switch (code) {
@@ -11,6 +17,10 @@ function exhaustiveSwitch(code: FbxErrorCode): string {
 }
 
 describe('FbxErrorCode', () => {
+  it('FbxErrorDetail projects the complete error detail surface', () => {
+    expectTypeOf<FbxErrorDetail>().toEqualTypeOf<FbxError['detail']>();
+  });
+
   it('closed union: exhaustive switch compiles without default', () => {
     // If the switch is non-exhaustive, tsc will fail (typecheck enabled).
     expect(exhaustiveSwitch('fbx-mesh-type-unsupported')).toBe('mesh-type');

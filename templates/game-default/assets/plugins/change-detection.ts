@@ -20,6 +20,7 @@ export interface GameplayChangeDetectionWitness {
 
 export interface GameplayChangeDetectionHandle {
   recordHit(entity: EntityHandle, points: number): void;
+  readScore(): number;
   reset(): void;
   snapshot(): GameplayChangeDetectionWitness;
 }
@@ -81,6 +82,9 @@ export function installGameplayChangeDetection(args: {
       world.set(entity, TargetHitState, { hits: current.hits + 1 }).unwrap();
       const score = world.getResource<ScoreResource>(GAME_DEFAULT_SCORE_RESOURCE).value;
       world.insertResource(GAME_DEFAULT_SCORE_RESOURCE, { value: score + points });
+    },
+    readScore() {
+      return world.getResource<ScoreResource>(GAME_DEFAULT_SCORE_RESOURCE).value;
     },
     reset() {
       for (const entity of scoringTargetEntities(world, targetQuery)) world.set(entity, TargetHitState, { hits: 0 }).unwrap();

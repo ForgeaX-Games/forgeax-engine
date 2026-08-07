@@ -12,6 +12,11 @@ import {
 } from '@forgeax/engine-rhi';
 import type { PassKind } from '@forgeax/engine-types';
 import { GpuBuffer } from '../gpu-resource';
+import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
+} from '../gpu-usage';
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { SKIN_MATERIAL_SHADER_ID } from '../pbr-pipeline';
 import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
@@ -22,15 +27,12 @@ import { worldEntityKey } from './frame-snapshot';
 import { isEntityFullyTransparent, selectGeometryPipeline } from './main-pass-material';
 import { _computeSkinGroup2DynOffsets } from './main-pass-skin';
 import {
-  COPY_DST_USAGE,
   getOrCreateFromChain,
   getOrCreatePerEntity,
   INSTANCE_UBO_FULL_ARRAY_BYTES,
   MAX_UNIFORM_INSTANCES,
   MESH_SSBO_BYTES,
   MESH_UBO_FULL_ARRAY_BYTES,
-  STORAGE_USAGE,
-  UNIFORM_USAGE,
 } from './mesh-ssbo';
 
 type GeometryInstanceDraw = {
@@ -639,7 +641,7 @@ function resolveGeometryInstanceBuffer(
     // cap (128 * 64B = 8192B < WebGL2 min 16384B UBO limit).
     // caps.storageBuffer===true -> existing storage buffer path unchanged.
     const uniformFallback = runtime.device.caps.storageBuffer === false;
-    let instanceBufferUsage = STORAGE_USAGE | COPY_DST_USAGE;
+    let instanceBufferUsage = GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST;
 
     if (uniformFallback && inst.instanceCount > MAX_UNIFORM_INSTANCES) {
       const draws: GeometryInstanceDraw[] = [];
@@ -648,7 +650,7 @@ function resolveGeometryInstanceBuffer(
         const chunk = inst.transforms.subarray(start * 16, (start + count) * 16);
         const bufRes = runtime.device.createBuffer({
           size: INSTANCE_UBO_FULL_ARRAY_BYTES,
-          usage: UNIFORM_USAGE | COPY_DST_USAGE,
+          usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
           mappedAtCreation: false,
         });
         if (!bufRes.ok) {
@@ -670,7 +672,9 @@ function resolveGeometryInstanceBuffer(
       }
       return { drawn: false, draws };
     }
-    if (uniformFallback) instanceBufferUsage = UNIFORM_USAGE | COPY_DST_USAGE;
+    if (uniformFallback) {
+      instanceBufferUsage = GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST;
+    }
 
     {
       // Cap-gate (LimitExceededDetail single emit point — feat-20260514

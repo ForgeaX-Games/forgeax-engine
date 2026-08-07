@@ -16,6 +16,11 @@ import type {
   RenderFeatureGraphicsPassDescriptor,
   RenderFeaturePreparedGraphicsState,
 } from './prepared-graphics';
+import {
+  isRenderFeatureTargetHandle,
+  type RenderFeatureTargetHandle,
+  renderFeatureAttachmentResource,
+} from './targets';
 import type { RenderFeaturePassContext } from './types';
 
 export interface RenderFeaturePassDependency {
@@ -78,8 +83,11 @@ function qualify(identity: string, name: string): string {
   return `${identity}::${name}`;
 }
 
-function qualifyAttachment(identity: string, name: string): string {
-  return name === 'swapchain' ? name : qualify(identity, name);
+function qualifyAttachment(identity: string, resource: string | RenderFeatureTargetHandle): string {
+  const name = renderFeatureAttachmentResource(resource);
+  return name === 'swapchain' || isRenderFeatureTargetHandle(resource)
+    ? name
+    : qualify(identity, name);
 }
 
 function failed(identity: string, order: number): RenderFeatureStageFailedError {
@@ -183,9 +191,13 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
         : ok(undefined);
     }
     const graphicsState = this.validateGraphics?.(descriptor, this.resourceEntries);
-    if (graphicsState !== undefined && !graphicsState.ok) return err(graphicsState.error);
+    if (graphicsState !== undefined && !graphicsState.ok) {
+      return err(graphicsState.error);
+    }
     const resolvedGraphics = this.resolveGraphics?.(descriptor);
-    if (resolvedGraphics !== undefined && !resolvedGraphics.ok) return err(resolvedGraphics.error);
+    if (resolvedGraphics !== undefined && !resolvedGraphics.ok) {
+      return err(resolvedGraphics.error);
+    }
     const qualifiedResources = descriptor.attachments.colors.map((attachment) =>
       qualifyAttachment(this.identity, attachment.resource),
     );

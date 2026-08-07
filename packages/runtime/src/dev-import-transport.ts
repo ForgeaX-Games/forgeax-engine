@@ -1,7 +1,7 @@
 // dev-import-transport.ts -- the dev-only ImportTransport adapter (M4 / w15,
 // AC-04). A host explicitly wires this into createRenderer / createApp so a
 // DDC miss at runtime triggers an on-demand import against the vite-plugin-pack
-// dev server (POST /__import/:guid). The shipped form leaves the transport
+// dev server (POST to the binding's scoped import endpoint). The shipped form
 // unwired so a miss fails fast with `asset-not-imported` (AC-08).
 //
 // Pure browser fetch -- no Node-only dependency (AC-04), no import.meta.env /
@@ -10,11 +10,17 @@
 // never imports @forgeax/engine-image (image-pipeline-isolation: runtime/src
 // must not statically depend on the image package).
 
-import type { ImportTransport, PackIndexEntry } from '@forgeax/engine-types';
+import type { ImportTransport, PackIndexEntry, RuntimeAssetBinding } from '@forgeax/engine-types';
+
+export type DevImportTransportBinding = Pick<
+  RuntimeAssetBinding,
+  'scopeId' | 'generation' | 'status' | 'importUrlBase'
+>;
 
 /**
- * Build the dev-only {@link ImportTransport}. `fetchPack(guid)` issues a
- * `POST /__import/<guid>` against the vite-plugin-pack dev server, which imports
+ * Build the dev-only {@link ImportTransport}. A caller must provide the
+ * current runtime binding; `fetchPack(guid)` then issues a scoped POST against
+ * the vite-plugin-pack dev server, which imports
  * exactly that GUID's `.bin` and returns the single imported catalog row (+ any
  * sub-asset siblings). The caller patches those rows into its catalog cache
  * incrementally -- per-asset, never a whole-catalog re-fetch (the four-verb
@@ -28,18 +34,31 @@ import type { ImportTransport, PackIndexEntry } from '@forgeax/engine-types';
  *   import { createApp } from '@forgeax/engine-app';
  *   import { createDevImportTransport } from '@forgeax/engine-runtime';
  *   const app = await createApp(canvas, opts, {
- *     importTransport: createDevImportTransport(),
+ *     importTransport: createDevImportTransport(runtimeBinding),
  *   });
  */
-export function createDevImportTransport(): ImportTransport {
+export function createDevImportTransport(binding?: DevImportTransportBinding): ImportTransport {
   return {
     async fetchPack(
       guid: string,
+      scope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation' | 'status'>,
     ): Promise<
       { readonly ok: true; readonly entries?: readonly PackIndexEntry[] } | { readonly ok: false }
     > {
+      const active = binding;
+      if (
+        active === undefined ||
+        active.status !== 'ready' ||
+        scope === undefined ||
+        scope.status !== 'ready' ||
+        scope.scopeId !== active.scopeId ||
+        scope.generation !== active.generation
+      ) {
+        return { ok: false };
+      }
       try {
-        const response = await fetch(`/__import/${guid}`, { method: 'POST' });
+        const base = active.importUrlBase.replace(/\/+$/, '');
+        const response = await fetch(`${base}/${encodeURIComponent(guid)}`, { method: 'POST' });
         if (!response.ok) {
           // The ImportTransport contract has no error channel (returns only
           // ok:false), so the runtime would otherwise report a generic

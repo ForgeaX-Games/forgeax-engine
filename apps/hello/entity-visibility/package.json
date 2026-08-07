@@ -46,7 +46,7 @@
         "legs": [
           "semantic",
           "gpu",
-          "visual"
+          "behavioral"
         ]
       },
       "oracle": {

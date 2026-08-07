@@ -351,6 +351,10 @@ export interface ImportTransport {
    */
   fetchPack(
     guid: string,
+    scope?: Pick<
+      import('./runtime-scope.js').RuntimeAssetBinding,
+      'scopeId' | 'generation' | 'status'
+    >,
   ): Promise<
     { readonly ok: true; readonly entries?: readonly PackIndexEntry[] } | { readonly ok: false }
   >;

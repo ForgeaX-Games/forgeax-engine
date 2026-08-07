@@ -10,6 +10,9 @@ import type {
   RenderFeatureGraphicsContributionStaging,
   RenderFeatureGraphicsPrepare,
 } from './prepared-graphics';
+import type { RenderFeatureTargetHandle } from './targets';
+
+export type { RenderFeatureTargetHandle } from './targets';
 
 /** Closed lifecycle states exposed by the feature host. */
 export type RenderFeatureStatus = 'active' | 'failed' | 'disabled' | 'disposed';
@@ -194,10 +197,6 @@ export interface RenderFeatureFrameIdentity {
 
 export interface RenderFeatureResourceHandle {
   readonly __renderFeatureResource: unique symbol;
-}
-
-export interface RenderFeatureTargetHandle {
-  readonly __renderFeatureTarget: unique symbol;
 }
 
 export interface RenderFeatureErrorSink {

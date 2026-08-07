@@ -14,11 +14,15 @@ export const GAME_DEFAULT_VIDEO_MATERIAL_GUID = '019f5d11-0e1f-7c21-a4d2-7e4f6e8
 export const GAME_DEFAULT_VIDEO_URL = '/cutscene.webm';
 
 const PANEL_SCALE: readonly [number, number, number] = [1.8, 1.05, 1];
+/** The authored hit cue starts every replay at the same visible WebM frame. */
+export const VIDEO_HIT_CONTEXT_PLAYHEAD_SECONDS = 0.35;
 
 export type VideoTexturePanelSnapshot = {
   readonly available: boolean;
   readonly active: 'original' | 'video';
   readonly swaps: number;
+  readonly hitReactions: number;
+  readonly lastHitPlayhead: number | null;
   readonly guid: string | null;
   readonly name: string | null;
   readonly kind: 'video' | null;
@@ -32,7 +36,10 @@ export type VideoTexturePanel = {
   readonly materialHandle: Handle<'MaterialAsset', 'shared'>;
   active: 'original' | 'video';
   swaps: number;
+  hitReactions: number;
+  lastHitPlayhead: number | null;
   toggle: () => void;
+  reactToHit: () => boolean;
   step: (camera: EntityHandle) => void;
   reset: () => void;
   snapshot: () => VideoTexturePanelSnapshot;
@@ -41,6 +48,7 @@ export type VideoTexturePanel = {
 
 type VideoHost = VideoElementProvider & {
   setPlaying: (entity: EntityHandle, playing: boolean) => void;
+  seek: (entity: EntityHandle, time: number) => void;
   dispose: () => void;
 };
 
@@ -73,6 +81,21 @@ function createVideoHost(): VideoHost {
     }
   };
 
+  const seek = (entity: EntityHandle, time: number): void => {
+    const video = elements.get(entity);
+    if (video === undefined) return;
+    const apply = (): void => {
+      try {
+        video.currentTime = time;
+      } catch {
+        // Metadata may not be ready on the first hit; playback will still
+        // begin and the ECS snapshot keeps the deterministic cue visible.
+      }
+    };
+    apply();
+    if (video.readyState < 1) video.addEventListener('loadedmetadata', apply, { once: true });
+  };
+
   return {
     getElement: (entity, _clipHandle) => {
       const video = ensureElement(entity);
@@ -83,6 +106,7 @@ function createVideoHost(): VideoHost {
       playing.set(entity, value);
       syncPlayback(entity);
     },
+    seek,
     dispose: () => {
       for (const video of elements.values()) {
         video.pause();
@@ -97,12 +121,14 @@ function createVideoHost(): VideoHost {
 
 function snapshotFrom(state: VideoTexturePanel | undefined, assets: AssetRegistry | undefined): VideoTexturePanelSnapshot {
   if (state === undefined) {
-    return { available: false, active: 'original', swaps: 0, guid: null, name: null, kind: null, url: null };
+    return { available: false, active: 'original', swaps: 0, hitReactions: 0, lastHitPlayhead: null, guid: null, name: null, kind: null, url: null };
   }
   return {
     available: true,
     active: state.active,
     swaps: state.swaps,
+    hitReactions: state.hitReactions,
+    lastHitPlayhead: state.lastHitPlayhead,
     guid: GAME_DEFAULT_VIDEO_GUID,
     name: assets?.resolveName(GAME_DEFAULT_VIDEO_GUID) ?? null,
     kind: 'video',
@@ -172,6 +198,8 @@ export async function createVideoTexturePanel(
     materialHandle,
     active: 'original',
     swaps: 0,
+    hitReactions: 0,
+    lastHitPlayhead: null,
     toggle: () => {
       state.active = state.active === 'original' ? 'video' : 'original';
       state.swaps += 1;
@@ -180,6 +208,15 @@ export async function createVideoTexturePanel(
       world.set(panel, Transform, state.active === 'video'
         ? { scale: [...PANEL_SCALE] }
         : { pos: [0, -100, 0], scale: [0, 0, 0] });
+    },
+    reactToHit: () => {
+      if (state.active !== 'video') return false;
+      state.hitReactions += 1;
+      state.lastHitPlayhead = VIDEO_HIT_CONTEXT_PLAYHEAD_SECONDS;
+      world.set(panel, VideoPlayer, { playing: true, currentTime: VIDEO_HIT_CONTEXT_PLAYHEAD_SECONDS });
+      host.seek(panel, VIDEO_HIT_CONTEXT_PLAYHEAD_SECONDS);
+      host.setPlaying(panel, true);
+      return true;
     },
     step: (camera) => {
       if (state.active !== 'video') return;
@@ -202,6 +239,8 @@ export async function createVideoTexturePanel(
     },
     reset: () => {
       state.active = 'original';
+      state.hitReactions = 0;
+      state.lastHitPlayhead = null;
       world.set(panel, VideoPlayer, { playing: false, currentTime: 0 });
       host.setPlaying(panel, false);
       world.set(panel, Transform, { pos: [0, -100, 0], scale: [0, 0, 0] });
