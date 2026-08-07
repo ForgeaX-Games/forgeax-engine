@@ -8,6 +8,7 @@ import { gltfImporter } from '@forgeax/engine-gltf';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
 import { targetProfileImporter } from '../../templates/game-default/assets/plugins/target-profile-importer';
 import {
@@ -98,6 +99,7 @@ export default defineConfig(({ command }) => ({
     // upload route, and debug-only browser chunk.
     ...(command === 'serve' ? [vitePluginRhiDebug()] : []),
     pluginPack({
+      runtimeBinding: createStandaloneRuntimeAssetBinding('preview'),
       refresh: reloadAssetHost(),
       roots: [
         // game-default/assets/ holds the entry SceneAsset, material/VFX packs,

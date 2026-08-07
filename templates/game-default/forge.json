@@ -1,6 +1,6 @@
 {
-  "id": "_template",
-  "name": "_template",
+  "id": "template-default",
+  "name": "Default",
   "schemaVersion": "1.0.0",
   "entry": "main.ts",
   "physics": "3d",

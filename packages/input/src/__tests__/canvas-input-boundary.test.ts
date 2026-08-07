@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createCanvasInputBoundary } from '../canvas-input-boundary';
-import type { InputBackend, InputBackendSample } from '../input-snapshot';
+import {
+  createEmptyInputBackendSample,
+  type InputBackend,
+  type InputBackendSample,
+} from '../input-snapshot';
 
 function sample(keys: readonly string[] = []): InputBackendSample {
   return {
@@ -16,6 +20,13 @@ function sample(keys: readonly string[] = []): InputBackendSample {
 }
 
 describe('CanvasInputBoundary', () => {
+  it('derives inactive consumers from the input empty-sample owner', () => {
+    const source: InputBackend = { sample: () => sample(['w']), detach() {} };
+    const boundary = createCanvasInputBoundary(source);
+
+    expect(boundary.game.sample()).toEqual(createEmptyInputBackendSample());
+  });
+
   it('routes each browser frame only to the leased consumer', () => {
     const source: InputBackend = { sample: () => sample(['w']), detach() {} };
     const boundary = createCanvasInputBoundary(source);

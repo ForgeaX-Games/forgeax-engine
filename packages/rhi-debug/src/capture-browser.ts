@@ -16,6 +16,7 @@
 //
 // Related: requirements AC-10; plan-strategy D-7/D-8.
 
+import { RHI_DEBUG_DEV_ROUTES } from './dev-routes';
 import { DebugError, type SnapshotTimeoutDetail } from './errors';
 import {
   captureIdleTimeoutMs,
@@ -96,8 +97,6 @@ export interface UploadTapeResult {
   readonly tapePath: string;
   readonly reportPath: string;
 }
-
-const TAPE_ROUTE = '/__forgeax-debug/tape';
 
 /**
  * Capture `frames` frames into an in-memory tape (zero fs, zero network).
@@ -195,7 +194,7 @@ export async function uploadTape(
     passOffsets: tape.passOffsets,
     valid: tape.valid,
   };
-  const response = await fetch(TAPE_ROUTE, {
+  const response = await fetch(RHI_DEBUG_DEV_ROUTES.tape, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

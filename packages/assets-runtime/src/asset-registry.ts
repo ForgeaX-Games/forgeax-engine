@@ -63,6 +63,7 @@ import {
   type MaterialAsset,
   type Package,
   type ParseErrorDetail,
+  type RuntimeAssetBinding,
   type SceneAsset,
   type SceneEntity,
   type TagOf,
@@ -322,6 +323,8 @@ export class AssetRegistry {
   // each resource URL resolved against that index and registers the asset.
   packIndexUrl: string | undefined = undefined;
   packIndexCache: Map<string, CatalogRecord> | undefined = undefined;
+  /** Current browser-facing asset realm; absent for inline/shipped legacy use. */
+  runtimeBinding: RuntimeAssetBinding | undefined = undefined;
 
   // tweak-20260609 M1: in-flight Map for recursive loadByGuid dedup + cycle
   // prevention (D-5 / B-10). Maps guidKey → Promise<Result<Handle, ...>> so
@@ -460,11 +463,25 @@ export class AssetRegistry {
     // feat-20260705-runtime-tier2-decomposition M1 / w9 (D-1): optional
     // post-spawn hook; createRenderer injects `postSpawnResolveJoints`.
     postSpawnHook?: PostSpawnHook | undefined,
+    runtimeBinding?: RuntimeAssetBinding | undefined,
   ) {
     void this.shaderRegistry;
     this.importTransport = importTransport;
     this.postSpawnHook = postSpawnHook;
+    this.runtimeBinding = runtimeBinding;
     this.loaders = createDefaultLoaderRegistry(extraLoaders);
+    this.registerBuiltins();
+  }
+
+  /**
+   * Restore the engine-owned GUID catalogue after a runtime-realm transition.
+   *
+   * Builtin meshes are process-static engine assets, not game-owned catalog
+   * rows. A realm transition clears the user catalog and load caches, but must
+   * leave these assets addressable so a scene in the newly bound game can keep
+   * resolving its builtin mesh references.
+   */
+  private registerBuiltins(): void {
     // feat-20260614 M8 (D-15): builtins are GUID-addressable catalogue rows.
     // The builtin payloads also live process-static in BuiltinAssetRegistry
     // (slot < BUILTIN_BASE) for handle-tier resolution; here they are
@@ -589,6 +606,23 @@ export class AssetRegistry {
   configurePackIndex(url: string): void {
     this.packIndexUrl = url;
     this.packIndexCache = undefined; // reset cache if URL changes
+  }
+
+  /**
+   * Atomically replace the browser-side asset realm. The binding owns the
+   * catalog URL and generation; no cache from the previous game survives the
+   * transition.
+   */
+  configureRuntimeBinding(binding: RuntimeAssetBinding): void {
+    this.catalogSourceDispose?.();
+    this.catalogSourceDispose = undefined;
+    this.catalogSource = undefined;
+    this.catalogReplica = undefined;
+    this.catalogEnumerating = undefined;
+    this.runtimeBinding = binding;
+    this.configurePackIndex(binding.catalogUrl);
+    this.invalidateAll();
+    this.registerBuiltins();
   }
 
   /**

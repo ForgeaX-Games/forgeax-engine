@@ -93,6 +93,21 @@ import type { PostProcessShaderEntry } from '../fullscreen-post-process-pass';
 import { glyphTextLayoutSystem } from '../glyph-text-layout-system';
 import { GpuBuffer } from '../gpu-resource';
 import { GpuResourceStore } from '../gpu-resource-store';
+import { GPU_SHADER_STAGE_FRAGMENT } from '../gpu-stage';
+import {
+  GPU_TEXTURE_USAGE_COPY_DST,
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
+} from '../gpu-texture-usage';
+import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_INDEX,
+  GPU_BUFFER_USAGE_MAP_READ,
+  GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
+  GPU_BUFFER_USAGE_VERTEX,
+} from '../gpu-usage';
 import {
   createHdrpBindGroupLayoutDescriptor,
   createHdrpClusterMembershipBindGroupLayoutDescriptor,
@@ -100,7 +115,11 @@ import {
 import { HDRP_CLUSTER_MEMBERSHIP_WGSL } from '../hdrp-cluster-membership';
 import { HDRP_PIPELINE_ID, hdrpPipeline } from '../hdrp-pipeline';
 import { clearIblCacheForDevice, setIblComposedShaders } from '../ibl/IblPipelineCache';
-import { createSkylightFallback, type SkylightFallback } from '../ibl/skylight-bind-group';
+import {
+  createSkylightFallback,
+  FALLBACK_BYTES_PER_ROW,
+  type SkylightFallback,
+} from '../ibl/skylight-bind-group';
 import {
   HealthListenerRegistry,
   LostListenerRegistry,
@@ -134,6 +153,7 @@ import { TONEMAP_POST_PROCESS_ID } from '../render-graph-primitives';
 import {
   configureSurface,
   createRenderSystem,
+  MATERIAL_PER_ENTITY_STRIDE,
   type MeshGpuHandles,
   type PipelineState,
   type RenderSystem,
@@ -3124,13 +3144,10 @@ async function debugReadbackShadowDepth(
   const alignedRowBytes = ((rowBytes + 255) >> 8) << 8;
   const totalBytes = alignedRowBytes * atlasSize;
 
-  // COPY_DST = 0x08, MAP_READ = 0x01
-  const COPY_DST = 0x08;
-  const MAP_READ = 0x01;
   const bufResult = internals.device.createBuffer({
     label: 'shadow-readback-staging',
     size: totalBytes,
-    usage: COPY_DST | MAP_READ,
+    usage: GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_MAP_READ,
     mappedAtCreation: false,
   });
   if (!bufResult.ok) {
@@ -3418,14 +3435,6 @@ function makeRhiNotAvailableError(): RhiError {
 // standardPipeline.module` GPU handles back to `RenderSystem` per-frame
 // dispatch (D-P4 + AGENTS.md `MeshRenderer` shader-identity discriminant).
 
-const GPU_BUFFER_USAGE_MAP_READ = 0x01;
-const GPU_BUFFER_USAGE_VERTEX = 0x20;
-const GPU_BUFFER_USAGE_INDEX = 0x10;
-const GPU_BUFFER_USAGE_UNIFORM = 0x40;
-const GPU_BUFFER_USAGE_STORAGE = 0x80;
-const GPU_BUFFER_USAGE_COPY_DST = 0x08;
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
-
 // Per-pipeline buffer sizes consumed by the manifest-shipped pbr / unlit
 // shaders (D-S2 + plan-strategy; w22.9 retired the inline fallback shader
 // constant in favor of the @forgeax/engine-vite-plugin-shader manifest path):
@@ -3452,14 +3461,12 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 // §2.D-1; spec floor of 128 MiB / 256 B stride = 524288 slots theoretical
 // max).
 //
-// `PER_ENTITY_STRIDE = 256` is retained for the material UBO path
-// (D-P9 trade-off; material binding still uses per-entity dynamic
-// offsets, supersede in OOS-02 `feat-future-render-world`). The mesh
-// storage buffer is allocated at `PER_ENTITY_STRIDE * slotCount` size
-// during initial build (slotCount = INITIAL_MESH_SSBO_SLOT_COUNT) and
-// pow2-doubled per grow event; the new path writes the leading
-// `instanceCount * 64 B` (tight-packed) per renderable into the
-// allocated slot.
+// `MATERIAL_PER_ENTITY_STRIDE` is the larger stride required by the material
+// UBO and is used for the shared mesh/material capacity allocation. Mesh
+// payload offsets remain independently owned by `MESH_PER_ENTITY_STRIDE` in
+// the record path; the shared buffer simply reserves the material-sized slot
+// for each renderable. The mesh path writes the leading `instanceCount * 64 B`
+// (tight-packed) payload into each reserved slot.
 // feat-20260518-pbr-direct-lighting-mvp M3 / w13 + AC-07 std140 layout:
 //   View    UBO  : worldViewProj (64 B mat4) + lightDir (16 B vec3+pad) +
 //                  lightColor (16 B vec3+pad) + cameraPos (16 B vec3+pad)
@@ -3774,15 +3781,14 @@ const COMPOSITE_PARAMS_BYTES = 16;
 // faces showed as a wood-coloured rim outside the front-face footprint.
 const DEPTH_TEXTURE_FORMAT: GPUTextureFormat = 'depth24plus-stencil8';
 
-const PER_ENTITY_STRIDE = 512;
 // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 / T-M2-05:
 // the legacy MESH_SSBO_SLOT_COUNT / MATERIAL_UBO_TOTAL_BYTES /
 // MESH_SSBO_TOTAL_BYTES literal-1024 module constants are gone. The
 // renderer now starts at INITIAL_MESH_SSBO_SLOT_COUNT and grows on demand
 // via `createMeshSsboGrowController` (pow2 doubling, ceiling =
-// device.limits.maxStorageBufferBindingSize / PER_ENTITY_STRIDE per
-// plan-strategy §2.D-1). PER_ENTITY_STRIDE stays at 256 B (OOS-10:
-// stride is unchanged; only slotCount grows).
+// device.limits.maxStorageBufferBindingSize / MATERIAL_PER_ENTITY_STRIDE per
+// plan-strategy §2.D-1). The shared allocation stride remains the material
+// owner; only slotCount grows.
 const INITIAL_MESH_SSBO_SLOT_COUNT = 1024;
 
 // ── createMeshSsboGrowController ───────────────────────────────────────────
@@ -4040,12 +4046,12 @@ export function createMeshSsboGrowController(
 //   emissiveIntensity  : f32           +4 B (offset 60)
 //   occlusionStrength  : f32           +4 B (offset 64)
 //                                      = 96 B  (alignUp 16)
-// The dynamic-offset stride of `PER_ENTITY_STRIDE = 256` is unchanged
-// (D-P9 256-byte minimum dynamic-offset alignment); only the BindGroup
-// entry's `size` matches the 128 B bind window. The trailing 256 - 128 = 128 B
-// per entity slot stays unread by the shader. SSOT lives in
-// `./render-system.ts` so `render-system-record.ts` can import the same
-// value without a createRenderer cycle (charter P5 consistent abstraction).
+// The material dynamic-offset stride is `MATERIAL_PER_ENTITY_STRIDE = 512`;
+// the mesh dynamic-offset stride remains `MESH_PER_ENTITY_STRIDE = 256` in the
+// record path. The material BindGroup entry's `size` matches the 128 B bind
+// window, so the trailing 512 - 128 = 384 B of the reserved material slot is
+// unread by the shader. The material SSOT lives in `./render-system.ts` so
+// record consumers can import it without a createRenderer cycle (charter P5).
 
 /**
  * Build the `Renderer.ready` Promise (D-S3 three-step strict-serial chain).
@@ -4776,6 +4782,22 @@ async function buildReadyWebGPU(
     );
     if (!pbrShaderResult.ok) throw pbrShaderResult.error;
     pbrModule = pbrShaderResult.value;
+    // feat-20260629-multi-uv-set-support: a real extra-UV mesh creates a
+    // layout-specific material PSO after the boot-time standard-layout PSO
+    // has been pre-warmed. Seed the shared shader-module adapter under the
+    // exact lazy-build labels so that this first-touch PSO can reuse the
+    // already compiled PBR variant instead of returning the transient
+    // `rhi-not-available` pending signal in a tight draw loop.
+    seedShaderModule('module-forgeax::default-standard-pbr', pbrModule);
+    const pbrManifestEntry = [...registry.materialShaderManifestEntries()].find(
+      (entry) => entry.identifier === 'forgeax::default-standard-pbr',
+    );
+    const pbrVariant = pbrManifestEntry?.variants.find(
+      (variant) => variant.composedWgsl === pbrEntry.wgsl,
+    );
+    if (pbrVariant !== undefined) {
+      seedShaderModule(`module-forgeax::default-standard-pbr#${pbrVariant.definesKey}`, pbrModule);
+    }
 
     const unlitShaderResult = await runShimStep(
       () =>
@@ -5478,8 +5500,8 @@ async function buildReadyWebGPU(
   // both buffers in lock-step (AC-06). Initial allocation lands at
   // `INITIAL_MESH_SSBO_SLOT_COUNT = 1024` slots (parity with the pre-feat
   // legacy literal); subsequent grow events pow2-double in one shot
-  // (AC-05). PER_ENTITY_STRIDE stays at 256 B — only slot count grows
-  // (OOS-10). Wrapper-object identity (`meshSsboState.mesh` /
+  // (AC-05). MATERIAL_PER_ENTITY_STRIDE stays at 512 B for the shared
+  // allocation — only slot count grows (OOS-10). Wrapper-object identity (`meshSsboState.mesh` /
   // `meshSsboState.material`) is stable across grow so PipelineState
   // fields below reference these wrappers once and survive grow events
   // (research §F8 R1).
@@ -5508,7 +5530,7 @@ async function buildReadyWebGPU(
     device: meshSsboGrowDeviceAdapter,
     errorRegistry: errorRegistry,
     initialSlotCount: INITIAL_MESH_SSBO_SLOT_COUNT,
-    perEntityStride: PER_ENTITY_STRIDE,
+    perEntityStride: MATERIAL_PER_ENTITY_STRIDE,
     // bug-20260610: WebGL2 fallback uses uniform-buffer for the mesh array
     // (matches the STORAGE_BUFFER_AVAILABLE=false shader variant which
     // declares `var<uniform> meshes : array<Mesh, 128>` instead of
@@ -5699,11 +5721,6 @@ async function buildReadyWebGPU(
   );
   if (!shadowSamplerResult.ok) throw shadowSamplerResult.error;
 
-  // GPUTextureUsage flags spec literals: TEXTURE_BINDING (0x4) | COPY_DST
-  // (0x2) -- the fallback white texture only needs sampler binding +
-  // queue.writeTexture for the seed white pixel.
-  const TEXTURE_BINDING_USAGE = 0x4;
-  const TEXTURE_COPY_DST_USAGE = 0x2;
   const fallbackTextureResult = runShimSyncStep(
     () =>
       rhiDevice.createTexture({
@@ -5713,7 +5730,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'rgba8unorm',
-        usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
+        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
         viewFormats: [],
         textureBindingViewDimension: undefined,
       }),
@@ -5728,7 +5745,6 @@ async function buildReadyWebGPU(
   // normative for multi-row copies, but the shim is uniformly strict).
   // Pad the source buffer to a 256-byte row stride; the upload still
   // writes only 1x1 because the destination size is 1x1.
-  const FALLBACK_BYTES_PER_ROW = 256;
   const fallbackPixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
   fallbackPixel[0] = 255;
   fallbackPixel[1] = 255;
@@ -5781,7 +5797,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'rgba8unorm',
-        usage: TEXTURE_BINDING_USAGE | TEXTURE_COPY_DST_USAGE,
+        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
         viewFormats: [],
         textureBindingViewDimension: undefined,
       }),
@@ -5832,8 +5848,6 @@ async function buildReadyWebGPU(
   // or allocation failed). Cleared to 1.0 (far plane) via a minimal
   // render pass so textureSampleCompareLevel always returns 1.0 (fully lit).
   // Uses RENDER_ATTACHMENT for the clear pass + TEXTURE_BINDING for sampling.
-  const RENDER_ATTACHMENT_USAGE = 0x10;
-  const SHADOW_FALLBACK_USAGE = TEXTURE_BINDING_USAGE | RENDER_ATTACHMENT_USAGE;
   const shadowFallbackTexResult = runShimSyncStep(
     () =>
       rhiDevice.createTexture({
@@ -5843,7 +5857,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'depth32float',
-        usage: SHADOW_FALLBACK_USAGE,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
         viewFormats: [],
         textureBindingViewDimension: undefined,
       }),
@@ -5905,7 +5919,7 @@ async function buildReadyWebGPU(
         sampleCount: 1,
         dimension: '2d',
         format: 'depth32float',
-        usage: SHADOW_FALLBACK_USAGE,
+        usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
         viewFormats: [],
         textureBindingViewDimension: 'cube',
       }),
@@ -6444,8 +6458,8 @@ async function buildReadyWebGPU(
     // copyTextureToBuffer source; RENDER_ATTACHMENT for the probe pass
     // colour target; TEXTURE_BINDING is unused but cheap and keeps the
     // texture symmetric with the shadow RT for future debug taps.
-    const TEXTURE_COPY_SRC_USAGE = 0x01;
-    const PROBE_RT_USAGE = TEXTURE_BINDING_USAGE | RENDER_ATTACHMENT_USAGE | TEXTURE_COPY_SRC_USAGE;
+    const PROBE_RT_USAGE =
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_SRC;
     const probeOutputTexResult = runShimSyncStep(
       () =>
         rhiDevice.createTexture({

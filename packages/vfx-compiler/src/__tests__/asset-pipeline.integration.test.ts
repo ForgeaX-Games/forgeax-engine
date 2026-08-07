@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { ok, type Result } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, ok, type Result } from '@forgeax/engine-types';
 import { type ParticleEffectSource, particleEffectPackLoader } from '@forgeax/engine-vfx';
 import type { ForgeaXPackPlugin } from '@forgeax/engine-vite-plugin-pack';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
@@ -261,22 +261,36 @@ describe('VFX asset-cook v2 dev/build chain', () => {
         }),
       );
       const plugin = pluginPack({
+        runtimeBinding: createStandaloneRuntimeAssetBinding('vfx-fixture'),
         roots: [join(fixture.root, 'assets')],
         importers: [particleEffectImporter(operators())],
       });
       const fetchFromDev = middlewareFetcher(plugin);
-      const imported = await fetchFromDev(`/__import/${EFFECT_GUID}`, 'POST');
+      const runtimeBinding = createStandaloneRuntimeAssetBinding('vfx-fixture');
+      // The initial scoped catalog request is the readiness barrier for the
+      // plugin's async startup scan. Import requests issued while the realm is
+      // still transitioning are intentionally rejected with 503.
+      const initialCatalog = await fetchFromDev(runtimeBinding.catalogUrl);
+      expect(initialCatalog.ok).toBe(true);
+      const imported = await fetchFromDev(`${runtimeBinding.importUrlBase}/${EFFECT_GUID}`, 'POST');
       expect(imported.ok).toBe(true);
-      const devIndex = await fetchFromDev('/__pack/index');
+      const devIndex = await fetchFromDev(runtimeBinding.catalogUrl);
       expect(devIndex.ok).toBe(true);
-      const entries = (await devIndex.json()) as readonly { guid: string; packageUrl: string }[];
+      const snapshot = (await devIndex.json()) as {
+        readonly scopeId: string;
+        readonly generation: number;
+        readonly entries: readonly { guid: string; packageUrl: string }[];
+      };
+      expect(snapshot.scopeId).toBe(runtimeBinding.scopeId);
+      expect(snapshot.generation).toBe(runtimeBinding.generation);
+      const entries = snapshot.entries;
       const row = entries.find((entry) => entry.guid === EFFECT_GUID);
       expect(row?.packageUrl).toContain('/__forgeax-ddc/');
       expect(row?.packageUrl.endsWith('.bin')).toBe(false);
       expect(row?.packageUrl.endsWith('.json')).toBe(true);
 
       const registry = new AssetRegistry({} as never);
-      registry.configurePackIndex('/__pack/index');
+      registry.configureRuntimeBinding(runtimeBinding);
       registry.loaders.registerPackLoader({
         kind: 'fixture-dependency',
         load: () => ({ kind: 'fixture-dependency', value: true }),

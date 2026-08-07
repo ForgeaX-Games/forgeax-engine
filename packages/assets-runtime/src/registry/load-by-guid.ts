@@ -837,7 +837,10 @@ export async function transportOrFail<T = Asset>(
   // After a successful transport call the DDC is available; re-enter the
   // catalog + DDC load path (the transport writes the DDC but does NOT
   // register the asset — that's the Loader's job).
-  const transportResult = await registry.importTransport.fetchPack(guidKey);
+  const transportResult = await registry.importTransport.fetchPack(
+    guidKey,
+    registry.runtimeBinding,
+  );
   if (!transportResult.ok) {
     return err(
       new AssetError({

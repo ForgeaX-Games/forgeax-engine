@@ -62,6 +62,15 @@ describe('AC-09: DebugErrorCode member count gate', () => {
   });
 });
 
+describe('W92: readback staging usage owner', () => {
+  it('keeps one COPY_DST | MAP_READ owner for all three readback paths', () => {
+    const readbackPath = path.resolve(__dirname, '..', '..', 'src', 'readback.ts');
+    const content = readFileSync(readbackPath, 'utf-8');
+    expect(content.match(/const COPY_DST_MAP_READ = 9/g)).toHaveLength(1);
+    expect(content.match(/usage: COPY_DST_MAP_READ/g)).toHaveLength(3);
+  });
+});
+
 describe('AC-08 partial: import.meta.hot in rhiDebugFlag guard', () => {
   it('all hotMeta.hot / import.meta.hot code references are inside rhiDebugFlag guard block', () => {
     const createAppPath = path.resolve(

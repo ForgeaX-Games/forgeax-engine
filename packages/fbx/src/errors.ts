@@ -2,9 +2,8 @@
 //
 // Per requirements AC-09 + plan-strategy D-5 (DIP), FbxErrorCode +
 // FbxErrorDetail + FbxError + FBX_ERROR_HINTS are the FBX importer's
-// own error SSOT, local to this package. After the ufbx WASM collapse the
-// union carries a single member; subsequent milestones append per-section
-// members as needed.
+// own error SSOT, local to this package. Subsequent milestones append
+// per-section members as needed.
 //
 // Producers MUST go through `fbxErr` so any FbxErrorCode addition that
 // lacks a matching detail variant fails at the call site (TS exhaustive
@@ -12,19 +11,19 @@
 
 export { err, ok, type Result } from '@forgeax/engine-types';
 
-// === FbxErrorCode — closed union SSOT (1 member) ===
+// === FbxErrorCode — closed union SSOT ===
 
 /**
- * Closed `FbxErrorCode` union. The ufbx WASM parser needs no native-addon
- * build step, so the SDK-era binding-availability code retired; the sole
- * member is `fbx-mesh-type-unsupported` (NURBS/patch surfaces).
+ * Closed `FbxErrorCode` union. The source union below is the single authority
+ * for parser diagnostics; the ufbx WASM parser needs no native-addon build
+ * step.
  *
  * Domain-separated from `ImportErrorCode` (importer dispatch surface in
  * @forgeax/engine-types) and `AssetErrorCode` (runtime registry surface).
  */
 export type FbxErrorCode = 'fbx-mesh-type-unsupported' | 'fbx-animation-target-invalid';
 
-// === Per-code detail shapes (1 interface, 1 discriminated union) ===
+// === Per-code detail shapes ===
 
 /** `fbx-mesh-type-unsupported` payload: surface type + mesh name. */
 export interface FbxMeshTypeUnsupportedDetail {
@@ -50,9 +49,9 @@ export type FbxAnimationTargetInvalidDetail =
     };
 
 /** Discriminated detail family unifying all FbxError variants. */
-export type FbxErrorDetail = FbxMeshTypeUnsupportedDetail | FbxAnimationTargetInvalidDetail;
+export type FbxErrorDetail = DetailFor[FbxErrorCode];
 
-// === FbxError discriminated union (1 variant) ===
+// === FbxError discriminated union ===
 
 export type FbxError =
   | {

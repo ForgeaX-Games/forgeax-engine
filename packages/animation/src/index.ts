@@ -48,7 +48,6 @@ export {
 export {
   EvaluateAnimationGraph,
   evaluateAnimationGraph,
-  registerEvaluateAnimationGraph,
 } from './systems/evaluate-animation-graph';
 /** Derive or validate the canonical 32-lowercase-hex animation target wire. */
 export { deriveAnimationTargetId, isAnimationTargetId } from './target-id';
