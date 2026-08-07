@@ -249,7 +249,7 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
       gltfMeshSwap: args.gltfMeshSwap?.() === undefined
         ? { available: false, active: 'original', swaps: 0 }
         : { available: true, ...args.gltfMeshSwap()! },
-      fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 },
+      fbxSkinnedTarget: args.fbxSkinnedTarget?.() ?? { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0, companionActive: false, targetEntity: null },
       gamepad: readGamepadEvidence(args.input),
       characterController: args.characterController?.() ?? null,
       targetHealth: args.targetHealth?.() ?? { contiguousSupported: false, contiguousCalls: 0, rows: 0, lengthsEqual: true, totalCurrent: 0, totalMax: 0, damageEvents: 0 },

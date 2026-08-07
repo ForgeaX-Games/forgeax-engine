@@ -7,7 +7,7 @@ describe('game-default HUD consumer', () => {
     const host = document.createElement('div');
     document.body.append(host);
     const actions: string[] = [];
-    const hud = installHud({ asset: { guid: 'test', html: '<section><span data-ui-slot="score"></span><aside data-ui-slot="target-status"></aside><aside data-ui-slot="combo"></aside><strong data-ui-slot="mission"></strong><button data-ui-action="toggle-mode"></button><details class="asset-lab"><summary>Asset Lab</summary><button data-ui-action="target-profile">Target profile</button><button data-ui-action="jpeg-texture">JPEG target</button><button data-ui-action="sprite-atlas">PNG projectile · animate</button><span data-ui-slot="asset-lab-status"></span></details><span data-ui-slot="crosshair"></span><span data-ui-slot="hint"></span><span data-ui-slot="lock-status"></span><div data-ui-slot="popups"></div></section>', css: '' }, initialMode: 'topdown', onToggle: () => undefined, host });
+    const hud = installHud({ asset: { guid: 'test', html: '<section><span data-ui-slot="score"></span><aside data-ui-slot="target-status"></aside><aside data-ui-slot="combo"></aside><strong data-ui-slot="mission"></strong><button data-ui-action="toggle-mode"></button><details class="asset-lab"><summary>Asset Lab</summary><button data-ui-action="target-profile">Target profile</button><button data-ui-action="jpeg-texture">JPEG target</button><button data-ui-action="sprite-atlas">PNG projectile · animate</button><button data-ui-action="fbx-companion">FBX target · animate</button><span data-ui-slot="asset-lab-status"></span></details><span data-ui-slot="crosshair"></span><span data-ui-slot="hint"></span><span data-ui-slot="lock-status"></span><div data-ui-slot="popups"></div></section>', css: '' }, initialMode: 'topdown', onToggle: () => undefined, host });
     hud.setAssetLabActionHandler((action) => {
       actions.push(action);
       return action === 'sprite-atlas'
@@ -36,6 +36,7 @@ describe('game-default HUD consumer', () => {
     assetHost?.shadowRoot?.querySelector<HTMLButtonElement>('[data-ui-action="sprite-atlas"]')?.click();
     expect(actions).toEqual(['jpeg-texture', 'sprite-atlas']);
     expect(assetHost?.shadowRoot?.textContent).toContain('PNG atlas projectile active · fire to confirm the four-frame hit');
+    expect(assetHost?.shadowRoot?.querySelector<HTMLButtonElement>('[data-ui-action="fbx-companion"]')?.disabled).toBe(true);
     hud.setScore(50);
     expect(assetHost?.shadowRoot?.querySelector<HTMLButtonElement>('[data-ui-action="target-profile"]')?.disabled).toBe(false);
     expect(assetHost?.shadowRoot?.textContent).toContain('Mission 2/3 · Press P');
@@ -45,6 +46,7 @@ describe('game-default HUD consumer', () => {
     hud.setTargetProfileActive(true, 1);
     expect(assetHost?.shadowRoot?.textContent).toContain('Mission complete · Precision hit confirmed · R to replay');
     expect(assetHost?.shadowRoot?.querySelector('[data-ui-slot="mission"]')?.getAttribute('data-complete')).toBe('true');
+    expect(assetHost?.shadowRoot?.querySelector<HTMLButtonElement>('[data-ui-action="fbx-companion"]')?.disabled).toBe(false);
     hud.setScore(0);
     hud.setTargetProfileActive(false);
     expect(assetHost?.shadowRoot?.querySelector<HTMLButtonElement>('[data-ui-action="target-profile"]')?.disabled).toBe(true);

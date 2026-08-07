@@ -59,7 +59,7 @@ import type {
   ProviderProvenance,
   ResourceRevision,
 } from '@forgeax/engine-types';
-import { catalogOperationsFor } from '@forgeax/engine-types';
+import { authoringCapabilityForAssetKind, catalogOperationsFor } from '@forgeax/engine-types';
 
 function projectionFor(
   subject: 'internal-asset' | 'imported-output',
@@ -96,7 +96,11 @@ export function projectPackageCatalog(
     packageUrl: packageUrl,
     ...(entry.name === undefined ? {} : { name: entry.name }),
     ...(entry.refs === undefined ? {} : { refs: entry.refs }),
-    ...(entry.authoring === undefined ? {} : { authoring: entry.authoring }),
+    ...(entry.authoring === undefined
+      ? entry.kind === 'ui'
+        ? { authoring: authoringCapabilityForAssetKind('ui') }
+        : {}
+      : { authoring: entry.authoring }),
     subject: 'internal-asset',
     execution: entry.execution ?? 'direct',
     lifecycle: entry.execution === 'cooked' ? 'missing' : 'current',
@@ -658,7 +662,10 @@ async function processMetaSidecar(
         packageUrl: normalizedUrl,
         kind: 'ui',
         sourcePath: sourceRel,
-        ...producerFields(meta, sub),
+        ...producerFields(meta, {
+          ...sub,
+          authoring: sub.authoring ?? authoringCapabilityForAssetKind('ui'),
+        }),
         name: subName(sub),
       });
     }

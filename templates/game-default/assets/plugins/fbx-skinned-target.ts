@@ -1,11 +1,14 @@
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { SceneInstance } from '@forgeax/engine-render';
+import { SceneInstance, Visibility, VisibilityStateValue, visibilityStateFromU32 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
 import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
+import { vec3 } from '@forgeax/engine-math';
+import { installFbxTargetCompanionSystem } from './systems/fbx-target-companion';
 
 export const GAME_DEFAULT_FBX_SKIN_SCENE_GUID = '019ecd87-179b-7eb3-a37d-391f05c61e52';
 export const GAME_DEFAULT_FBX_SKIN_CLIP_GUID = '019ecd87-179b-71f7-b9f8-4c8518326b65';
@@ -21,12 +24,17 @@ export type FbxSkinnedTargetSnapshot = {
   readonly worldMatrix: readonly number[];
   readonly animationTime: number;
   readonly hitPulses: number;
+  readonly companionActive: boolean;
+  readonly targetEntity: EntityHandle | null;
 };
 
 export type FbxSkinnedTarget = {
   readonly root: EntityHandle;
   readonly skinEntity: EntityHandle;
   readonly triggerHit: () => void;
+  readonly reactToHit: (entity: EntityHandle) => boolean;
+  readonly toggleCompanion: () => boolean;
+  readonly companionActive: () => boolean;
   readonly reset: () => void;
   readonly dispose: () => void;
   readonly snapshot: () => FbxSkinnedTargetSnapshot;
@@ -35,7 +43,9 @@ export type FbxSkinnedTarget = {
 type Args = {
   readonly world: World;
   readonly assets: AssetRegistry | undefined;
+  readonly physics?: PhysicsWorld;
   readonly position?: readonly [number, number, number];
+  readonly target?: EntityHandle;
 };
 
 function parseGuid(text: string): ReturnType<typeof AssetGuid.parse> {
@@ -80,7 +90,18 @@ export async function createFbxSkinnedTarget(args: Args): Promise<FbxSkinnedTarg
   }
   if (skinEntity === undefined) return undefined;
 
-  const position = args.position ?? [0, 0, 0];
+  const targetTransform = args.target === undefined ? undefined : args.world.get(args.target, Transform);
+  const targetPlacementTransform = targetTransform?.ok === true
+    ? {
+        pos: [targetTransform.value.pos[0] ?? 0, targetTransform.value.pos[1] ?? 0, targetTransform.value.pos[2] ?? 0] as [number, number, number],
+        quat: [targetTransform.value.quat[0] ?? 0, targetTransform.value.quat[1] ?? 0, targetTransform.value.quat[2] ?? 0, targetTransform.value.quat[3] ?? 1] as [number, number, number, number],
+        scale: [targetTransform.value.scale[0] ?? 1, targetTransform.value.scale[1] ?? 1, targetTransform.value.scale[2] ?? 1] as [number, number, number],
+      }
+    : undefined;
+  const targetPosition = targetTransform?.ok === true
+    ? [targetTransform.value.pos[0] ?? 0, targetTransform.value.pos[1] ?? 0, targetTransform.value.pos[2] ?? 0] as [number, number, number]
+    : undefined;
+  const position = args.position ?? targetPosition ?? [0, 0, 0];
   const rootTransform = args.world.get(root, Transform);
   const rootPlacementTransform = {
     pos: [position[0], position[1], position[2]] as [number, number, number],
@@ -113,26 +134,98 @@ export async function createFbxSkinnedTarget(args: Args): Promise<FbxSkinnedTarg
     data: { clips: [clipHandle], times: [0], weights: [1], speeds: [1], looping: true },
   });
 
+  const rootVisibility = args.world.get(root, Visibility);
+  const rootInitialVisibility = rootVisibility.ok
+    ? visibilityStateFromU32(rootVisibility.value.state) ?? 'inherited'
+    : 'inherited';
+  if (!rootVisibility.ok) {
+    const added = args.world.addComponent(root, {
+      component: Visibility,
+      data: { state: VisibilityStateValue.inherited },
+    });
+    if (!added.ok) return undefined;
+  }
+  const targetInitialVisibility = args.target === undefined
+    ? 'inherited'
+    : (() => {
+      const value = args.world.get(args.target, Visibility);
+      return value.ok ? visibilityStateFromU32(value.value.state) ?? 'inherited' : 'inherited';
+    })();
+
   let hitPulses = 0;
+  let companionActive = false;
+  const setVisibility = (entity: EntityHandle, state: keyof typeof VisibilityStateValue): void => {
+    args.world.set(entity, Visibility, { state: VisibilityStateValue[state] });
+  };
   const triggerHit = (): void => {
     const player = args.world.get(skinEntity, AnimationPlayer);
     if (!player.ok) return;
     args.world.set(skinEntity, AnimationPlayer, { times: [0], paused: false });
     hitPulses += 1;
   };
+  const reactToHit = (entity: EntityHandle): boolean => {
+    if (!companionActive || args.target !== entity) return false;
+    triggerHit();
+    return true;
+  };
+  const syncToTarget = (): void => {
+    if (args.target === undefined) return;
+    const target = args.world.get(args.target, Transform);
+    if (!target.ok) return;
+    args.world.set(root, Transform, {
+      pos: [target.value.pos[0] ?? 0, target.value.pos[1] ?? 0, target.value.pos[2] ?? 0],
+      quat: rootPlacementTransform.quat,
+      scale: rootPlacementTransform.scale,
+    });
+  };
+  const restoreTargetPlacement = (): void => {
+    if (args.target === undefined || targetPlacementTransform === undefined) return;
+    args.world.set(args.target, Transform, targetPlacementTransform);
+    if (args.physics?.hasBody(args.target)) {
+      args.physics.teleport(args.target, vec3.create(targetPlacementTransform.pos[0], targetPlacementTransform.pos[1], targetPlacementTransform.pos[2]));
+    }
+  };
+  const toggleCompanion = (): boolean => {
+    if (args.target === undefined) return false;
+    companionActive = !companionActive;
+    if (companionActive) restoreTargetPlacement();
+    setVisibility(root, companionActive ? 'visible' : rootInitialVisibility);
+    setVisibility(args.target, companionActive ? 'hidden' : targetInitialVisibility);
+    if (companionActive) syncToTarget();
+    else restoreTargetPlacement();
+    return companionActive;
+  };
+  if (args.target !== undefined) {
+    setVisibility(root, 'hidden');
+    installFbxTargetCompanionSystem({
+      world: args.world,
+      target: args.target,
+      root,
+      isActive: () => companionActive,
+      rootQuat: rootPlacementTransform.quat,
+      rootScale: rootPlacementTransform.scale,
+    });
+  }
   const reset = (): void => {
+    companionActive = false;
+    if (args.target !== undefined) setVisibility(args.target, targetInitialVisibility);
+    setVisibility(root, args.target === undefined ? rootInitialVisibility : 'hidden');
     args.world.set(root, Transform, rootPlacementTransform);
     args.world.set(skinEntity, Transform, skinPlacementTransform);
     args.world.set(skinEntity, AnimationPlayer, { times: [0], paused: false, looping: true });
     hitPulses = 0;
   };
   const dispose = (): void => {
+    if (args.target !== undefined) setVisibility(args.target, targetInitialVisibility);
     args.world.despawnScene(root);
   };
   return {
     root,
     skinEntity,
     triggerHit,
+    reactToHit,
+    toggleCompanion,
+    companionActive: () => companionActive,
     reset,
     dispose,
     snapshot: () => {
@@ -149,6 +242,8 @@ export async function createFbxSkinnedTarget(args: Args): Promise<FbxSkinnedTarg
         worldMatrix: playerTransform(args.world, root).worldMatrix,
         animationTime: player.ok ? (player.value.times[0] ?? 0) : 0,
         hitPulses,
+        companionActive,
+        targetEntity: args.target ?? null,
       };
     },
   };

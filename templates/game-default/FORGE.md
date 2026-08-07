@@ -4,8 +4,8 @@ This is ForgeaX's canonical first game: a small target-range mission that teache
 ECS behavior, physics, picking, rendering, UiAssets, spatial audio, and a host-defined asset plugin
 through one coherent loop. Real projectile hits must earn Score 50 before the collapsed Asset Lab
 unlocks `Target profile`; applying the profile turns the RedBox into a moving precision target, and
-one real projectile hit on that target finishes the third mission step. The same panel names four optional
-asset outcomes—JPEG target, WebM panel, PNG projectile, and TTF score text—without making the player
+one real projectile hit on that target finishes the third mission step. The same panel names five optional
+asset outcomes—JPEG target, WebM panel, PNG projectile, TTF score text, and the imported FBX companion—without making the player
 memorize a hotkey wall; their legacy keys (`P`, `L`, `M`, `N`, `Y`) remain available for keyboard play.
 Every variation changes the existing target-range world and the `R` key visibly restores the authored
 RedBox baseline. The default HUD also teaches two gameplay decisions: `F`/click fires immediately,
@@ -31,9 +31,10 @@ FPS/free-flight, and bounded orthographic Map).
 `assets/plugins/bootstrap.ts` is intentionally only an 18-line host phase coordinator. Its three
 neighbors make the assembly map explicit: `gameplay-targets.ts` owns the target roster and GUID-backed
 asset plugins, `gameplay-session.ts` owns the one-shot runtime capabilities and reset transaction, and
-`gameplay-wiring.ts` registers projections and systems. The guided profile/JPEG/WebM paths are part of
-the normal game, while the built-in mesh, FBX, glTF, and imported-skin comparisons are created only by
-`?asset-evidence=1` or `?render-evidence=1`. This keeps a copied game teachable without making a
+`gameplay-wiring.ts` registers projections and systems. The guided profile/JPEG/WebM/FBX-companion paths
+are part of the normal game, while the built-in mesh, FBX cube, and glTF comparisons are created only by
+`?asset-evidence=1` or `?render-evidence=1`. The guided FBX companion is prepared hidden and unlocks after
+the precision mission, so it can replace the same scored target without making a
 canonical-only gallery pay for cold-start setup or turning the entrypoint into a second gameplay system.
 The cold-start HUD also names the authored primary `RedBox`, projects its ECS-owned health and
 points (`assets/plugins/target-status.ts`). That cue is part of the playable target encounter, not an
@@ -161,13 +162,18 @@ pnpm --filter @forgeax/preview smoke:asset-loop
 
 The Asset Lab is the guided content front door. `assets/plugins/asset-lab-actions.ts` is the single
 action router used by both the named HUD buttons and the legacy keyboard bindings; `assets/plugins/hud.ts`
-owns only presentation and the status slot. The five controls therefore teach real plugin paths without
+owns only presentation and the status slot. The six controls therefore teach real plugin paths without
 creating a second asset registry, format gallery, or reset owner. Each result is reported as `active`
-or `restored` in the same panel, and the shared `R` transaction returns all five paths to the authored
+or `restored` in the same panel, and the shared `R` transaction returns all six paths to the authored
 RedBox baseline. The PNG projectile entry is outcome-oriented: enable it, fire once, and the status
 confirms the animated projectile reached the normal hit/score/VFX/audio path. The TTF entry is also
 outcome-oriented: enable it, land one real score, and the world-space label visibly switches to the
-imported font presentation before `R` restores the authored label.
+imported font presentation before `R` restores the authored label. The FBX companion is mission-gated: after
+the precision hit, the `FBX target · animate` button makes the imported humanoid replace the visible RedBox
+presentation while the original target's collider, score, health, and reset owners remain in place; a real
+hit restarts the imported `run` clip and reports the result in the same status slot. Guided presentations are
+mutually exclusive: selecting another variation restores the authored target first, while `R` restores every
+variation and the original placement in one transaction.
 
 `L` (or the `JPEG target` button) is the guided JPEG image lesson. Preview includes the exact `wood-container.jpg.meta.json`
 sidecar from `forgeax-engine-assets/demo-assets/hello-sprite`; `assets/plugins/jpeg-texture-swap.ts` loads
@@ -201,7 +207,8 @@ while `main.ts` registers the runtime loader and loads the profile through `Asse
 profile applies a visible target tint, doubles the existing score value, and supplies the RedBox's
 precision rotation speed through the existing `GameDefaultRotatable` ECS component;
 `game-default.toggle-target-profile` and `R` provide the reversible action/reset path. The
-`smoke:mission-progression` dev/production pair proves real hits → unlock → profile → precision hit → reset. This is the
+`smoke:mission-progression` dev/production pair proves real hits → unlock → profile → precision hit → WebM/TTF/atlas/FBX
+consequences → reset. This is the
 complete custom source → sidecar/GUID → pluginPack importer → Pack v2 → loader → gameplay chain,
 adapted from `apps/hello/custom-importer` without importing its unrelated reel-machine scene.
 
@@ -311,12 +318,14 @@ submesh while `RedBox` teaches two authored material slots, the swap owner deriv
 while FBX is active and restores the complete authored mesh/material pair on `R`. The existing
 collider, hit/score, input, render-evidence, and reset owners stay in place, so this is a format
 delivery change rather than a second scene. Built-in sphere and FBX cube comparisons are inspection-only;
-normal play keeps the authored target mesh; the imported humanoid is intentionally absent until an
-evidence run requests its canonical comparison owner.
+normal play keeps the authored target mesh until the mission-gated FBX companion is enabled; the
+comparison-only imported-skin owner remains available to evidence runs without changing the default scene.
 
 The imported `humanoid.fbx` is the canonical skeletal-animation lesson. `assets/plugins/fbx-skinned-target.ts`
 loads the scene and its `run` clip by stable GUID, instantiates the `Skin`/`AnimationPlayer` payload,
-and joins the existing Play, hit, and reset lifecycle when the evidence query is present. The authored placement is written to the
+and joins the existing Play, hit, and reset lifecycle. In the normal game the scene is hidden until the
+precision mission is complete; the guided companion then follows the scored RedBox and restarts the clip
+on real hits. The evidence mode keeps the same owner visible at its canonical placement. The authored placement is written to the
 imported scene root (`scale: [0.03, 0.03, 0.03]`) rather than only to the mesh node: skin palettes
 are derived from the joint hierarchy, so root placement keeps the rendered mesh and its joints in
 the same coordinate space. `game-default.snapshot` reports the root, skin entity, clip, joint count,

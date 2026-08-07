@@ -26,6 +26,7 @@ export type TargetFeedbackSystemContext = {
   readonly worldScoreText: WorldScoreTextHandle | undefined;
   readonly onFontScore?: () => void;
   readonly onVideoHit?: () => void;
+  readonly onFbxHit?: (entity: EntityHandle) => void;
   readonly changeDetection: GameplayChangeDetectionHandle;
   readonly damageTarget: (entity: EntityHandle, points: number) => void;
   readonly spawnPopup: (text: string, x: number, y: number, z: number) => void;
@@ -81,6 +82,7 @@ export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): v
             ctx.spawnPopup('+' + award.points, fx, fy + 0.8, fz);
             if (ctx.worldScoreText?.snapshot().fontSource === 'ttf-plugin' && ctx.spriteAtlasLoop?.active !== true) ctx.onFontScore?.();
             ctx.onVideoHit?.();
+            ctx.onFbxHit?.(entity);
             ctx.gameplayAudio?.triggerHit();
             ctx.vfxHitLoop.trigger();
           }

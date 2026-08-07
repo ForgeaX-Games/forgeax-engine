@@ -45,6 +45,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
     gltfMeshSwap: targets.gltfMeshSwap,
     jpegTextureSwap: targets.jpegTextureSwap,
     videoTexturePanel: targets.videoTexturePanel,
+    fbxSkinnedTarget: targets.fbxSkinnedTarget,
     targetProfile: targets.targetProfile,
     readScore: session.changeDetection.readScore,
     toggleProfile,
@@ -61,6 +62,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
     reportAssetLabResult(result);
     return result;
   };
+  const applyFbxCompanion = (): AssetLabActionResult => applyAssetLab('fbx-companion');
   cameraController.hud.setAssetLabActionHandler(applyAssetLab);
 
   if (host !== undefined) {
@@ -78,6 +80,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       videoTexturePanel: targets.videoTexturePanel,
       targetProfile: targets.targetProfile,
       applyTargetProfile: () => applyAssetLab('target-profile'),
+      applyFbxCompanion,
       spriteAtlasLoop,
       multiWorldOverlay: session.multiWorldOverlay,
       worldScoreText: session.worldScoreText,
@@ -115,6 +118,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       gltfMeshSwap: targets.gltfMeshSwap,
       jpegTextureSwap: targets.jpegTextureSwap,
       videoTexturePanel: targets.videoTexturePanel,
+      fbxSkinnedTarget: targets.fbxSkinnedTarget,
       targetProfile: targets.targetProfile,
       toggleProfile,
       readScore: session.changeDetection.readScore,

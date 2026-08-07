@@ -42,6 +42,7 @@ import type {
   RenderFeatureRecoverInput,
   RenderFeatureResourceHandle,
   RenderFeatureStatus,
+  RenderFeatureTargetHandle,
   RenderFeatureWorldVisibilitySnapshot,
 } from './types';
 
@@ -57,6 +58,8 @@ export interface RenderFeatureFrameInput {
   readonly frameNumber: number;
   readonly visibilitySnapshots?: readonly RenderFeatureWorldVisibilitySnapshot[];
   readonly hiddenEntityReports?: readonly RenderFeatureHiddenEntityReport[];
+  /** Active-pipeline logical targets available to producer-owned features. */
+  readonly targets?: readonly RenderFeatureTargetHandle[];
   readonly generation?: number;
   readonly caps: Readonly<RhiCaps>;
   readonly createContributionStaging?: (
@@ -286,6 +289,7 @@ function graphicsValidator(
       ...descriptor.attachments.colors
         .filter(
           (attachment) =>
+            typeof attachment.resource !== 'string' ||
             attachment.resource === 'swapchain' ||
             resources.some((resource) => resource.name === `${identity}::${attachment.resource}`),
         )
@@ -295,7 +299,7 @@ function graphicsValidator(
         : resources.some(
               (resource) =>
                 resource.name === `${identity}::${descriptor.attachments.depthStencil?.resource}`,
-            )
+            ) || typeof descriptor.attachments.depthStencil.resource !== 'string'
           ? [
               {
                 resource: descriptor.attachments.depthStencil.resource,
@@ -794,7 +798,7 @@ export function runRenderFeatureFrame(
           caps: input.caps,
           frame: { frameNumber: input.frameNumber },
           resources: [],
-          targets: [],
+          targets: input.targets ?? [],
           reportError: { report: (error) => errors.push(error) },
           graphics,
         }),
@@ -842,7 +846,7 @@ export function runRenderFeatureFrame(
           caps: input.caps,
           frame: { frameNumber: input.frameNumber },
           resources: [],
-          targets: [],
+          targets: input.targets ?? [],
           reportError: { report: (error) => errors.push(error) },
           graphics,
           staging,

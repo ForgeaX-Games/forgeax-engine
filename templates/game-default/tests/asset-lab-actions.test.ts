@@ -15,6 +15,7 @@ function context(
     gltfMeshSwap: undefined,
     jpegTextureSwap: undefined,
     videoTexturePanel: undefined,
+    fbxSkinnedTarget: undefined,
     targetProfile: undefined,
     readScore,
     toggleProfile: vi.fn(() => ({ available: true, active: 'profile' as const, precisionHits: 0, precisionComplete: false, title: 'Precision target', scoreMultiplier: 2, rotationSpeed: 0.18, swaps: 1, guid: 'profile', baseColor: [0.12, 0.68, 1, 1] as const })),
@@ -33,6 +34,21 @@ describe('game-default guided mission gate', () => {
     const unlocked = context(() => 50);
     expect(applyAssetLabAction(unlocked, 'target-profile')).toEqual({ state: 'active', text: 'Target profile active · Precision target' });
     expect(unlocked.toggleProfile).toHaveBeenCalledOnce();
+  });
+
+  it('restores the moving FBX presentation before another guided outcome', () => {
+    const companion = {
+      companionActive: vi.fn(() => true),
+      toggleCompanion: vi.fn(() => false),
+    } as unknown as NonNullable<AssetLabActionContext['fbxSkinnedTarget']>;
+    const profile = {
+      active: 'profile' as const,
+      precisionHits: 0,
+    } as NonNullable<AssetLabActionContext['targetProfile']>;
+    const guided = { ...context(() => 50), fbxSkinnedTarget: companion, targetProfile: profile };
+
+    expect(applyAssetLabAction(guided, 'target-profile')).toEqual({ state: 'active', text: 'Target profile active · Precision target' });
+    expect(companion.toggleCompanion).toHaveBeenCalledOnce();
   });
 
   it('makes the atlas a named guided projectile outcome', () => {
@@ -61,5 +77,20 @@ describe('game-default guided mission gate', () => {
     expect(ttf.fontSize).toBeGreaterThan(legacy.fontSize);
     expect(ttf.color).not.toEqual(legacy.color);
     expect(ttf.color[2]).toBeGreaterThan(ttf.color[0]);
+  });
+
+  it('keeps the imported FBX companion behind the completed precision mission', () => {
+    const companion = { toggleCompanion: vi.fn(() => true) } as unknown as NonNullable<AssetLabActionContext['fbxSkinnedTarget']>;
+    const profile = {
+      active: 'profile' as const,
+      precisionHits: 0,
+    } as NonNullable<AssetLabActionContext['targetProfile']>;
+    const locked = { ...context(() => 50), fbxSkinnedTarget: companion, targetProfile: profile };
+    expect(applyAssetLabAction(locked, 'fbx-companion')).toEqual({ state: 'unavailable', text: 'FBX target companion unavailable · complete the precision mission first' });
+    expect(companion.toggleCompanion).not.toHaveBeenCalled();
+
+    profile.precisionHits = 1;
+    expect(applyAssetLabAction(locked, 'fbx-companion')).toEqual({ state: 'active', text: 'FBX target companion active · fire to replay the imported run animation' });
+    expect(companion.toggleCompanion).toHaveBeenCalledOnce();
   });
 });

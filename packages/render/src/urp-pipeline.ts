@@ -47,6 +47,7 @@ import { mat4 } from '@forgeax/engine-math';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { RhiError } from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
+import { createRenderFeatureTarget } from './features/targets';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
   GPU_TEXTURE_USAGE_COPY_SRC,
@@ -84,7 +85,7 @@ export const URP_PIPELINE_ID = 'forgeax::urp';
  * using the public render-graph vocabulary; `execute` runs the memoized graph.
  *
  * The 9-pass topology is data-flow driven: shadow writes shadowDepth, skybox
- * writes hdrColor, main reads both + writes hdrColor + depth, the 4 bloom
+ * writes hdrColor, main reads both + writes logical sceneColor + depth, the 4 bloom
  * passes form a half-res blur chain whose composite reads hdrColor + the
  * blurred bloom and writes the SEPARATE hdrComposited target (not an in-place
  * alias of hdrColor -- that triggered a WebGPU read+write-same-texture hazard,
@@ -94,6 +95,32 @@ export const URP_PIPELINE_ID = 'forgeax::urp';
  * for a guided walk-through.
  */
 export const urpPipeline: RenderPipeline = {
+  getRenderFeatureTargets: ({ camera, colorAttachmentFormat, backendKind }) => {
+    const sampleCount: 1 | 4 = camera.antialias === 'msaa' && backendKind !== 'wgpu-webgl2' ? 4 : 1;
+    const colorResource =
+      camera.tonemap !== 'none'
+        ? 'sceneColor'
+        : camera.antialias === 'fxaa'
+          ? 'ldrColor'
+          : camera.antialias === 'msaa' && backendKind !== 'wgpu-webgl2'
+            ? 'msaaColor'
+            : 'swapchain';
+    const colorFormat = camera.tonemap === 'none' ? colorAttachmentFormat : 'rgba16float';
+    return [
+      createRenderFeatureTarget({
+        kind: 'scene-color',
+        resource: colorResource,
+        format: colorFormat,
+        sampleCount,
+      }),
+      createRenderFeatureTarget({
+        kind: 'scene-depth',
+        resource: 'depth',
+        format: 'depth24plus-stencil8',
+        sampleCount,
+      }),
+    ];
+  },
   buildGraph(
     ctx: RenderPipelineContext,
     data: RenderPipelineData,
@@ -167,6 +194,7 @@ export const urpPipeline: RenderPipeline = {
     });
 
     const fxaaActive = data.camera.antialias === 'fxaa';
+    const msaaSupported = runtime.device.caps.backendKind !== 'wgpu-webgl2';
     // FXAA samples a graph-owned LDR target and writes the surface. Native
     // WebGPU renders through an sRGB view of the storage-format target;
     // WebGL2 has no view-format reinterpretation, so its target format is
@@ -191,6 +219,14 @@ export const urpPipeline: RenderPipeline = {
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
+    // Keep the scene-color dependency key separate from the physical HDR
+    // target. The main pass must read physical `hdrColor` to order after the
+    // skybox, while producer-owned features and downstream post effects must
+    // depend on the scene phase without creating a main -> feature -> main
+    // cycle when both passes resolve to the same HDR texture.
+    if (data.camera.tonemap !== 'none') {
+      graph.addColorTargetAlias('sceneColor', 'hdrColor');
+    }
     // hdrComposited holds the bloom-composited HDR scene that tonemap reads.
     // It MUST be a distinct physical texture from hdrColor, not an alias: the
     // composite pass samples hdrColor (scene) while writing the composite, and
@@ -231,7 +267,6 @@ export const urpPipeline: RenderPipeline = {
     // capability at the RHI boundary; it cannot allocate multisample texture
     // storage, so omit these targets entirely and let the runtime select the
     // single-sample route. Native/WebGPU retain the existing MSAA resources.
-    const msaaSupported = runtime.device.caps.backendKind !== 'wgpu-webgl2';
     if (msaaSupported) {
       graph.addColorTarget('hdrColorMsaa', {
         format: 'rgba16float',
@@ -349,19 +384,30 @@ export const urpPipeline: RenderPipeline = {
 
     // 3. Main: scene draw list into the colour + depth target. FXAA without
     // tonemap is the only LDR scene route; all other scenes keep the HDR path.
-    const sceneColor = fxaaActive && data.camera.tonemap === 'none' ? 'ldrColor' : 'hdrColor';
+    const sceneColor =
+      data.camera.tonemap !== 'none'
+        ? 'sceneColor'
+        : fxaaActive
+          ? 'ldrColor'
+          : data.camera.antialias === 'msaa' && msaaSupported
+            ? 'msaaColor'
+            : 'swapchain';
     addScenePass(graph, 'main', {
       color: sceneColor,
       depth: 'depth',
       // feat-20260625 M2 / w9 (D-2): read spotShadowDepth so the spot caster
       // pass orders before the forward pass that samples it (binding 8).
-      reads: ['shadowDepth', 'spotShadowDepth', ...(sceneColor === 'hdrColor' ? ['hdrColor'] : [])],
+      reads: [
+        'shadowDepth',
+        'spotShadowDepth',
+        ...(data.camera.tonemap !== 'none' ? ['hdrColor'] : []),
+      ],
       selector: { LightMode: ['Forward'] },
     });
 
     // 4-7. Bloom chain: bright -> blur-h -> blur-v -> composite.
     addBloomPasses(graph, {
-      hdrColor: 'hdrColor',
+      hdrColor: data.camera.tonemap !== 'none' ? 'sceneColor' : 'hdrColor',
       hdrComposited: 'hdrComposited',
       bright: 'bloomBright',
       blurH: 'bloomBlurH',
@@ -374,7 +420,7 @@ export const urpPipeline: RenderPipeline = {
     if (data.camera.tonemap !== 'none') {
       addTonemapPass(graph, 'tonemap', {
         hdrComposited: 'hdrComposited',
-        hdrColorWhenBloomOff: 'hdrColor',
+        hdrColorWhenBloomOff: 'sceneColor',
         color: ldrOutput,
       });
     }
@@ -400,6 +446,7 @@ export const urpPipeline: RenderPipeline = {
     // post effects while preserving the built-in shadow/tonemap chain.
     const postEffects =
       runtime.device.caps.backendKind === 'wgpu-webgl2' ? [] : (data.config?.postEffects ?? []);
+    const postEffectSceneColor = sceneColor;
     for (let i = 0; i < postEffects.length; i++) {
       const effectId = postEffects[i] as string;
       // One scratch target per effect. It is the
@@ -413,7 +460,12 @@ export const urpPipeline: RenderPipeline = {
         sample: 1,
         usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
       });
-      const passReads: string[] = [];
+      // A composite-over-swapchain pass samples a private copy of the
+      // swap-chain at record time, so this read is intentionally a topology
+      // edge only. It keeps a producer-owned scene-color pass ahead of every
+      // optional post effect even though the post effect does not sample that
+      // logical HDR/LDR resource directly.
+      const passReads: string[] = [postEffectSceneColor];
       // plan-strategy D-6: when the post-effect entry declares a depth read,
       // add a 'depth' topology edge so the graph orders the main pass (which
       // writes depth) before the overlay (which samples it). This is a graph
@@ -441,24 +493,36 @@ export const urpPipeline: RenderPipeline = {
     //    registered (createDebugDrawOnReady not called), the pass is a no-op.
     //    Must be the last pass so the overlay draws on top of everything
     //    including FXAA (plan-strategy D-5 / D-8 tonemap-suffix).
-    attachDebugOverlayPass(graph, (ctx: RenderPipelineContext) => {
-      const proj = mat4.create();
-      if (ctx.camera.projection === 'orthographic') {
-        mat4.orthographic(
-          proj,
-          ctx.camera.orthoLeft,
-          ctx.camera.orthoRight,
-          ctx.camera.orthoBottom,
-          ctx.camera.orthoTop,
-          ctx.camera.near,
-          ctx.camera.far,
-        );
-      } else {
-        mat4.perspective(proj, ctx.camera.fov, ctx.camera.aspect, ctx.camera.near, ctx.camera.far);
-      }
-      const view = mat4.invert(mat4.create(), ctx.camera.world);
-      return mat4.multiply(mat4.create(), proj, view);
-    });
+    attachDebugOverlayPass(
+      graph,
+      (ctx: RenderPipelineContext) => {
+        const proj = mat4.create();
+        if (ctx.camera.projection === 'orthographic') {
+          mat4.orthographic(
+            proj,
+            ctx.camera.orthoLeft,
+            ctx.camera.orthoRight,
+            ctx.camera.orthoBottom,
+            ctx.camera.orthoTop,
+            ctx.camera.near,
+            ctx.camera.far,
+          );
+        } else {
+          mat4.perspective(
+            proj,
+            ctx.camera.fov,
+            ctx.camera.aspect,
+            ctx.camera.near,
+            ctx.camera.far,
+          );
+        }
+        const view = mat4.invert(mat4.create(), ctx.camera.world);
+        return mat4.multiply(mat4.create(), proj, view);
+      },
+      {
+        reads: [sceneColor],
+      },
+    );
 
     // ── COMPILE ─────────────────────────────────────────────────────────────
 

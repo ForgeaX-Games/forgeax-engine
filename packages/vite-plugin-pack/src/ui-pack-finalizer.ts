@@ -1,4 +1,9 @@
-import type { ImportedArtifactBody, ImportProduct, PackIndexEntry } from '@forgeax/engine-types';
+import {
+  authoringCapabilityForAssetKind,
+  type ImportedArtifactBody,
+  type ImportProduct,
+  type PackIndexEntry,
+} from '@forgeax/engine-types';
 
 export interface UiArtifactPayload {
   readonly guid: string;
@@ -69,6 +74,7 @@ export function createUiCatalogRow(input: {
     kind: 'ui',
     sourcePath: input.sourcePath,
     packageUrl: input.packageUrl,
+    authoring: authoringCapabilityForAssetKind('ui'),
   };
 }
 

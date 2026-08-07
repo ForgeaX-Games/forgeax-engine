@@ -45,7 +45,7 @@ export function installHud(opts: {
     onAction: (action) => {
       if (action === 'toggle-mode') opts.onToggle();
       if (action === 'open-settings') opts.onSettings?.();
-      if (action === 'target-profile' || action === 'jpeg-texture' || action === 'video-texture' || action === 'sprite-atlas' || action === 'font-source') {
+      if (action === 'target-profile' || action === 'jpeg-texture' || action === 'video-texture' || action === 'sprite-atlas' || action === 'font-source' || action === 'fbx-companion') {
         const result = assetLabActionHandler?.(action);
         if (result !== undefined) setAssetLabStatus(result.text, result.state);
       }
@@ -68,6 +68,7 @@ export function installHud(opts: {
   const assetLabStatus = slot<HTMLElement>(shadow, 'asset-lab-status');
   const button = shadow.querySelector<HTMLButtonElement>('[data-ui-action="toggle-mode"]');
   const targetProfileButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="target-profile"]');
+  const fbxCompanionButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="fbx-companion"]');
   const spriteAtlasButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="sprite-atlas"]');
   const crosshair = slot<HTMLElement>(shadow, 'crosshair');
   const hint = slot<HTMLElement>(shadow, 'hint');
@@ -93,6 +94,11 @@ export function installHud(opts: {
       targetProfileButton.disabled = !profileUnlocked;
       targetProfileButton.setAttribute('aria-disabled', String(!profileUnlocked));
       targetProfileButton.title = profileUnlocked ? 'Apply or restore the authored target profile' : `Score ${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE} to unlock`;
+    }
+    if (fbxCompanionButton) {
+      fbxCompanionButton.disabled = !precisionComplete;
+      fbxCompanionButton.setAttribute('aria-disabled', String(!precisionComplete));
+      fbxCompanionButton.title = precisionComplete ? 'Show the imported humanoid on the scored target' : 'Complete the precision mission first';
     }
   };
   let currentMode = opts.initialMode;

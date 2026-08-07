@@ -35,6 +35,7 @@ export type GameplayProjectionContext = {
   readonly videoTexturePanel: VideoTexturePanel | undefined;
   readonly targetProfile: TargetProfileLoop | undefined;
   readonly applyTargetProfile: () => AssetLabActionResult;
+  readonly applyFbxCompanion: () => AssetLabActionResult;
   readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
   readonly multiWorldOverlay: MultiWorldOverlay | undefined;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
@@ -56,7 +57,7 @@ export type GameplayProjectionContext = {
 const EMPTY_VIDEO_TEXTURE = { available: false, active: 'original', swaps: 0, hitReactions: 0, lastHitPlayhead: null, guid: null, name: null, kind: null, url: null } as const;
 const EMPTY_MULTI_WORLD = { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 } as const;
 const EMPTY_WORLD_SCORE_TEXT = { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0], fontSource: 'legacy-pack', fontGuid: null, fontSize: 0, color: [1, 1, 1, 1], toggles: 0 } as const;
-const EMPTY_FBX_SKINNED_TARGET = { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0 } as const;
+const EMPTY_FBX_SKINNED_TARGET = { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0, companionActive: false, targetEntity: null } as const;
 
 /** Keep the JSON boundary explicit while retaining typed snapshots internally. */
 function asProjection<T>(value: T): GameProjectionValue {
@@ -195,6 +196,12 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
       title: 'Toggle target profile plugin',
       description: 'After Score 50, apply or restore the host-defined GUID target profile on the existing scored target.',
       run: () => asProjection(args.applyTargetProfile()),
+    }),
+    projection.registerAction({
+      id: 'game-default.toggle-fbx-companion',
+      title: 'Toggle FBX target companion',
+      description: 'After the precision mission, replace the authored RedBox presentation with the imported humanoid scene and replay its run clip on the same scored target.',
+      run: () => asProjection(args.applyFbxCompanion()),
     }),
     projection.registerAction({
       id: 'game-default.toggle-sprite-atlas',

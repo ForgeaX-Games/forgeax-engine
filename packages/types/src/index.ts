@@ -4140,6 +4140,8 @@ export type {
   TopologyConflictReason,
   TopologyDiff,
   TopologyPreserved,
+  UiAuthoringCapability,
+  UiAuthoringProjection,
 } from './asset-producer';
 export {
   authoringCapabilityForAssetKind,

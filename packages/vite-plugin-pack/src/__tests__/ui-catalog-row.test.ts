@@ -1,3 +1,4 @@
+import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import {
   createUiCatalogRow,
@@ -17,6 +18,7 @@ describe('UI catalog rows', () => {
       kind: 'ui',
       sourcePath: 'menu.ui.html',
       packageUrl: '/assets/menu.html',
+      authoring: authoringCapabilityForAssetKind('ui'),
     });
     expect(row).not.toHaveProperty('sourceDependencies');
     expect(row).not.toHaveProperty('resourceLedger');
@@ -50,6 +52,7 @@ describe('UI catalog rows', () => {
       kind: 'ui',
       sourcePath: 'menu.ui.html',
       packageUrl: '/assets/prepared-ui.pack.json',
+      authoring: authoringCapabilityForAssetKind('ui'),
     });
     expect(row).not.toHaveProperty('assetType');
     expect(row).not.toHaveProperty('importer');

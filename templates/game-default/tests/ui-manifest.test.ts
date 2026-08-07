@@ -47,6 +47,7 @@ describe('game-default UI asset manifest', () => {
     expect(hudHtml).toContain('data-ui-action="video-texture"');
     expect(hudHtml).toContain('data-ui-action="sprite-atlas"');
     expect(hudHtml).toContain('data-ui-action="font-source"');
+    expect(hudHtml).toContain('data-ui-action="fbx-companion"');
     expect(settingsHtml).toContain('data-ui-setting="clear-color"');
     expect(settingsHtml).toContain('value="purple"');
   });

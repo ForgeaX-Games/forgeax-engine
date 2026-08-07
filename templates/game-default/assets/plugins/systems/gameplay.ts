@@ -8,6 +8,7 @@ import type { GameplayChangeDetectionHandle } from '../change-detection';
 import type { ChromaticAberrationHandle } from '../chromatic-aberration';
 import type { CustomProjectileMesh } from '../custom-projectile-mesh';
 import type { FbxMeshSwap } from '../fbx-mesh-swap';
+import type { FbxSkinnedTarget } from '../fbx-skinned-target';
 import type { GltfMeshSwap } from '../gltf-mesh-swap';
 import type { JpegTextureSwap } from '../jpeg-texture-swap';
 import type { MeshHandleSwap } from '../mesh-handle-swap';
@@ -46,6 +47,7 @@ export type GameplaySystemsContext = {
   readonly gltfMeshSwap: GltfMeshSwap | undefined;
   readonly jpegTextureSwap: JpegTextureSwap | undefined;
   readonly videoTexturePanel: VideoTexturePanel | undefined;
+  readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
   readonly targetProfile: TargetProfileLoop | undefined;
   readonly readScore: () => number;
   readonly toggleProfile: () => TargetProfileSnapshot;
@@ -90,6 +92,7 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     gltfMeshSwap: ctx.gltfMeshSwap,
     jpegTextureSwap: ctx.jpegTextureSwap,
     videoTexturePanel: ctx.videoTexturePanel,
+    fbxSkinnedTarget: ctx.fbxSkinnedTarget,
     targetProfile: ctx.targetProfile,
     readScore: ctx.readScore,
     toggleProfile: ctx.toggleProfile,
@@ -151,6 +154,11 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     onVideoHit: () => {
       if (ctx.videoTexturePanel?.reactToHit() === true) {
         ctx.onAssetLabResult?.({ text: 'WebM target panel active · hit context replayed', state: 'active' });
+      }
+    },
+    onFbxHit: (entity) => {
+      if (ctx.fbxSkinnedTarget?.reactToHit(entity) === true) {
+        ctx.onAssetLabResult?.({ text: 'FBX target companion active · animated hit confirmed', state: 'active' });
       }
     },
     changeDetection: ctx.changeDetection,

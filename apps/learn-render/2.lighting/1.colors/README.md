@@ -89,6 +89,15 @@ FALSIFY_MATERIAL_EMISSIVE_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-l
 # the same standard material's albedo slot; its response must move from default
 FALSIFY_MATERIAL_BASE_COLOR_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
 
+# Material base-color texture UV-transform control: bind a 2x2 linear texture
+# with a black origin and white remaining texels, then sample the transformed origin response
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material base-color texture UV-set control: clone the real cube into a mesh
+# with UV1=[0.75,0.75], then use coordinates.set=1 to select UV1's white field
+# from the same 2x2 texture; the UV0 response must remain distinguishable
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
 # Material metallic-roughness texture control: bind a real black linear TextureAsset
 # to the same standard material's metallic/roughness slot; its response must move from default
 FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
@@ -226,6 +235,17 @@ The base-color-texture control binds a 1x1 linear black texture to the same mate
 `baseColorTexture` slot. It requires the same `cubeCenter` response to move beyond the calibrated
 base-color-texture threshold, proving that texture upload, user-region binding, and sampled albedo
 reach the Standard PBR fragment path rather than being silently ignored.
+
+The UV-transform control binds a real 2x2 linear texture whose origin texel is black and whose
+other texels are white, then passes the slot as
+`{ texture, coordinates: { transform: { offset: [0.25,0.25], scale: [0,0], rotation: 0 } } }`.
+The fixed `cubeCenter` must sample the origin texel center at RGB
+`[0.0666666667,0.0666666667,0.0666666667]`; the same 2x2 texture without a transform reads
+`[0.3333333333,0.1686274510,0.1137254902]`. This covers the texture asset upload, nested
+`MaterialTextureValue.coordinates`, the Standard PBR UBO transform fields, and WGSL UV transform
+before base-color sampling. It is mutually exclusive with the generic, channel, RGB,
+texture-alpha, scalar-alpha, and alpha-cutoff controls so another falsifier cannot satisfy the
+witness.
 
 The midrange RGB control binds one 1x1 linear `[128,128,128,255]` texture to that same
 `baseColorTexture` slot while leaving scalar `baseColor=[1,1,1,1]`. It compares all three sampled

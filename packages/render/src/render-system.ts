@@ -1805,14 +1805,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
         const preparedPipeline = internals.getMaterialShaderPipeline?.(
           descriptor.shader,
-          false,
+          descriptor.colorFormats[0] === 'rgba16float',
           descriptor.renderState,
           undefined,
           undefined,
           undefined,
           'forward',
           undefined,
-          1,
+          descriptor.sampleCount ?? 1,
           undefined,
           undefined,
           descriptor.depthFormat === undefined
@@ -2026,6 +2026,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
         lastVisibilityStats.explicitlyHidden = visibilityStats.explicitlyHidden;
+        const featureTargets =
+          preparedPipelineState === null || cameras[0] === undefined
+            ? []
+            : (frameState.activePipeline.getRenderFeatureTargets?.({
+                camera: cameras[0],
+                colorAttachmentFormat: preparedPipelineState.colorAttachmentFormat,
+                backendKind: internals.device.caps.backendKind,
+              }) ?? []);
         const preparedResourceBatches = runProfiledRenderPhase(profileSession, 'features', () => {
           if (internals.featureHost === undefined) return [];
           const featureFrame = runRenderFeatureFrame(internals.featureHost, {
@@ -2034,6 +2042,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             frameNumber: frameState.frameNumber,
             visibilitySnapshots: frame.featureVisibilitySnapshots,
             hiddenEntityReports: frame.hiddenEntityReports,
+            targets: featureTargets,
             generation: 0,
             caps: internals.device.caps,
             createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>

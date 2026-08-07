@@ -5,7 +5,8 @@
 // hit must complete the precision step, the guided WebM panel must replay its
 // authored hit playhead on another real hit, the guided atlas must animate a
 // real projectile hit, the imported TTF must change the world-score consequence
-// on another real hit, and R must restore the first step.
+// on another real hit, the hidden FBX companion must replace the same scored
+// target and replay its animation on a real hit, and R must restore the first step.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -53,6 +54,7 @@ const readHud = () => hudHost().evaluate((host) => {
     target: text('[data-ui-slot="target-status"]'),
     profileButton: profile?.outerHTML ?? null,
     profileDisabled: profile?.hasAttribute('disabled') ?? null,
+    fbxButtonDisabled: shadow?.querySelector('[data-ui-action="fbx-companion"]')?.hasAttribute('disabled') ?? null,
   };
 });
 const readSnapshot = () => page.evaluate(() => globalThis.__forgeaxPreviewInspection?.read('game-default.snapshot'));
@@ -174,6 +176,45 @@ try {
   }
   await screenshot('mission-complete');
 
+  // The imported FBX path is mission-gated and must become a visible player
+  // consequence on the same scored RedBox, not just a loaded scene snapshot.
+  await openAssetLab();
+  await hudHost().locator('[data-ui-action="fbx-companion"]').click();
+  await page.waitForTimeout(150);
+  const fbxEnabled = { snapshot: await readSnapshot(), hud: await readHud() };
+  if (!fbxEnabled.snapshot?.ok || fbxEnabled.snapshot.value.fbxSkinnedTarget?.available !== true || fbxEnabled.snapshot.value.fbxSkinnedTarget?.companionActive !== true || fbxEnabled.snapshot.value.fbxSkinnedTarget?.targetEntity === null || fbxEnabled.snapshot.value.visibility?.effective !== 'hidden' || !fbxEnabled.hud.assetStatus?.includes('FBX target companion active')) {
+    throw new Error(`guided FBX companion did not replace the scored presentation: ${JSON.stringify({ completed, fbxEnabled })}`);
+  }
+  const fbxEnabledScore = Number.parseInt(fbxEnabled.hud.score?.replace(/\D/g, '') ?? '0', 10);
+  let fbxHitAttempt;
+  for (const [x, y] of precisionAimPoints) {
+    await page.mouse.click(x, y);
+    await page.waitForTimeout(180);
+    const attempt = { snapshot: await readSnapshot(), hud: await readHud() };
+    if ((attempt.snapshot?.value?.fbxSkinnedTarget?.hitPulses ?? 0) >= 1) {
+      fbxHitAttempt = attempt;
+      break;
+    }
+  }
+  await page.waitForTimeout(300);
+  const fbxHit = fbxHitAttempt ?? { snapshot: await readSnapshot(), hud: await readHud() };
+  const fbxHitScore = Number.parseInt(fbxHit.hud.score?.replace(/\D/g, '') ?? '0', 10);
+  if (!fbxHit.snapshot?.ok || fbxHit.snapshot.value.fbxSkinnedTarget?.companionActive !== true || (fbxHit.snapshot.value.fbxSkinnedTarget?.hitPulses ?? 0) < 1 || fbxHitScore <= fbxEnabledScore || !fbxHit.hud.assetStatus?.includes('animated hit confirmed')) {
+    throw new Error(`guided FBX companion did not replay on a real hit: ${JSON.stringify({ fbxEnabled, fbxHit })}`);
+  }
+  await screenshot('fbx-companion-guided-hit');
+
+  // Guided Asset Lab presentations share one scored target. Restore the
+  // authored RedBox before the next variation so its fixed aim points remain
+  // a deterministic player path rather than relying on a moving companion.
+  await openAssetLab();
+  await hudHost().locator('[data-ui-action="fbx-companion"]').click();
+  await page.waitForTimeout(150);
+  const fbxRestored = { snapshot: await readSnapshot(), hud: await readHud() };
+  if (!fbxRestored.snapshot?.ok || fbxRestored.snapshot.value.fbxSkinnedTarget?.companionActive !== false || fbxRestored.snapshot.value.visibility?.effective !== 'visible' || !fbxRestored.hud.assetStatus?.includes('FBX target companion restored')) {
+    throw new Error(`guided FBX companion did not restore the scored target: ${JSON.stringify({ fbxHit, fbxRestored })}`);
+  }
+
   // The WebM entry is a guided consequence, not only a loader toggle. Enable
   // the existing pooled panel, then use the real projectile path to prove that
   // target feedback seeks and replays its deterministic hit context.
@@ -269,14 +310,14 @@ try {
   const reset = { snapshot: await readSnapshot(), hud: await readHud() };
   const resetFont = reset.snapshot.value.worldScoreText;
   const resetFontColor = resetFont?.color ?? [];
-  if (!reset.snapshot?.ok || reset.snapshot.value.targetProfile?.active !== 'original' || reset.snapshot.value.targetProfile?.precisionHits !== 0 || reset.snapshot.value.targetProfile?.precisionComplete !== false || reset.snapshot.value.videoTexture?.active !== 'original' || reset.snapshot.value.videoTexture?.hitReactions !== 0 || reset.snapshot.value.videoTexture?.lastHitPlayhead !== null || reset.snapshot.value.spriteAtlas?.active !== false || reset.snapshot.value.spriteAtlas?.animatedShots !== 0 || reset.snapshot.value.spriteAtlas?.animatedHits !== 0 || resetFont?.fontSource !== 'legacy-pack' || Math.abs((resetFont?.fontSize ?? 0) - 0.024) > 1e-5 || Math.abs((resetFontColor[0] ?? 0) - 1) > 1e-5 || Math.abs((resetFontColor[1] ?? 0) - 0.8) > 1e-5 || Math.abs((resetFontColor[2] ?? 0) - 0.2) > 1e-5 || reset.hud.score !== 'Score  0' || reset.hud.mission !== 'Mission 1/3 · Score 50 · 0/50' || reset.hud.profileDisabled !== true || reset.hud.missionComplete !== 'false' || reset.hud.target !== 'TARGET · RedBox · 100/100 HP · +10') {
+  if (!reset.snapshot?.ok || reset.snapshot.value.targetProfile?.active !== 'original' || reset.snapshot.value.targetProfile?.precisionHits !== 0 || reset.snapshot.value.targetProfile?.precisionComplete !== false || reset.snapshot.value.videoTexture?.active !== 'original' || reset.snapshot.value.videoTexture?.hitReactions !== 0 || reset.snapshot.value.videoTexture?.lastHitPlayhead !== null || reset.snapshot.value.spriteAtlas?.active !== false || reset.snapshot.value.spriteAtlas?.animatedShots !== 0 || reset.snapshot.value.spriteAtlas?.animatedHits !== 0 || reset.snapshot.value.fbxSkinnedTarget?.companionActive !== false || reset.snapshot.value.fbxSkinnedTarget?.hitPulses !== 0 || reset.snapshot.value.visibility?.effective !== 'visible' || resetFont?.fontSource !== 'legacy-pack' || Math.abs((resetFont?.fontSize ?? 0) - 0.024) > 1e-5 || Math.abs((resetFontColor[0] ?? 0) - 1) > 1e-5 || Math.abs((resetFontColor[1] ?? 0) - 0.8) > 1e-5 || Math.abs((resetFontColor[2] ?? 0) - 0.2) > 1e-5 || reset.hud.score !== 'Score  0' || reset.hud.mission !== 'Mission 1/3 · Score 50 · 0/50' || reset.hud.profileDisabled !== true || reset.hud.fbxButtonDisabled !== true || reset.hud.missionComplete !== 'false' || reset.hud.target !== 'TARGET · RedBox · 100/100 HP · +10') {
     throw new Error(`mission reset failed: ${JSON.stringify(reset)}`);
   }
   await screenshot('mission-reset');
 
   if (pageErrors.length > 0 || consoleErrors.length > 0 || badResponses.length > 0) throw new Error(`browser diagnostics failed: ${JSON.stringify({ pageErrors, consoleErrors, badResponses })}`);
-  writeReport('passed', { baseline, lockedAttempt, firstHit, unlocked, profileActive, completed, videoEnabled, videoHit, fontEnabled, fontHit, atlasEnabled, atlasFrame1, atlasFrame2, atlasHit, reset });
-  console.log(`Mission progression smoke PASS (${MODE}): score=${unlockedScore} precision=hit video=context font=hit atlas=hit scoreAfter=${atlasHitScore} reset=locked`);
+  writeReport('passed', { baseline, lockedAttempt, firstHit, unlocked, profileActive, completed, videoEnabled, videoHit, fontEnabled, fontHit, atlasEnabled, atlasFrame1, atlasFrame2, atlasHit, fbxEnabled, fbxHit, fbxRestored, reset });
+  console.log(`Mission progression smoke PASS (${MODE}): score=${unlockedScore} precision=hit video=context font=hit atlas=hit fbx=hit scoreAfter=${Math.max(atlasHitScore, fbxHitScore)} reset=locked`);
   console.log(`artifacts=${ARTIFACT_DIR}`);
 } catch (error) {
   writeReport('failed', { error: String(error) });

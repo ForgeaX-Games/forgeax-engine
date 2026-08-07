@@ -1,5 +1,6 @@
 import type { BootstrapContext } from '@forgeax/engine-app';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { installAssetContentEvidence } from './asset-content-evidence';
 import { createFbxMeshSwap, resetFbxMeshSwap, type FbxMeshSwap } from './fbx-mesh-swap';
 import { createFbxSkinnedTarget, type FbxSkinnedTarget } from './fbx-skinned-target';
@@ -49,9 +50,10 @@ export async function createGameplayTargetFeatures(
   const targetHealth = installTargetHealth(world, scene.targetQuery);
   const targetDisabling = installTargetDisabling(world, scene.targetQuery);
   const visibilityLoop = installVisibilityLoop(world, scene.targetQuery);
-  // Mesh/FBX/glTF swaps and the imported skin are canonical comparison owners,
-  // not part of the first-user mission. Keep their asset work out of a cold
-  // start unless a named evidence surface explicitly asks for it.
+  // Mesh/FBX/glTF swaps remain comparison owners. The imported humanoid is also
+  // prepared as a hidden guided companion so one Asset Lab action can turn the
+  // existing scored target into a real source-format lesson without creating a
+  // second gameplay owner.
   const comparisonEvidenceMode = options.comparisonEvidenceMode === true;
   const meshHandleSwap = comparisonEvidenceMode ? createMeshHandleSwap(world, primaryTarget()) : undefined;
   const fbxMeshSwap = comparisonEvidenceMode ? await createFbxMeshSwap(world, host?.assets, primaryTarget()) : undefined;
@@ -73,9 +75,13 @@ export async function createGameplayTargetFeatures(
     toggleTargetProfile(world, targetProfile);
     return targetProfileSnapshot(targetProfile);
   };
-  const fbxSkinnedTarget = comparisonEvidenceMode
-    ? await createFbxSkinnedTarget({ world, assets: host?.assets })
-    : undefined;
+  const guidedFbxTarget = comparisonEvidenceMode ? undefined : primaryTarget();
+  const physics = world.hasResource('PhysicsWorld') ? world.getResource<PhysicsWorld>('PhysicsWorld') : undefined;
+  const fbxSkinnedTarget = await createFbxSkinnedTarget(
+    guidedFbxTarget === undefined
+      ? { world, assets: host?.assets }
+      : { world, assets: host?.assets, target: guidedFbxTarget, ...(physics === undefined ? {} : { physics }) },
+  );
   host?.registerCleanup?.(() => fbxSkinnedTarget?.dispose());
 
   const skylightEntity = scene.loaded?.nodes

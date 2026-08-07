@@ -4782,6 +4782,22 @@ async function buildReadyWebGPU(
     );
     if (!pbrShaderResult.ok) throw pbrShaderResult.error;
     pbrModule = pbrShaderResult.value;
+    // feat-20260629-multi-uv-set-support: a real extra-UV mesh creates a
+    // layout-specific material PSO after the boot-time standard-layout PSO
+    // has been pre-warmed. Seed the shared shader-module adapter under the
+    // exact lazy-build labels so that this first-touch PSO can reuse the
+    // already compiled PBR variant instead of returning the transient
+    // `rhi-not-available` pending signal in a tight draw loop.
+    seedShaderModule('module-forgeax::default-standard-pbr', pbrModule);
+    const pbrManifestEntry = [...registry.materialShaderManifestEntries()].find(
+      (entry) => entry.identifier === 'forgeax::default-standard-pbr',
+    );
+    const pbrVariant = pbrManifestEntry?.variants.find(
+      (variant) => variant.composedWgsl === pbrEntry.wgsl,
+    );
+    if (pbrVariant !== undefined) {
+      seedShaderModule(`module-forgeax::default-standard-pbr#${pbrVariant.definesKey}`, pbrModule);
+    }
 
     const unlitShaderResult = await runShimStep(
       () =>
