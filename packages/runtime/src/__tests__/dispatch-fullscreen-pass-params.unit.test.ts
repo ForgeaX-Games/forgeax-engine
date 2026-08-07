@@ -186,6 +186,18 @@ describe('M-A2 w6: dispatch 3-entry BGL + per-frame writeBuffer (params channel 
     expect(spy.writeBufferCalls[0]?.offset).toBe(0);
   });
 
+  it('rewrites the registered default when the current world has no params', () => {
+    const ubo = { __ubo: true };
+    const defaultValue = Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+    const { spy, threw } = buildAndExecute({
+      entry: { source: 'fn fs(){}', params: { byteSize: 16, defaultValue } },
+      paramsBuffer: ubo,
+    });
+
+    expect(threw).toBeNull();
+    expect(spy.writeBufferCalls).toEqual([{ buffer: ubo, offset: 0, data: defaultValue }]);
+  });
+
   it('createFullscreenBindGroup includes binding 2 (the params buffer)', () => {
     const ubo = { __ubo: true };
     const snapshot = new Map<string, Uint8Array>([[SHADER_ID, new Uint8Array(16)]]);

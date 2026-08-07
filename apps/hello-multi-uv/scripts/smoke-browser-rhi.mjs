@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +26,6 @@ const switchVariantAfterPipeline = process.env.FORGEAX_M3_SWITCH_VARIANT === '1'
 const switchPostAfterPipeline = process.env.FORGEAX_M3_SWITCH_POST === '1';
 const resizeChurn = process.env.FORGEAX_M3_RESIZE_CHURN === '1';
 const doubleResizeChurn = process.env.FORGEAX_M3_DOUBLE_RESIZE_CHURN === '1';
-const vitePort = process.env.FORGEAX_M3_RHI_PORT ?? '0';
 const expectedVariant = switchVariantAfterPipeline
   ? selectedVariant === 'true'
     ? 'false'
@@ -38,6 +38,29 @@ const expectedPost = switchPostAfterPipeline
   : selectedPost;
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
+async function findFreePort() {
+  return await new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : undefined;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else if (port === undefined) {
+          reject(new Error('could not resolve an ephemeral Vite port'));
+        } else {
+          resolvePort(String(port));
+        }
+      });
+    });
+  });
+}
+
+const requestedVitePort = process.env.FORGEAX_M3_RHI_PORT;
+const vitePort = requestedVitePort !== undefined && requestedVitePort !== '0' ? requestedVitePort : await findFreePort();
+
 function fail(message) {
   console.error(`[m3-browser-rhi] FAIL - ${message}`);
   process.exitCode = 1;
@@ -49,6 +72,20 @@ function resolveArtifact(path) {
   const inApp = resolve(APP_ROOT, path);
   if (existsSync(inApp)) return inApp;
   return resolve(REPO_ROOT, path);
+}
+
+function countLiveTextures(report, matches) {
+  const live = new Set();
+  for (const event of report.events) {
+    const handleId = event.handleId ?? event.id;
+    if (handleId === undefined || handleId === null) continue;
+    if (event.kind === 'createTexture' && matches(event.desc)) {
+      live.add(handleId);
+    } else if (event.kind === 'destroyTexture') {
+      live.delete(handleId);
+    }
+  }
+  return live.size;
 }
 
 async function waitForVite(proc) {
@@ -255,16 +292,12 @@ try {
     throw new Error(`capture artifacts missing: tape=${tapePath} report=${reportPath}`);
   }
   const report = JSON.parse(readFileSync(reportPath, 'utf8'));
-  const textureResourceCount = report.events.filter(
-    (event) =>
-      event.kind === 'createTexture' &&
-      event.desc?.size?.width === 2 &&
-      event.desc?.size?.height === 2,
-  ).length;
+  const textureResourceCount = countLiveTextures(
+    report,
+    (desc) => desc?.size?.width === 2 && desc?.size?.height === 2,
+  );
   if (textureResourceCount < 2) throw new Error(`capture report has fewer than two 2x2 texture resources: ${textureResourceCount}`);
-  const msaaTextureResourceCount = report.events.filter(
-    (event) => event.kind === 'createTexture' && event.desc?.sampleCount === 4,
-  ).length;
+  const msaaTextureResourceCount = countLiveTextures(report, (desc) => desc?.sampleCount === 4);
   if (useMsaa && msaaTextureResourceCount < 2) {
     throw new Error(`capture report has fewer than two sampleCount=4 targets: ${msaaTextureResourceCount}`);
   }

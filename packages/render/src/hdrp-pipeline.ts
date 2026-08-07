@@ -45,6 +45,8 @@ import { RenderGraph, type ResolveContext } from '@forgeax/engine-render-graph';
 import { err, ok, type Result, RhiError, type TextureView } from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
 import { HdrpDeferredCapsInsufficientError } from './errors/render';
+import { createRenderFeatureTarget } from './features/targets';
+import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from './gpu-texture-usage';
 import { getOrCreateHdrpBuffers } from './hdrp-buffers';
 import { DEFERRED_COLOR_FORMATS } from './pipeline-spec';
 import { recordMainPass } from './record';
@@ -187,6 +189,20 @@ export const MAX_LIGHTS = 256;
  *   slot 6 = cluster_uniform (uniform) — @group(2) @binding(6)
  */
 export const hdrpPipeline: RenderPipeline = {
+  getRenderFeatureTargets: ({ camera, colorAttachmentFormat }) => [
+    createRenderFeatureTarget({
+      kind: 'scene-color',
+      resource: camera.tonemap === 'none' ? 'swapchain' : 'sceneColor',
+      format: camera.tonemap === 'none' ? colorAttachmentFormat : 'rgba16float',
+      sampleCount: 1,
+    }),
+    createRenderFeatureTarget({
+      kind: 'scene-depth',
+      resource: 'hdrDepth',
+      format: 'depth24plus-stencil8',
+      sampleCount: 1,
+    }),
+  ],
   buildGraph(
     ctx: RenderPipelineContext,
     data: RenderPipelineData,
@@ -233,7 +249,7 @@ export const hdrpPipeline: RenderPipeline = {
     graph.addResource('hdrpLightBounds', { kind: 'buffer', lifetime: 'persistent' });
 
     // feat-20260609-hdrp-cluster-fragment-ggx M4 / w17: HDR colour + depth
-    // targets so the cluster-forward pass can declare `writes: ['hdrColor']`
+    // targets so the cluster-forward pass can declare a logical scene-color write
     // and recordMainPass (delegate executed by the pass) can resolve
     // `geometryColorView` against the graph's hdrColor when the active
     // camera carries `tonemap !== 'none'`. Mirrors the URP shape (see
@@ -247,8 +263,16 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
+    // Keep the phase dependency key separate from the physical HDR target.
+    // Lighting/forward and producer-owned features all resolve to the same
+    // texture, but the logical key prevents a feature's depth dependency from
+    // forming a main -> feature -> main cycle in the graph.
+    if (data.camera.tonemap !== 'none') {
+      graph.addColorTargetAlias('sceneColor', 'hdrColor');
+    }
+    const sceneColor = data.camera.tonemap !== 'none' ? 'sceneColor' : 'swapchain';
     graph.addColorTarget('hdrDepth', {
       format: 'depth24plus-stencil8',
       size: 'swapchain',
@@ -257,7 +281,7 @@ export const hdrpPipeline: RenderPipeline = {
       // sample hdr_depth via the dedicated SSAO BGL @binding(5); a
       // depth-only view is constructed in render-graph-primitives.ts
       // (resolveHdrDepthDepthOnlyView) and bound at draw time.
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     // feat-20260609-hdrp-cluster-fragment-ggx [scope-amend graph-depth-target]:
     // `recordFrame` (render-system-record.ts:1539) hard-requires a graph color
@@ -280,19 +304,19 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('gbuf1', {
       format: 'rgba8unorm',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('gbuf2', {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // feat-20260612-hdrp-ssao M4 / w19: SSAO half-resolution transient targets
@@ -303,13 +327,13 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'r8unorm',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
     graph.addColorTarget('ssaoBlurred', {
       format: 'r8unorm',
       size: 'half-swapchain',
       sample: 1,
-      usage: 0x10 | 0x04,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
     });
 
     // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-1 (plan-strategy §D-1
@@ -444,7 +468,7 @@ export const hdrpPipeline: RenderPipeline = {
     }
     graph.addPass('lighting', {
       reads: lightingReads,
-      writes: ['hdrColor'],
+      writes: [sceneColor],
     });
 
     // D-6 / D-4 forward transparent pass: renders alpha-blended geometry via
@@ -474,7 +498,7 @@ export const hdrpPipeline: RenderPipeline = {
         'hdrpClusterUniform',
         ...ssaoForwardReads,
       ],
-      writes: ['hdrColor'],
+      writes: [sceneColor],
       execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
         const internal = ctx as _InternalRenderPipelineContext;
         if (data.config?.ssao?.enabled && resolveCtx !== undefined) {
@@ -490,36 +514,48 @@ export const hdrpPipeline: RenderPipeline = {
     // every lit pixel to pure white. The pass is a no-op when
     // camera.tonemap === 'none' (recordTonemapPass at render-system-record.ts
     // line ~4326).
-    // No bloom path under HDRP yet, so the tonemap pass reads hdrColor
+    // No bloom path under HDRP yet, so the tonemap pass reads sceneColor
     // directly (URP routes through the separate hdrComposited target written by
     // bloom-composite; HDRP has no such producer). With hdrColorWhenBloomOff
     // defaulting to hdrComposited, both keys are hdrColor here -> single read,
     // always resolves hdrColor.
-    addTonemapPass(graph, 'tonemap', { hdrComposited: 'hdrColor' });
+    addTonemapPass(graph, 'tonemap', { hdrComposited: sceneColor });
 
     // 11. DebugOverlay: immediate-mode debug overlay on top of everything
     //     (AFTER tonemap, verifying AC-07 R>=0.85 red-channel gate — the
     //     overlay writes to the swap-chain that the tonemap just populated,
     //     so overlay pixels sit on top of the tonemapped LDR result).
     //     When no DebugDraw is registered, the pass is a silent no-op.
-    attachDebugOverlayPass(graph, (ctx: RenderPipelineContext) => {
-      const proj = mat4.create();
-      if (ctx.camera.projection === 'orthographic') {
-        mat4.orthographic(
-          proj,
-          ctx.camera.orthoLeft,
-          ctx.camera.orthoRight,
-          ctx.camera.orthoBottom,
-          ctx.camera.orthoTop,
-          ctx.camera.near,
-          ctx.camera.far,
-        );
-      } else {
-        mat4.perspective(proj, ctx.camera.fov, ctx.camera.aspect, ctx.camera.near, ctx.camera.far);
-      }
-      const view = mat4.invert(mat4.create(), ctx.camera.world);
-      return mat4.multiply(mat4.create(), proj, view);
-    });
+    attachDebugOverlayPass(
+      graph,
+      (ctx: RenderPipelineContext) => {
+        const proj = mat4.create();
+        if (ctx.camera.projection === 'orthographic') {
+          mat4.orthographic(
+            proj,
+            ctx.camera.orthoLeft,
+            ctx.camera.orthoRight,
+            ctx.camera.orthoBottom,
+            ctx.camera.orthoTop,
+            ctx.camera.near,
+            ctx.camera.far,
+          );
+        } else {
+          mat4.perspective(
+            proj,
+            ctx.camera.fov,
+            ctx.camera.aspect,
+            ctx.camera.near,
+            ctx.camera.far,
+          );
+        }
+        const view = mat4.invert(mat4.create(), ctx.camera.world);
+        return mat4.multiply(mat4.create(), proj, view);
+      },
+      {
+        reads: [sceneColor],
+      },
+    );
 
     // Pass `device` so allocateColorTargets actually creates GPU textures (and
     // resolves aliases — without device the alias lookup `result.get('hdrDepth')`

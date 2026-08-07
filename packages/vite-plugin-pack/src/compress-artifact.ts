@@ -109,7 +109,7 @@ export async function compressArtifact(
   // so the runtime fetchBinary will treat it as uncompressed (E1 passthrough).
   // The failure is not propagated because this is build-time — a broken
   // zstd library should not block the entire asset pipeline.
-  // detail is CodecErrorDetails[CodecErrorCode]; the real detail carries
+  // detail is code-specific in @forgeax/engine-codec; the real detail carries
   // 'reason' for decompression-failed, 'stage' for codec-init-failed, etc.
   // We extract a best-effort reason string via the union's shared properties.
   const errorReason: string =

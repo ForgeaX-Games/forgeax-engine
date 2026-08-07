@@ -5,8 +5,11 @@ import { inState } from '@forgeax/engine-state';
 import type { GameplayAudio } from '../gameplay-audio';
 import type { GameplayChangeDetectionHandle } from '../change-detection';
 import type { ChromaticAberrationHandle } from '../chromatic-aberration';
-import { targetProfilePoints, type TargetProfileLoop } from '../target-profile-loop';
+import { recordTargetProfileHit, targetProfilePoints, type TargetProfileLoop } from '../target-profile-loop';
+import type { SpriteAtlasLoop } from '../sprite-atlas-loop';
 import type { VfxHitLoop } from '../vfx-hit-loop';
+import type { HitStreakHandle } from '../hit-streak';
+import type { WorldScoreTextHandle } from '../world-score-text';
 import type { MatHandle } from '../scene-runtime';
 import { activeScoringTargetEntities, scoringPoints, type ScoringTargetQuery, ScoringTarget } from '../scoring-target';
 import { GameState } from '../gameplay-state';
@@ -17,6 +20,13 @@ export type TargetFeedbackSystemContext = {
   readonly targetQuery: ScoringTargetQuery;
   readonly projectileEntities: () => readonly EntityHandle[];
   readonly targetProfile: TargetProfileLoop | undefined;
+  readonly onProfileHit?: () => void;
+  readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
+  readonly onAtlasHit?: () => void;
+  readonly worldScoreText: WorldScoreTextHandle | undefined;
+  readonly onFontScore?: () => void;
+  readonly onVideoHit?: () => void;
+  readonly onFbxHit?: (entity: EntityHandle) => void;
   readonly changeDetection: GameplayChangeDetectionHandle;
   readonly damageTarget: (entity: EntityHandle, points: number) => void;
   readonly spawnPopup: (text: string, x: number, y: number, z: number) => void;
@@ -25,6 +35,7 @@ export type TargetFeedbackSystemContext = {
   readonly triggerFlash: (entity?: EntityHandle) => void;
   readonly materialsForCurrentMesh: (entity: EntityHandle, flashing: boolean) => readonly MatHandle[];
   readonly chromaticAberration: ChromaticAberrationHandle;
+  readonly hitStreak: HitStreakHandle | undefined;
 };
 
 /** Resolves projectile hits and owns the transient HitFlash component lifecycle. */
@@ -57,12 +68,21 @@ export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): v
           if (dx * dx + dy * dy + dz * dz >= hitRadiusSquared) continue;
           const hitMask = projectile.value.hitMask | mask;
           ctx.world.set(projectileEntity, Projectile, { hitMask });
+          if (ctx.spriteAtlasLoop?.recordHit(projectileEntity)) ctx.onAtlasHit?.();
+          if (recordTargetProfileHit(ctx.targetProfile, entity)) ctx.onProfileHit?.();
           const basePoints = scoringPoints(ctx.world, entity);
-          const points = basePoints === undefined ? undefined : targetProfilePoints(ctx.targetProfile, basePoints);
+          const impactScale = Math.max(1, projectile.value.impactScale);
+          const points = basePoints === undefined
+            ? undefined
+            : Math.round(targetProfilePoints(ctx.targetProfile, basePoints) * impactScale);
           if (points !== undefined) {
-            ctx.changeDetection.recordHit(entity, points);
-            ctx.damageTarget(entity, points);
-            ctx.spawnPopup('+' + points, fx, fy + 0.8, fz);
+            const award = ctx.hitStreak?.recordHit(points) ?? { points, hits: 0, multiplier: 1 };
+            ctx.changeDetection.recordHit(entity, award.points);
+            ctx.damageTarget(entity, award.points);
+            ctx.spawnPopup('+' + award.points, fx, fy + 0.8, fz);
+            if (ctx.worldScoreText?.snapshot().fontSource === 'ttf-plugin' && ctx.spriteAtlasLoop?.active !== true) ctx.onFontScore?.();
+            ctx.onVideoHit?.();
+            ctx.onFbxHit?.(entity);
             ctx.gameplayAudio?.triggerHit();
             ctx.vfxHitLoop.trigger();
           }

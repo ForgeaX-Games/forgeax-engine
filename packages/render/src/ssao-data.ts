@@ -14,7 +14,7 @@
 // The mulberry32 PRNG is used for deterministic reproducibility across
 // runs — same seed always yields same kernel/noise (AC-03 snapshot).
 
-const KERNEL_SIZE = 64;
+export const SSAO_KERNEL_SAMPLE_COUNT = 64;
 const NOISE_SIZE = 16; // 4 x 4
 
 /**
@@ -54,7 +54,7 @@ function lerp(a: number, b: number, t: number): number {
 export function generateSsaoKernel(seed: number = 0): readonly Float32Array[] {
   const rand = mulberry32(seed);
   const kernel: Float32Array[] = [];
-  for (let i = 0; i < KERNEL_SIZE; i++) {
+  for (let i = 0; i < SSAO_KERNEL_SAMPLE_COUNT; i++) {
     // Step 1: random direction on unit hemisphere (z >= 0)
     let x = rand() * 2 - 1;
     let y = rand() * 2 - 1;
@@ -70,7 +70,7 @@ export function generateSsaoKernel(seed: number = 0): readonly Float32Array[] {
     y *= r;
     z *= r;
     // Step 3: quadratic falloff — more samples near origin
-    const scale = lerp(0.1, 1.0, (i / KERNEL_SIZE) * (i / KERNEL_SIZE));
+    const scale = lerp(0.1, 1.0, (i / SSAO_KERNEL_SAMPLE_COUNT) * (i / SSAO_KERNEL_SAMPLE_COUNT));
     const sample = new Float32Array(3);
     sample[0] = x * scale;
     sample[1] = y * scale;

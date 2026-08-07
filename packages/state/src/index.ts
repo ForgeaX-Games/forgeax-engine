@@ -31,7 +31,6 @@ export {
 export { statePlugin } from './plugin-factory';
 export { registerStatesPlugin, StateSet } from './register-plugin';
 export {
-  countScopedEntitiesByVariant,
   despawnOnEnter,
   despawnOnExit,
 } from './scoped-component';

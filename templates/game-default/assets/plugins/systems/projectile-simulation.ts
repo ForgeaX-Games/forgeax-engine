@@ -9,7 +9,7 @@ import { inState } from '@forgeax/engine-state';
 import type { CustomProjectileMesh } from '../custom-projectile-mesh';
 import type { SpriteAtlasLoop } from '../sprite-atlas-loop';
 import { GameState } from '../gameplay-state';
-import { GameplayInput, PlayerMotion, Projectile, type ProjectileVisual } from '../components/gameplay';
+import { ChargeShot, GameplayInput, PlayerMotion, Projectile, type ProjectileVisual } from '../components/gameplay';
 import { GAME_DEFAULT_GAMEPLAY_CONFIG, type GameplayConfig } from '../resources/gameplay';
 
 export type ProjectileSimulationSystemContext = {
@@ -42,7 +42,8 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
       const playerTransform = ctx.world.get(ctx.root, Transform);
       const playerMotion = ctx.world.get(ctx.root, PlayerMotion);
       const gameplayInput = ctx.world.get(ctx.root, GameplayInput);
-      if (!playerTransform.ok || !playerMotion.ok || !gameplayInput.ok) return;
+      const charge = ctx.world.get(ctx.root, ChargeShot);
+      if (!playerTransform.ok || !playerMotion.ok || !gameplayInput.ok || !charge.ok) return;
       const px = playerTransform.value.pos[0] ?? 0;
       const pz = playerTransform.value.pos[2] ?? 0;
       const jumpY = playerMotion.value.jumpY;
@@ -51,7 +52,9 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
       const faceZ = playerMotion.value.faceZ;
       let shootCd = playerMotion.value.shootCooldown - dt;
       const playerY = ctx.getMode() === 'fps' ? freeY : jumpY;
-      const fire = (snap.action('shoot').isPressed() || gameplayInput.value.wantShoot !== 0) && shootCd <= 0;
+      const chargedFire = charge.value.release !== 0;
+      const normalFire = charge.value.active === 0 && (snap.action('shoot').isPressed() || gameplayInput.value.wantShoot !== 0);
+      const fire = (normalFire || chargedFire) && shootCd <= 0;
       ctx.world.set(ctx.root, GameplayInput, { wantShoot: 0 });
       if (fire) {
         shootCd = config.projectile.shootCooldown;
@@ -73,6 +76,8 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
         const bx = px + dirX * 0.6;
         const byy = by + dirY * 0.6;
         const bz = pz + dirZ * 0.6;
+        const impactScale = chargedFire ? Math.max(1, charge.value.power) : 1;
+        const shotScale = 1 + (impactScale - 1) * 0.6;
         const bulletQuat = quat.fromUnitVectors(quat.create(), [0, 1, 0], [dirX, dirY, dirZ]);
         const visual = ctx.getProjectileVisual();
         const useSprite = visual !== 'mesh' && ctx.customProjectile !== undefined;
@@ -94,16 +99,17 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
           ]
           : [];
         const entity = commands.spawn(
-          { component: Transform, data: { pos: [bx, byy, bz], quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!] } },
+          { component: Transform, data: { pos: [bx, byy, bz], quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!], scale: [shotScale, shotScale, shotScale] } },
           { component: MeshFilter, data: { assetHandle: shotMesh } },
           { component: MeshRenderer, data: { materials: [shotMaterial] } },
           { component: Layer, data: { value: useSprite ? 100 : 0 } },
           { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } },
           { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: config.projectile.radius, halfHeight: config.projectile.halfHeight, friction: 0, restitution: 0.6 } },
-          { component: Projectile, data: { age: 0, velocityX: dirX * config.projectile.speed, velocityY: dirY * config.projectile.speed, velocityZ: dirZ * config.projectile.speed } },
+          { component: Projectile, data: { age: 0, velocityX: dirX * config.projectile.speed, velocityY: dirY * config.projectile.speed, velocityZ: dirZ * config.projectile.speed, impactScale } },
           ...spriteAnimationComponents,
         );
         if (atlasActive) ctx.spriteAtlasLoop?.track(entity);
+        if (chargedFire) ctx.world.set(ctx.root, ChargeShot, { release: 0 });
         ctx.onSpawn();
       }
       for (const entity of ctx.projectileEntities()) {

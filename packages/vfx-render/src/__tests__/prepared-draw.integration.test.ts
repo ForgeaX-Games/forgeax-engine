@@ -1,6 +1,7 @@
 import { encodeEntity, FixedUpdate, World } from '@forgeax/engine-ecs';
 import {
   Camera,
+  createRenderFeatureTarget,
   type RenderPipeline,
   Visibility,
   VisibilityStateValue,
@@ -70,10 +71,39 @@ function canvas(): HTMLCanvasElement {
 
 function pipeline(): RenderPipeline {
   return {
+    getRenderFeatureTargets: ({ colorAttachmentFormat }) => [
+      createRenderFeatureTarget({
+        kind: 'scene-color',
+        resource: 'color',
+        format: colorAttachmentFormat,
+        sampleCount: 1,
+      }),
+      createRenderFeatureTarget({
+        kind: 'scene-depth',
+        resource: 'depth',
+        format: 'depth24plus-stencil8',
+        sampleCount: 1,
+      }),
+    ],
     buildGraph: (context) => {
       const graph = new RenderGraph<typeof context>();
-      graph.addResource('color', { kind: 'texture', lifetime: 'transient' });
-      graph.addPass('base', { reads: [], writes: ['color'], execute: () => undefined });
+      graph.addColorTarget('color', {
+        format: 'rgba8unorm-srgb',
+        size: 'swapchain',
+        sample: 1,
+        usage: 0x10,
+      });
+      graph.addColorTarget('depth', {
+        format: 'depth24plus-stencil8',
+        size: 'swapchain',
+        sample: 1,
+        usage: 0x10,
+      });
+      graph.addPass('base', {
+        reads: [],
+        writes: ['color', 'depth'],
+        execute: () => undefined,
+      });
       return graph;
     },
     execute: () => undefined,

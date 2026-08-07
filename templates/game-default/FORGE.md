@@ -2,8 +2,15 @@
 
 This is ForgeaX's canonical first game: a small target-range mission that teaches scene assets,
 ECS behavior, physics, picking, rendering, UiAssets, spatial audio, and a host-defined asset plugin
-through one coherent loop. Score 50, then press `P` to apply the authored target profile and finish
-the two-step mission. The collapsed Asset Lab keeps optional format lessons out of the default path.
+through one coherent loop. Real projectile hits must earn Score 50 before the collapsed Asset Lab
+unlocks `Target profile`; applying the profile turns the RedBox into a moving precision target, and
+one real projectile hit on that target finishes the third mission step. The same panel names five optional
+asset outcomes—JPEG target, WebM panel, PNG projectile, TTF score text, and the imported FBX companion—without making the player
+memorize a hotkey wall; their legacy keys (`P`, `L`, `M`, `N`, `Y`) remain available for keyboard play.
+Every variation changes the existing target-range world and the `R` key visibly restores the authored
+RedBox baseline. The default HUD also teaches two gameplay decisions: `F`/click fires immediately,
+while holding `C` starts the authored charge VFX and releasing it fires a larger, higher-impact shot;
+consecutive real hits inside the visible Combo window raise the multiplier, and waiting lets it expire.
 
 ## Run, inspect, change
 
@@ -24,8 +31,15 @@ FPS/free-flight, and bounded orthographic Map).
 `assets/plugins/bootstrap.ts` is intentionally only an 18-line host phase coordinator. Its three
 neighbors make the assembly map explicit: `gameplay-targets.ts` owns the target roster and GUID-backed
 asset plugins, `gameplay-session.ts` owns the one-shot runtime capabilities and reset transaction, and
-`gameplay-wiring.ts` registers projections and systems. This keeps the game teachable without turning
-the entrypoint into a second gameplay system.
+`gameplay-wiring.ts` registers projections and systems. The guided profile/JPEG/WebM/FBX-companion paths
+are part of the normal game, while the built-in mesh, FBX cube, and glTF comparisons are created only by
+`?asset-evidence=1` or `?render-evidence=1`. The guided FBX companion is prepared hidden and unlocks after
+the precision mission, so it can replace the same scored target without making a
+canonical-only gallery pay for cold-start setup or turning the entrypoint into a second gameplay system.
+The cold-start HUD also names the authored primary `RedBox`, projects its ECS-owned health and
+points (`assets/plugins/target-status.ts`). That cue is part of the playable target encounter, not an
+inspection witness: after a hit the same card changes to the target's damaged health while the existing
+world-space score, audio, VFX, and mission progress provide the consequence.
 `assets/plugins/camera-orbit.ts`, `assets/plugins/camera-zoom.ts`, and `assets/plugins/free-camera.ts` own the
 canonical spherical pose math; `assets/plugins/systems/camera-input.ts`, `assets/plugins/systems/camera-follow.ts`,
 and `assets/plugins/systems/player-movement.ts` own the named ECS systems; `assets/plugins/components/gameplay.ts`
@@ -63,20 +77,32 @@ the standalone chromatic-shader oracle.
 
 Hit feedback also demonstrates world-space MSDF text. `assets/plugins/world-score-text.ts` keeps one pooled
 `GlyphText`, loads the legacy baked DejaVu `FontAsset` by GUID, and can switch that same entity with
-`Y` to a second stable GUID produced from the licensed `DejaVuSansMono.ttf` by the public `font`
+`Y` (or the `TTF score text` button) to a second stable GUID produced from the licensed `DejaVuSansMono.ttf` by the public `font`
 importer/plugin. Preview registers `fontImporter`, delivers the TTF source through the Pack-v2
-catalog, and keeps the legacy pack as the comparison baseline; `R` returns the pooled label to the
-legacy source. This teaches source TTF → declared sub-asset GUIDs → MSDF bake/importer → runtime
-FontAsset without copying the hello-text gallery or adding another scene. The DOM score popup remains
-the screen-space UI example, so the two text contracts are visible together without creating a second
-score owner. `apps/hello/text` remains the pre-baked MSDF renderer oracle, while
+catalog, and keeps the legacy pack as the comparison baseline. The named guided action changes the
+same hit consequence: the imported TTF handle uses its own GlyphText metrics plus a larger cyan
+presentation, and the next real score reports `imported glyph metrics on scored hit`; `R` restores
+the yellow legacy label. This teaches source TTF → declared sub-asset GUIDs → MSDF bake/importer →
+runtime FontAsset without copying the hello-text gallery or adding another scene. The DOM score popup
+remains the screen-space UI example, so the two text contracts are visible together without creating
+a second score owner. `apps/hello/text` remains the pre-baked MSDF renderer oracle, while
 `apps/hello/m2-content-pipeline` remains the source-reimport/Worker recovery oracle.
 
 The Play shooting system also demonstrates the ECS `CommandBuffer` boundary: bullets are spawned and
 expired through deferred commands, while `commands.isDeferred` prevents same-system Transform writes
 against pending handles. The synchronous `R` reset remains the gameplay owner's cleanup boundary, and
-the render-evidence smoke records the deferred spawn count after a deterministic canvas shot (manual
-play still uses `F`).
+the render-evidence smoke records the deferred spawn count after a deterministic canvas shot. `F` (or
+click) fires immediately; holding `C` builds the ECS-owned `ChargeShot` component, updates the
+authored HUD charge meter, and starts the authored Pack charge effect, then releasing fires the same
+projectile owner with a larger mesh and scaled score/health consequence. `R` clears the charge state,
+meter, and VFX through the existing reset transaction.
+
+The same projectile path now has a compact player-facing scoring loop. `assets/plugins/hit-streak.ts`
+stores `HitStreak` on the player, records consecutive target-feedback hits for 1.65 seconds, and
+caps the multiplier at `x2.75`. The awarded points are used by the existing change-detection score,
+target-health, world-text, popup, VFX, and spatial-audio owners, so the second hit is visibly worth
+more without adding a second score or damage authority. Its `Update` system owns expiry and the HUD
+shows `ready`, `active`, and `expired`; `R` resets the same component through the normal lifecycle.
 
 The gameplay state is deliberately ECS-shaped. `GameplayInput`, `PlayerMotion`, `FreeCameraMotion`,
 `CameraRig`, `Projectile`, `HitFlash`, `ProjectilePolicy`, `ResetPose`, and `TargetPresentation` are
@@ -134,7 +160,22 @@ FORGEAX_ASSET_LOOP_DIR=<run>/artifacts \
 pnpm --filter @forgeax/preview smoke:asset-loop
 ```
 
-`L` is the guided JPEG image lesson. Preview includes the exact `wood-container.jpg.meta.json`
+The Asset Lab is the guided content front door. `assets/plugins/asset-lab-actions.ts` is the single
+action router used by both the named HUD buttons and the legacy keyboard bindings; `assets/plugins/hud.ts`
+owns only presentation and the status slot. The six controls therefore teach real plugin paths without
+creating a second asset registry, format gallery, or reset owner. Each result is reported as `active`
+or `restored` in the same panel, and the shared `R` transaction returns all six paths to the authored
+RedBox baseline. The PNG projectile entry is outcome-oriented: enable it, fire once, and the status
+confirms the animated projectile reached the normal hit/score/VFX/audio path. The TTF entry is also
+outcome-oriented: enable it, land one real score, and the world-space label visibly switches to the
+imported font presentation before `R` restores the authored label. The FBX companion is mission-gated: after
+the precision hit, the `FBX target · animate` button makes the imported humanoid replace the visible RedBox
+presentation while the original target's collider, score, health, and reset owners remain in place; a real
+hit restarts the imported `run` clip and reports the result in the same status slot. Guided presentations are
+mutually exclusive: selecting another variation restores the authored target first, while `R` restores every
+variation and the original placement in one transaction.
+
+`L` (or the `JPEG target` button) is the guided JPEG image lesson. Preview includes the exact `wood-container.jpg.meta.json`
 sidecar from `forgeax-engine-assets/demo-assets/hello-sprite`; `assets/plugins/jpeg-texture-swap.ts` loads
 the cooked `TextureAsset` by GUID, clones the existing RedBox `MaterialAsset` slots with
 `baseColorTexture`, and keeps the authored mesh, line-list accent, collider, hit, score, and
@@ -144,35 +185,43 @@ array, so the JPEG path teaches source → sidecar → image importer → pack-i
 delivery without adding a second scene or a decoder in game code. `apps/hello/sprite` remains the
 deeper 2D texture/sort oracle.
 
-`M` is the guided runtime-video lesson. Preview serves the licensed
+`M` (or the `WebM panel` button) is the guided runtime-video lesson. Preview serves the licensed
 `forgeax-engine-assets/demo-assets/hello-video-cutscene/cutscene.webm` from Vite's `publicDir`;
 `assets/plugins/video-texture-panel.ts` catalogs a runtime-only `VideoAsset { kind: 'video', url }`, loads it
 through the default video loader, creates a `VideoPlayer` quad with a video-backed MaterialAsset,
 and registers a host-owned `VideoElementProvider`. The panel follows the existing scored target and
-faces the active camera, so the lesson composes with the same hit, input, inspection, App/World, and
-typed `R` reset owners. This is intentionally not a new WebM importer or Pack sidecar: the engine's
-video contract keeps bytes and DOM lifecycle at the host boundary. `game-default.toggle-video-texture`
-and `M` toggle the panel; `R` pauses, hides, and rewinds it, while Stop removes the provider and
-disposes the `<video>` element. The focused canonical upload and cutscene oracles remain
+faces the active camera. After the panel is enabled, a real scored hit calls the same `VideoPlayer`
+owner to seek the WebM to the authored `0.35s` hit playhead, replay it, and report the hit context in
+the Asset Lab status; the snapshot exposes the reaction count and playhead. This is intentionally not
+a new WebM importer or Pack sidecar: the engine's video contract keeps bytes and DOM lifecycle at the
+host boundary. `game-default.toggle-video-texture` and `M` toggle the panel; `R` pauses, hides,
+rewinds, and clears the hit context, while Stop removes the provider and disposes the `<video>` element.
+The focused canonical upload and cutscene oracles remain
 `apps/hello/video-texture` and `apps/hello/video-cutscene`.
 
-`P` is the host-plugin lesson. `assets/target-profile.json` and its sidecar declare a
+`P` (or the `Target profile` button after Score 50) is the host-plugin lesson. Before the threshold,
+the authored button is disabled and the shared action adapter returns `unavailable`; keyboard, HUD,
+and inspection callers therefore cannot bypass the player-facing mission. `assets/target-profile.json` and its sidecar declare a
 `game-default-target-profile` GUID; `apps/preview/vite.config.ts` injects the matching importer,
 while `main.ts` registers the runtime loader and loads the profile through `AssetRegistry`. The
-profile applies a visible target tint and doubles the existing score value on the same RedBox;
-`game-default.toggle-target-profile` and `R` provide the reversible action/reset path. This is the
+profile applies a visible target tint, doubles the existing score value, and supplies the RedBox's
+precision rotation speed through the existing `GameDefaultRotatable` ECS component;
+`game-default.toggle-target-profile` and `R` provide the reversible action/reset path. The
+`smoke:mission-progression` dev/production pair proves real hits → unlock → profile → precision hit → WebM/TTF/atlas/FBX
+consequences → reset. This is the
 complete custom source → sidecar/GUID → pluginPack importer → Pack v2 → loader → gameplay chain,
 adapted from `apps/hello/custom-importer` without importing its unrelated reel-machine scene.
 
-`N` is the first atlas-animation asset lesson. Preview adds the `hello-sprite-atlas` directory to
+`N` (or the `PNG projectile` button) is the first atlas-animation asset lesson. Preview adds the `hello-sprite-atlas` directory to
 the existing `pluginPack` roots, so `walk.atlas.png.meta.json` is handled by the standard image
 importer and its GUID resolves to a cooked `TextureAsset`. `assets/plugins/sprite-atlas-loop.ts` projects the
 four regions from the companion `walk.atlas.json` build-time text channel into the public
 `SpriteAnimation` + `SpriteRegionOverride` components on the same fired projectile. The engine's
 `spriteAnimationTickSystem` advances frames; `game-default.toggle-sprite-atlas` (or `N`) turns the
 representation on for newly spawned shots, while `game-default.snapshot.spriteAtlas` proves the
-GUID, payload format, current frame, tracked entity count, and structured error state. Hit/score,
-physics, audio, and `R` reset remain the existing owners. `apps/hello/sprite-atlas` stays the
+GUID, payload format, current frame, tracked entity count, animated-shot count, and animated-hit
+count. The status slot confirms a real atlas projectile hit, while hit/score, physics, audio, and
+`R` reset remain the existing owners. `apps/hello/sprite-atlas` stays the
 10,000-entity fold/performance oracle; this template intentionally composes one animated shot
 instead of copying its gallery. If named atlas metadata becomes a runtime requirement, add a
 narrow host importer/plugin rather than parsing source JSON in the player.
@@ -222,16 +271,16 @@ Real projectile hits own the transient VFX asset lesson. `assets/hit-vfx-effect.
 source Pack v2 particle effect with one local billboard emitter and one world-space
 mesh emitter; Preview registers the shared VFX native cooker, so the build produces
 the canonical runtime program and artifact rather than making the game parse source.
-The inspection action selects the companion `assets/charge-vfx-effect.pack.json`, which keeps the same
-materials and mesh but adds continuous-rate scheduling and a box-spawn emitter. Both
-GUIDs are loaded by `assets/plugins/vfx-hit-loop.ts` and switched on the same `ParticleEffectPlayer`
-attached to the existing scored target. The loop builds one CPU FixedUpdate simulation
-with the scene-space resolver and installs one `particleRenderFeature` through the
-renderer's late `installRenderFeature` seam. A real projectile hit and
-`game-default.trigger-vfx-hit` select the finite hit burst; `game-default.trigger-vfx-charge`
-and `game-default.trigger-vfx-charge` selects the charge mode; all paths increment the seed and share the same
-billboard/mesh output buckets. `R` selects the hit asset, sets `playing=false`, seed
-zero, and clears the trigger count. `game-default.snapshot.vfxHit` reports the active
+The authored `assets/charge-vfx-effect.pack.json` now participates in the player path: the charge
+system starts and stops the same `ParticleEffectPlayer` while the player holds `C`. It keeps the same
+materials and mesh but adds continuous-rate scheduling and a box-spawn emitter. Both GUIDs are
+loaded by `assets/plugins/vfx-hit-loop.ts` and switched on the same player attached to the existing
+scored target. The loop builds one CPU FixedUpdate simulation with the scene-space resolver and
+installs one `particleRenderFeature` through the renderer's late `installRenderFeature` seam. A real
+projectile hit and `game-default.trigger-vfx-hit` select the finite hit burst; the inspection action
+`game-default.trigger-vfx-charge` remains recovery/evidence for that same charge mode. All paths
+increment the seed and share the same billboard/mesh output buckets. `R` selects the hit asset, sets
+`playing=false`, seed zero, and clears the trigger count. `game-default.snapshot.vfxHit` reports the active
 mode/GUID, emitter/alive telemetry, RenderFeature readiness, and structured errors,
 making source → cooker → GUID switch → ECS player → simulation → render-feature → reset
 inspectable without a second scene or renderer. The focused
@@ -249,18 +298,34 @@ FORGEAX_VFX_CHARGE_DIR=<run>/artifacts/vfx-charge-production \
 It checks both Pack index rows, positive charge output, charge-to-hit switching,
 reset cleanup, and page/console/HTTP diagnostics in dev and production hosts.
 
-The focused mesh-swap smoke is the FBX asset-format delivery proof. Preview registers the FBX importer and scans the hydrated
+The player-loop proof covers the authored Combo path in both hosts:
+
+```sh
+FORGEAX_HIT_STREAK_DIR=<run>/artifacts/hit-streak-dev \
+  pnpm --filter @forgeax/preview smoke:hit-streak
+FORGEAX_HIT_STREAK_DIR=<run>/artifacts/hit-streak-production \
+  pnpm --filter @forgeax/preview smoke:hit-streak-production
+```
+
+It fires at the isolated authored BouncyBall, observes `x1.00 → x1.25`, waits for ECS expiry,
+replays one hit, and verifies the HUD, health reset, score reset, and browser diagnostics.
+
+The focused mesh-swap smoke is the FBX asset-format delivery proof. It explicitly starts Preview with
+`?render-evidence=1`, which opts into the comparison-only asset owners. Preview registers the FBX importer and scans the hydrated
 `forgeax-engine-assets/vendor/fbx-test/cube.fbx` sidecar; `assets/plugins/fbx-mesh-swap.ts` loads the emitted mesh
 sub-asset by GUID and swaps it onto the same authored scoring target. Because `cube.fbx` has one
 submesh while `RedBox` teaches two authored material slots, the swap owner derives a one-slot view
 while FBX is active and restores the complete authored mesh/material pair on `R`. The existing
 collider, hit/score, input, render-evidence, and reset owners stay in place, so this is a format
 delivery change rather than a second scene. Built-in sphere and FBX cube comparisons are inspection-only;
-normal play keeps the authored target mesh and the visible animated FBX humanoid.
+normal play keeps the authored target mesh until the mission-gated FBX companion is enabled; the
+comparison-only imported-skin owner remains available to evidence runs without changing the default scene.
 
-The imported `humanoid.fbx` is the guided skeletal-animation lesson. `assets/plugins/fbx-skinned-target.ts`
+The imported `humanoid.fbx` is the canonical skeletal-animation lesson. `assets/plugins/fbx-skinned-target.ts`
 loads the scene and its `run` clip by stable GUID, instantiates the `Skin`/`AnimationPlayer` payload,
-and joins the existing Play, hit, and reset lifecycle. The authored placement is written to the
+and joins the existing Play, hit, and reset lifecycle. In the normal game the scene is hidden until the
+precision mission is complete; the guided companion then follows the scored RedBox and restarts the clip
+on real hits. The evidence mode keeps the same owner visible at its canonical placement. The authored placement is written to the
 imported scene root (`scale: [0.03, 0.03, 0.03]`) rather than only to the mesh node: skin palettes
 are derived from the joint hierarchy, so root placement keeps the rendered mesh and its joints in
 the same coordinate space. `game-default.snapshot` reports the root, skin entity, clip, joint count,

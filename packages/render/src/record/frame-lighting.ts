@@ -23,7 +23,7 @@ import {
   HDRP_UNIFORM_LIGHT_CAPACITY,
   packClusterUniform,
 } from '../hdrp-buffers';
-import { LIGHT_INDEX_LIST_CAPACITY } from '../hdrp-pipeline';
+import { DEFAULT_CLUSTER_GRID, LIGHT_INDEX_LIST_CAPACITY } from '../hdrp-pipeline';
 import {
   LIGHT_ARRAY_HEADER_BYTES,
   LIGHT_ARRAY_MAX_SLOTS,
@@ -644,11 +644,8 @@ export function writeHdrpClusterAndSsaoBuffers(
     }
   }
   const effectiveLightCount = effectivePointLights.length + effectiveSpotLights.length;
-  const configuredClusterGrid = frameState.installedPipelineConfig?.clusterGrid ?? {
-    x: 16,
-    y: 9,
-    z: 24,
-  };
+  const configuredClusterGrid =
+    frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
   let gpuMembership = useGpuMembership && membershipBindGroupLayout !== null;
   if (
     gpuMembership &&
@@ -707,11 +704,8 @@ export function writeHdrpClusterAndSsaoBuffers(
             hdrpLights.push({ position: sl.position as unknown as Float32Array, range });
           }
 
-          const clusterGrid = frameState.installedPipelineConfig?.clusterGrid ?? {
-            x: 16,
-            y: 9,
-            z: 24,
-          };
+          const clusterGrid =
+            frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
           const gridX = clusterGrid.x;
           const gridY = clusterGrid.y;
           const gridZ = clusterGrid.z;

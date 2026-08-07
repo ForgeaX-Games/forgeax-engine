@@ -144,11 +144,7 @@ export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-de
  * has `canvasId`, `AppDetailSystemUpdateFailed` has `cause`, the empty
  * shape has neither).
  */
-export type AppErrorDetail =
-  | AppDetailEmpty
-  | AppDetailCanvasDetached
-  | AppDetailSystemUpdateFailed
-  | AppDetailPointerLockFailed;
+export type AppErrorDetail = AppErrorDetailFor<AppErrorCode>;
 
 /**
  * Render a one-line summary of `detail.cause` for embedding in

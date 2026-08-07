@@ -26,6 +26,7 @@ import {
   type RenderFeaturePreparedRef,
   validateRenderFeatureGraphicsPass,
 } from '../features/prepared-graphics';
+import { isRenderFeatureTargetHandle } from '../features/targets';
 import type { RenderFeaturePassContext } from '../features/types';
 import type {
   PreparedGraphicsResolvedResource,
@@ -693,13 +694,96 @@ function executeGraphOwnedRenderFeaturePass(
   resolveContext: ResolveContext,
   execute: (context: RenderFeaturePassContext) => void,
 ): void {
+  const internalContext = context as _InternalRenderPipelineContext;
+  const targetColorAttachment = contributionPass.graphics?.attachments.colors.find(
+    (attachment) =>
+      isRenderFeatureTargetHandle(attachment.resource) &&
+      attachment.resource.kind === 'scene-color',
+  );
+  const targetColor =
+    targetColorAttachment !== undefined &&
+    isRenderFeatureTargetHandle(targetColorAttachment.resource)
+      ? targetColorAttachment.resource
+      : undefined;
+  const targetDepthAttachment =
+    contributionPass.graphics?.attachments.depthStencil !== undefined &&
+    isRenderFeatureTargetHandle(contributionPass.graphics.attachments.depthStencil.resource) &&
+    contributionPass.graphics.attachments.depthStencil.resource.kind === 'scene-depth'
+      ? contributionPass.graphics.attachments.depthStencil
+      : undefined;
   const resolvedWrites = contributionPass.descriptor.writes
     .map((name) => resolveContext.resolve(name))
     .filter((view): view is unknown => view !== undefined);
-  const resolvedDepth = contributionPass.descriptor.reads
-    .map((name) => resolveContext.resolve(name))
-    .find((view): view is unknown => view !== undefined);
-  const colorViews = resolvedWrites.length > 0 ? resolvedWrites : [context.view];
+  const resolvedTargetColor =
+    targetColor === undefined ? undefined : resolveContext.resolve(targetColor.resource);
+  const targetDepth =
+    targetDepthAttachment === undefined ||
+    !isRenderFeatureTargetHandle(targetDepthAttachment.resource)
+      ? undefined
+      : targetDepthAttachment.resource;
+  const resolvedTargetDepth =
+    targetDepth === undefined ? undefined : resolveContext.resolve(targetDepth.resource);
+  const geometryBackedColor =
+    targetColor !== undefined &&
+    targetColor.sampleCount === 4 &&
+    (targetColor.resource === 'hdrColor' ||
+      targetColor.resource === 'ldrColor' ||
+      targetColor.resource === 'sceneColor' ||
+      targetColor.resource === 'msaaColor');
+  const geometryBackedDepth =
+    targetDepth !== undefined &&
+    (targetDepth.resource === 'depth' || targetDepth.resource === 'hdrDepth');
+  const targetDepthView =
+    targetDepthAttachment === undefined
+      ? undefined
+      : geometryBackedDepth
+        ? internalContext.geometryDepthView
+        : (resolvedTargetDepth ?? internalContext.geometryDepthView);
+  if (
+    targetColorAttachment !== undefined &&
+    resolvedTargetColor === undefined &&
+    internalContext.geometryColorView === null
+  ) {
+    throw new RenderFeatureStageFailedError(
+      contributionPass.featureIdentity,
+      contributionPass.order,
+      'record',
+      'next-frame',
+    );
+  }
+  if (
+    targetDepthAttachment !== undefined &&
+    (targetDepthView === null || targetDepthView === undefined)
+  ) {
+    throw new RenderFeatureStageFailedError(
+      contributionPass.featureIdentity,
+      contributionPass.order,
+      'record',
+      'next-frame',
+    );
+  }
+  const resolvedDepth =
+    targetDepthAttachment !== undefined
+      ? targetDepthView
+      : contributionPass.descriptor.reads
+          .map((name) => resolveContext.resolve(name))
+          .find((view): view is unknown => view !== undefined);
+  const colorViews =
+    targetColorAttachment !== undefined
+      ? [
+          (geometryBackedColor
+            ? internalContext.geometryColorView
+            : (resolvedTargetColor ??
+              internalContext.geometryColorView ??
+              context.view)) as unknown,
+        ]
+      : resolvedWrites.length > 0
+        ? resolvedWrites
+        : [context.view];
+  const resolveTarget =
+    geometryBackedColor && targetColor?.sampleCount === 4 && internalContext.msaaActive
+      ? internalContext.geometryColorResolveView
+      : null;
   if (
     contributionPass.graphics !== undefined &&
     (contributionPass.graphicsState === undefined ||
@@ -716,6 +800,9 @@ function executeGraphOwnedRenderFeaturePass(
     label: contributionPass.name,
     colorAttachments: colorViews.map((view) => ({
       view: view as unknown as GPUTextureView,
+      ...(resolveTarget === null
+        ? {}
+        : { resolveTarget: resolveTarget as unknown as GPUTextureView }),
       loadOp: 'load',
       storeOp: 'store',
     })),

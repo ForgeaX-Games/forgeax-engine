@@ -178,9 +178,7 @@ export async function buildEngineShaderManifest(): Promise<{
         ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
       };
       const r = await cookMaterialSource(
-        defines === undefined
-          ? stripPragmas(file.source)
-          : stripFalseImports(stripPragmas(file.source), defines),
+        defines === undefined ? file.source : stripFalseImports(file.source, defines),
         {
           id:
             defines === undefined || buildVariantKey(defines) === ''
@@ -190,8 +188,8 @@ export async function buildEngineShaderManifest(): Promise<{
             defines === undefined
               ? eng.imports
               : filterImportsByDefines(
-                  extractTransitiveImports(stripPragmas(file.source), eng.imports),
-                  stripPragmas(file.source),
+                  extractTransitiveImports(file.source, eng.imports),
+                  file.source,
                   defines,
                   axes,
                 ),
@@ -617,9 +615,9 @@ async function compileUserMaterialVariants(
   // pipeline layout (the old failure surfaced only at queue submit).
   const axes = scanUserMaterialVariantAxes(source);
   const combinations = axes.length > 0 ? cartesianDefines(axes) : [undefined];
-  const cleanSource = stripPragmas(source);
+  const sourceForRouting = source;
   const transitiveImports =
-    axes.length > 0 ? extractTransitiveImports(cleanSource, imports) : imports;
+    axes.length > 0 ? extractTransitiveImports(sourceForRouting, imports) : imports;
   const compiled: CompiledUserMaterialVariant[] = [];
 
   for (const defines of combinations) {
@@ -631,11 +629,11 @@ async function compileUserMaterialVariants(
       ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
     };
     const variantSource =
-      defines === undefined ? cleanSource : stripFalseImports(cleanSource, defines);
+      defines === undefined ? sourceForRouting : stripFalseImports(sourceForRouting, defines);
     const variantImports =
       defines === undefined
         ? imports
-        : filterImportsByDefines(transitiveImports, cleanSource, defines, axes);
+        : filterImportsByDefines(transitiveImports, sourceForRouting, defines, axes);
     const r = await cookMaterialSource(variantSource, {
       id: definesKey === '' ? id : `${id}#${definesKey}`,
       imports: variantImports,
@@ -893,13 +891,6 @@ function buildEntryVariantKey(axes: readonly string[]): string {
     defines[axis] = axis !== 'CLUSTER_FORWARD_AVAILABLE';
   }
   return buildVariantKey(defines);
-}
-
-const PRAGMA_RE = /^\s*#pragma\s+\S.*$/gm;
-
-/** Strip #pragma lines before passing to naga_oil -- they pass through compose and naga rejects `#` tokens. */
-function stripPragmas(source: string): string {
-  return source.replace(PRAGMA_RE, '');
 }
 
 /**
@@ -1702,9 +1693,9 @@ async function compileEngineEntry(
   const variantBindingsJson: string[] = [];
   // feat-20260629 M4: uvSetCount from first variant compile result
   let engineUvSetCount = 0;
-  const cleanSource = stripPragmas(file.source);
+  const sourceForRouting = file.source;
   const allTransitiveImports =
-    variantAxes.length > 0 ? extractTransitiveImports(cleanSource, imports) : imports;
+    variantAxes.length > 0 ? extractTransitiveImports(sourceForRouting, imports) : imports;
 
   for (const defines of axisCombos) {
     const effectiveDefines = {
@@ -1723,7 +1714,7 @@ async function compileEngineEntry(
     // whose condition is false for this variant.
     const perVariantImports = filterImportsByDefines(
       allTransitiveImports,
-      cleanSource,
+      sourceForRouting,
       effectiveDefines,
       variantAxes,
     );
@@ -1736,7 +1727,9 @@ async function compileEngineEntry(
     // remove them here so the false-variant import-not-found error is
     // eliminated at the TS layer.
     const perVariantSource =
-      variantAxes.length > 0 ? stripFalseImports(cleanSource, effectiveDefines) : cleanSource;
+      variantAxes.length > 0
+        ? stripFalseImports(sourceForRouting, effectiveDefines)
+        : sourceForRouting;
     const r = await cookMaterialSource(perVariantSource, {
       id: uniqueId,
       imports: perVariantImports,

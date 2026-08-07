@@ -164,7 +164,7 @@ graph.execute(ctx);
 
 ## Error model
 
-`RenderGraphErrorCode` is a closed 5-member union. All failures return `Result<T, RenderGraphError>` (never throw).
+`RenderGraphErrorCode` is a closed 7-member union. All failures return `Result<T, RenderGraphError>` (never throw). The private code-to-detail authority correlates each constructor `code` with its accepted `detail` shape while keeping `detail` optional.
 
 | Code | Trigger | `.detail` shape |
 |:--|:--|:--|
@@ -173,6 +173,8 @@ graph.execute(ctx);
 | `'cyclic-dependency'` | Pass dependency graph contains a cycle (topo-sort failed) | `{ cycle: readonly string[] }` |
 | `'duplicate-resource'` | Same resource key registered twice via `addResource` | `{ resourceKey: string }` |
 | `'unknown-resource'` | A pass references a resource key that was never registered | `{ resourceKey: string, passName: string }` |
+| `'resource-alloc-failed'` | GPU allocation or view creation returns an RHI error | `{ resourceKey: string, passName?: string, rhiCode?: string }` |
+| `'invalid-format'` | An `addColorTarget` format is not a valid GPU texture format | `{ resourceKey: string, format: string, expected: readonly string[] }` |
 
 Every error carries four readonly fields aligned with the engine error convention (research Finding 8):
 
@@ -181,7 +183,7 @@ class RenderGraphError extends Error {
   readonly code: RenderGraphErrorCode;     // closed-union member -- primary signal
   readonly expected: string;               // expected-state description
   readonly hint: string;                   // actionable recovery guidance
-  readonly detail: RenderGraphErrorDetail; // narrowed payload per code
+  readonly detail: RenderGraphErrorDetail | undefined; // optional payload per code
 }
 ```
 
@@ -194,6 +196,8 @@ class RenderGraphError extends Error {
 | `cyclic-dependency` | Break the cycle among passes (cycle path in `.detail.cycle`) |
 | `duplicate-resource` | Remove the duplicate `addResource` call |
 | `unknown-resource` | Register the resource with `addResource` before referencing it |
+| `resource-alloc-failed` | Check device state and recreate the graph or device if allocation fails |
+| `invalid-format` | Use a standard GPU texture format listed in `.detail.expected` |
 
 `compile()` does **not** error on "dangling write" (a resource written but never read). This is intentional -- the output resource may be consumed by swap-chain display, Inspector readback, or a future downstream pass (plan-strategy D-5).
 
@@ -252,7 +256,7 @@ Runtime (`@forgeax/engine-runtime`) consumes `@forgeax/engine-render-graph`. The
 |:--|:--|:--|
 | Top (this section + Proposition) | What: declarative pass I/O, graph owns lifecycle + barriers | First-time reader deciding if this package fits |
 | Middle (API tables) | How: full type signatures for addResource/addPass/compile/execute/listPasses/listResources | AI user adding a pass |
-| Bottom (Error model + Barrier + Fallback) | Edge cases: 5 error codes with detail shapes, backend-kind discrimination, uniform-storage fallback | AI user debugging a compile failure |
+| Bottom (Error model + Barrier + Fallback) | Edge cases: 7 error codes with detail shapes, backend-kind discrimination, uniform-storage fallback | AI user debugging a compile failure |
 
 Type signatures and error-code tables are the machine-readable SSOT (charter F2: text over images).
 

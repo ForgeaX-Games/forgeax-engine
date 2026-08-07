@@ -15,10 +15,8 @@
 // the (eventual) bind-group layout consumer (charter P5: one resource, one
 // owner; AC-13: 4 RHI buffers actually exist on slot 3..6 layout).
 //
-// Storage usage flag values mirror the pattern already in use in
-// `createRenderer.ts` (GPU_BUFFER_USAGE_STORAGE = 0x80 etc.) -- copied here
-// rather than imported because that file does not export them and this module
-// must stay decoupled from createRenderer.
+// Storage usage flags come from the render package's dependency-free buffer
+// usage owner; this module stays decoupled from renderer bootstrap.
 //
 // Sizes:
 //   - light_data        : 256 x 64 B  = 16 384 B
@@ -45,6 +43,17 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 import {
+  GPU_SHADER_STAGE_COMPUTE,
+  GPU_SHADER_STAGE_FRAGMENT,
+  GPU_SHADER_STAGE_VERTEX,
+} from './gpu-stage';
+import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
+import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
+} from './gpu-usage';
+import {
   CLUSTER_GRID_STRIDE_U32,
   DEFAULT_CLUSTER_GRID,
   LIGHT_INDEX_LIST_CAPACITY,
@@ -65,23 +74,6 @@ const HDRP_BGL_SPEC_STUB: PipelineSpec = Object.freeze({
   geometry: { topology: 'triangle-list', vertexLayout: {} },
   renderState: undefined,
 }) as PipelineSpec;
-
-// WebGPU buffer-usage flag values (mirrors createRenderer.ts constants;
-// re-declared locally to keep this module decoupled from that file).
-const GPU_BUFFER_USAGE_UNIFORM = 0x40;
-const GPU_BUFFER_USAGE_STORAGE = 0x80;
-const GPU_BUFFER_USAGE_COPY_DST = 0x08;
-
-// WebGPU shader-stage visibility flags (mirrors pbr-pipeline.ts constants;
-// re-declared locally to keep this module decoupled).
-const GPU_SHADER_STAGE_VERTEX = 0x1;
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
-const GPU_SHADER_STAGE_COMPUTE = 0x4;
-
-// WebGPU texture-usage flags (matching GPUTextureUsage enum). Mirrors
-// ssao-buffers.ts; re-declared locally to keep the module decoupled.
-const GPU_TEXTURE_USAGE_COPY_DST = 0x02;
-const GPU_TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
 
 /**
  * WebGL2 HDRP downlevel light-list capacity. 128 x 64 B = 8 KiB, below the

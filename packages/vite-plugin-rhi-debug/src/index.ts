@@ -18,11 +18,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { assembleReport, type PassOffset } from '@forgeax/engine-rhi-debug';
+import { RHI_DEBUG_DEV_ROUTES } from '@forgeax/engine-rhi-debug/dev-routes';
 import type { Plugin, ViteDevServer } from 'vite';
 
-const TAPE_ROUTE = '/__forgeax-debug/tape';
-const TRIGGER_ROUTE = '/__forgeax-debug/trigger';
-const ARTIFACT_ROUTE = '/__forgeax-debug/artifact';
 const DEFINE_KEY = 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG';
 const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const CAPTURE_FILES = new Set(['frame-0.tape.bin', 'frame-0.report.json']);
@@ -228,14 +226,14 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
         const url = new URL(requestUrl, 'http://localhost');
 
         // Route dispatch: trigger or tape, else pass through.
-        if (url.pathname === ARTIFACT_ROUTE) {
+        if (url.pathname === RHI_DEBUG_DEV_ROUTES.artifact) {
           const out = res as unknown as MiddlewareRes;
           allowReviewerOrigin(out);
           if (r.method !== 'GET') {
             out.setHeader('Allow', 'GET');
             sendJson(out, 405, {
               error: 'method-not-allowed',
-              hint: `use GET to read a captured frame artifact via ${ARTIFACT_ROUTE}`,
+              hint: `use GET to read a captured frame artifact via ${RHI_DEBUG_DEV_ROUTES.artifact}`,
             });
             return;
           }
@@ -243,14 +241,14 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
           return;
         }
 
-        if (url.pathname === TRIGGER_ROUTE) {
+        if (url.pathname === RHI_DEBUG_DEV_ROUTES.trigger) {
           const out = res as unknown as MiddlewareRes;
 
           if (r.method !== 'POST') {
             out.setHeader('Allow', 'POST');
             sendJson(out, 405, {
               error: 'method-not-allowed',
-              hint: `use POST to trigger a browser capture via ${TRIGGER_ROUTE}`,
+              hint: `use POST to trigger a browser capture via ${RHI_DEBUG_DEV_ROUTES.trigger}`,
             });
             return;
           }
@@ -329,13 +327,13 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
           return;
         }
 
-        if (url.pathname === TAPE_ROUTE) {
+        if (url.pathname === RHI_DEBUG_DEV_ROUTES.tape) {
           const out = res as unknown as MiddlewareRes;
           if (r.method !== 'POST') {
             out.setHeader('Allow', 'POST');
             sendJson(out, 405, {
               error: 'method-not-allowed',
-              hint: `use POST to upload a captured tape to ${TAPE_ROUTE}`,
+              hint: `use POST to upload a captured tape to ${RHI_DEBUG_DEV_ROUTES.tape}`,
             });
             return;
           }

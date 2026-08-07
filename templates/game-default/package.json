@@ -30,7 +30,7 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "no CI gate on template scaffold; apps/preview hosts acceptance"
+        "reason": "CI acceptance is owned by the apps/preview host; the template has no standalone runner"
       },
       "spike-report": {
         "enabled": false,

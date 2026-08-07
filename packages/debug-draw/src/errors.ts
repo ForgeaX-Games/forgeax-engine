@@ -1,6 +1,6 @@
 // @forgeax/engine-debug-draw -- error model SSOT (feat-20260615-debug-draw M1 / w2)
 //
-// Closed union DebugDrawErrorCode (4 members), discriminated detail union,
+// Closed union DebugDrawErrorCode, discriminated detail union,
 // and structured DebugDrawError carrying .code / .expected / .hint / .detail.
 //
 // Decision anchors:
@@ -12,7 +12,7 @@
 import { err, type Result } from '@forgeax/engine-types';
 
 /**
- * Closed {@link DebugDrawErrorCode} union -- 4 members.
+ * Closed {@link DebugDrawErrorCode} union.
  * Exhaustive `switch (err.code)` needs no default fallback.
  *
  * | code | trigger |

@@ -164,14 +164,7 @@ export type PostProcessErrorDetailFor<C extends PostProcessErrorCode> =
  * graph-resource-miss variant); the code discriminator narrows the intent across
  * the two id-shaped variants.
  */
-export type PostProcessErrorDetail =
-  | PostProcessPreviouslyRegisteredDetail
-  | PostProcessNotFoundDetail
-  | FullscreenInputNotFoundDetail
-  | SsaoRadiusNonPositiveDetail
-  | SsaoBiasNegativeDetail
-  | PostProcessParamsSizeMismatchDetail
-  | PostProcessParamsUpdateSizeMismatchDetail;
+export type PostProcessErrorDetail = PostProcessErrorDetailFor<PostProcessErrorCode>;
 
 const POST_PROCESS_EXPECTED: { readonly [C in PostProcessErrorCode]: string } = {
   'post-process-already-registered': 'each post-process id is registered at most once',
