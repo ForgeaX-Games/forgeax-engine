@@ -15,7 +15,7 @@ const contract = JSON.parse(
 
 test('uses non-interactive overwrite mode when expanding duplicate artifact paths', () => {
   const source = readFileSync(script, 'utf8');
-  assert.match(source, /execFileSync\('unzip', \['-q', '-o', archive, '-d', destination\]\)/);
+  assert.match(source, /execFileAsync\('unzip', \['-q', '-o', archive, '-d', destination\]\)/);
 });
 
 test('deduplicates artifact expansion when provenance classes share an artifact', () => {
@@ -24,7 +24,8 @@ test('deduplicates artifact expansion when provenance classes share an artifact'
     source,
     /new Map\(artifacts\.map\(\(artifact\) => \[String\(artifact\.id\), artifact\]\)\)/,
   );
-  assert.match(source, /uniqueArtifacts\.map\(\(artifact\) =>/);
+  assert.match(source, /mapBatches\(\n\s+uniqueArtifacts,\n\s+expandedBytesConcurrency,/);
+  assert.match(source, /const expandedBytesConcurrency = 3;/);
 });
 
 function fixture() {

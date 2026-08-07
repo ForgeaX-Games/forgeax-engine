@@ -10,6 +10,7 @@ import {
   RenderFeaturePreparationFailedError,
   RenderFeaturePreparedStateMismatchError,
 } from '../errors/render';
+import type { RenderFeatureTargetHandle } from './targets';
 import type { RenderFeaturePreparedStateMismatchDetail } from './types';
 
 /** Closed prepared kinds: pipeline, bindings, vertex/index data, and attachment. */
@@ -38,6 +39,8 @@ export interface RenderFeaturePipelineDescriptor {
   readonly vertexLayout: string;
   readonly colorFormats: readonly string[];
   readonly depthFormat?: string;
+  /** Sample count of the target this pipeline will draw into. */
+  readonly sampleCount?: 1 | 4;
   /**
    * Declarative raster/depth/blend overrides for this pipeline. The render
    * owner maps this portable material state onto the backend pipeline; a
@@ -94,7 +97,7 @@ export interface RenderFeatureGraphicsPrepare {
 
 /** A color target declared by a graphics pass. */
 export interface RenderFeatureColorAttachment {
-  readonly resource: string;
+  readonly resource: string | RenderFeatureTargetHandle;
   readonly format: string;
   readonly loadOp: 'load' | 'clear';
   readonly storeOp: 'store' | 'discard';
@@ -102,7 +105,7 @@ export interface RenderFeatureColorAttachment {
 
 /** A depth/stencil target declared by a graphics pass. */
 export interface RenderFeatureDepthStencilAttachment {
-  readonly resource: string;
+  readonly resource: string | RenderFeatureTargetHandle;
   readonly format: string;
   readonly depthLoadOp: 'load' | 'clear';
   readonly depthStoreOp: 'store' | 'discard';
@@ -188,7 +191,10 @@ export interface RenderFeatureGraphicsContributionStaging {
 export interface RenderFeaturePreparedGraphicsState {
   readonly capabilityAvailable: boolean;
   readonly generation: number;
-  readonly attachments: readonly { readonly resource: string; readonly format: string }[];
+  readonly attachments: readonly {
+    readonly resource: string | RenderFeatureTargetHandle;
+    readonly format: string;
+  }[];
   readonly pipeline: RenderFeaturePreparedRef | undefined;
   /** All prepared pipelines available to the current graphics pass. */
   readonly pipelines?: readonly RenderFeaturePreparedRef[];
@@ -263,9 +269,14 @@ function hasAttachment(
   available: RenderFeaturePreparedGraphicsState['attachments'],
   required: RenderFeatureColorAttachment | RenderFeatureDepthStencilAttachment,
 ): boolean {
+  const requiredResource =
+    typeof required.resource === 'string' ? required.resource : required.resource.resource;
   return available.some(
     (attachment) =>
-      attachment.resource === required.resource && attachment.format === required.format,
+      (typeof attachment.resource === 'string'
+        ? attachment.resource
+        : attachment.resource.resource) === requiredResource &&
+      attachment.format === required.format,
   );
 }
 

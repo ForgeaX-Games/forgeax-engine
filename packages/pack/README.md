@@ -32,7 +32,7 @@ Put the material payload in the package `assets[]` row and keep its `refs[]` gra
 > package moves and DDC relocation. Paths and array positions are locators,
 > not identities.
 
-Disk schema, GUID tools (`AssetGuid` brand + UUIDv7/v5), scanner fail-fast chain (13-member `PackErrorCode`) for the forgeax engine asset package system. The three CLI surfaces -- `scan`, `lookup`, `verify` -- are shipped as the standalone plugin bin `forgeax-engine-remote-asset` (resolved via PATH-prefix discovery for `forgeax-engine-remote-`; filesystem-mode; offline; no WS connection required).
+Disk schema, GUID tools (`AssetGuid` brand + UUIDv7/v5), mesh-binary wire facts, and scanner fail-fast chain (13-member `PackErrorCode`) for the forgeax engine asset package system. The three CLI surfaces -- `scan`, `lookup`, `verify` -- are shipped as the standalone plugin bin `forgeax-engine-remote-asset` (resolved via PATH-prefix discovery for `forgeax-engine-remote-`; filesystem-mode; offline; no WS connection required).
 
 > Package name vs directory: this package is published as `@forgeax/engine-pack` but lives at `packages/pack` on disk. The `@forgeax/engine-` prefix is the IDE-autocomplete entrypoint AI users discover the package family by; the directory drops the prefix to keep tree depth flat (mirrors the `packages/runtime` / `@forgeax/engine-runtime` pair). All other packages in the engine family follow the same convention.
 
@@ -239,6 +239,13 @@ The `verify` subcommand runs a fail-fast 7-step chain:
 | 5 | Missing `.meta.json` check (source file without sidecar) | `pack-meta-missing` |
 | 6 | Subasset index bounds check (`.meta.json` subAssets[].sourceIndex) | `pack-subasset-index-out-of-range` |
 | 7 | Material payload schema check (`buildMaterialAssetValidator(MATERIAL_PARAM_TYPES_V1)` for `kind: 'material'`) | `payload-schema-mismatch` |
+
+## Mesh-binary artifact contract
+
+`MESH_BIN_VERSION` and `MESH_BIN_HEADER_V2_BYTES` are the Pack-owned facts for
+the v2 `<guid>.bin` mesh artifact. The import encoder and assets-runtime decoder
+consume them from the package root; independent test fixtures intentionally keep
+literal header values so they remain wire-format oracles.
 
 ## Entry subpaths
 

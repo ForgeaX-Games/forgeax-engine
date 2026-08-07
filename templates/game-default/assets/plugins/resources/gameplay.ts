@@ -3,6 +3,7 @@ import type { World } from '@forgeax/engine-ecs';
 export const GAME_DEFAULT_GAMEPLAY_CONFIG = 'gameDefaultGameplayConfig';
 export const GAME_DEFAULT_COMMAND_COUNTERS = 'gameDefaultCommandCounters';
 export const GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN = 'gameDefaultMaterialElapsedOrigin';
+export const GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE = 50;
 
 export type GameplayCommandCounters = {
   spawned: number;

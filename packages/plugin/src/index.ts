@@ -155,7 +155,7 @@ export type PluginErrorDetailFor<C extends PluginErrorCode> = C extends 'duplica
 /**
  * Tagged union of `.detail` payloads carried by structured PluginError.
  */
-export type PluginErrorDetail = PluginDetailDuplicatePlugin | PluginDetailBuildFailed;
+export type PluginErrorDetail = PluginErrorDetailFor<PluginErrorCode>;
 
 class PluginErrorClass extends Error {
   readonly code: PluginErrorCode;

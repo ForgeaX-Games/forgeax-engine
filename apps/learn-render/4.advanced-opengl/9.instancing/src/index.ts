@@ -39,17 +39,18 @@ import type {
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 // 2. example glue
 
-// pack-index URL: GUID -> URL map served by @forgeax/engine-vite-plugin-pack
-// in dev and emitted to dist/ at build time. assets.configurePackIndex()
-// wires the prod fetch chain for loadByGuid<MeshAsset> / <TextureAsset>.
-const PACK_INDEX_URL = '/pack-index.json';
+// The runtime binding provides the scoped GUID -> URL map in dev and the
+// single-game catalog emitted to dist/ at build time.
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-9-instancing',
+);
 
 // Asteroid belt form. The belt is a torus of ASTEROID_COUNT rocks orbiting a
 // central planet, mirroring LO 9.instancing's `amount = 1000` ring.
@@ -144,7 +145,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.9 instancing] createApp failed:', appRes.error);
@@ -160,10 +161,9 @@ const appRes = await createApp(
   });
   const assets = renderer.assets;
 
-  // Wire the prod pack-index URL: loadByGuid fast-path checks the in-memory
-  // map first; on miss it falls back to this URL. @forgeax/engine-vite-plugin-pack
-  // serves the catalog in dev and emits dist/pack-index.json at build time.
-  assets.configurePackIndex(PACK_INDEX_URL);
+  // Wire the scoped catalog: loadByGuid fast-path checks the in-memory map
+  // first; the binding also supplies the scoped package and import endpoints.
+  assets.configureRuntimeBinding(runtimeBinding);
 
   // --- load vendored planet mesh + mars.png texture ---
 

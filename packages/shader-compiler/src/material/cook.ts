@@ -37,7 +37,6 @@ export interface MaterialCookedAsset {
 export type MaterialCookError = MaterialError | ShaderError;
 
 const IMPORT_RE = /^\s*#import\s+([A-Za-z0-9_:-]+)/gm;
-const PRAGMA_RE = /^\s*#pragma\s+\S.*$/gm;
 
 function materialTypeToSchema(parameter: MaterialParameter): ParamSchemaEntry | undefined {
   switch (parameter.type) {
@@ -283,7 +282,7 @@ export async function cookMaterialAsset(
   for (const pass of resolved.value.asset.passes ?? []) {
     const sourceRecord = request.sources.get(pass.program.module);
     if (!sourceRecord.ok) return err(sourceRecord.error);
-    const source = sourceRecord.value.source.replace(PRAGMA_RE, '');
+    const source = sourceRecord.value.source;
     const imports = collectSourceClosure(source, request.sources, generatedModule);
     if (!imports.ok) return imports;
     const defines = moduleDefines(

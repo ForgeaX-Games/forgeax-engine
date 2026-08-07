@@ -1,0 +1,102 @@
+import { describe, expectTypeOf, it } from 'vitest';
+import {
+  type CapMissingDetail,
+  type CyclicDependencyDetail,
+  type DanglingReadDetail,
+  type DuplicateResourceDetail,
+  type InvalidFormatDetail,
+  RenderGraphError,
+  type RenderGraphErrorCode,
+  type RenderGraphErrorDetail,
+  type ResourceAllocFailedDetail,
+} from '../errors.js';
+
+describe('RenderGraphError code/detail correlation', () => {
+  it('accepts every existing code with its matching detail interface', () => {
+    new RenderGraphError({
+      code: 'dangling-read',
+      expected: '',
+      hint: '',
+      detail: { resourceKey: 'resource', passName: 'pass' } satisfies DanglingReadDetail,
+    });
+    new RenderGraphError({
+      code: 'cap-missing',
+      expected: '',
+      hint: '',
+      detail: { cap: 'compute', passName: 'pass' } satisfies CapMissingDetail,
+    });
+    new RenderGraphError({
+      code: 'cyclic-dependency',
+      expected: '',
+      hint: '',
+      detail: { cycle: ['a', 'b'] } satisfies CyclicDependencyDetail,
+    });
+    new RenderGraphError({
+      code: 'duplicate-resource',
+      expected: '',
+      hint: '',
+      detail: { resourceKey: 'resource' } satisfies DuplicateResourceDetail,
+    });
+    new RenderGraphError({
+      code: 'unknown-resource',
+      expected: '',
+      hint: '',
+      detail: { resourceKey: 'resource', passName: 'pass' } satisfies DanglingReadDetail,
+    });
+    new RenderGraphError({
+      code: 'resource-alloc-failed',
+      expected: '',
+      hint: '',
+      detail: {
+        resourceKey: 'resource',
+        passName: 'pass',
+        rhiCode: 'lost',
+      } satisfies ResourceAllocFailedDetail,
+    });
+    new RenderGraphError({
+      code: 'invalid-format',
+      expected: '',
+      hint: '',
+      detail: {
+        resourceKey: 'resource',
+        format: 'rgba16float',
+        expected: ['rgba16float'],
+      } satisfies InvalidFormatDetail,
+    });
+  });
+
+  it('keeps detail optional, including explicit undefined', () => {
+    new RenderGraphError({ code: 'dangling-read', expected: '', hint: '' });
+    new RenderGraphError({ code: 'invalid-format', expected: '', hint: '', detail: undefined });
+  });
+
+  it('rejects a detail belonging to a different code', () => {
+    new RenderGraphError({
+      code: 'dangling-read',
+      expected: '',
+      hint: '',
+      // @ts-expect-error -- dangling-read accepts DanglingReadDetail, not CapMissingDetail.
+      detail: { cap: 'compute', passName: 'pass' },
+    });
+  });
+
+  it('preserves the closed seven-code and six-shape public unions', () => {
+    expectTypeOf<RenderGraphErrorCode>().toEqualTypeOf<
+      | 'dangling-read'
+      | 'cap-missing'
+      | 'cyclic-dependency'
+      | 'duplicate-resource'
+      | 'unknown-resource'
+      | 'resource-alloc-failed'
+      | 'invalid-format'
+    >();
+    expectTypeOf<RenderGraphErrorDetail>().toEqualTypeOf<
+      | DanglingReadDetail
+      | CapMissingDetail
+      | CyclicDependencyDetail
+      | DuplicateResourceDetail
+      | ResourceAllocFailedDetail
+      | InvalidFormatDetail
+    >();
+  });
+});

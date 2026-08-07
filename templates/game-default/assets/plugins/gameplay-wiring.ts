@@ -17,6 +17,7 @@ import type { GameplaySession } from './gameplay-session';
 import type { GameplayTargetFeatures } from './gameplay-targets';
 import { GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN, recordGameplayCommand } from './resources/gameplay';
 import { TOP_DOWN_OFFSET_Z, TOP_DOWN_Y } from './camera-controller';
+import { applyAssetLabAction, type AssetLabActionResult } from './asset-lab-actions';
 
 export type GameplayWiringArgs = {
   readonly world: World;
@@ -34,9 +35,35 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
   const { projectileMesh, projectileMaterial, customProjectile, spriteAtlasLoop, flashMaterial, getProjectileVisual, setProjectileVisual, materialsForCurrentMesh, triggerFlash, multiMaterial } = projectilePresentation;
   const toggleProfile = () => {
     const snapshot = targets.toggleProfile();
-    cameraController.hud.setTargetProfileActive(snapshot.active === 'profile');
+    cameraController.hud.setTargetProfileActive(snapshot.active === 'profile', snapshot.precisionHits);
     return snapshot;
   };
+  const assetLabContext = {
+    world,
+    meshHandleSwap: targets.meshHandleSwap,
+    fbxMeshSwap: targets.fbxMeshSwap,
+    gltfMeshSwap: targets.gltfMeshSwap,
+    jpegTextureSwap: targets.jpegTextureSwap,
+    videoTexturePanel: targets.videoTexturePanel,
+    fbxSkinnedTarget: targets.fbxSkinnedTarget,
+    targetProfile: targets.targetProfile,
+    readScore: session.changeDetection.readScore,
+    toggleProfile,
+    spriteAtlasLoop,
+    worldScoreText: session.worldScoreText,
+    setProjectileVisual,
+  };
+  const reportAssetLabResult = (result: AssetLabActionResult): void => {
+    cameraController.hud.setAssetLabStatus(result.text, result.state);
+  };
+  const applyAssetLab = (action: Parameters<typeof applyAssetLabAction>[1]): AssetLabActionResult => {
+    const result = applyAssetLabAction(assetLabContext, action);
+    cameraController.hud.setTargetProfileActive(targets.targetProfile?.active === 'profile', targets.targetProfile?.precisionHits ?? 0);
+    reportAssetLabResult(result);
+    return result;
+  };
+  const applyFbxCompanion = (): AssetLabActionResult => applyAssetLab('fbx-companion');
+  cameraController.hud.setAssetLabActionHandler(applyAssetLab);
 
   if (host !== undefined) {
     installGameplayProjection({
@@ -52,12 +79,14 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       jpegTextureSwap: targets.jpegTextureSwap,
       videoTexturePanel: targets.videoTexturePanel,
       targetProfile: targets.targetProfile,
-      toggleProfile,
+      applyTargetProfile: () => applyAssetLab('target-profile'),
+      applyFbxCompanion,
       spriteAtlasLoop,
       multiWorldOverlay: session.multiWorldOverlay,
       worldScoreText: session.worldScoreText,
       fbxSkinnedTarget: targets.fbxSkinnedTarget,
       vfxHitLoop: session.vfxHitLoop,
+      hitStreak: session.hitStreak,
       triggerFlash: () => triggerFlash(),
       triggerScore: session.triggerScore,
       resetMeshHandleSwap: (state) => resetMeshHandleSwap(world, state),
@@ -79,6 +108,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       camera,
       readInput: session.readInput,
       getMode,
+      hud: cameraController.hud,
       gameplayAudio: session.gameplayAudio,
       customProjectile,
       getProjectileVisual,
@@ -88,11 +118,15 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       gltfMeshSwap: targets.gltfMeshSwap,
       jpegTextureSwap: targets.jpegTextureSwap,
       videoTexturePanel: targets.videoTexturePanel,
+      fbxSkinnedTarget: targets.fbxSkinnedTarget,
       targetProfile: targets.targetProfile,
-      toggleProfile: () => { toggleProfile(); },
+      toggleProfile,
+      readScore: session.changeDetection.readScore,
+      onAssetLabResult: reportAssetLabResult,
       spriteAtlasLoop,
       worldScoreText: session.worldScoreText,
       vfxHitLoop: session.vfxHitLoop,
+      hitStreak: session.hitStreak,
       toggleCustomProjectileMesh,
       resetMeshHandleSwap: (state) => resetMeshHandleSwap(world, state),
       resetFbxMeshSwap: (state) => resetFbxMeshSwap(world, state),

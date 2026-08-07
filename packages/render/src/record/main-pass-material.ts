@@ -33,6 +33,7 @@ import {
   type EmissiveAoBindGroupResources,
   type SkylightBindGroupResources,
 } from '../ibl/skylight-bind-group';
+import { isStandardPbrMaterialShader } from '../pbr-pipeline';
 import { deriveTextureExtent } from '../render-data';
 import {
   type PipelineState,
@@ -251,20 +252,6 @@ export function selectMaterialPipelineForRender(args: {
  * upload fails (a structured error is fired). Callers then fall back to their
  * existing placeholder view, preserving the pre-extraction fallback semantics.
  */
-// feat-20260601-gpu-resource-store-extraction M1 (D-1): builtin mesh handle
-// ids 1-5 (CUBE/TRIANGLE/QUAD/SPHERE/NINESLICE_QUAD) are seeded + uploaded
-// by createRenderer step-3 into `pipelineState.meshes`; they are not routed
-// through the store's `ensureResident` pull path. Any handle id above this
-// max is a user mesh. feat-20260527-sprite-nineslice M2 / w11: bumped to 5
-// when HANDLE_NINESLICE_QUAD joined the builtin set.
-export const BUILTIN_MESH_ID_MAX = 5;
-
-// feat-20260527-sprite-nineslice M2 / w11 (D-2): raw u32 id of
-// HANDLE_NINESLICE_QUAD used to look up the 16-vertex / 54-index mesh
-// from `pipelineState.meshes` when a sprite material declares non-zero
-// `slices`. Mirrors the literal in `asset-registry.ts:HANDLE_NINESLICE_QUAD`.
-export const NINESLICE_QUAD_RAW_ID = 5;
-
 function isImageError(error: unknown): error is ImageError {
   if (typeof error !== 'object' || error === null) return false;
   const code = (error as { readonly code?: unknown }).code;
@@ -348,6 +335,11 @@ export function videoTextureView(
   if (element === undefined) return store.getView(clip);
   const width = element.videoWidth;
   const height = element.videoHeight;
+  // Metadata dimensions can be non-zero before the decoder has produced a
+  // current frame. WebGPU rejects copyExternalImageToTexture in that window
+  // because the video element has no back resource yet; keep the previous
+  // frame/default view until HAVE_CURRENT_DATA (2) is reached.
+  if (width <= 0 || height <= 0 || element.readyState < 2) return store.getView(clip);
   const uploaded = store.uploadFrame(clip, element, width, height);
   if (uploaded === undefined) return store.getView(clip);
   if (!uploaded.ok) {
@@ -427,12 +419,9 @@ export function applyMaterialTextureUvScales(
   // Standard PBR grew two authored coat fields before the engine-owned UV
   // tail. Sprite, sprite-lit, unlit, and text keep their own 80-byte tail
   // position because their WGSL layouts do not carry clearcoat.
-  const textureScaleOffset =
-    material.materialShaderId === 'forgeax::default-standard-pbr' ||
-    material.materialShaderId === 'forgeax::pbr-skin' ||
-    material.materialShaderId === 'forgeax::default-standard-pbr-skin'
-      ? STANDARD_PBR_TEXTURE_SCALE_OFFSET
-      : LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET;
+  const textureScaleOffset = isStandardPbrMaterialShader(material.materialShaderId)
+    ? STANDARD_PBR_TEXTURE_SCALE_OFFSET
+    : LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET;
   const isStandardPbr = textureScaleOffset === STANDARD_PBR_TEXTURE_SCALE_OFFSET;
   const hasTextureMetadata =
     material.textureCoordinates !== undefined ||
@@ -589,7 +578,8 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
   //   f32[19]     clearcoatRoughness (offset 76)
   //   f32[20..22] specularTint       (offset 80, vec3)
   //                                  (offset 92..95 alignment pad)
-  //   f32[24..]   engine-owned texture coordinate records (offset 96)
+  //   f32[24..71] engine-owned texture coordinate records (offset 96)
+  //   f32[72]     normalScale        (offset 288)
   f32[0] = material.baseColor[0] ?? 0;
   f32[1] = material.baseColor[1] ?? 0;
   f32[2] = material.baseColor[2] ?? 0;
@@ -618,6 +608,7 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
   f32[20] = 1;
   f32[21] = 1;
   f32[22] = 1;
+  f32[72] = material.normalScale ?? 1;
   // Schema-driven paramSnapshot overlay (feat-20260523 M9-T05, AC-14):
   // for user-shaders with a paramSnapshot, project the first vec4/color
   // entry onto slot 0 and the first two f32 entries onto slot 1's first

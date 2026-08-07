@@ -41,6 +41,8 @@ export interface VfxHitLoopSnapshot {
 
 export interface VfxHitLoop {
   readonly trigger: () => void;
+  readonly beginCharge: () => void;
+  readonly endCharge: () => void;
   readonly triggerCharge: () => void;
   readonly reset: () => void;
   readonly snapshot: () => VfxHitLoopSnapshot;
@@ -128,24 +130,24 @@ export async function createVfxHitLoop(options: {
 }): Promise<VfxHitLoop> {
   const { world, assets, renderer, target, camera } = options;
   if (assets === undefined || renderer === undefined || target === undefined) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable('host-unavailable', 'VFX needs the Preview AssetRegistry, Renderer, and a scored target.'), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable('host-unavailable', 'VFX needs the Preview AssetRegistry, Renderer, and a scored target.'), dispose: () => undefined };
   }
   const parsed = AssetGuid.parse(GAME_DEFAULT_HIT_VFX_GUID);
   if (!parsed.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(parsed.error.code, parsed.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(parsed.error.code, parsed.error.hint), dispose: () => undefined };
   }
   const parsedCharge = AssetGuid.parse(GAME_DEFAULT_CHARGE_VFX_GUID);
   if (!parsedCharge.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(parsedCharge.error.code, parsedCharge.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(parsedCharge.error.code, parsedCharge.error.hint), dispose: () => undefined };
   }
   assets.loaders.registerPackLoader(particleEffectPackLoader);
   const loaded = await loadParticleEffect(assets, GAME_DEFAULT_HIT_VFX_GUID);
   if (!loaded.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(loaded.error.code, loaded.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(loaded.error.code, loaded.error.hint), dispose: () => undefined };
   }
   const loadedCharge = await loadParticleEffect(assets, GAME_DEFAULT_CHARGE_VFX_GUID);
   if (!loadedCharge.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(loadedCharge.error.code, loadedCharge.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(loadedCharge.error.code, loadedCharge.error.hint), dispose: () => undefined };
   }
 
   const hitEffect = world.allocSharedRef('ParticleEffectAsset', loaded.value);
@@ -155,7 +157,7 @@ export async function createVfxHitLoop(options: {
     data: { effect: hitEffect, playing: false, seed: 0, timeScale: 1 },
   });
   if (!player.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(player.error.code, player.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(player.error.code, player.error.hint), dispose: () => undefined };
   }
 
   const simulationPlugin = particleSimulationPlugin({
@@ -165,7 +167,7 @@ export async function createVfxHitLoop(options: {
   });
   const built = await simulationPlugin.build(world);
   if (!built.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(built.error.code, built.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(built.error.code, built.error.hint), dispose: () => undefined };
   }
 
   const feature = particleRenderFeature({
@@ -180,7 +182,7 @@ export async function createVfxHitLoop(options: {
   });
   const installed = await renderer.installRenderFeature(feature);
   if (!installed.ok) {
-    return { trigger: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(installed.error.code, installed.error.hint), dispose: () => undefined };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => unavailable(installed.error.code, installed.error.hint), dispose: () => undefined };
   }
 
   let seed = 0;
@@ -222,8 +224,23 @@ export async function createVfxHitLoop(options: {
       playing = true;
       writePlayer();
     },
+    beginCharge: () => {
+      if (disposed) return;
+      if (mode === 'charge' && playing) return;
+      seed = (seed + 1) >>> 0;
+      triggers += 1;
+      mode = 'charge';
+      playing = true;
+      writePlayer();
+    },
+    endCharge: () => {
+      if (disposed || mode !== 'charge') return;
+      playing = false;
+      writePlayer();
+    },
     triggerCharge: () => {
       if (disposed) return;
+      if (mode === 'charge' && playing) return;
       seed = (seed + 1) >>> 0;
       triggers += 1;
       mode = 'charge';

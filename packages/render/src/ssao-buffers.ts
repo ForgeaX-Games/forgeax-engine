@@ -17,10 +17,10 @@
 // capability gate.
 
 import type { Buffer, Texture } from '@forgeax/engine-rhi';
+import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
+import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
 import type { RenderSystemRuntime } from './render-system';
-import { generateSsaoKernel, generateSsaoNoise } from './ssao-data';
-
-const KERNEL_SAMPLE_COUNT = 64;
+import { generateSsaoKernel, generateSsaoNoise, SSAO_KERNEL_SAMPLE_COUNT } from './ssao-data';
 
 // Each vec3<f32> in a WGSL array is 16B (12B payload + 4B padding).
 // 64 samples * 16 B/sample = 1024 B.
@@ -39,15 +39,6 @@ const UNIFORM_INTENSITY_OFFSET_BYTES = 192;
 const UNIFORM_BYTES = 256;
 export const SSAO_UNIFORM_INTENSITY_OFFSET = UNIFORM_INTENSITY_OFFSET_BYTES;
 export const SSAO_UNIFORM_BYTES = UNIFORM_BYTES;
-
-// WebGPU buffer-usage flag values (mirrors hdrp-buffers.ts constants).
-const GPU_BUFFER_USAGE_UNIFORM = 0x40;
-const GPU_BUFFER_USAGE_COPY_DST = 0x08;
-
-// WebGPU texture-usage flags (matching GPUTextureUsage enum).
-// GPUTextureUsage.COPY_DST = 0x02, GPUTextureUsage.TEXTURE_BINDING = 0x04.
-const GPU_TEXTURE_USAGE_COPY_DST = 0x02;
-const GPU_TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
 
 /**
  * SSAO GPU resources owned by this module (plan-strategy D-1, D-4).
@@ -85,8 +76,8 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
 
   // (1) Kernel UBO — 64 padded vec4 samples (1024 B).
   const kernelSamples = generateSsaoKernel();
-  const kernelData = new Float32Array(KERNEL_SAMPLE_COUNT * 4); // 4 floats per padded vec3
-  for (let i = 0; i < KERNEL_SAMPLE_COUNT; i++) {
+  const kernelData = new Float32Array(SSAO_KERNEL_SAMPLE_COUNT * 4); // 4 floats per padded vec3
+  for (let i = 0; i < SSAO_KERNEL_SAMPLE_COUNT; i++) {
     const s = kernelSamples[i];
     if (s === undefined) continue;
     kernelData[i * 4 + 0] = s[0] ?? 0;
@@ -97,7 +88,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
 
   const kernelBufferRes = device.createBuffer({
     label: 'hdrp-ssao-kernel',
-    size: KERNEL_SAMPLE_COUNT * BYTES_PER_KERNEL_ELEMENT,
+    size: SSAO_KERNEL_SAMPLE_COUNT * BYTES_PER_KERNEL_ELEMENT,
     usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
@@ -173,7 +164,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
 
   const buffers: SsaoBuffers = {
     kernelBuffer: kernelBufferRes.value,
-    kernelBytes: KERNEL_SAMPLE_COUNT * BYTES_PER_KERNEL_ELEMENT,
+    kernelBytes: SSAO_KERNEL_SAMPLE_COUNT * BYTES_PER_KERNEL_ELEMENT,
     noiseTexture: noiseTexRes.value,
     uniformBuffer: uniformBufRes.value,
     uniformBytes: UNIFORM_BYTES,

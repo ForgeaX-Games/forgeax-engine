@@ -105,7 +105,7 @@ await fs.writeFile('wood-container.jpg.meta.json', JSON.stringify(pack, null, 2)
 //    package never imports `device.queue.writeTexture`)
 ```
 
-## 4 错误码全集（charter P3 显式失败）
+## Base importer errors (charter P3 explicit failure)
 
 | code | trigger | detail shape |
 |:--|:--|:--|
@@ -114,7 +114,12 @@ await fs.writeFile('wood-container.jpg.meta.json', JSON.stringify(pack, null, 2)
 | `'image-dimension-out-of-bounds'` | width / height exceed device caps (or hard 16k cap when caps absent) | `{ requested, limit }` |
 | `'image-meta-missing'` | source file exists but no `<source>.meta.json` sidecar in the same directory | `{ sourcePath, expectedSidecarPath }` |
 
-`switch (err.code)` over the 4 members compiles without a `default:` arm; TS guards completeness (charter P4 explicit failure).
+`decodeImageFromFile` produces the four base importer members above. The complete
+`ImageErrorCode` vocabulary, per-code detail shapes, and correlated `ImageError`
+envelope are owned by [`packages/types/src/index.ts`](../types/src/index.ts);
+keep this package guide focused on the producer subset instead of repeating the
+closed union. A `switch (err.code)` over that subset is exhaustive for this
+function's documented result path.
 
 ## 形态铁律
 

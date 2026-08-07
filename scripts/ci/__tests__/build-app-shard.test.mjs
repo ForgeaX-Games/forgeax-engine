@@ -518,21 +518,26 @@ test('repair: aggregate producers use exact artifact IDs with bounded retry tran
 
 test('repair: trusted coverage owns the perf ratio gate outside instrumentation', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
-  const start = workflow.indexOf('  coverage-pnpm:');
-  const remaining = workflow.slice(start);
-  const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
-  const section = remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
+  const sectionFor = (job) => {
+    const start = workflow.indexOf(`  ${job}:`);
+    const remaining = workflow.slice(start);
+    const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
+    return remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
+  };
+  const coverage = sectionFor('coverage-pnpm');
+  const perf = sectionFor('coverage-perf');
   assert.match(
-    section,
-    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "standard"\]'\) \}\}/,
+    coverage,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
   );
-  assert.doesNotMatch(section, /github\.event\.pull_request\.head\.repo/);
+  assert.doesNotMatch(coverage, /github\.event\.pull_request\.head\.repo/);
   assert.match(
-    section,
+    coverage,
     /--coverage --project='@forgeax\/\*' --project=hello-triangle --project=unit/,
   );
-  assert.match(section, /name: ECS performance ratio gates \(uninstrumented\)/);
-  assert.match(section, /--project=ecs-perf/);
+  assert.doesNotMatch(coverage, /--project=ecs-perf/);
+  assert.match(perf, /name: ECS performance ratio gates \(uninstrumented\)/);
+  assert.match(perf, /--project=ecs-perf/);
 });
 
 test('repair: core-only consumers hydrate exact IDs without the app aggregate barrier', () => {

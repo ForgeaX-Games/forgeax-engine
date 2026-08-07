@@ -1,0 +1,9 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "headless": false,
+      "args": ["--enable-unsafe-webgpu"]
+    }
+  }
+}
