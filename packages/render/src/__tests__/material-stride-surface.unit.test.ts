@@ -3,15 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { MATERIAL_PER_ENTITY_STRIDE } from '../render-system';
 
 const ownerSource = readFileSync(new URL('../render-system.ts', import.meta.url), 'utf8');
-const rendererFactorySource = readFileSync(
-  new URL('../renderer/renderer-factory.ts', import.meta.url),
-  'utf8',
-);
 const recordSources = [
   readFileSync(new URL('../record/main-pass.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../record/main-pass-geometry.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../record/main-pass-sprite-draws.ts', import.meta.url), 'utf8'),
-  rendererFactorySource,
 ];
 
 describe('material dynamic-offset stride surface', () => {
@@ -23,10 +18,5 @@ describe('material dynamic-offset stride surface', () => {
       expect(source).toContain('MATERIAL_PER_ENTITY_STRIDE');
       expect(source).not.toMatch(/const MATERIAL_PER_ENTITY_STRIDE\s*=/);
     }
-  });
-
-  it('routes shared renderer allocation through the owner', () => {
-    expect(rendererFactorySource).toContain('perEntityStride: MATERIAL_PER_ENTITY_STRIDE');
-    expect(rendererFactorySource).not.toMatch(/const PER_ENTITY_STRIDE\s*=/);
   });
 });

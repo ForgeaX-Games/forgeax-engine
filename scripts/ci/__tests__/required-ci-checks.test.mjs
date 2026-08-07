@@ -33,7 +33,7 @@ test('lists the exact direct CI contexts selected for the ruleset', () => {
 
 test('required-context workflow projects the manifest count instead of a stale list', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
-  assert.match(workflow, /same 19 contexts/);
+  assert.match(workflow, /same 18 contexts/);
   assert.doesNotMatch(workflow, /same nine contexts/);
 });
 
@@ -178,7 +178,7 @@ test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', ()
 test('t7: REQUIRED_CHECK_NAMES includes every direct CI gate', () => {
   assert.strictEqual(
     REQUIRED_CHECK_NAMES.length,
-    19,
+    18,
     'REQUIRED_CHECK_NAMES must include the legacy smoke aggregates and matrix gates',
   );
 });

@@ -5,11 +5,7 @@
 // InputBackend views. This is exclusive ownership, deliberately separate from
 // synthetic/replay input composition.
 
-import {
-  createEmptyInputBackendSample,
-  type InputBackend,
-  type InputBackendSample,
-} from './input-snapshot';
+import type { InputBackend, InputBackendSample } from './input-snapshot';
 import { isUiOwnedEvent } from './ui-ownership';
 
 export interface CanvasInputBoundary {
@@ -28,7 +24,16 @@ export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoun
   let gamePointerLockAllowed = false;
   source.setPointerLockAllowed?.(false);
 
-  const empty = (): InputBackendSample => createEmptyInputBackendSample();
+  const empty = (): InputBackendSample => ({
+    downKeys: new Set<string>(),
+    upKeys: new Set<string>(),
+    buttons: [false, false, false],
+    movementX: 0,
+    movementY: 0,
+    wheelDelta: 0,
+    focused: true,
+    pointerLocked: false,
+  });
 
   const clear = (): void => {
     source.clear?.();

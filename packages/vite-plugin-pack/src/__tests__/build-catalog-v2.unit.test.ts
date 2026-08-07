@@ -92,18 +92,4 @@ describe('catalog builder v2', () => {
     );
     expect(row?.authoring).toEqual(authoring);
   });
-
-  it('publishes the built-in UI authoring contract for legacy rows without an override', () => {
-    const [row] = projectPackageCatalog(
-      [{ guid: 'ui-guid', kind: 'ui', sourcePath: 'menu.ui.html' }],
-      '/preview/ui',
-    );
-
-    expect(row?.authoring?.ui).toMatchObject({
-      contractVersion: '1',
-      profileVersion: '1',
-      preview: { operation: 'createUiPreviewSession' },
-      mount: { operation: 'mountUi' },
-    });
-  });
 });

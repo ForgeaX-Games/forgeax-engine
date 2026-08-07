@@ -92,19 +92,6 @@ describe('catalog failure result', () => {
     });
   });
 
-  it('supports a host-owned build-input filter without weakening the default fail-closed policy', async () => {
-    const root = await makeRoot('shader-filtered');
-    await writeMeta(root, meta('shader', 'shader'));
-
-    const result = await buildCatalogResult([root], '/', new Set(), {
-      ignorePath: (path) => path.endsWith('.meta.json'),
-    });
-
-    expect(result.authority).toBe('authoritative');
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics).toEqual([]);
-  });
-
   it('marks schema or scan failure as degraded with an affected root', async () => {
     const root = await makeRoot('schema-failure');
     await writeMeta(root, { ...meta('gltf', 'mesh'), importSettings: 'invalid' });

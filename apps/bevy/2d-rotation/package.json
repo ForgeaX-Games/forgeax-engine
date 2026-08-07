@@ -35,7 +35,6 @@
     "@forgeax/engine-scene": "workspace:*"
   },
   "devDependencies": {
-    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",

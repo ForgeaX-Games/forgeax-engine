@@ -174,7 +174,7 @@ describe('feat-20260621 M4′: URP config.postEffects topology (AUGMENT, not REP
     expect(graph).not.toBeNull();
     if (graph === null) return;
     const byName = new Map(graph.listPasses().map((pass) => [pass.name, pass]));
-    expect(byName.get('main')?.writes).toContain('sceneColor');
+    expect(byName.get('main')?.writes).toContain('hdrColor');
     expect(byName.get('tonemap')?.writes).toEqual(['ldrColor']);
     expect(byName.get('fxaa')?.reads).toEqual(['ldrColor']);
     expect(byName.get('fxaa')?.writes).toEqual(['swapchain']);

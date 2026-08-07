@@ -1,9 +1,9 @@
 import { defineSystem, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
-import { pick, viewportToWorld } from '@forgeax/engine-picking';
+import { pick } from '@forgeax/engine-picking';
+import { Transform } from '@forgeax/engine-scene';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import type { HudHandle, ViewMode } from './hud';
-import { GameplayInput, PlayerBodyPart, PlayerMotion } from './components/gameplay';
-import { resolveShotDirection } from './gameplay-aim';
+import { GameplayInput, PlayerMotion } from './components/gameplay';
 
 export type GameplayInputContext = {
   world: World;
@@ -62,32 +62,40 @@ export function installGameplayInput(ctx: GameplayInputContext): void {
         }
         const player = ctx.getPlayerPosition();
         const hit = pick(ctx.world, ctx.camera, ev.x, ev.y, ctx.canvas.width, ctx.canvas.height);
-        const ray = viewportToWorld(
-          ctx.world,
-          ctx.camera,
-          ev.x,
-          ev.y,
-          ctx.canvas.width,
-          ctx.canvas.height,
-        );
-        const hitIsPlayerBodyPart =
-          hit !== undefined &&
-          (hit.entity === ctx.player || ctx.world.get(hit.entity, PlayerBodyPart).ok);
-        const direction = resolveShotDirection({
-          player,
-          playerEntity: ctx.player,
-          hit,
-          hitIsPlayerBodyPart,
-          ray,
-        });
-        if (direction === undefined) continue;
+        let aimX: number, aimZ: number;
+        if (hit) {
+          const tr = ctx.world.get(hit.entity, Transform);
+          if (tr.ok) {
+            aimX = tr.value.pos[0] ?? 0;
+            aimZ = tr.value.pos[2] ?? 0;
+          } else {
+            aimX = player.x + (ev.x - ctx.canvas.width / 2);
+            aimZ = player.z + (ev.y - ctx.canvas.height / 2);
+          }
+        } else {
+          aimX = player.x + (ev.x - ctx.canvas.width / 2);
+          aimZ = player.z + (ev.y - ctx.canvas.height / 2);
+        }
+        let dx = aimX - player.x, dz = aimZ - player.z;
+        let len = Math.hypot(dx, dz);
+        // Picking can legitimately hit the player at the screen centre. That
+        // is not an aim target; fall back to the pointer ray so a click near
+        // the avatar still produces a shot instead of being discarded as a
+        // zero-length direction.
+        if (len <= 1e-3) {
+          dx = ev.x - ctx.canvas.width / 2;
+          dz = ev.y - ctx.canvas.height / 2;
+          len = Math.hypot(dx, dz);
+        }
+        if (len <= 1e-3) continue;
+        const nx = dx / len, nz = dz / len;
         ctx.world.set(ctx.player, GameplayInput, {
-          shotDirX: direction.x,
-          shotDirZ: direction.z,
+          shotDirX: nx,
+          shotDirZ: nz,
           shotDirValid: 1,
           wantShoot: 1,
         });
-        ctx.world.set(ctx.player, PlayerMotion, { faceX: direction.x, faceZ: direction.z });
+        ctx.world.set(ctx.player, PlayerMotion, { faceX: nx, faceZ: nz });
       }
     },
   });

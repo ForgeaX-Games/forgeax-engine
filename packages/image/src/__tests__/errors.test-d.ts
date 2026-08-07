@@ -3,8 +3,6 @@ import type {
   ImageError,
   ImageErrorCode,
   ImageErrorDetail,
-  ImageErrorDetailFor,
-  ImageErrorFor,
   ImageMeta,
 } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
@@ -81,39 +79,6 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
       }
     }
     expectTypeOf(describe_).toBeFunction();
-  });
-
-  it('ImageError correlates envelope code and detail shape', () => {
-    function describeError(error: ImageError): string {
-      switch (error.code) {
-        case 'image-decode-failed':
-          return error.detail.reason;
-        case 'image-format-unsupported':
-          return error.detail.actualMime;
-        case 'image-dimension-out-of-bounds':
-          return `${error.detail.requested.width} > ${error.detail.limit}`;
-        case 'image-meta-missing':
-          return error.detail.expectedSidecarPath;
-        case 'image-hdr-decode-failed':
-          return error.detail.reason;
-        case 'atlas-empty-input':
-          return `${error.detail.receivedCount}`;
-        case 'atlas-size-exceeded':
-          return `${error.detail.name}:${error.detail.maxAtlasSize}`;
-        case 'atlas-region-mismatch':
-          return `${error.detail.name}:${error.detail.atlasPixels}`;
-      }
-    }
-
-    expectTypeOf(describeError).toBeFunction();
-    expectTypeOf<ImageErrorDetailFor<'image-decode-failed'>>().toMatchTypeOf<{
-      code: 'image-decode-failed';
-      reason: string;
-    }>();
-    expectTypeOf<ImageErrorFor<'image-format-unsupported'>>().toMatchTypeOf<{
-      code: 'image-format-unsupported';
-      detail: { actualMime: string };
-    }>();
   });
 
   it('ImageMeta POD has the 5 free-form fields (guid + 4 importer settings)', () => {

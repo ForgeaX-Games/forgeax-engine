@@ -1,7 +1,0 @@
-{
-  "name": "@forgeax/template-game-empty",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Empty ForgeaX game template."
-}

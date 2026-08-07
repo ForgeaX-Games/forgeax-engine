@@ -139,57 +139,6 @@ export interface AssetBindingTarget {
   readonly cardinality: 'single' | 'array';
 }
 
-/**
- * One projection exposed by the producer-owned UI authoring contract.
- *
- * `supported` describes a real engine seam; `unavailable` is deliberately
- * structured so an editor or AI client cannot silently invent a consumer-side
- * implementation for a missing producer capability.
- */
-export type UiAuthoringProjection =
-  | {
-      readonly status: 'supported';
-      readonly operation:
-        | 'createUiPreviewSession'
-        | 'mountUi'
-        | 'gameProjection'
-        | 'dom-native'
-        | 'ui-artifact-companion';
-      readonly contractVersion: '1';
-    }
-  | {
-      readonly status: 'unavailable';
-      readonly reason: AssetAuthoringUnavailableReason;
-    };
-
-/**
- * Versioned UI authoring facts published beside every `kind: 'ui'` catalog
- * row. This is a protocol descriptor, not a promise that the editor may reach
- * into a game world: runtime state/action/read semantics remain owned by the
- * game projection registrar and the UI mount/preview seams remain owned by the
- * engine UI package.
- */
-export interface UiAuthoringCapability {
-  readonly contractVersion: '1';
-  readonly profileVersion: '1';
-  readonly preview: {
-    readonly operation: 'createUiPreviewSession';
-    readonly lifecycle: 'open-rebuild-retry-dispose';
-  };
-  readonly mount: {
-    readonly operation: 'mountUi';
-    readonly lifecycle: 'mount-dispose';
-    readonly actionPort: 'onAction';
-  };
-  readonly state: UiAuthoringProjection;
-  readonly actions: UiAuthoringProjection;
-  readonly reads: UiAuthoringProjection;
-  readonly input: UiAuthoringProjection;
-  readonly navigation: UiAuthoringProjection;
-  readonly font: UiAuthoringProjection;
-  readonly localization: UiAuthoringProjection;
-}
-
 export type AssetBindingCapability =
   | {
       readonly operation: 'bindAssetRef' | 'createMaterialThenBindAssetRef';
@@ -202,59 +151,12 @@ export type AssetBindingCapability =
 export interface AssetAuthoringCapability {
   readonly placement: AssetPlacementCapability;
   readonly binding: AssetBindingCapability;
-  /** Present for producer-owned UI assets; absent for unrelated kinds. */
-  readonly ui?: UiAuthoringCapability;
   readonly sourceOverrides?: readonly SourceOverrideDescriptor[];
 }
-
-const UI_AUTHORING_CAPABILITY: UiAuthoringCapability = {
-  contractVersion: '1',
-  profileVersion: '1',
-  preview: {
-    operation: 'createUiPreviewSession',
-    lifecycle: 'open-rebuild-retry-dispose',
-  },
-  mount: {
-    operation: 'mountUi',
-    lifecycle: 'mount-dispose',
-    actionPort: 'onAction',
-  },
-  state: { status: 'supported', operation: 'gameProjection', contractVersion: '1' },
-  actions: { status: 'supported', operation: 'gameProjection', contractVersion: '1' },
-  reads: { status: 'supported', operation: 'gameProjection', contractVersion: '1' },
-  input: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
-  navigation: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
-  font: { status: 'supported', operation: 'ui-artifact-companion', contractVersion: '1' },
-  localization: {
-    status: 'unavailable',
-    reason: {
-      code: 'missing-producer-capability',
-      hint: 'UI localization resources are not yet published through the UI authoring contract.',
-    },
-  },
-};
 
 /** Built-in defaults for legacy rows that do not carry an explicit override. */
 export function authoringCapabilityForAssetKind(kind: string): AssetAuthoringCapability {
   switch (kind) {
-    case 'ui':
-      return {
-        placement: {
-          operation: 'unavailable',
-          reason: {
-            code: 'unsupported-asset-kind',
-            hint: 'UI assets mount through the UI runtime and are not ECS scene placements.',
-          },
-        },
-        binding: {
-          operation: 'unavailable',
-          reason: {
-            code: 'unsupported-asset-kind',
-            hint: 'UI assets bind through their producer-owned UI runtime contract.',
-          },
-        },
-        ui: UI_AUTHORING_CAPABILITY,
-      };
     case 'scene':
       return {
         placement: { operation: 'addSceneAssetToScene' },

@@ -99,67 +99,7 @@ try {
     throw new Error(`VFX reset failed: ${JSON.stringify({ resetAction, afterReset })}`);
   }
 
-  // Dogfood the same authored effect through the real player path. The red
-  // primary target is stable in the default 960x540 camera, so this click is
-  // the smallest deterministic aim input that exercises picking + charge +
-  // deferred projectile + target feedback together.
-  await page.keyboard.down('r');
-  await page.waitForTimeout(80);
-  await page.keyboard.up('r');
-  await page.waitForTimeout(250);
-  const gameplayBefore = await readSnapshot();
-  await page.keyboard.down('c');
-  await page.waitForTimeout(950);
-  await page.waitForFunction(() => document.querySelector('[data-ui-asset]')?.shadowRoot?.querySelector('[data-ui-slot="charge-meter"]')?.getAttribute('aria-valuenow') === '100', undefined, { timeout: 3_000 });
-  const chargeHud = await page.evaluate(() => document.querySelector('[data-ui-asset]')?.shadowRoot?.textContent ?? '');
-  const chargeMeter = await page.evaluate(() => {
-    const charge = document.querySelector('[data-ui-asset]')?.shadowRoot?.querySelector('[data-ui-slot="charge"]');
-    return charge === null || charge === undefined
-      ? { state: null, value: null, width: null }
-      : {
-        state: charge.getAttribute('data-state'),
-        value: charge.querySelector('[data-ui-slot="charge-meter"]')?.getAttribute('aria-valuenow') ?? null,
-        width: charge.querySelector('[data-ui-slot="charge-fill"]')?.getAttribute('style') ?? null,
-      };
-  });
-  if (!chargeHud.includes('Charging · 100%') || chargeMeter.state !== 'charging' || chargeMeter.value !== '100' || !chargeMeter.width?.includes('width: 100%')) {
-    throw new Error(`player charge HUD failed: ${JSON.stringify({ chargeHud, chargeMeter })}`);
-  }
-  await page.mouse.click(660, 208);
-  await page.keyboard.up('c');
-  await page.waitForTimeout(900);
-  const gameplayAfter = await readSnapshot();
-  const gameplayHealthBefore = gameplayBefore?.value?.targetHealth?.totalCurrent ?? 0;
-  const gameplayHealthAfter = gameplayAfter?.value?.targetHealth?.totalCurrent ?? 0;
-  const gameplayHit = gameplayAfter?.value?.vfxHit;
-  if (!gameplayAfter?.ok || gameplayAfter?.value?.targetHealth?.damageEvents <= (gameplayBefore?.value?.targetHealth?.damageEvents ?? 0) || gameplayHealthAfter >= gameplayHealthBefore || gameplayHit?.mode !== 'hit' || gameplayHit?.playing !== true) {
-    throw new Error(`player charge shot failed: ${JSON.stringify({ gameplayBefore, gameplayAfter, chargeHud })}`);
-  }
-  await page.screenshot({ path: resolve(ARTIFACT_DIR, 'player-charge-shot.png') });
-  await page.keyboard.down('r');
-  await page.waitForTimeout(80);
-  await page.keyboard.up('r');
-  await page.waitForTimeout(350);
-  const gameplayReset = await readSnapshot();
-  const chargeReset = await page.evaluate(() => {
-    const charge = document.querySelector('[data-ui-asset]')?.shadowRoot?.querySelector('[data-ui-slot="charge"]');
-    return charge === null || charge === undefined
-      ? { state: null, value: null }
-      : {
-        state: charge.getAttribute('data-state'),
-        value: charge.querySelector('[data-ui-slot="charge-meter"]')?.getAttribute('aria-valuenow') ?? null,
-      };
-  });
-  const resetBefore = gameplayAfter?.value?.state?.resetTransitions ?? 0;
-  const resetAfter = gameplayReset?.value?.state?.resetTransitions ?? 0;
-  const resetHealth = gameplayReset?.value?.targetHealth?.totalCurrent ?? 0;
-  const resetMaxHealth = gameplayReset?.value?.targetHealth?.totalMax ?? 0;
-  if (!gameplayReset?.ok || resetAfter <= resetBefore || resetHealth !== resetMaxHealth || chargeReset.state !== 'ready' || chargeReset.value !== '0') {
-    throw new Error(`player charge reset failed: ${JSON.stringify({ gameplayReset, chargeReset })}`);
-  }
-  await page.screenshot({ path: resolve(ARTIFACT_DIR, 'player-charge-reset.png') });
-
-  report = { mode: MODE, catalog, before, chargeAction, afterCharge, hitAction, afterHit, resetAction, afterReset, gameplayBefore, gameplayAfter, gameplayReset, chargeHud, chargeMeter, chargeReset, pageErrors, consoleErrors, badResponses, serverOutput };
+  report = { mode: MODE, catalog, before, chargeAction, afterCharge, hitAction, afterHit, resetAction, afterReset, pageErrors, consoleErrors, badResponses, serverOutput };
   writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), JSON.stringify(report, null, 2));
   if (pageErrors.length > 0 || consoleErrors.length > 0 || badResponses.length > 0) throw new Error(`VFX browser diagnostics failed: ${JSON.stringify({ pageErrors, consoleErrors, badResponses })}`);
   console.log(`VFX charge smoke PASS (${MODE}): catalog=${catalog.length} chargeAlive=${charge.alive} chargeBuckets=${charge.bucketCount} resetAlive=${reset.alive}`);

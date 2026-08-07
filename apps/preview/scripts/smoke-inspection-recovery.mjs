@@ -11,7 +11,6 @@ import { chromium } from 'playwright';
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const ARTIFACT_DIR = resolve(process.env.FORGEAX_INSPECTION_DIR ?? resolve(ROOT, '.forgeax-debug/inspection-recovery'));
 const PORT = Number.parseInt(process.env.FORGEAX_INSPECTION_PORT ?? '5199', 10);
-const RUNTIME_SCOPE_ID = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'preview';
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
 const server = spawn('pnpm', ['--filter', '@forgeax/preview', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(PORT)], {
@@ -23,18 +22,9 @@ server.stdout.on('data', (chunk) => { serverOutput += chunk.toString(); });
 server.stderr.on('data', (chunk) => { serverOutput += chunk.toString(); });
 
 const browser = await chromium.launch({
-  headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
-  channel: process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome',
-  args: [
-    '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-    '--use-vulkan=swiftshader',
-    '--disable-vulkan-surface',
-    '--ignore-gpu-blocklist',
-    '--disable-gpu-driver-bug-workarounds',
-    '--disable-dawn-features=disallow_unsafe_apis',
-    '--autoplay-policy=no-user-gesture-required',
-  ],
+  headless: true,
+  channel: 'chrome',
+  args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
 });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
 const pageErrors = [];
@@ -51,50 +41,29 @@ const readInspection = () => page.evaluate(() => {
   if (!inspection) throw new Error('Preview inspection global is unavailable');
   return inspection;
 });
-const readCatalogRows = () => page.evaluate(async (scopeId) => {
-  const urls = [`/__pack/scopes/${encodeURIComponent(scopeId)}/1/catalog.json`];
-  for (const url of urls) {
-    const response = await fetch(url);
-    if (!response.ok) continue;
-    const payload = await response.json();
-    if (Array.isArray(payload)) return payload;
-    if (payload !== null && typeof payload === 'object' && Array.isArray(payload.entries)) return payload.entries;
-  }
-  throw new Error(`no catalog endpoint available for scope ${scopeId}`);
-}, RUNTIME_SCOPE_ID);
 
 try {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      await page.goto(`http://127.0.0.1:${PORT}/?game=game-default&asset-evidence=1`, { waitUntil: 'networkidle', timeout: 2_000 });
+      await page.goto(`http://127.0.0.1:${PORT}/?game=game-default`, { waitUntil: 'networkidle', timeout: 2_000 });
       break;
     } catch (error) {
       if (Date.now() >= deadline) throw new Error(`preview did not boot: ${serverOutput}\n${String(error)}`);
       await sleep(250);
     }
   }
-  await page.waitForFunction(
-    () => {
-      const listed = globalThis.__forgeaxPreviewInspection?.list();
-      return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2;
-    },
-    undefined,
-    { timeout: 30_000, polling: 100 },
-  );
+  await page.waitForTimeout(1_500);
 
   const listed = await page.evaluate(() => globalThis.__forgeaxPreviewInspection?.list());
   if (!listed || listed.actions.length < 4 || listed.reads.length < 2) throw new Error(`projection list incomplete: ${JSON.stringify(listed)}`);
   const before = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
   if (!before.ok || before.value.state.phase !== 'Play') throw new Error(`baseline projection failed: ${JSON.stringify(before)}`);
-  const hudTargetStatus = await page.evaluate(() => {
-    const host = document.querySelector('[data-ui-asset="019f8354-6386-4386-849d-f2ab4b96229c"]');
-    return host?.shadowRoot?.querySelector('[data-ui-slot="target-status"]')?.textContent ?? null;
+  const profileCatalog = await page.evaluate(async () => {
+    const response = await fetch('/pack-index.json');
+    const rows = await response.json();
+    return rows.find((row) => row.guid === '019e2cc6-0c86-79da-aa76-b0984c86d461');
   });
-  if (hudTargetStatus !== 'TARGET · RedBox · 100/100 HP · +10') {
-    throw new Error(`primary target HUD cue failed: ${JSON.stringify({ hudTargetStatus })}`);
-  }
-  const profileCatalog = (await readCatalogRows()).find((row) => row.guid === '019e2cc6-0c86-79da-aa76-b0984c86d461');
   if (
     profileCatalog?.kind !== 'game-default-target-profile' ||
     profileCatalog?.name !== 'target-profile.json' ||
@@ -111,67 +80,6 @@ try {
   ) {
     throw new Error(`target profile load witness failed: ${JSON.stringify(profileBefore)}`);
   }
-  // Inspection recovery is allowed to use the existing score projection, but it must
-  // still cross the same ECS-owned threshold before the Target profile button enables.
-  const scoreTriggers = [];
-  for (let index = 0; index < 5; index++) {
-    scoreTriggers.push(await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.trigger-score')));
-    await page.waitForTimeout(220);
-  }
-  const unlockedForGuidedLab = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (!unlockedForGuidedLab.ok || unlockedForGuidedLab.value.state.phase !== 'Play' || unlockedForGuidedLab.value.targetHealth.damageEvents < 2) {
-    throw new Error(`inspection score gate setup failed: ${JSON.stringify({ scoreTriggers, unlockedForGuidedLab })}`);
-  }
-  const assetLabSummary = page.locator('summary');
-  if (await assetLabSummary.count() !== 1) throw new Error('guided Asset Lab summary missing');
-  await assetLabSummary.click();
-  const scoreGateHud = await page.locator('[data-ui-slot="score"]').allTextContents();
-  const targetProfileGate = await page.getByRole('button', { name: 'Target profile', exact: true }).evaluate((button) => ({ disabled: button.disabled, title: button.title, ariaDisabled: button.getAttribute('aria-disabled') }));
-  if (targetProfileGate.disabled) throw new Error(`inspection score gate did not reach HUD: ${JSON.stringify({ scoreTriggers, unlockedForGuidedLab, scoreGateHud, targetProfileGate })}`);
-  const assetLabStatus = page.locator('[data-ui-slot="asset-lab-status"]');
-  const assetLabControls = [
-    ['Target profile', (snapshot) => snapshot.targetProfile?.active === 'profile'],
-    ['JPEG target', (snapshot) => snapshot.jpegTexture?.active === 'jpeg'],
-    ['WebM panel', (snapshot) => snapshot.videoTexture?.active === 'video'],
-    ['PNG projectile', (snapshot) => snapshot.spriteAtlas?.active === true],
-    ['TTF score text', (snapshot) => snapshot.worldScoreText?.fontSource === 'ttf-plugin'],
-  ];
-  const assetLabGuided = [];
-  for (const [name, active] of assetLabControls) {
-    const button = page.getByRole('button', { name, exact: true });
-    if (await button.count() !== 1) throw new Error(`guided Asset Lab button missing: ${name}`);
-    await button.click();
-    await page.waitForTimeout(120);
-    const snapshot = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-    const status = await assetLabStatus.innerText();
-    if (!snapshot.ok || !active(snapshot.value) || !status.toLowerCase().includes('active')) {
-      throw new Error(`guided Asset Lab action failed: ${JSON.stringify({ name, status, snapshot })}`);
-    }
-    assetLabGuided.push({ name, status, snapshot: snapshot.value });
-  }
-  await page.screenshot({ path: resolve(ARTIFACT_DIR, 'asset-lab-active.png') });
-  await page.locator('canvas').click();
-  await page.keyboard.down('r');
-  await page.waitForTimeout(120);
-  await page.keyboard.up('r');
-  await page.waitForTimeout(700);
-  const assetLabAfterReset = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  const assetLabResetStatus = await assetLabStatus.innerText();
-  if (
-    !assetLabAfterReset.ok ||
-    assetLabAfterReset.value.targetProfile?.active !== 'original' ||
-    assetLabAfterReset.value.jpegTexture?.active !== 'original' ||
-    assetLabAfterReset.value.videoTexture?.active !== 'original' ||
-    assetLabAfterReset.value.videoTexture?.hitReactions !== 0 ||
-    assetLabAfterReset.value.videoTexture?.lastHitPlayhead !== null ||
-    assetLabAfterReset.value.spriteAtlas?.active !== false ||
-    assetLabAfterReset.value.worldScoreText?.fontSource !== 'legacy-pack' ||
-    !assetLabResetStatus.startsWith('Asset Lab reset · authored RedBox baseline')
-  ) {
-    throw new Error(`guided Asset Lab reset failed: ${JSON.stringify({ assetLabResetStatus, assetLabAfterReset })}`);
-  }
-  const assetLabReset = { guided: assetLabGuided, afterReset: assetLabAfterReset.value, status: assetLabResetStatus };
-  const assetBaseline = assetLabAfterReset.value;
   const fbxBefore = before.value.fbxSkinnedTarget;
   if (
     fbxBefore?.available !== true ||
@@ -258,9 +166,7 @@ try {
     videoBefore?.available !== true ||
     videoBefore.active !== 'original' ||
     videoBefore.kind !== 'video' ||
-    videoBefore.url !== '/cutscene.webm' ||
-    videoBefore.hitReactions !== 0 ||
-    videoBefore.lastHitPlayhead !== null
+    videoBefore.url !== '/cutscene.webm'
   ) {
     throw new Error(`WebM asset witness failed: ${JSON.stringify(videoBefore)}`);
   }
@@ -271,9 +177,7 @@ try {
     !videoToggle.ok ||
     !afterVideo.ok ||
     afterVideo.value.videoTexture?.active !== 'video' ||
-    afterVideo.value.videoTexture?.hitReactions !== 0 ||
-    afterVideo.value.videoTexture?.lastHitPlayhead !== null ||
-    afterVideo.value.videoTexture?.swaps !== (assetBaseline.videoTexture?.swaps ?? 0) + 1
+    afterVideo.value.videoTexture?.swaps !== 1
   ) {
     throw new Error(`WebM toggle failed: ${JSON.stringify({ videoToggle, afterVideo })}`);
   }
@@ -287,7 +191,7 @@ try {
     !videoRestore.ok ||
     !afterVideoRestore.ok ||
     afterVideoRestore.value.videoTexture?.active !== 'original' ||
-    afterVideoRestore.value.videoTexture?.swaps !== (assetBaseline.videoTexture?.swaps ?? 0) + 2
+    afterVideoRestore.value.videoTexture?.swaps !== 2
   ) {
     throw new Error(`WebM restore failed: ${JSON.stringify({ videoRestore, afterVideoRestore })}`);
   }
@@ -296,7 +200,7 @@ try {
   await page.keyboard.up('m');
   await page.waitForTimeout(100);
   const afterVideoKey = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (!afterVideoKey.ok || afterVideoKey.value.videoTexture?.active !== 'video' || afterVideoKey.value.videoTexture?.swaps !== (assetBaseline.videoTexture?.swaps ?? 0) + 3) {
+  if (!afterVideoKey.ok || afterVideoKey.value.videoTexture?.active !== 'video' || afterVideoKey.value.videoTexture?.swaps !== 3) {
     throw new Error(`WebM keyboard toggle failed: ${JSON.stringify(afterVideoKey)}`);
   }
   await page.keyboard.down('m');
@@ -304,7 +208,7 @@ try {
   await page.keyboard.up('m');
   await page.waitForTimeout(100);
   const afterVideoKeyRestore = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (!afterVideoKeyRestore.ok || afterVideoKeyRestore.value.videoTexture?.active !== 'original' || afterVideoKeyRestore.value.videoTexture?.swaps !== (assetBaseline.videoTexture?.swaps ?? 0) + 4) {
+  if (!afterVideoKeyRestore.ok || afterVideoKeyRestore.value.videoTexture?.active !== 'original' || afterVideoKeyRestore.value.videoTexture?.swaps !== 4) {
     throw new Error(`WebM keyboard restore failed: ${JSON.stringify(afterVideoKeyRestore)}`);
   }
 
@@ -327,17 +231,18 @@ try {
     atlasBefore.width !== 64 ||
     atlasBefore.height !== 64 ||
     atlasBefore.frameCount !== 4 ||
-    atlasBefore.animatedShots !== 0 ||
-    atlasBefore.animatedHits !== 0 ||
     atlasBefore.active !== false
   ) {
     throw new Error(`PNG sprite atlas witness failed: ${JSON.stringify(atlasBefore)}`);
   }
-  const catalogRows = await readCatalogRows();
-  const fontCatalog = {
-    font: catalogRows.find((row) => row.guid === '57db8d79-bb62-4b2a-8400-67c9601870cd'),
-    atlas: catalogRows.find((row) => row.guid === 'd7b931cf-5835-4341-94e7-281939db018e'),
-  };
+  const fontCatalog = await page.evaluate(async () => {
+    const response = await fetch('/pack-index.json');
+    const rows = await response.json();
+    return {
+      font: rows.find((row) => row.guid === '57db8d79-bb62-4b2a-8400-67c9601870cd'),
+      atlas: rows.find((row) => row.guid === 'd7b931cf-5835-4341-94e7-281939db018e'),
+    };
+  });
   if (
     fontCatalog.font?.kind !== 'font' ||
     fontCatalog.font?.execution !== 'cooked' ||
@@ -348,7 +253,7 @@ try {
     throw new Error(`TTF font catalog rows failed: ${JSON.stringify(fontCatalog)}`);
   }
   const fontBefore = before.value.worldScoreText;
-  if (fontBefore?.available !== true || fontBefore.fontSource !== 'legacy-pack' || Math.abs(fontBefore.fontSize - 0.024) > 1e-5 || Math.abs((fontBefore.color?.[0] ?? 0) - 1) > 1e-5 || Math.abs((fontBefore.color?.[1] ?? 0) - 0.8) > 1e-5 || Math.abs((fontBefore.color?.[2] ?? 0) - 0.2) > 1e-5 || fontBefore.toggles !== 0) {
+  if (fontBefore?.available !== true || fontBefore.fontSource !== 'legacy-pack' || fontBefore.toggles !== 0) {
     throw new Error(`legacy font baseline failed: ${JSON.stringify(fontBefore)}`);
   }
   const fontToggle = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.toggle-font-source'));
@@ -358,16 +263,14 @@ try {
     !afterFontToggle.ok ||
     afterFontToggle.value.worldScoreText?.fontSource !== 'ttf-plugin' ||
     afterFontToggle.value.worldScoreText?.fontGuid !== '57db8d79-bb62-4b2a-8400-67c9601870cd' ||
-    afterFontToggle.value.worldScoreText?.fontSize <= 0.024 ||
-    afterFontToggle.value.worldScoreText?.color?.[2] <= afterFontToggle.value.worldScoreText?.color?.[0] ||
-    afterFontToggle.value.worldScoreText?.toggles !== (assetBaseline.worldScoreText?.toggles ?? 0) + 1
+    afterFontToggle.value.worldScoreText?.toggles !== 1
   ) {
     throw new Error(`TTF font plugin toggle failed: ${JSON.stringify({ fontCatalog, fontBefore, fontToggle, afterFontToggle })}`);
   }
   const fontScore = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.trigger-score'));
   await page.waitForTimeout(100);
   const afterFontScore = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (!fontScore.ok || fontScore.value?.points === null || !afterFontScore.ok || afterFontScore.value.worldScoreText?.active !== true || afterFontScore.value.worldScoreText?.fontSource !== 'ttf-plugin' || afterFontScore.value.worldScoreText?.fontSize <= 0.024 || afterFontScore.value.worldScoreText?.color?.[2] <= afterFontScore.value.worldScoreText?.color?.[0]) {
+  if (!fontScore.ok || fontScore.value?.points === null || !afterFontScore.ok || afterFontScore.value.worldScoreText?.active !== true || afterFontScore.value.worldScoreText?.fontSource !== 'ttf-plugin') {
     throw new Error(`TTF font score outcome failed: ${JSON.stringify({ fontScore, afterFontScore })}`);
   }
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'ttf-font-active.png') });
@@ -376,11 +279,11 @@ try {
   await page.keyboard.up('y');
   await page.waitForTimeout(120);
   const fontRestoreKey = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (!fontRestoreKey.ok || fontRestoreKey.value.worldScoreText?.fontSource !== 'legacy-pack' || Math.abs(fontRestoreKey.value.worldScoreText?.fontSize - 0.024) > 1e-5 || Math.abs((fontRestoreKey.value.worldScoreText?.color?.[0] ?? 0) - 1) > 1e-5 || Math.abs((fontRestoreKey.value.worldScoreText?.color?.[1] ?? 0) - 0.8) > 1e-5 || Math.abs((fontRestoreKey.value.worldScoreText?.color?.[2] ?? 0) - 0.2) > 1e-5) {
+  if (!fontRestoreKey.ok || fontRestoreKey.value.worldScoreText?.fontSource !== 'legacy-pack') {
     throw new Error(`TTF font keyboard restore failed: ${JSON.stringify(fontRestoreKey)}`);
   }
   const atlasToggle = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.toggle-sprite-atlas'));
-  if (!atlasToggle.ok || atlasToggle.value?.active !== true || atlasToggle.value?.swaps !== (assetBaseline.spriteAtlas?.swaps ?? 0) + 1) {
+  if (!atlasToggle.ok || atlasToggle.value?.active !== true || atlasToggle.value?.swaps !== 1) {
     throw new Error(`PNG sprite atlas toggle failed: ${JSON.stringify(atlasToggle)}`);
   }
   await page.keyboard.down('f');
@@ -394,7 +297,6 @@ try {
     !atlasFrame1.ok ||
     !atlasFrame2.ok ||
     atlasFrame1.value.spriteAtlas?.active !== true ||
-    atlasFrame1.value.spriteAtlas?.animatedShots < 1 ||
     atlasFrame1.value.spriteAtlas?.trackedEntities < 1 ||
     atlasFrame2.value.spriteAtlas?.frame === atlasFrame1.value.spriteAtlas?.frame
   ) {
@@ -411,7 +313,7 @@ try {
   }
   const jpegToggle = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.toggle-jpeg-texture'));
   const afterJpeg = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (!jpegToggle.ok || !afterJpeg.ok || afterJpeg.value.jpegTexture?.active !== 'jpeg' || afterJpeg.value.jpegTexture?.swaps !== (assetBaseline.jpegTexture?.swaps ?? 0) + 1) {
+  if (!jpegToggle.ok || !afterJpeg.ok || afterJpeg.value.jpegTexture?.active !== 'jpeg' || afterJpeg.value.jpegTexture?.swaps !== 1) {
     throw new Error(`JPEG toggle failed: ${JSON.stringify({ jpegToggle, afterJpeg })}`);
   }
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'jpeg-active.png') });
@@ -421,19 +323,13 @@ try {
     throw new Error(`JPEG restore failed: ${JSON.stringify({ jpegRestore, afterJpegRestore })}`);
   }
 
-  // The reset above intentionally restores score to zero. Re-cross the same
-  // Score 50 contract before exercising the profile action again.
-  for (let index = 0; index < 5; index++) {
-    await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.trigger-score'));
-    await page.waitForTimeout(120);
-  }
   const profileToggle = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.toggle-target-profile'));
   const afterProfile = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
   if (
     !profileToggle.ok ||
     !afterProfile.ok ||
     afterProfile.value.targetProfile?.active !== 'profile' ||
-    afterProfile.value.targetProfile?.swaps !== (assetBaseline.targetProfile?.swaps ?? 0) + 1 ||
+    afterProfile.value.targetProfile?.swaps !== 1 ||
     afterProfile.value.targetProfile?.baseColor?.[2] !== 1
   ) {
     throw new Error(`target profile action failed: ${JSON.stringify({ profileToggle, afterProfile })}`);
@@ -448,26 +344,28 @@ try {
     throw new Error(`target profile keyboard restore failed: ${JSON.stringify(afterProfileKey)}`);
   }
 
+  await page.keyboard.down('b');
+  await page.waitForTimeout(100);
+  await page.keyboard.up('b');
+  await page.waitForTimeout(150);
+  const afterVisibilityKey = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
+  if (
+    !afterVisibilityKey.ok ||
+    afterVisibilityKey.value.visibility?.intent !== 'hidden' ||
+    afterVisibilityKey.value.visibility?.effective !== 'hidden'
+  ) {
+    throw new Error(`visibility input loop failed: ${JSON.stringify(afterVisibilityKey)}`);
+  }
+  await page.screenshot({ path: resolve(ARTIFACT_DIR, 'visibility-hidden.png') });
   const visibilityToggle = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.toggle-visibility'));
   const afterVisibilityAction = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
   if (
     !visibilityToggle.ok ||
     !afterVisibilityAction.ok ||
-    afterVisibilityAction.value.visibility?.intent !== 'hidden' ||
-    afterVisibilityAction.value.visibility?.effective !== 'hidden'
+    afterVisibilityAction.value.visibility?.intent !== 'visible' ||
+    afterVisibilityAction.value.visibility?.effective !== 'visible'
   ) {
     throw new Error(`visibility inspection action failed: ${JSON.stringify({ visibilityToggle, afterVisibilityAction })}`);
-  }
-  await page.screenshot({ path: resolve(ARTIFACT_DIR, 'visibility-hidden.png') });
-  const visibilityRestore = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.toggle-visibility'));
-  const afterVisibilityRestore = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
-  if (
-    !visibilityRestore.ok ||
-    !afterVisibilityRestore.ok ||
-    afterVisibilityRestore.value.visibility?.intent !== 'visible' ||
-    afterVisibilityRestore.value.visibility?.effective !== 'visible'
-  ) {
-    throw new Error(`visibility inspection restore failed: ${JSON.stringify({ visibilityRestore, afterVisibilityRestore })}`);
   }
 
   const orbit = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.run('game-default.set-view', { mode: 'orbit' }));
@@ -497,15 +395,11 @@ try {
     afterReset.value.state.phase !== 'Play' ||
     afterReset.value.state.resetTransitions < 1 ||
     afterReset.value.videoTexture?.active !== 'original' ||
-    afterReset.value.videoTexture?.hitReactions !== 0 ||
-    afterReset.value.videoTexture?.lastHitPlayhead !== null ||
     afterReset.value.visibility?.intent !== 'inherited' ||
     afterReset.value.visibility?.effective !== 'visible' ||
     afterReset.value.spriteAtlas?.active !== false ||
     afterReset.value.spriteAtlas?.frame !== 0 ||
-    afterReset.value.spriteAtlas?.trackedEntities !== 0 ||
-    afterReset.value.spriteAtlas?.animatedShots !== 0 ||
-    afterReset.value.spriteAtlas?.animatedHits !== 0
+    afterReset.value.spriteAtlas?.trackedEntities !== 0
     || afterReset.value.worldScoreText?.fontSource !== 'legacy-pack'
     || afterReset.value.worldScoreText?.toggles !== 0
     || afterReset.value.vfxHit?.mode !== 'hit'
@@ -560,7 +454,7 @@ try {
   const cleared = await page.evaluate(() => globalThis.__forgeaxPreviewInspection === undefined);
   if (!cleared) throw new Error('Preview inspection global survived Stop');
 
-  const report = { listed, before, hudTargetStatus, assetLabReset, vfxBefore, vfxTrigger, afterVfx, videoBefore, videoToggle, afterVideo, videoOrbit, videoRestore, afterVideoRestore, afterVideoKey, afterVideoKeyRestore, profileCatalog, profileBefore, profileToggle, afterProfile, afterProfileKey, atlasBefore, atlasToggle, atlasFrame1, atlasFrame2, atlasRestoreKey, fontCatalog, fontBefore, fontToggle, afterFontToggle, fontScore, afterFontScore, fontRestoreKey, jpegBefore, jpegToggle, afterJpeg, jpegRestore, afterJpegRestore, visibilityToggle, afterVisibilityAction, visibilityRestore, afterVisibilityRestore, orbit, afterOrbit, hit, afterHit, invalidState, missingRead, resetRequest, afterReset, health, recoverHealthy, capture, cleared, pageErrors, consoleErrors, badResponses, serverOutput };
+  const report = { listed, before, vfxBefore, vfxTrigger, afterVfx, videoBefore, videoToggle, afterVideo, videoOrbit, videoRestore, afterVideoRestore, afterVideoKey, afterVideoKeyRestore, profileCatalog, profileBefore, profileToggle, afterProfile, afterProfileKey, atlasBefore, atlasToggle, atlasFrame1, atlasFrame2, atlasRestoreKey, fontCatalog, fontBefore, fontToggle, afterFontToggle, fontScore, afterFontScore, fontRestoreKey, jpegBefore, jpegToggle, afterJpeg, jpegRestore, afterJpegRestore, afterVisibilityKey, visibilityToggle, afterVisibilityAction, orbit, afterOrbit, hit, afterHit, invalidState, missingRead, resetRequest, afterReset, health, recoverHealthy, capture, cleared, pageErrors, consoleErrors, badResponses, serverOutput };
   writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (badResponses.length > 0) throw new Error(`bad responses: ${badResponses.join(' | ')}`);

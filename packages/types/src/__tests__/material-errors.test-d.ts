@@ -1,10 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest';
-import type {
-  MATERIAL_ERROR_CODES,
-  MaterialError,
-  MaterialErrorCode,
-  MaterialErrorDetail,
-} from '../material/errors.js';
+import type { MATERIAL_ERROR_CODES, MaterialError, MaterialErrorCode } from '../material/errors.js';
 
 const expectedCodes = [
   'material-parent-not-found',
@@ -59,10 +54,6 @@ function renderDiagnostic(error: MaterialError): string {
 }
 
 describe('MaterialError closed contract', () => {
-  it('projects the complete detail family from the material error union', () => {
-    expectTypeOf<MaterialErrorDetail>().toEqualTypeOf<MaterialError['detail']>();
-  });
-
   it('keeps the planned error code set closed and discoverable', () => {
     expectTypeOf<typeof MATERIAL_ERROR_CODES>().toEqualTypeOf<typeof expectedCodes>();
     expectTypeOf<MaterialErrorCode>().toEqualTypeOf<(typeof expectedCodes)[number]>();

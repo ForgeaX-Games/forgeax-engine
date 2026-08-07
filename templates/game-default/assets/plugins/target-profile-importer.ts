@@ -71,9 +71,6 @@ export function targetProfileImporter(): Importer {
         || typeof record.scoreMultiplier !== 'number'
         || !Number.isFinite(record.scoreMultiplier)
         || record.scoreMultiplier <= 0
-        || typeof record.rotationSpeed !== 'number'
-        || !Number.isFinite(record.rotationSpeed)
-        || record.rotationSpeed <= 0
         || !Array.isArray(color)
         || color.length !== 4
         || !color.every((channel) => typeof channel === 'number' && Number.isFinite(channel) && channel >= 0 && channel <= 1)
@@ -82,7 +79,7 @@ export function targetProfileImporter(): Importer {
           ok: false,
           error: new ImportError({
             code: 'source-validation-failed',
-            expected: 'kind, version, title, positive scoreMultiplier, positive rotationSpeed, and four normalized baseColor channels',
+            expected: 'kind, version, title, positive scoreMultiplier, and four normalized baseColor channels',
             hint: IMPORT_ERROR_HINTS['source-validation-failed'],
             detail: {
               diagnostics: [{
@@ -104,7 +101,6 @@ export function targetProfileImporter(): Importer {
         version: 1,
         title: record.title,
         scoreMultiplier: record.scoreMultiplier,
-        rotationSpeed: record.rotationSpeed,
         baseColor: [color[0] as number, color[1] as number, color[2] as number, color[3] as number],
       };
       return {

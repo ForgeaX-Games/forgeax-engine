@@ -1,7 +1,0 @@
-{
-  "id": "template-empty",
-  "name": "Empty",
-  "schemaVersion": "1.0.0",
-  "entry": "main.ts",
-  "physics": "3d"
-}

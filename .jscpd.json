@@ -18,13 +18,6 @@
   "filePairIgnore": [
     {
       "files": [
-        "apps/preview/scripts/smoke-hit-streak.mjs",
-        "apps/preview/scripts/smoke-mission-progression.mjs"
-      ],
-      "rationale": "game-default M0 progression round 20260806: both smokes keep a self-contained Preview/WebGPU browser front door so an AI user can run one player path without traversing a helper. hit-streak proves the timed combo lifecycle; mission-progression proves the ordered score-unlock-profile-reset task and its DOM contract. Revisit if a third Preview gameplay smoke repeats the same harness."
-    },
-    {
-      "files": [
         "apps/bevy/bloom-2d/scripts/smoke-dawn.mjs",
         "apps/bevy/transparency-2d/scripts/smoke-dawn.mjs"
       ],

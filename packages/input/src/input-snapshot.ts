@@ -429,20 +429,6 @@ export interface InputBackendSample {
   readonly pointerLocked: boolean;
 }
 
-/** Build the neutral backend sample used before or outside an active consumer. */
-export function createEmptyInputBackendSample(): InputBackendSample {
-  return {
-    downKeys: new Set<string>(),
-    upKeys: new Set<string>(),
-    buttons: [false, false, false],
-    movementX: 0,
-    movementY: 0,
-    wheelDelta: 0,
-    focused: true,
-    pointerLocked: false,
-  };
-}
-
 /**
  * Build an `InputSnapshot` from a backend sample. The returned object is
  * frozen on construction: `down/up/button` are bound to the closed-over
@@ -723,7 +709,18 @@ export function readActionStatesForEdgeDiff(
  * The underlying 7-field POD sample contract is unchanged (D-9).
  */
 export function createInputSnapshot(): InputSnapshot {
-  return snapshotFromSample(createEmptyInputBackendSample());
+  return snapshotFromSample({
+    downKeys: new Set<string>(),
+    upKeys: new Set<string>(),
+    downCodes: new Set<string>(),
+    upCodes: new Set<string>(),
+    buttons: [false, false, false],
+    movementX: 0,
+    movementY: 0,
+    wheelDelta: 0,
+    focused: true,
+    pointerLocked: false,
+  });
 }
 
 /** Stable Resource key for `world.insertResource` / `world.getResource`. */

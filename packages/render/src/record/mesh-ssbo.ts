@@ -36,6 +36,14 @@ export const MESH_UBO_FULL_ARRAY_BYTES = 112 * 128;
 // min-binding-size mismatch.
 export const INSTANCE_UBO_FULL_ARRAY_BYTES = 64 * 128;
 
+// W3C WebGPU §3.6 GPUBufferUsage flags used by the per-entity instance
+// transform buffer (STORAGE | COPY_DST = 128 | 8).
+export const STORAGE_USAGE = 128;
+
+export const UNIFORM_USAGE = 64;
+
+export const COPY_DST_USAGE = 8;
+
 export const MAX_UNIFORM_INSTANCES = 128;
 
 /**

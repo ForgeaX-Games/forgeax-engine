@@ -57,7 +57,6 @@ import type {
   Handle,
   SceneAsset,
 } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { createHUD, hideHUD, showHUD } from './hud';
 import { createGameProgress, GAME_PROGRESS_KEY, resetProgress } from './resources';
 import { CORE_POSITIONS, spawnCore } from './spawn/spawn-core';
@@ -99,15 +98,13 @@ const BOOT_TRANSITION_PUMP_LIMIT = 8;
 
 // humanoid.fbx GUIDs (reused from apps/hello/fbx-skin per D-3). Scene + the run
 // clip used as both locomotion (speed 1) and idle (speed 0) slots.
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'collectathon',
-);
+const PACK_INDEX_URL = '/pack-index.json';
 const HUMANOID_SCENE_GUID = '019ecd87-179b-7eb3-a37d-391f05c61e52';
 const RUN_CLIP_GUID = '019ecd87-179b-71f7-b9f8-4c8518326b65';
 
 // sky.hdr IBL source (F-05): demo-assets/template-game-default/sky.hdr (Apache-2.0,
 // commercial-compatible). pluginPack scans that directory (added to vite roots)
-// and surfaces it via the binding's scoped catalog -> loadByGuid<EquirectAsset>, the same
+// and surfaces it via /pack-index.json -> loadByGuid<EquirectAsset>, the same
 // declarative equirect IBL path the learn-render PBR demos + templates/game-default
 // use (Skylight/SkyboxBackground hold the equirect handle; projection is internal).
 const SKY_HDR_GUID = '81eec382-392f-5a93-8998-0ecf11ef7990';
@@ -149,7 +146,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
     { plugins: [physicsPlugin('rapier-3d'), audioPlugin()] },
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
   );
   if (!appResult.ok) {
     throw new Error(`collectathon: createApp failed: ${JSON.stringify(appResult.error)}`);
@@ -170,7 +167,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (assets === null) {
     throw new Error('collectathon: AssetRegistry is null (bundler adapter missing?)');
   }
-  assets.configureRuntimeBinding(runtimeBinding);
+  assets.configurePackIndex(PACK_INDEX_URL);
 
   const sceneHandle = await loadSceneHandle(world, assets);
   const runClip = await loadClipHandle(world, assets);

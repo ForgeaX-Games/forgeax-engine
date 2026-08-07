@@ -23,9 +23,6 @@ import type { Replay } from './replayer';
 import { bytesPerTexel } from './texel-layout';
 import type { RhiCallEvent } from './types';
 
-// GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
-const COPY_DST_MAP_READ = 9;
-
 // ============================================================================
 // resolveTextureDescriptor — tape handle -> source texture descriptor (SSOT)
 // ============================================================================
@@ -181,6 +178,9 @@ export async function readbackTexturePixels(
   const alignedRowBytes = Math.ceil(rowBytes / 256) * 256; // WebGPU alignment
   const bufferSize = alignedRowBytes * blockCountY;
 
+  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9
+  const COPY_DST_MAP_READ = 9;
+
   const readbackBufferResult = device.createBuffer({
     size: bufferSize,
     usage: COPY_DST_MAP_READ,
@@ -319,6 +319,9 @@ export async function readbackBufferBytes(
       }),
     );
 
+  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9
+  const COPY_DST_MAP_READ = 9;
+
   const readbackBufferResult = device.createBuffer({ size, usage: COPY_DST_MAP_READ });
   if (!readbackBufferResult.ok) {
     return fail('copy', `staging buffer creation failed: ${readbackBufferResult.error.code}`);
@@ -429,6 +432,8 @@ export async function readbackBufferBytesBatch(
     }
   };
 
+  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
+  const COPY_DST_MAP_READ = 9;
   let encoder: RhiCommandEncoder;
   try {
     const encoderResult = device.createCommandEncoder({});

@@ -135,19 +135,6 @@ describe('Materials.standard multi-pass (w14)', () => {
       expect(mat.values?.roughness).toBe(0.5);
     });
 
-    it('preserves the metallic texture-channel selector and validates its closed range', () => {
-      const mat = Materials.standard({
-        baseColor: [0.5, 0.5, 0.5, 1],
-        metallicChannel: 0,
-      });
-      expect(mat.values?.metallicChannel).toBe(0);
-      for (const metallicChannel of [-1, 4, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-        expect(() =>
-          Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1], metallicChannel }),
-        ).toThrow('metallicChannel must be an integer in [0, 3]');
-      }
-    });
-
     it('values includes the optional clearcoat layer', () => {
       const mat = Materials.standard({
         baseColor: [0.5, 0.5, 0.5, 1],
