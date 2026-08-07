@@ -1,6 +1,8 @@
 export {
   projectHierarchy,
   type SceneHierarchyDiagnostic,
+  type SceneHierarchyDiagnosticCode,
+  type SceneHierarchyDiagnosticDetail,
   type SceneHierarchySnapshot,
 } from './hierarchy-projection';
 export {

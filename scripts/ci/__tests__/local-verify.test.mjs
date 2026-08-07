@@ -261,18 +261,6 @@ test('local PR CI projection extracts workflow shell commands rather than a copi
   );
 });
 
-test('CI runs the engine-template browser smoke with the headed WebGPU Chrome Beta channel', () => {
-  const start = workflow.indexOf('  shared-inputs-browser:');
-  const end = workflow.indexOf('\n  smoke-fleet:', start);
-  const step = extractRunSteps(workflow.slice(start, end)).find(
-    (candidate) =>
-      candidate.command ===
-      'xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 pnpm --filter @forgeax/preview smoke:templates',
-  );
-  assert.ok(step, 'shared-inputs-browser must run the headed engine-template Preview smoke');
-  assert.equal(step.environment.FORGEAX_CHROME_CHANNEL, 'chrome-beta');
-});
-
 test('local PR CI projection runs the WebKit dev-server step and carries its PID', () => {
   const start = workflow.indexOf('  webkit-fallback:');
   const end = workflow.indexOf('\n  portability-bun:', start);

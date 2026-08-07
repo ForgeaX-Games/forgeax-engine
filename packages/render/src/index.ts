@@ -99,11 +99,7 @@ export {
   addTonemapPass,
   TONEMAP_POST_PROCESS_ID,
 } from './render-graph-primitives';
-export type {
-  RenderFeatureTargetContext,
-  RenderPipeline,
-  RenderPipelineData,
-} from './render-pipeline';
+export type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 export type { RenderPipelineContext } from './render-pipeline-context';
 export type {
   DrawOwnerOptions,

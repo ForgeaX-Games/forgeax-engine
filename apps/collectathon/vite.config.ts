@@ -8,7 +8,6 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 
 // collectathon vite config: 3D third-person collectathon showcase.
 //
@@ -26,7 +25,6 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
-      runtimeBinding: createStandaloneRuntimeAssetBinding('collectathon'),
       refresh: reloadAssetHost(),
       roots: [
         resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test'),

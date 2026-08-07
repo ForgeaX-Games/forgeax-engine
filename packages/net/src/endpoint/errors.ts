@@ -61,7 +61,12 @@ export type EndpointErrorDetailFor<C extends EndpointErrorCode> = C extends 'pee
           : never;
 
 /** Tagged union of all endpoint error detail variants. */
-export type EndpointErrorDetail = EndpointErrorDetailFor<EndpointErrorCode>;
+export type EndpointErrorDetail =
+  | EndpointDetailPeerNotFound
+  | EndpointDetailConnectionClosed
+  | EndpointDetailSendFailed
+  | EndpointDetailAlreadyClosed
+  | EndpointDetailConnectionFailed;
 
 // ---------------------------------------------------------------------------
 // Error class

@@ -8,7 +8,6 @@ export default defineConfig({
     'src/errors.ts',
     'src/adapter.ts',
     'src/capture-browser.ts',
-    'src/dev-routes.ts',
     'src/inspect-core.ts',
     // Pure whole-frame analysis SSOT shared by apps/rhi-debug-viewer (ViewModel)
     // and the cli `summary` subcommand + inspect-core pipelineState. Node-free.

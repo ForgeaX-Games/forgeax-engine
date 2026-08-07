@@ -16,7 +16,6 @@ export {
   validateCookedMaterialRecord,
 } from './evidence/material-cook.js';
 export { buildOfflineAssetEvidence, packageVerification } from './evidence/offline-evidence.js';
-export { MESH_BIN_HEADER_V2_BYTES, MESH_BIN_VERSION } from './mesh-bin-contract.js';
 export { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 export { calculateTopologyDiff, diffTopology } from './topology.js';
 

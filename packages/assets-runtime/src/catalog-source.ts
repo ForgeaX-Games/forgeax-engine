@@ -5,7 +5,6 @@ import {
   type CatalogDelta,
   type CatalogEntry,
   type ResourceRevision,
-  type RuntimeAssetBinding,
 } from '@forgeax/engine-types';
 import { fetchCatalog } from './registry/catalog';
 
@@ -15,7 +14,6 @@ export type CatalogListener = (delta: CatalogDelta) => void;
 export interface CatalogSource {
   enumerate(): Promise<Result<readonly CatalogEntry[], AssetError>>;
   subscribe(listener: CatalogListener): () => void;
-  readonly expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>;
 }
 
 /**
@@ -29,7 +27,6 @@ export function createCatalogSource(options: {
   readonly entries?: readonly CatalogEntry[];
   readonly fetch?: typeof globalThis.fetch;
   readonly expectedRevision?: ResourceRevision;
-  readonly expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>;
   readonly subscribe?: (listener: CatalogListener) => () => void;
 }): CatalogSource {
   const entries = options.entries;
@@ -74,7 +71,6 @@ export function createCatalogSource(options: {
         options.fetch ?? globalThis.fetch,
         undefined,
         options.expectedRevision,
-        options.expectedScope,
       );
       if (!result.ok) return result;
       return ok(
@@ -84,6 +80,5 @@ export function createCatalogSource(options: {
     subscribe(listener) {
       return options.subscribe?.(listener) ?? (() => {});
     },
-    ...(options.expectedScope === undefined ? {} : { expectedScope: options.expectedScope }),
   };
 }

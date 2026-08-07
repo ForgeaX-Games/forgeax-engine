@@ -1,13 +1,19 @@
 import type { Archetype, EntityHandle, World } from '@forgeax/engine-ecs';
 import { Entity } from '@forgeax/engine-ecs';
 import { ChildOf } from '../components';
-import type { SceneErrorCode, SceneErrorDetail } from '../errors';
+
+export type SceneHierarchyDiagnosticCode = 'hierarchy-broken' | 'hierarchy-cycle';
+
+export interface SceneHierarchyDiagnosticDetail {
+  readonly entity: EntityHandle;
+  readonly parent: EntityHandle;
+}
 
 export interface SceneHierarchyDiagnostic {
-  readonly code: SceneErrorCode;
+  readonly code: SceneHierarchyDiagnosticCode;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: SceneErrorDetail;
+  readonly detail: SceneHierarchyDiagnosticDetail;
 }
 
 export interface SceneHierarchySnapshot {
@@ -34,7 +40,7 @@ function readColumn(
 }
 
 function diagnostic(
-  code: SceneErrorCode,
+  code: SceneHierarchyDiagnosticCode,
   entity: EntityHandle,
   parent: EntityHandle,
 ): SceneHierarchyDiagnostic {

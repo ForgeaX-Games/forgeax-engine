@@ -183,7 +183,6 @@ import type {
   RenderFeatureHiddenEntityReport,
   RenderFeatureWorldVisibilitySnapshot,
 } from './features/types';
-import { isStandardPbrMaterialShader } from './pbr-pipeline';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
@@ -870,8 +869,6 @@ export interface MaterialSnapshot {
    * stage can wire real normal textures from Sponza glTF materials.
    */
   readonly normalTexture?: Handle<'TextureAsset', 'shared'> | undefined;
-  /** Scalar applied to tangent-space normal XY after the normal texture sample. */
-  readonly normalScale?: number | undefined;
   readonly emissive?: readonly [number, number, number] | undefined;
   readonly emissiveIntensity?: number | undefined;
   readonly emissiveTexture?: Handle<'TextureAsset', 'shared'> | undefined;
@@ -1078,13 +1075,15 @@ type WorldInternalView = World & {
  * The user-region texture fields the built-in standard-PBR material declares.
  * Used as the fallback texture-field set when the shader id is not registered
  * (cross-worktree shader-late-register, plan R-4) so a built-in material still
- * resolves its user-region textures. Mirrors `derive(default-standard-pbr).textureFieldNames`.
+ * resolves its 3 textures. Mirrors `derive(default-standard-pbr).textureFieldNames`.
  */
 const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
   'baseColorTexture',
   'metallicRoughnessTexture',
   'normalTexture',
   'specularTintTexture',
+  'emissiveTexture',
+  'occlusionTexture',
 ];
 const BUILTIN_USER_REGION_TEXTURE_FIELD_SET = new Set(BUILTIN_USER_REGION_TEXTURE_FIELDS);
 const BUILTIN_BASE_COLOR_TEXTURE_FIELD_SET = new Set(['baseColorTexture']);
@@ -1302,15 +1301,6 @@ function materialTextureValue(value: unknown): MaterialTextureValue | undefined 
     : undefined;
 }
 
-function materialNormalScale(values: Readonly<Record<string, unknown>>): number {
-  for (const [field, value] of Object.entries(values)) {
-    if (field !== 'normalTexture') continue;
-    const scale = materialTextureValue(value)?.normalScale;
-    return typeof scale === 'number' && Number.isFinite(scale) ? scale : 1;
-  }
-  return 1;
-}
-
 function materialTextureRef(value: unknown): unknown {
   return materialTextureValue(value)?.texture ?? value;
 }
@@ -1340,9 +1330,9 @@ function collectMaterialTextureCoordinates(
  * `AssetRegistry.materialShaderTextureFieldNames`). Each declared texture
  * field whose paramValue resolves to a handle lands in the returned map keyed
  * by field name; this is the single path through which any number of user-region
- * textures (4 standard or 5+ custom, e.g. parallax `heightTexture`) flow.
+ * textures (3 standard or 4+ custom, e.g. parallax `heightTexture`) flow.
  *
- * When the shader is not registered the built-in 4-field set is used so
+ * When the shader is not registered the built-in 3-field set is used so
  * standard materials still resolve. `emissiveTexture` / `occlusionTexture`
  * are engine-injection (lightmap) textures and are NOT part of this set.
  *
@@ -1391,25 +1381,14 @@ function collectUserRegionTextureHandles(
   return out;
 }
 
-const ENGINE_INJECTED_TEXTURE_FIELDS = new Set(['emissiveTexture', 'occlusionTexture']);
-
-function isEngineInjectedTextureField(shaderId: string | undefined, fieldName: string): boolean {
-  return isStandardPbrMaterialShader(shaderId) && ENGINE_INJECTED_TEXTURE_FIELDS.has(fieldName);
-}
-
 function materialParametersToParamSchema(
   parameters: readonly MaterialParameter[],
-  shaderId: string | undefined,
 ): readonly ParamSchemaEntry[] {
-  const engineInjectedTextureFields = isStandardPbrMaterialShader(shaderId)
-    ? ENGINE_INJECTED_TEXTURE_FIELDS
-    : undefined;
   return parameters.flatMap((parameter): ParamSchemaEntry[] => {
     // Static values select a cooked specialization and boolean material
     // values have no runtime UBO representation in ParamSchemaEntry.
     if (parameter.static || parameter.type === 'bool') return [];
     if (parameter.type === 'texture') {
-      if (engineInjectedTextureFields?.has(parameter.name) === true) return [];
       return [{ name: parameter.name, type: 'texture2d' }];
     }
     return [
@@ -1495,7 +1474,6 @@ function resolveMaterialSnapshot(
   const clearcoatPv = typeof pv.clearcoat === 'number' ? pv.clearcoat : 0;
   const clearcoatRoughnessPv =
     typeof pv.clearcoatRoughness === 'number' ? pv.clearcoatRoughness : 0.5;
-  const normalScalePv = materialNormalScale(pv);
 
   const paramSnap: Record<string, number | number[] | string> = {};
   for (const [k, v] of Object.entries(pv)) {
@@ -1505,10 +1483,7 @@ function resolveMaterialSnapshot(
       paramSnap[k] = v as number[];
     }
   }
-  const materialParamSchema = materialParametersToParamSchema(
-    resolved.parameters ?? [],
-    firstPassShader,
-  );
+  const materialParamSchema = materialParametersToParamSchema(resolved.parameters ?? []);
   // feat-20260614 M8 (D-19): texture / sampler values are embedded GUIDs
   // (dash-form strings) after loadByGuid. Resolve each to a user-tier column
   // handle by looking up the catalogued payload and minting via
@@ -1571,7 +1546,6 @@ function resolveMaterialSnapshot(
     roughness: roughnessPv,
     clearcoat: clearcoatPv,
     clearcoatRoughness: clearcoatRoughnessPv,
-    normalScale: normalScalePv,
     materialShaderId: firstPassShader,
     materialHandle: handleRaw,
     renderState: pipelineRenderState(allPasses[0]?.renderState),
@@ -3395,7 +3369,6 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
           const clearcoatPv = typeof pv.clearcoat === 'number' ? pv.clearcoat : 0;
           const clearcoatRoughnessPv =
             typeof pv.clearcoatRoughness === 'number' ? pv.clearcoatRoughness : 0.5;
-          const normalScalePv = materialNormalScale(pv);
 
           const paramSnap: Record<string, number | number[] | string> = {};
           for (const [k, v] of Object.entries(pv)) {
@@ -3406,10 +3379,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             }
           }
 
-          const materialParamSchema = materialParametersToParamSchema(
-            resolved.parameters ?? [],
-            firstPassShader,
-          );
+          const materialParamSchema = materialParametersToParamSchema(resolved.parameters ?? []);
           // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w17 (D-5):
           // bidirectional Skin <-> pbr-skin material fail-fast at extract.
           // Skin component without a forgeax::pbr-skin first-pass material
@@ -3542,12 +3512,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             // Field is not declared as a texture by the shader -> the
             // loader's "try every int" fallback misclassified a scalar;
             // drop the slot so the record stage uses the default white.
-            if (
-              !declaredFields.has(fieldName) &&
-              !isEngineInjectedTextureField(firstPassShader, fieldName)
-            ) {
-              return undefined;
-            }
+            if (!declaredFields.has(fieldName)) return undefined;
             // Field declared as texture: verify the handle's asset kind.
             const assetRes = resolveAssetHandle(world, handle);
             if (!assetRes.ok) return undefined;
@@ -3706,7 +3671,6 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             roughness: roughnessPv,
             clearcoat: clearcoatPv,
             clearcoatRoughness: clearcoatRoughnessPv,
-            normalScale: normalScalePv,
             materialShaderId: firstPassShader,
             materialHandle: handleRaw,
             renderState: pipelineRenderState(allPasses[0]?.renderState),

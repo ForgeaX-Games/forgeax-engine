@@ -31,8 +31,7 @@ import type { AnimatedMaterialTarget } from './animated-target-material';
 import { resetAnimatedMaterial } from './animated-target-material';
 import type { MultiWorldOverlay } from './multi-world-overlay';
 import type { GameplayChangeDetectionHandle } from './change-detection';
-import type { HitStreakHandle } from './hit-streak';
-import { ChargeShot, FreeCameraMotion, GameplayInput, HitFlash, CameraRig, PlayerMotion, ResetPose } from './components/gameplay';
+import { FreeCameraMotion, GameplayInput, HitFlash, CameraRig, PlayerMotion, ResetPose } from './components/gameplay';
 import { resetGameplayCommandCounters } from './resources/gameplay';
 import { PAN_HALF_HEIGHT_INITIAL, TOP_DOWN_OFFSET_Z } from './camera-controller';
 import { PERSPECTIVE_FOV_INITIAL } from './camera-zoom';
@@ -55,7 +54,6 @@ type ResetGameplayArgs = {
   readonly visibilityLoop: VisibilityLoopHandle;
   readonly targetHealth: TargetHealthHandle;
   readonly changeDetection: GameplayChangeDetectionHandle;
-  readonly hitStreak: HitStreakHandle | undefined;
   readonly depthOfField: DepthOfFieldHandle;
   readonly chromaticAberration: ChromaticAberrationHandle;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
@@ -107,7 +105,6 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     }
     if (args.player !== undefined) {
       args.world.set(args.player, GameplayInput, { lookYaw: 0, lookPitch: 0, wantShoot: 0, shotDirValid: 0 });
-      args.world.set(args.player, ChargeShot, { active: 0, release: 0, elapsed: 0, power: 1 });
       args.world.set(args.player, PlayerMotion, { faceX: 0, faceZ: -1, jumpY: args.playerY, freeY: args.playerY, velocityY: 0, grounded: 1, shootCooldown: 0 });
       args.world.set(args.player, FreeCameraMotion, { velocityX: 0, velocityY: 0, velocityZ: 0, walkSpeed: 3, runSpeed: 9 });
     }
@@ -115,7 +112,6 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     args.world.set(args.camera, Camera, { fov: PERSPECTIVE_FOV_INITIAL });
     args.targetDisabling.reset();
     args.changeDetection.reset();
-    args.hitStreak?.reset();
     args.visibilityLoop.reset();
     args.targetHealth.reset();
     args.depthOfField.reset();

@@ -18,5 +18,5 @@
     }
   },
   "dependencies": { "@forgeax/engine-app": "workspace:*", "@forgeax/engine-assets-runtime": "workspace:*", "@forgeax/engine-ecs": "workspace:*", "@forgeax/engine-runtime": "workspace:*", "@forgeax/engine-types": "workspace:*", "@forgeax/engine-scene": "workspace:*", "@forgeax/engine-render": "workspace:*" },
-  "devDependencies": { "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*", "@forgeax/engine-vite-plugin-shader": "workspace:*", "@webgpu/types": "^0.1.71", "vite": "8.0.10", "webgpu": "^0.4.0" }
+  "devDependencies": { "@forgeax/engine-vite-plugin-shader": "workspace:*", "@webgpu/types": "^0.1.71", "vite": "8.0.10", "webgpu": "^0.4.0" }
 }

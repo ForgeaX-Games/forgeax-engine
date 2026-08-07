@@ -1364,9 +1364,6 @@ function dispatchFullscreenPass(
         }
         const writeResult = ctx.runtime.device.queue.writeBuffer(ubo, 0, data);
         if (!writeResult.ok) return;
-      } else {
-        const writeResult = ctx.runtime.device.queue.writeBuffer(ubo, 0, entry.params.defaultValue);
-        if (!writeResult.ok) return;
       }
       paramsBuffer = ubo;
     }

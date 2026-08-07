@@ -5,7 +5,6 @@
 import type {
   EndpointError,
   EndpointErrorCode,
-  EndpointErrorDetail,
   EndpointErrorDetailFor,
   EndpointDetailPeerNotFound,
   EndpointDetailConnectionClosed,
@@ -27,8 +26,4 @@ test('EndpointErrorDetailFor narrows detail per code', () => {
   expectTypeOf<EndpointErrorDetailFor<'send-failed'>>().toEqualTypeOf<EndpointDetailSendFailed>();
   expectTypeOf<EndpointErrorDetailFor<'already-closed'>>().toEqualTypeOf<EndpointDetailAlreadyClosed>();
   expectTypeOf<EndpointErrorDetailFor<'connection-failed'>>().toEqualTypeOf<EndpointDetailConnectionFailed>();
-});
-
-test('EndpointErrorDetail derives from the complete code resolver', () => {
-  expectTypeOf<EndpointErrorDetail>().toEqualTypeOf<EndpointErrorDetailFor<EndpointErrorCode>>();
 });

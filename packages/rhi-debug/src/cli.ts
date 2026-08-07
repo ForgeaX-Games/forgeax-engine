@@ -29,7 +29,6 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { defaultConnect } from '@forgeax/engine-types/inspector-client';
-import { RHI_DEBUG_DEV_ROUTES } from './dev-routes';
 import { DebugError } from './errors';
 import { buildFrameModel } from './frame-model';
 import { findEventIdxForDraw } from './inspect-core';
@@ -1047,7 +1046,7 @@ async function triggerBrowserDispatch(args: string[]): Promise<void> {
   }
 
   try {
-    const response = await fetch(`${devUrl}${RHI_DEBUG_DEV_ROUTES.trigger}`, {
+    const response = await fetch(`${devUrl}/__forgeax-debug/trigger`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

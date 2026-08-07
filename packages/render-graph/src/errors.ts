@@ -2,13 +2,12 @@
 // error model + Result<T, E>.
 //
 // Shape (plan-strategy D-3):
-// - RenderGraphErrorCode, RenderGraphErrorDetail, and the constructor argument
-//   union derive from one private seven-code code-to-detail map.
+// - RenderGraphErrorCode = closed 5-member union: 'dangling-read' /
+//   'cap-missing' / 'cyclic-dependency' / 'duplicate-resource' / 'unknown-resource'.
 // - RenderGraphError extends Error { readonly code; readonly expected;
 //   readonly hint; readonly detail } — four-field structured error surface,
 //   aligned with RhiError (research Finding 8).
-// - RenderGraphErrorDetail = six-shape union projected from that map; the
-//   constructor arguments correlate each code with its accepted detail:
+// - RenderGraphErrorDetail = tagged union narrowed by code:
 //   - 'dangling-read' / 'unknown-resource' -> { resourceKey, passName }
 //   - 'cap-missing' -> { cap, passName }
 //   - 'cyclic-dependency' -> { cycle: string[] }
@@ -19,42 +18,29 @@
 // Related: plan-strategy D-3; research Finding 8; AC-15.
 
 /**
- * Private code-to-detail authority for the complete RenderGraphError surface.
+ * Closed RenderGraphErrorCode union (7 members).
  *
- * The two resource-key errors intentionally share DanglingReadDetail. Keeping
- * that fact in this map lets the public code and detail unions, plus the
- * constructor arguments, derive from one seven-code authority without
- * exporting a framework or runtime registry.
+ * `switch` exhaustive checks need no default fallback — tsc strict mode
+ * guards union completeness (charter proposition 4).
+ *
+ * | code | trigger | detail variant |
+ * |:--|:--|:--|
+ * | `'dangling-read'` | pass reads a resource key that no pass writes | `{ resourceKey, passName }` |
+ * | `'cap-missing'` | compute/storage pass on a backend without the required cap | `{ cap, passName }` |
+ * | `'cyclic-dependency'` | compile() topology sort detected a cycle | `{ cycle: string[] }` |
+ * | `'duplicate-resource'` | same resource key registered twice | `{ resourceKey }` |
+ * | `'unknown-resource'` | pass references a resource key not registered | `{ resourceKey, passName }` |
+ * | `'resource-alloc-failed'` | device.createTexture/createSampler returned RhiError | `{ resourceKey, passName?, rhiCode? }` |
+ * | `'invalid-format'` | addColorTarget desc format is not a valid GPU texture format | `{ resourceKey, format, expected: string[] }` |
  */
-interface RenderGraphErrorDetailByCode {
-  'dangling-read': DanglingReadDetail;
-  'cap-missing': CapMissingDetail;
-  'cyclic-dependency': CyclicDependencyDetail;
-  'duplicate-resource': DuplicateResourceDetail;
-  'unknown-resource': DanglingReadDetail;
-  'resource-alloc-failed': ResourceAllocFailedDetail;
-  'invalid-format': InvalidFormatDetail;
-}
-
-/** Closed RenderGraphErrorCode union derived from the private detail map. */
-export type RenderGraphErrorCode = keyof RenderGraphErrorDetailByCode;
-
-/** Detail union projected from the private code-to-detail map. */
-export type RenderGraphErrorDetail = RenderGraphErrorDetailByCode[RenderGraphErrorCode];
-
-/**
- * Constructor arguments correlated by code. `detail` remains optional to
- * preserve the existing envelope behavior for callers that only need the
- * top-level fields.
- */
-type RenderGraphErrorConstructorArgs = {
-  [Code in RenderGraphErrorCode]: {
-    code: Code;
-    expected: string;
-    hint: string;
-    detail?: RenderGraphErrorDetailByCode[Code] | undefined;
-  };
-}[RenderGraphErrorCode];
+export type RenderGraphErrorCode =
+  | 'dangling-read'
+  | 'cap-missing'
+  | 'cyclic-dependency'
+  | 'duplicate-resource'
+  | 'unknown-resource'
+  | 'resource-alloc-failed'
+  | 'invalid-format';
 
 /** Detail variant for dangling-read and unknown-resource errors. */
 export interface DanglingReadDetail {
@@ -93,6 +79,21 @@ export interface InvalidFormatDetail {
 }
 
 /**
+ * Tagged union of detail shapes carried by structured RenderGraphError.
+ *
+ * Narrowing: switch on `err.code` then cast `err.detail` to the
+ * corresponding variant. The `dangling-read` and `unknown-resource`
+ * codes share DanglingReadDetail.
+ */
+export type RenderGraphErrorDetail =
+  | DanglingReadDetail
+  | CapMissingDetail
+  | CyclicDependencyDetail
+  | DuplicateResourceDetail
+  | ResourceAllocFailedDetail
+  | InvalidFormatDetail;
+
+/**
  * Structured RenderGraph error.
  *
  * Four readonly fields aligned with AGENTS.md "Errors are structured"
@@ -108,7 +109,12 @@ export class RenderGraphError extends Error {
   readonly hint: string;
   readonly detail: RenderGraphErrorDetail | undefined;
 
-  constructor(args: RenderGraphErrorConstructorArgs) {
+  constructor(args: {
+    code: RenderGraphErrorCode;
+    expected: string;
+    hint: string;
+    detail?: RenderGraphErrorDetail | undefined;
+  }) {
     super(`[RenderGraphError ${args.code}] expected: ${args.expected}; hint: ${args.hint}`);
     this.name = 'RenderGraphError';
     this.code = args.code;

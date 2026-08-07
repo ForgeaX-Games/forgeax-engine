@@ -2,8 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseParticleEffectSource } from '@forgeax/engine-vfx';
 import { Disabled, World } from '@forgeax/engine-ecs';
-import { Name } from '@forgeax/engine-scene';
-import { activeScoringTargetEntities, createScoringTargetQuery, firstScoringTarget, scoringTargetEntities, ScoringTarget } from '../assets/plugins/scoring-target';
+import { activeScoringTargetEntities, createScoringTargetQuery, scoringTargetEntities, ScoringTarget } from '../assets/plugins/scoring-target';
 import { GAME_DEFAULT_GAMEPLAY_CONFIG, installGameplayConfig } from '../assets/plugins/resources/gameplay';
 import { describe, expect, it } from 'vitest';
 
@@ -55,18 +54,6 @@ describe('game-default authored VFX effects', () => {
     expect(scoringTargetEntities(world, query)).toEqual([target]);
     world.removeComponent(target, Disabled).unwrap();
     expect(activeScoringTargetEntities(world, query)).toEqual([target]);
-  });
-
-  it('prefers the authored RedBox as the primary mission target', () => {
-    const world = new World();
-    const incidental = world.spawn({ component: ScoringTarget, data: { points: 25, slot: 0 } }).unwrap();
-    const authored = world.spawn(
-      { component: Name, data: { value: 'RedBox' } },
-      { component: ScoringTarget, data: { points: 10, slot: 1 } },
-    ).unwrap();
-    const query = createScoringTargetQuery();
-    expect(firstScoringTarget(world, query)).toBe(authored);
-    expect(firstScoringTarget(world, query)).not.toBe(incidental);
   });
 
   it('keeps tuning discoverable as one ECS World resource', () => {

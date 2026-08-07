@@ -406,17 +406,14 @@ function runOwnershipCheck({
   // (e) perf ratios run exactly once per CI channel without coverage
   // instrumentation. Instrumentation changes the relative cost of the two
   // compared loops, so a coverage run is not valid evidence for this gate.
-  // The coverage/typecheck owner and the uninstrumented ratio owner are
-  // deliberately separate jobs so they can run concurrently.
   const priBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
   const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm');
-  const coveragePerfBlock = extractJobBlock(ciYamlText, 'coverage-perf');
   if (priBlock) {
-    const coverageSteps = [
+    const steps = [
       ...extractStepRuns(priBlock),
       ...(coverageBlock ? extractStepRuns(coverageBlock) : []),
     ];
-    const vitestSteps = coverageSteps.filter(
+    const vitestSteps = steps.filter(
       (s) => s.run.includes('vitest run') && s.run.includes('--typecheck'),
     );
     const isSingleOwner = vitestSteps.length === 1 && Boolean(coverageBlock);
@@ -430,31 +427,21 @@ function runOwnershipCheck({
           `  Expected: one coverage/typecheck owner in coverage-pnpm; primary-pnpm must not carry an event-specific duplicate`,
       );
     }
-    const coveragePerfSteps = coveragePerfBlock ? extractStepRuns(coveragePerfBlock) : [];
-    const perfSteps = [...coverageSteps, ...coveragePerfSteps].filter(
+    const perfSteps = steps.filter(
       (s) => s.run.includes('vitest run') && s.run.includes('--project=ecs-perf'),
     );
     const uninstrumentedPerfSteps = perfSteps.filter((s) => !s.run.includes('--coverage'));
-    const hasCoveragePerfOwnedPerf = coveragePerfSteps.some(
-      (s) =>
-        s.name === 'ECS performance ratio gates (uninstrumented)' &&
-        s.run.includes('vitest run') &&
-        s.run.includes('--project=ecs-perf') &&
-        !s.run.includes('--coverage'),
+    const hasCoverageOwnedPerf = uninstrumentedPerfSteps.some(
+      (s) => s.name === 'ECS performance ratio gates (uninstrumented)',
     );
-    if (
-      perfSteps.length !== 1 ||
-      !coveragePerfBlock ||
-      !hasCoveragePerfOwnedPerf ||
-      uninstrumentedPerfSteps.length !== 1
-    ) {
+    if (perfSteps.length !== 1 || !hasCoverageOwnedPerf || uninstrumentedPerfSteps.length !== 1) {
       issues.push(
-        `[ownership] FAIL: coverage-perf must have one uninstrumented ecs-perf owner\n` +
+        `[ownership] FAIL: coverage-pnpm must have one uninstrumented ecs-perf owner\n` +
           `  Project: ecs-perf\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
           `  W7: ${W7_PATH}\n` +
-          `  Expected: one 'ECS performance ratio gates (uninstrumented)' step in coverage-perf, with no coverage instrumentation`,
+          `  Expected: one 'ECS performance ratio gates (uninstrumented)' step in coverage-pnpm, with no coverage instrumentation`,
       );
     }
   }
@@ -616,7 +603,7 @@ function runOwnershipSelfTest() {
       'ownership-primary-missing-ecs-perf',
       { ciYamlText: primaryWithoutPerf, rootDir },
       true,
-      'coverage-perf must have one uninstrumented ecs-perf owner',
+      'coverage-pnpm must have one uninstrumented ecs-perf owner',
     ],
     [
       'ownership-primary-zero-vitest-typecheck',

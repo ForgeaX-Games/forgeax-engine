@@ -13,11 +13,6 @@ import {
 import type { Handle, MaterialRenderState } from '@forgeax/engine-types';
 import { GpuBuffer } from '../gpu-resource';
 import {
-  GPU_BUFFER_USAGE_COPY_DST,
-  GPU_BUFFER_USAGE_STORAGE,
-  GPU_BUFFER_USAGE_UNIFORM,
-} from '../gpu-usage';
-import {
   assembleMaterialWithSkylightEntries,
   type EmissiveAoBindGroupResources,
   type SkylightBindGroupResources,
@@ -33,10 +28,13 @@ import { worldEntityKey } from './frame-snapshot';
 import { entityHasTransparentSubmesh, residentTextureView } from './main-pass-material';
 import { interleaveSpriteInstanceBuffer, spriteInstancesCacheHit } from './main-pass-sprite';
 import {
+  COPY_DST_USAGE,
   extractEntryResourceHandle,
   getOrCreatePerEntity,
   MAX_UNIFORM_INSTANCES,
   MESH_PER_ENTITY_STRIDE,
+  STORAGE_USAGE,
+  UNIFORM_USAGE,
 } from './mesh-ssbo';
 
 /**
@@ -597,8 +595,8 @@ function recordSpriteEntityDraws(
       const bucketBytes = foldHeadBucket.transforms.byteLength;
       const uniformFallback = runtime.device.caps.storageBuffer === false;
       const bucketBufUsage = uniformFallback
-        ? GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST
-        : GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST;
+        ? UNIFORM_USAGE | COPY_DST_USAGE
+        : STORAGE_USAGE | COPY_DST_USAGE;
       const cachedBucket = frameState.instanceBuffers.get(bucketCacheKey);
       let activeBucket: InstanceBufferCacheEntry | null = null;
       if (
@@ -644,7 +642,7 @@ function recordSpriteEntityDraws(
       }
     } else if (spriteInst !== undefined) {
       const uniformFallback = runtime.device.caps.storageBuffer === false;
-      let spriteBufUsage = GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST;
+      let spriteBufUsage = STORAGE_USAGE | COPY_DST_USAGE;
 
       if (uniformFallback) {
         if (spriteInst.instanceCount > MAX_UNIFORM_INSTANCES) {
@@ -680,7 +678,7 @@ function recordSpriteEntityDraws(
           spritePass.drawIndexed(spriteEntry.mesh.indexCount, spriteInstanceCount, 0, 0, 0);
           continue;
         }
-        spriteBufUsage = GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST;
+        spriteBufUsage = UNIFORM_USAGE | COPY_DST_USAGE;
       }
 
       {
@@ -951,7 +949,7 @@ function resolveSpriteInstancesBuffer(
       } else if (requestedBytes > 0) {
         const bufRes = runtime.device.createBuffer({
           size: requestedBytes,
-          usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+          usage: STORAGE_USAGE | COPY_DST_USAGE,
           mappedAtCreation: false,
         });
         if (!bufRes.ok) {
