@@ -7,7 +7,6 @@
 
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import { checkExtensions, type GltfExtensionsJson } from './check-extensions.js';
-import { dataUriBase64Payload, decodeBase64 } from './data-uri.js';
 import {
   type AccessorJson,
   type BufferViewJson,
@@ -523,6 +522,22 @@ function parseTextureInfo(
 
 export type ExternalLoader = (uri: string) => Promise<ArrayBuffer>;
 
+// data:application/octet-stream;base64,XXXX or data:*;base64,XXXX
+const DATA_URI_BASE64_RE = /^data:[^;,]*(?:;[^,;]+)*;base64,(.*)$/;
+
+// Browser-friendly base64 decoder. atob handles standard ASCII base64
+// strings; padding is preserved by `data:` URIs so no extra normalisation
+// is required. (Buffer.from would force a Node dependency on this file
+// and break the package's "ship to browser" property.)
+function decodeBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
 async function resolveBuffer(
   buf: BuffersJson,
   externalLoader: ExternalLoader,
@@ -535,9 +550,9 @@ async function resolveBuffer(
     }
     return binChunk;
   }
-  const dataPayload = dataUriBase64Payload(buf.uri);
-  if (dataPayload !== undefined) {
-    return decodeBase64(dataPayload);
+  const dataMatch = DATA_URI_BASE64_RE.exec(buf.uri);
+  if (dataMatch !== null) {
+    return decodeBase64(dataMatch[1] ?? '');
   }
   const arrayBuffer = await externalLoader(buf.uri);
   return new Uint8Array(arrayBuffer);
@@ -937,7 +952,8 @@ async function parseGltfWithBin(
   // Load external image URIs via externalLoader.
   for (const img of images) {
     if (img.uri !== undefined) {
-      if (dataUriBase64Payload(img.uri) !== undefined) continue; // data: URI, skip external load
+      const dataMatch = DATA_URI_BASE64_RE.exec(img.uri);
+      if (dataMatch !== null) continue; // data: URI, skip external load
       try {
         await ctx.externalLoader(img.uri);
       } catch (_e) {

@@ -29,8 +29,6 @@ import { PLAYER_Y } from './scene-runtime';
 import { type GameplayTargetFeatures } from './gameplay-targets';
 import { createCameraController, type CameraController } from './camera-controller';
 import { installAudioSettingsSystem } from './systems/audio-settings';
-import { installTargetStatusSystem } from './target-status';
-import { createHitStreak, type HitStreakHandle } from './hit-streak';
 
 export type GameplaySession = {
   readonly cameraController: CameraController;
@@ -48,7 +46,6 @@ export type GameplaySession = {
   readonly gameplayAudio: Awaited<ReturnType<typeof installGameplayAudio>> | undefined;
   readonly resetGameplay: () => void;
   readonly gameplayState: GameplayStateHandle;
-  readonly hitStreak: HitStreakHandle | undefined;
 };
 
 /** Build the one gameplay session that systems consume; no feature state stays in bootstrap. */
@@ -82,13 +79,6 @@ export async function createGameplaySession(
   const worldScoreText = await createWorldScoreText(world, host?.assets);
   host?.registerCleanup?.(() => worldScoreText?.dispose());
   const changeDetection = installGameplayChangeDetection({ world, targetQuery: targets.targetQuery, hud });
-  const hitStreak = createHitStreak(world, targets.player, hud);
-  installTargetStatusSystem({
-    world,
-    hud,
-    primaryTarget: targets.primaryTarget,
-    targetProfile: targets.targetProfile,
-  });
   const triggerScore = (): { readonly points: number | null } => {
     const target = targets.primaryTarget();
     if (target === undefined) return { points: null };
@@ -194,7 +184,6 @@ export async function createGameplaySession(
     targetDisabling: targets.targetDisabling,
     visibilityLoop: targets.visibilityLoop,
     targetHealth: targets.targetHealth,
-    hitStreak,
     changeDetection,
     depthOfField,
     chromaticAberration,
@@ -215,10 +204,7 @@ export async function createGameplaySession(
     animatedMaterial: targets.animatedMaterial,
     vfxHitLoop,
     setProjectileVisual: projectilePresentation.setProjectileVisual,
-    resetMission: () => {
-      cameraController.hud.setTargetProfileActive(false, 0);
-      cameraController.hud.setAssetLabStatus('Asset Lab reset · authored RedBox baseline', 'restored');
-    },
+    resetMission: () => cameraController.hud.setTargetProfileActive(false),
   });
   const gameplayState = installGameplayState({ world, reset: resetGameplay });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
@@ -239,6 +225,5 @@ export async function createGameplaySession(
     gameplayAudio,
     resetGameplay,
     gameplayState,
-    hitStreak,
   };
 }

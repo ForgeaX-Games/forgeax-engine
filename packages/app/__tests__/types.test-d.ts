@@ -23,21 +23,7 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
 
-import {
-  AppError,
-  type AppDetailCanvasDetached,
-  type AppDetailEmpty,
-  type AppDetailPointerLockFailed,
-  type AppDetailSystemUpdateFailed,
-  type AppErrorCode,
-  type AppErrorDetail,
-} from '../src/errors';
-import type {
-  LoadGameDetailImportFailed,
-  LoadGameDetailInvalidFormat,
-  LoadGameDetailModuleNotFound,
-  LoadGameErrorDetail,
-} from '../src/load-game-errors';
+import { AppError, type AppErrorCode } from '../src/errors';
 import type { App } from '../src/types';
 
 describe('AppErrorCode is the 5-member closed union (AC-07)', () => {
@@ -113,25 +99,6 @@ describe('AppError.detail is discriminated per code (AC-07)', () => {
         readonly cause: unknown;
       }>();
     }
-  });
-});
-
-describe('error detail unions derive from their code resolvers', () => {
-  it('preserves the complete AppError detail union', () => {
-    expectTypeOf<AppErrorDetail>().toEqualTypeOf<
-      | AppDetailEmpty
-      | AppDetailCanvasDetached
-      | AppDetailSystemUpdateFailed
-      | AppDetailPointerLockFailed
-    >();
-  });
-
-  it('preserves the complete LoadGameError detail union', () => {
-    expectTypeOf<LoadGameErrorDetail>().toEqualTypeOf<
-      | LoadGameDetailModuleNotFound
-      | LoadGameDetailInvalidFormat
-      | LoadGameDetailImportFailed
-    >();
   });
 });
 

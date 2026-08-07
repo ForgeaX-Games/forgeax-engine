@@ -27,7 +27,6 @@
   },
   "dependencies": {
     "@forgeax/engine-geometry": "workspace:*",
-    "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {

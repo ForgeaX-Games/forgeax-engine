@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  createEmptyInputBackendSample,
-  type InputBackendSample,
-  snapshotFromSample,
-} from '../input-snapshot';
+import { type InputBackendSample, snapshotFromSample } from '../input-snapshot';
 
 function sample(
   downKeys: string[],
@@ -46,23 +42,6 @@ describe('keyboard snapshot edges', () => {
     expect(snap.keyboard.justPressed('?')).toBe(true);
     expect(snap.keyboard.downCode('KeyA')).toBe(true);
     expect(snap.keyboard.justPressedCode('KeyA')).toBe(true);
-  });
-});
-
-describe('empty backend sample ownership', () => {
-  it('keeps the neutral sample owner out of the public root', async () => {
-    const root = (await import('../index')) as Record<string, unknown>;
-    const empty = createEmptyInputBackendSample();
-
-    expect(root).not.toHaveProperty('createEmptyInputBackendSample');
-    expect(empty.downKeys.size).toBe(0);
-    expect(empty.upKeys.size).toBe(0);
-    expect(empty.buttons).toEqual([false, false, false]);
-    expect(empty.movementX).toBe(0);
-    expect(empty.movementY).toBe(0);
-    expect(empty.wheelDelta).toBe(0);
-    expect(empty.focused).toBe(true);
-    expect(empty.pointerLocked).toBe(false);
   });
 });
 

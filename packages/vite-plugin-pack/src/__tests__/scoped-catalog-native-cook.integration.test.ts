@@ -66,15 +66,12 @@ describe('roots-scoped native catalog publication', () => {
       ws: { send: () => {} },
     });
 
-    const binding = await plugin.rebind(runtimeBinding('active', 1), [active]);
-    expect(binding.status).toBe('ready');
-    const catalogResponse = await request(middlewares, binding.catalogUrl);
-    const entries = (JSON.parse(catalogResponse.body) as { entries: PackEntry[] }).entries;
+    const entries = await plugin.catalogForRoots([active]);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       guid: EFFECT_GUID,
       kind: 'test-effect',
-      packageUrl: `/__pack/scopes/active/1/asset/__forgeax-ddc/${EFFECT_GUID}.pack.json`,
+      packageUrl: `/__forgeax-ddc/${EFFECT_GUID}.pack.json`,
       refs: [MATERIAL_GUID],
     });
     const entry = entries[0];
@@ -97,9 +94,7 @@ describe('roots-scoped native catalog publication', () => {
     expect(artifactResponse.body).toBe('{"program":"native"}');
 
     await writeFile(activePack, '{broken-after-success');
-    const degraded = await plugin.rebind(runtimeBinding('active', 2), [active]);
-    expect(degraded.status).toBe('degraded');
-    await plugin.closeBundle();
+    expect(await plugin.catalogForRoots([active])).toEqual(entries);
   });
 
   it('keeps scoped lazy import reachable when an unrelated root degrades the union catalog', async () => {
@@ -153,9 +148,7 @@ describe('roots-scoped native catalog publication', () => {
       ws: { send: () => {} },
     });
 
-    const binding = await plugin.rebind(runtimeBinding('active', 1), [active]);
-    const catalogResponse = await request(middlewares, binding.catalogUrl);
-    const discovered = (JSON.parse(catalogResponse.body) as { entries: PackEntry[] }).entries;
+    const discovered = await plugin.catalogForRoots([active]);
     expect(discovered).toHaveLength(1);
     expect(discovered[0]).toMatchObject({
       guid: IMPORTED_GUID,
@@ -163,11 +156,7 @@ describe('roots-scoped native catalog publication', () => {
       lifecycle: 'missing',
     });
 
-    const imported = await request(
-      middlewares,
-      `${binding.importUrlBase}/${IMPORTED_GUID}`,
-      'POST',
-    );
+    const imported = await request(middlewares, `/__import/${IMPORTED_GUID}`, 'POST');
     expect(imported.statusCode).toBe(200);
     expect(importCalls).toBe(1);
     const rows = JSON.parse(imported.body) as Array<{
@@ -182,7 +171,6 @@ describe('roots-scoped native catalog publication', () => {
     const body = await request(middlewares, row.packageUrl);
     expect(body.statusCode).toBe(200);
     expect(JSON.parse(body.body).assets[0].payload.text).toBe('{"title":"scoped"}');
-    await plugin.closeBundle();
   });
 
   it('filters the finalized production catalog without recooking or synthesizing DDC URLs', async () => {
@@ -264,35 +252,16 @@ describe('roots-scoped native catalog publication', () => {
     expect(globalActive).toBeDefined();
     if (globalActive === undefined)
       throw new Error('expected the active effect in the global index');
-    expect(globalRows.map((row) => row.guid).sort()).toEqual(
-      [EFFECT_GUID, SIBLING_EFFECT_GUID].sort(),
-    );
-    expect(globalActive.packageUrl).toContain('/assets/');
-    expect(globalActive.packageUrl).not.toContain('/__forgeax-ddc/');
-    expect(cookCalls).toBeGreaterThan(0);
+    const cookCallsAfterFinalization = cookCalls;
+
+    const scoped = await plugin.catalogForRoots([active], { target: 'build' });
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]).toMatchObject({ guid: EFFECT_GUID, packageUrl: globalActive.packageUrl });
+    expect(scoped[0]?.packageUrl).toContain('/assets/');
+    expect(scoped[0]?.packageUrl).not.toContain('/__forgeax-ddc/');
+    expect(cookCalls).toBe(cookCallsAfterFinalization);
   });
 });
-
-interface PackEntry {
-  guid: string;
-  packageUrl: string;
-  kind?: string;
-  refs?: string[];
-  lifecycle?: string;
-}
-
-function runtimeBinding(scopeId: string, generation: number) {
-  return {
-    schemaVersion: 'runtime-asset-binding-v1' as const,
-    gameId: scopeId,
-    scopeId,
-    generation,
-    status: 'unbound' as const,
-    catalogUrl: `/__pack/scopes/${scopeId}/${generation}/catalog.json`,
-    importUrlBase: `/__pack/scopes/${scopeId}/${generation}/import`,
-    packageUrlBase: `/__pack/scopes/${scopeId}/${generation}/asset`,
-  };
-}
 
 interface MockResponse {
   statusCode: number;

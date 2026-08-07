@@ -1,1 +1,0 @@
-export function bootstrap(): void {}

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Minimal Vite host that loads a GameEntry template and renders it in-browser (createApp + loadGame). Local smoke host for engine/templates.",
+  "description": "Minimal Vite host that loads a GameEntry template and renders it in-browser (createApp + loadGame). Local smoke host for templates/game-default.",
   "scripts": {
     "dev": "vite",
     "test:catalog-refresh": "pnpm --dir ../.. build:app preview && node scripts/catalog-host-refresh.browser.mjs",
@@ -21,20 +21,14 @@
     "smoke:gamepad": "node scripts/smoke-gamepad.mjs",
     "smoke:character-controller": "node scripts/smoke-character-controller.mjs",
     "smoke:render-evidence": "node scripts/smoke-render-evidence.mjs",
-    "bench:score-hitch": "node scripts/bench-score-hitch.mjs",
     "smoke:render-evidence-production": "pnpm --dir ../.. build:app preview && FORGEAX_RENDER_EVIDENCE_MODE=production node scripts/smoke-render-evidence.mjs",
     "smoke:depth-of-field": "node scripts/smoke-depth-of-field.mjs",
     "smoke:fixed-state": "node scripts/smoke-fixed-state.mjs",
     "smoke:asset-loop": "node scripts/smoke-asset-loop.mjs",
     "smoke:asset-loop-production": "pnpm --dir ../.. build:app preview && FORGEAX_ASSET_LOOP_MODE=production node scripts/smoke-asset-loop.mjs",
-    "smoke:templates": "node scripts/smoke-templates.mjs",
     "smoke:inspection-recovery": "node scripts/smoke-inspection-recovery.mjs",
     "smoke:vfx-charge": "node scripts/smoke-vfx-charge.mjs",
     "smoke:vfx-charge-production": "pnpm --dir ../.. build:app preview && FORGEAX_VFX_CHARGE_MODE=production node scripts/smoke-vfx-charge.mjs",
-    "smoke:hit-streak": "node scripts/smoke-hit-streak.mjs",
-    "smoke:hit-streak-production": "pnpm --dir ../.. build:app preview && FORGEAX_HIT_STREAK_MODE=production node scripts/smoke-hit-streak.mjs",
-    "smoke:mission-progression": "node scripts/smoke-mission-progression.mjs",
-    "smoke:mission-progression-production": "pnpm --dir ../.. build:app preview && FORGEAX_MISSION_PROGRESS_MODE=production node scripts/smoke-mission-progression.mjs",
     "smoke:device-loss-reentry": "node scripts/smoke-device-loss-reentry.mjs",
     "smoke:device-loss-reentry-production": "pnpm --dir ../.. build:app preview && FORGEAX_DEVICE_LOSS_MODE=production node scripts/smoke-device-loss-reentry.mjs",
     "smoke:clean-copy-reentry": "node scripts/smoke-clean-copy-reentry.mjs",
@@ -63,7 +57,7 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "engine-template browser smoke is CI-owned in shared-inputs-browser; preview has no standalone metric artifact"
+        "reason": "e2e gate is the central vitest browser project (preview.browser.test.ts, run by pnpm test:browser in the vitest-browser CI job), not a per-package smoke command"
       },
       "spike-report": {
         "enabled": false,
@@ -91,7 +85,6 @@
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
     "@forgeax/engine-render": "workspace:*"
   },

@@ -109,30 +109,29 @@ export interface GltfMaterialUvSetMissingDetail {
   readonly availableSets: readonly number[];
 }
 
-interface MaterialErrorDetailByCode {
-  readonly 'material-parent-not-found': MaterialParentNotFoundDetail;
-  readonly 'material-circular-inheritance': MaterialCircularInheritanceDetail;
-  readonly 'material-no-effective-pass': MaterialNoEffectivePassDetail;
-  readonly 'material-value-unknown': MaterialValueUnknownDetail;
-  readonly 'material-value-type-mismatch': MaterialValueTypeMismatchDetail;
-  readonly 'material-contract-program-mismatch': MaterialContractProgramMismatchDetail;
-  readonly 'shader-module-id-missing': ShaderModuleIdMissingDetail;
-  readonly 'shader-module-id-duplicate': ShaderModuleIdDuplicateDetail;
-  readonly 'shader-module-not-found': ShaderModuleNotFoundDetail;
-  readonly 'shader-module-namespace-reserved': ShaderModuleNamespaceReservedDetail;
-  readonly 'material-reflection-binding-mismatch': MaterialReflectionBindingMismatchDetail;
-  readonly 'material-specialization-not-cooked': MaterialSpecializationNotCookedDetail;
-  readonly 'material-specialization-stale-generation': MaterialSpecializationStaleGenerationDetail;
-  readonly 'gltf-material-uv-set-missing': GltfMaterialUvSetMissingDetail;
-}
-
-export type MaterialErrorDetail = MaterialErrorDetailByCode[MaterialErrorCode];
+export type MaterialErrorDetail =
+  | MaterialParentNotFoundDetail
+  | MaterialCircularInheritanceDetail
+  | MaterialNoEffectivePassDetail
+  | MaterialValueUnknownDetail
+  | MaterialValueTypeMismatchDetail
+  | MaterialContractProgramMismatchDetail
+  | ShaderModuleIdMissingDetail
+  | ShaderModuleIdDuplicateDetail
+  | ShaderModuleNotFoundDetail
+  | ShaderModuleNamespaceReservedDetail
+  | MaterialReflectionBindingMismatchDetail
+  | MaterialSpecializationNotCookedDetail
+  | MaterialSpecializationStaleGenerationDetail
+  | GltfMaterialUvSetMissingDetail;
 
 export type MaterialErrorFor<C extends MaterialErrorCode> = {
   readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: MaterialErrorDetailByCode[C];
+  readonly detail: C extends 'gltf-material-uv-set-missing'
+    ? GltfMaterialUvSetMissingDetail
+    : Extract<MaterialErrorDetail, { readonly code: C }>;
   readonly message: string;
 };
 
@@ -177,7 +176,9 @@ export const MATERIAL_ERROR_HINTS: Readonly<Record<MaterialErrorCode, string>> =
 
 export function createMaterialError<C extends MaterialErrorCode>(
   code: C,
-  detail: MaterialErrorDetailByCode[C],
+  detail: C extends 'gltf-material-uv-set-missing'
+    ? GltfMaterialUvSetMissingDetail
+    : Extract<MaterialErrorDetail, { readonly code: C }>,
   message = `${code}: ${MATERIAL_ERROR_EXPECTED[code]}`,
 ): MaterialErrorFor<C> {
   return {

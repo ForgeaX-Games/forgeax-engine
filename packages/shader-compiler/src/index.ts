@@ -102,15 +102,10 @@ export interface CompileResult {
 
 // === Main API =======================================================================
 
-const PRAGMA_RE = /^\s*#pragma\s+\S.*$/gm;
 const DEFINE_WITH_VALUE_RE = /^\s*#define\s+\w+\s+(\S.*)$/;
 const IMPORT_DIRECTIVE_RE = /^\s*#import\s+([A-Za-z0-9_:-]+)/;
 const MODULE_ID_PREFIX_RE = /^([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)/;
 const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/;
-
-function stripPragmas(source: string): string {
-  return source.replace(PRAGMA_RE, '');
-}
 
 /**
  * Build-time pure function: WGSL -> triplet artefacts + reflection derivation.
@@ -129,10 +124,9 @@ function stripPragmas(source: string): string {
  * All error paths return Result.err — never throw (AGENTS.md "Errors are structured").
  */
 export async function compileShader(
-  rawSource: string,
+  source: string,
   options: CompileOptions = {},
 ): Promise<Result<CompileResult, ShaderErrorType>> {
-  const source = stripPragmas(rawSource);
   const imports = options.imports ?? {};
   const defines = options.defines ?? {};
   const fromModuleId = options.id ?? `<anonymous-entry-${computeHash(source)}>`;

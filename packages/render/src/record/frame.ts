@@ -1,7 +1,7 @@
 // @forgeax/engine-runtime - RenderSystem record stage: frame.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
-import { HANDLE_NINESLICE_QUAD, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import {
   type BindGroup,
@@ -10,7 +10,7 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, MeshAsset } from '@forgeax/engine-types';
-import { handleSlot, toShared } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
 import { disposeTransientInstanceBuffers } from '../instance-buffer-cache';
 import type {
   _InternalRenderPipelineContext,
@@ -74,6 +74,7 @@ import {
   warnMultiSkybox,
   warnMultiSkylight,
 } from './helpers';
+import { BUILTIN_MESH_ID_MAX, NINESLICE_QUAD_RAW_ID } from './main-pass-material';
 import { computeSplitLdrSprite } from './main-pass-sprite';
 import { cleanPerEntityCache, ensureMeshSsboCapacity, uploadMeshSsboBatch } from './mesh-ssbo';
 import { writeViewUbo } from './view-ubo';
@@ -719,7 +720,7 @@ function validateRenderables(
       continue;
     }
     // feat-20260601-gpu-resource-store-extraction M1 (D-1): builtin meshes
-    // (slots through HANDLE_NINESLICE_QUAD) keep the createRenderer step-3
+    // (ids 1-4: CUBE/TRIANGLE/QUAD/SPHERE) keep the createRenderer step-3
     // direct-upload + `pipelineState.meshes` path -- they are NOT routed
     // through `ensureResident`. User-registered meshes pull through the store
     // on first access (the register->upload push was severed in this M1);
@@ -728,7 +729,7 @@ function validateRenderables(
     // frames hit the O(1) cache.
     const meshAssetHandle = toShared<'MeshAsset'>(r.assetHandle);
     let meshHandles = internals.gpuStore.getMeshGpuHandles(meshAssetHandle, r.worldId);
-    if (meshHandles === undefined && r.assetHandle > handleSlot(HANDLE_NINESLICE_QUAD)) {
+    if (meshHandles === undefined && r.assetHandle > BUILTIN_MESH_ID_MAX) {
       const residentRes = internals.gpuStore.ensureResident(
         meshAssetHandle,
         assetRes.value,
@@ -784,7 +785,7 @@ function validateRenderables(
         slicesArr.length >= 4 &&
         (slicesArr[0] !== 0 || slicesArr[1] !== 0 || slicesArr[2] !== 0 || slicesArr[3] !== 0)
       ) {
-        const nineSliceHandles = pipelineState.meshes.get(handleSlot(HANDLE_NINESLICE_QUAD));
+        const nineSliceHandles = pipelineState.meshes.get(NINESLICE_QUAD_RAW_ID);
         if (nineSliceHandles !== undefined) {
           effectiveMeshHandles = nineSliceHandles;
         }

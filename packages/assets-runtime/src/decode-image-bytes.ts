@@ -70,8 +70,11 @@ function isSupportedMime(mime: string): mime is SupportedMime {
  * const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
  * const result = await decodeImageBytes(bytes, 'image/png');
  * if (!result.ok) {
- *   // The ImageError code and detail are one correlated discriminated union.
- *   switch (result.error.code) {
+ *   // Switch on `result.error.detail.code`, not `result.error.code`:
+ *   // ImageError carries two independent discriminants (envelope + detail);
+ *   // TS won't cross-narrow between them, so per-arm `detail.<field>` access
+ *   // only compiles when the switch scrutinee is the detail-side discriminant.
+ *   switch (result.error.detail.code) {
  *     case 'image-format-unsupported':
  *       console.error('bad mime:', result.error.detail.actualMime);
  *       break;

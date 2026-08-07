@@ -1,7 +1,7 @@
 import { type FSWatcher, watch as fsWatch } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { type ScanOptions, scan } from '@forgeax/engine-pack/scanner';
+import { scan } from '@forgeax/engine-pack/scanner';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 
 export interface WatchedChange {
@@ -36,13 +36,10 @@ export function buildUrlToAbsolute(
   return map;
 }
 
-export async function buildGuidToMetaMap(
-  roots: readonly string[],
-  scanOptions: ScanOptions = {},
-): Promise<Map<string, string>> {
+export async function buildGuidToMetaMap(roots: readonly string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   for (const root of roots) {
-    const result = await scan([root], scanOptions);
+    const result = await scan([root]);
     if (!result.ok) continue;
     for (const metaPath of result.value.filter((path) => path.endsWith('.meta.json'))) {
       try {

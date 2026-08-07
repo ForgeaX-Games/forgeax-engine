@@ -4,7 +4,6 @@ import {
   type RenderFeaturePrepareContext,
   type RenderFeaturePreparedRef,
   RenderFeatureStageFailedError,
-  type RenderFeatureTargetHandle,
 } from '@forgeax/engine-render';
 import { err, type MaterialRenderState, ok, type Result } from '@forgeax/engine-types';
 import type { ParticleOutputBatch } from '@forgeax/engine-vfx';
@@ -49,8 +48,6 @@ interface ParticlePreparedRefs {
 export interface ParticlePreparedState {
   generation: number | undefined;
   draws: readonly RenderFeatureDrawRecord[];
-  colorTarget: RenderFeatureTargetHandle | undefined;
-  depthTarget: RenderFeatureTargetHandle | undefined;
   diagnostics: ParticleRenderDiagnostics;
 }
 
@@ -58,8 +55,6 @@ export function createParticlePreparedState(): ParticlePreparedState {
   return {
     generation: undefined,
     draws: [],
-    colorTarget: undefined,
-    depthTarget: undefined,
     diagnostics: { readiness: 'empty', error: undefined, bucketCount: 0, generation: undefined },
   };
 }
@@ -232,23 +227,9 @@ function prepareRefs(
   if (buckets.length === 0) {
     state.draws = [];
     state.generation = undefined;
-    state.colorTarget = undefined;
-    state.depthTarget = undefined;
     setDiagnostics(state, 'empty', undefined, 0);
     return ok(undefined);
   }
-  // Older host/test adapters can omit the optional frame target projection.
-  // The active engine pipelines always provide it, but particle preparation
-  // still has to degrade to the historical swap-chain path for those adapters.
-  const availableTargets = context.targets ?? [];
-  const colorTarget = availableTargets.find((target) => target.kind === 'scene-color');
-  const depthTarget = availableTargets.find((target) => target.kind === 'scene-depth');
-  state.colorTarget = colorTarget;
-  state.depthTarget = depthTarget;
-  const colorFormat = colorTarget?.format ?? 'rgba8unorm-srgb';
-  const depthFormat = depthTarget?.format;
-  const sampleCount = colorTarget?.sampleCount ?? 1;
-  const targetKey = `${colorFormat}.${depthFormat ?? 'none'}.${sampleCount}`;
   setDiagnostics(state, 'preparing', undefined, buckets.length);
 
   const pipelines = new Map<ParticleOutputBatch['kind'], RenderFeaturePreparedRef<'pipeline'>>();
@@ -263,17 +244,12 @@ function prepareRefs(
     const kind = bucket.key.kind;
     let pipeline = pipelines.get(kind);
     if (pipeline === undefined) {
-      const pipelineResult = context.graphics.preparePipeline(
-        `particles.${kind}.pipeline.${targetKey}`,
-        {
-          shader: PARTICLE_SHADER_IDENTIFIERS[kind],
-          vertexLayout: pipelineLayout(kind),
-          colorFormats: [colorFormat],
-          ...(depthFormat === undefined ? {} : { depthFormat }),
-          sampleCount,
-          ...(kind === 'billboard' ? { renderState: PARTICLE_BILLBOARD_RENDER_STATE } : {}),
-        },
-      );
+      const pipelineResult = context.graphics.preparePipeline(`particles.${kind}.pipeline`, {
+        shader: PARTICLE_SHADER_IDENTIFIERS[kind],
+        vertexLayout: pipelineLayout(kind),
+        colorFormats: ['rgba8unorm-srgb'],
+        ...(kind === 'billboard' ? { renderState: PARTICLE_BILLBOARD_RENDER_STATE } : {}),
+      });
       if (!pipelineResult.ok) return assetNotReady(state, bucket, kind, buckets.length);
       pipeline = pipelineResult.value;
       pipelines.set(kind, pipeline);
@@ -403,28 +379,11 @@ export function particleRenderFeature(
     prepare: (data, context) => prepareRefs(data, context, state),
     contribute: (_data, context) => {
       if (state.draws.length === 0) return ok(undefined);
-      const colorTarget = state.colorTarget;
-      const depthTarget = state.depthTarget;
       const pass = context.staging.addGraphicsPass('particles', {
         attachments: {
           colors: [
-            {
-              resource: colorTarget ?? 'swapchain',
-              format: colorTarget?.format ?? 'rgba8unorm-srgb',
-              loadOp: 'load',
-              storeOp: 'store',
-            },
+            { resource: 'swapchain', format: 'rgba8unorm-srgb', loadOp: 'load', storeOp: 'store' },
           ],
-          ...(depthTarget === undefined
-            ? {}
-            : {
-                depthStencil: {
-                  resource: depthTarget,
-                  format: depthTarget.format,
-                  depthLoadOp: 'load' as const,
-                  depthStoreOp: 'store' as const,
-                },
-              }),
         },
         draws: state.draws,
       });
@@ -435,8 +394,6 @@ export function particleRenderFeature(
       const generation = state.generation;
       state.draws = [];
       state.generation = undefined;
-      state.colorTarget = undefined;
-      state.depthTarget = undefined;
       setDiagnostics(
         state,
         'unavailable',
@@ -450,8 +407,6 @@ export function particleRenderFeature(
     dispose: () => {
       state.draws = [];
       state.generation = undefined;
-      state.colorTarget = undefined;
-      state.depthTarget = undefined;
       setDiagnostics(state, 'disabled', undefined, 0);
       return ok(undefined);
     },

@@ -7,7 +7,6 @@ import { type Mat4, mat4 } from '@forgeax/engine-math';
 import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { EquirectProjectionFailedError } from '../errors/render';
-import { isStandardPbrMaterialShader } from '../pbr-pipeline';
 import type { RenderSystemInternals } from '../render-system';
 import type {
   CameraSnapshot,
@@ -240,7 +239,11 @@ export function driveLazyEquirectProjection(
  * the production implementation rather than a test-local copy.
  */
 export function isLitMaterialSnapshot(material: MaterialSnapshot): boolean {
-  return isStandardPbrMaterialShader(material.materialShaderId);
+  return (
+    material.materialShaderId === 'forgeax::default-standard-pbr' ||
+    material.materialShaderId === 'forgeax::pbr-skin' ||
+    material.materialShaderId === 'forgeax::default-standard-pbr-skin'
+  );
 }
 
 export function computeViewMatrix(camera: CameraSnapshot): Mat4 {

@@ -84,10 +84,7 @@ describe('material texture UV scale [w37]', () => {
     );
     expect(
       Array.from(
-        new Float32Array(standard.buffer, standard.byteOffset, standard.byteLength / 4).slice(
-          24,
-          72,
-        ),
+        new Float32Array(standard.buffer, standard.byteOffset, standard.byteLength / 4).slice(24),
       ),
     ).toEqual([
       0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1,
