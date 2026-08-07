@@ -4,6 +4,8 @@ export { scenePlugin } from './plugin';
 export {
   projectHierarchy,
   type SceneHierarchyDiagnostic,
+  type SceneHierarchyDiagnosticCode,
+  type SceneHierarchyDiagnosticDetail,
   type SceneHierarchySnapshot,
 } from './systems/hierarchy-projection';
 export {

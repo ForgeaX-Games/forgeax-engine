@@ -8,7 +8,12 @@
 //   - orthographic projection already exists (Camera + orthographic())
 //   - scene uses standard PBR materials + PointLight + HANDLE_CUBE
 
-import { createApp } from '@forgeax/engine-app';
+import { World } from '@forgeax/engine-ecs';
+import {
+  acquireCanvasContext,
+  createRenderer,
+  EngineEnvironmentError,
+} from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildOrthographicWorld } from './orthographic.js';
 
@@ -16,24 +21,42 @@ const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-orthographic: missing <canvas id="app"> in index.html');
 
 bootstrap(canvas).catch((err: unknown) => {
-  console.error('[bevy-orthographic] bootstrap error:', err);
+  if (err instanceof EngineEnvironmentError) {
+    console.error('[bevy-orthographic] no usable backend:', err);
+  } else {
+    console.error('[bevy-orthographic] bootstrap error:', err);
+  }
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
-  if (!appResult.ok) {
-    console.error('[bevy-orthographic] createApp failed:', appResult.error);
-    return;
-  }
-  const app = appResult.value;
+  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
 
-  const ready = await app.renderer.ready;
+  const ctxResult = acquireCanvasContext(target);
+  if (ctxResult.ok) {
+    const cfgResult = ctxResult.value.configure({
+      device: renderer.device,
+      format: 'rgba8unorm',
+      usage: 0x10 | 0x01,
+    });
+    if (!cfgResult.ok) console.error('[bevy-orthographic] canvasContext.configure failed:', cfgResult.error);
+  } else {
+    console.warn('[bevy-orthographic] acquireCanvasContext failed:', ctxResult.error);
+  }
+  console.warn(`[bevy-orthographic] backend=${renderer.backend}`);
+
+  const ready = await renderer.ready;
   if (!ready.ok) {
     console.error('[bevy-orthographic] renderer.ready failed:', ready.error);
     return;
   }
 
-  buildOrthographicWorld(app.world);
-  const started = app.start();
-  if (!started.ok) console.error('[bevy-orthographic] app.start failed:', started.error);
+  const world = new World();
+  buildOrthographicWorld(world);
+
+  const frame = (): void => {
+    const r = renderer.draw([world], { owner: 0 });
+    if (!r.ok) console.error('[bevy-orthographic] draw error:', r.error);
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }

@@ -6,7 +6,6 @@ export const Projectile = defineComponent('GameDefaultProjectile', {
   velocityX: 'f32',
   velocityY: 'f32',
   velocityZ: 'f32',
-  impactScale: { type: 'f32', default: 1 },
   hitMask: { type: 'u32', default: 0 },
 }, { transient: true });
 
@@ -29,14 +28,6 @@ export const GameplayInput = defineComponent('GameDefaultGameplayInput', {
   shotDirX: { type: 'f32', default: 0 },
   shotDirZ: { type: 'f32', default: -1 },
   shotDirValid: { type: 'u32', default: 0 },
-}, { transient: true });
-
-/** ECS-owned hold/release state for the player-visible charged shot. */
-export const ChargeShot = defineComponent('GameDefaultChargeShot', {
-  active: { type: 'u32', default: 0 },
-  release: { type: 'u32', default: 0 },
-  elapsed: { type: 'f32', default: 0 },
-  power: { type: 'f32', default: 1 },
 }, { transient: true });
 
 /** Tunable FPS camera velocity; the free-camera helper operates on this ECS payload. */

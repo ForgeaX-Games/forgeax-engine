@@ -1,6 +1,5 @@
 import type { BootstrapContext } from '@forgeax/engine-app';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { installAssetContentEvidence } from './asset-content-evidence';
 import { createFbxMeshSwap, resetFbxMeshSwap, type FbxMeshSwap } from './fbx-mesh-swap';
 import { createFbxSkinnedTarget, type FbxSkinnedTarget } from './fbx-skinned-target';
@@ -33,16 +32,10 @@ export type GameplayTargetFeatures = GameplaySceneAssembly & {
   readonly damageTarget: (entity: EntityHandle, points: number) => void;
 };
 
-export type GameplayTargetOptions = {
-  /** Load comparison-only mesh/FBX/glTF/skin owners for an explicit evidence run. */
-  readonly comparisonEvidenceMode?: boolean;
-};
-
-/** Assemble the target roster and the guided asset loops around it. */
+/** Assemble the target roster and all asset-format feature loops around it. */
 export async function createGameplayTargetFeatures(
   world: World,
   host: BootstrapContext | undefined,
-  options: GameplayTargetOptions = {},
 ): Promise<GameplayTargetFeatures> {
   const scene = await assembleGameplayScene(world, host);
   const targetEntities = (): EntityHandle[] => scoringTargetEntities(world, scene.targetQuery);
@@ -50,14 +43,9 @@ export async function createGameplayTargetFeatures(
   const targetHealth = installTargetHealth(world, scene.targetQuery);
   const targetDisabling = installTargetDisabling(world, scene.targetQuery);
   const visibilityLoop = installVisibilityLoop(world, scene.targetQuery);
-  // Mesh/FBX/glTF swaps remain comparison owners. The imported humanoid is also
-  // prepared as a hidden guided companion so one Asset Lab action can turn the
-  // existing scored target into a real source-format lesson without creating a
-  // second gameplay owner.
-  const comparisonEvidenceMode = options.comparisonEvidenceMode === true;
-  const meshHandleSwap = comparisonEvidenceMode ? createMeshHandleSwap(world, primaryTarget()) : undefined;
-  const fbxMeshSwap = comparisonEvidenceMode ? await createFbxMeshSwap(world, host?.assets, primaryTarget()) : undefined;
-  const gltfMeshSwap = comparisonEvidenceMode ? await createGltfMeshSwap(world, host?.assets, primaryTarget()) : undefined;
+  const meshHandleSwap = createMeshHandleSwap(world, primaryTarget());
+  const fbxMeshSwap = await createFbxMeshSwap(world, host?.assets, primaryTarget());
+  const gltfMeshSwap = await createGltfMeshSwap(world, host?.assets, primaryTarget());
   const jpegTextureSwap = await createJpegTextureSwap(world, host?.assets, primaryTarget());
   const videoTexturePanel = await createVideoTexturePanel(world, host?.assets, primaryTarget());
   host?.registerCleanup?.(() => videoTexturePanel?.dispose());
@@ -75,13 +63,7 @@ export async function createGameplayTargetFeatures(
     toggleTargetProfile(world, targetProfile);
     return targetProfileSnapshot(targetProfile);
   };
-  const guidedFbxTarget = comparisonEvidenceMode ? undefined : primaryTarget();
-  const physics = world.hasResource('PhysicsWorld') ? world.getResource<PhysicsWorld>('PhysicsWorld') : undefined;
-  const fbxSkinnedTarget = await createFbxSkinnedTarget(
-    guidedFbxTarget === undefined
-      ? { world, assets: host?.assets }
-      : { world, assets: host?.assets, target: guidedFbxTarget, ...(physics === undefined ? {} : { physics }) },
-  );
+  const fbxSkinnedTarget = await createFbxSkinnedTarget({ world, assets: host?.assets });
   host?.registerCleanup?.(() => fbxSkinnedTarget?.dispose());
 
   const skylightEntity = scene.loaded?.nodes

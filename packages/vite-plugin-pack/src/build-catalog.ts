@@ -49,7 +49,7 @@ import { posix, relative } from 'node:path';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
-import { type ScanOptions, scan } from '@forgeax/engine-pack/scanner';
+import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import type {
   AssetAuthoringCapability,
@@ -59,7 +59,7 @@ import type {
   ProviderProvenance,
   ResourceRevision,
 } from '@forgeax/engine-types';
-import { authoringCapabilityForAssetKind, catalogOperationsFor } from '@forgeax/engine-types';
+import { catalogOperationsFor } from '@forgeax/engine-types';
 
 function projectionFor(
   subject: 'internal-asset' | 'imported-output',
@@ -96,11 +96,7 @@ export function projectPackageCatalog(
     packageUrl: packageUrl,
     ...(entry.name === undefined ? {} : { name: entry.name }),
     ...(entry.refs === undefined ? {} : { refs: entry.refs }),
-    ...(entry.authoring === undefined
-      ? entry.kind === 'ui'
-        ? { authoring: authoringCapabilityForAssetKind('ui') }
-        : {}
-      : { authoring: entry.authoring }),
+    ...(entry.authoring === undefined ? {} : { authoring: entry.authoring }),
     subject: 'internal-asset',
     execution: entry.execution ?? 'direct',
     lifecycle: entry.execution === 'cooked' ? 'missing' : 'current',
@@ -662,10 +658,7 @@ async function processMetaSidecar(
         packageUrl: normalizedUrl,
         kind: 'ui',
         sourcePath: sourceRel,
-        ...producerFields(meta, {
-          ...sub,
-          authoring: sub.authoring ?? authoringCapabilityForAssetKind('ui'),
-        }),
+        ...producerFields(meta, sub),
         name: subName(sub),
       });
     }
@@ -828,7 +821,6 @@ export async function buildCatalogResult(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
-  scanOptions: ScanOptions = {},
 ): Promise<CatalogBuildResult> {
   if (roots.length === 0) {
     return { entries: [], authority: 'authoritative', diagnostics: [] };
@@ -836,7 +828,7 @@ export async function buildCatalogResult(
 
   const cwd = process.cwd();
   const { paths: assetPaths } = loadAssetConfig(cwd);
-  const result = await scan(roots, scanOptions);
+  const result = await scan(roots);
 
   const warnErrors = (errors: readonly CatalogBuildError[]): void => {
     for (const e of errors) {
@@ -869,7 +861,7 @@ export async function buildCatalogResult(
   const seen = new Set<string>();
   const errors: CatalogBuildError[] = [];
   for (const root of roots) {
-    const r = await scan([root], scanOptions);
+    const r = await scan([root]);
     if (!r.ok) {
       console.warn(
         `[forgeax-pack] per-root scan error @ ${root}: ${r.error.message} — dropping this root`,
@@ -914,11 +906,8 @@ export async function buildCatalogProjection(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
-  scanOptions: ScanOptions = {},
 ): Promise<CatalogLegacyProjection> {
-  return projectLegacyCatalog(
-    await buildCatalogResult(roots, base, registeredImporterKeys, scanOptions),
-  );
+  return projectLegacyCatalog(await buildCatalogResult(roots, base, registeredImporterKeys));
 }
 
 /**
@@ -930,9 +919,8 @@ export async function buildCatalog(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
-  scanOptions: ScanOptions = {},
 ): Promise<PackIndexEntry[]> {
-  const projection = await buildCatalogProjection(roots, base, registeredImporterKeys, scanOptions);
+  const projection = await buildCatalogProjection(roots, base, registeredImporterKeys);
   return projection.authority === 'authoritative' ? [...projection.entries] : [];
 }
 
@@ -945,13 +933,12 @@ export async function buildCatalogStrict(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
-  scanOptions: ScanOptions = {},
 ): Promise<{
   catalog: PackIndexEntry[];
   errors: CatalogBuildError[];
   projection: CatalogLegacyProjection;
 }> {
-  const result = await buildCatalogResult(roots, base, registeredImporterKeys, scanOptions);
+  const result = await buildCatalogResult(roots, base, registeredImporterKeys);
   return {
     catalog: [...result.entries],
     errors: [...result.diagnostics],

@@ -22,7 +22,6 @@
 // size) and the importer only runs at build time.
 
 import type { ImportContext, ImportError as ImportErrorType } from '@forgeax/engine-types';
-import { dataUriBase64Payload, decodeBase64 } from './data-uri.js';
 import { parseGlbChunks } from './parse-glb-chunks.js';
 
 /** Source of an image: matches `GltfImageExtractFailedDetail.source`. */
@@ -47,6 +46,7 @@ export interface ExtractFailure {
   readonly reason: string;
 }
 
+const DATA_URI_BASE64_RE = /^data:[^;,]*(?:;[^,;]+)*;base64,(.*)$/;
 const DATA_URI_MIME_RE = /^data:([^;,]+)(?:;[^,;]+)*;base64,/;
 
 /** Pull the source-read-failed reason out of an ImportError without
@@ -57,6 +57,16 @@ const DATA_URI_MIME_RE = /^data:([^;,]+)(?:;[^,;]+)*;base64,/;
  * which the class composes from `expected: ...; reason: ...`. */
 function describeImportError(err: ImportErrorType): string {
   return err.message;
+}
+
+/** Browser-friendly base64 decode (mirrors parse-gltf.ts decodeBase64). */
+function decodeBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
 }
 
 /** Pick PNG vs JPEG from declared mimeType + magic-byte fallback. */
@@ -213,9 +223,9 @@ export async function extractImageBytes(
       buffersCache.set(bufferIndex, glbBin);
       return glbBin;
     }
-    const dataPayload = dataUriBase64Payload(bufJson.uri);
-    if (dataPayload !== undefined) {
-      const bytes = decodeBase64(dataPayload);
+    const dataMatch = DATA_URI_BASE64_RE.exec(bufJson.uri);
+    if (dataMatch !== null) {
+      const bytes = decodeBase64(dataMatch[1] ?? '');
       buffersCache.set(bufferIndex, bytes);
       return bytes;
     }
@@ -273,11 +283,11 @@ export async function extractImageBytes(
     }
 
     if (img.uri !== undefined) {
-      const dataPayload = dataUriBase64Payload(img.uri);
-      if (dataPayload !== undefined) {
+      const dataMatch = DATA_URI_BASE64_RE.exec(img.uri);
+      if (dataMatch !== null) {
         let bytes: Uint8Array;
         try {
-          bytes = decodeBase64(dataPayload);
+          bytes = decodeBase64(dataMatch[1] ?? '');
         } catch (e) {
           failures.push({
             imageIndex: i,

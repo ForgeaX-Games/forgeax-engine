@@ -47,11 +47,6 @@ import type { Mat4 } from '@forgeax/engine-math';
 import { mat4 } from '@forgeax/engine-math';
 import type { Buffer, RhiDevice } from '@forgeax/engine-rhi';
 import { SkinPaletteOverflowError } from '../errors';
-import {
-  GPU_BUFFER_USAGE_COPY_DST,
-  GPU_BUFFER_USAGE_STORAGE,
-  GPU_BUFFER_USAGE_UNIFORM,
-} from '../gpu-usage';
 import type { SkinPaletteSlice } from '../render-system-extract';
 
 const MAT4_BYTES = 64; // 16 f32 * 4 bytes
@@ -70,6 +65,10 @@ const BINDING_WINDOW_BYTES = MAX_JOINTS * MAT4_BYTES; // 16320
 // lands on an unaligned offset and trips `Dynamic Offset[1] is not 256 byte
 // aligned` at draw time.
 const PALETTE_OFFSET_ALIGN = 256;
+
+// STORAGE = 0x80, UNIFORM = 0x40, COPY_DST = 0x08 (WebGPU spec).
+const STORAGE_USAGE = 0x80 | 0x08;
+const UNIFORM_USAGE = 0x40 | 0x08;
 
 export interface SkinPaletteAllocator {
   /**
@@ -152,7 +151,7 @@ export function createSkinPaletteAllocator(
     const bufRes = device.createBuffer({
       label: 'skin-palette',
       size: newCapacity,
-      usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+      usage: STORAGE_USAGE,
       mappedAtCreation: false,
     });
     if (!bufRes.ok) throw bufRes.error;
@@ -172,7 +171,7 @@ export function createSkinPaletteAllocator(
     const bufRes = device.createBuffer({
       label: 'skin-palette',
       size: BINDING_WINDOW_BYTES,
-      usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+      usage: UNIFORM_USAGE,
       mappedAtCreation: false,
     });
     if (!bufRes.ok) throw bufRes.error;

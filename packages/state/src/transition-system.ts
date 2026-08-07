@@ -25,7 +25,6 @@ import { createQueryState, Entity, queryRun, resolveComponent } from '@forgeax/e
 import { getRegisteredTokens } from './define-state';
 import { getCallbacks, OnEnter, OnExit } from './on-enter-on-exit';
 import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
-import { SCOPED_MODE_VALUE } from './scoped-component';
 
 interface NextStatePayload {
   value: number;
@@ -120,8 +119,8 @@ export function transitionStatesSystem(world: World): void {
     // Resolve the per-token ScopedTo component from the global ECS registry
     const scopedComponent = resolveComponent(`__scopedTo__${token.name}`);
     if (scopedComponent) {
-      // (4) Despawn exit-scoped entities (value=prev)
-      scopeDespawn(world, scopedComponent, SCOPED_MODE_VALUE.exit, prevIdx);
+      // (4) Despawn exit-scoped entities (mode=0, value=prev)
+      scopeDespawn(world, scopedComponent, 0, prevIdx);
 
       // (5) OnExit dispatch: fire registered callbacks for prev variant.
       // Errors bubble to the transitionStatesSystem call stack per req §7.
@@ -133,8 +132,8 @@ export function transitionStatesSystem(world: World): void {
         }
       }
 
-      // (6) Despawn enter-scoped entities (value=next)
-      scopeDespawn(world, scopedComponent, SCOPED_MODE_VALUE.enter, nextIdx);
+      // (6) Despawn enter-scoped entities (mode=1, value=next)
+      scopeDespawn(world, scopedComponent, 1, nextIdx);
 
       // (7) OnEnter dispatch: fire registered callbacks for next variant.
       // Errors bubble to the transitionStatesSystem call stack per req §7.

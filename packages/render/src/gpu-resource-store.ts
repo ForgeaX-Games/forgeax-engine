@@ -59,21 +59,13 @@ import {
   handleSlot,
   IMAGE_ERROR_HINTS,
   type ImageError,
-  type ImageErrorCode,
-  type ImageErrorDetailFor,
-  type ImageErrorFor,
+  type ImageErrorDetail,
   type PrimitiveTopology,
   type Submesh,
   type TextureAsset,
   type MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
 import { GpuBuffer, GpuTexture } from './gpu-resource';
-import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
-import {
-  GPU_BUFFER_USAGE_COPY_DST,
-  GPU_BUFFER_USAGE_INDEX,
-  GPU_BUFFER_USAGE_VERTEX,
-} from './gpu-usage';
 import {
   createFaceUniformsBuffer,
   createPrefilterUniformsBuffer,
@@ -128,12 +120,12 @@ const IMAGE_ERROR_EXPECTED_LOCAL: Readonly<Record<string, string>> = {
     'width and height fall under device caps maxTextureDimension2D (or 16384 hard cap)',
 };
 
-class RuntimeImageError<C extends ImageErrorCode> extends Error implements ImageErrorFor<C> {
-  readonly code: C;
+class RuntimeImageError extends Error implements ImageError {
+  readonly code: ImageError['code'];
   readonly expected: string;
   readonly hint: string;
-  readonly detail: ImageErrorDetailFor<C>;
-  constructor(detail: ImageErrorDetailFor<C>) {
+  readonly detail: ImageErrorDetail;
+  constructor(detail: ImageErrorDetail) {
     const code = detail.code;
     const expected = IMAGE_ERROR_EXPECTED_LOCAL[code] ?? '';
     const hint = IMAGE_ERROR_HINTS[code];
@@ -146,10 +138,8 @@ class RuntimeImageError<C extends ImageErrorCode> extends Error implements Image
   }
 }
 
-function makeImageError<C extends ImageErrorCode>(
-  detail: ImageErrorDetailFor<C>,
-): ImageErrorFor<C> {
-  return new RuntimeImageError<C>(detail);
+function makeImageError(detail: ImageErrorDetail): ImageError {
+  return new RuntimeImageError(detail);
 }
 
 // Extended device shape adding `queue.writeTexture` on top of
@@ -876,7 +866,7 @@ export class GpuResourceStore {
       ? 'srgb'
       : 'linear';
     if (decoded.colorSpace !== formatExpected) {
-      const detail: ImageErrorDetailFor<'image-format-unsupported'> = {
+      const detail: ImageErrorDetail = {
         code: 'image-format-unsupported',
         actualMime: decoded.mime,
         formatColorSpaceConflict: {
@@ -1149,6 +1139,9 @@ export class GpuResourceStore {
 
     // Usage flags for the small equirect helper texture (sampled source for the
     // IBL precompute pass); the cube texture's usage comes from the projection.
+    const TEXTURE_BINDING = 0x4;
+    const COPY_DST = 0x2;
+
     // biome-ignore lint/suspicious/noExplicitAny: union of shim/raw return shapes
     const unwrap = (r: any): any => {
       if (r === null || r === undefined) return undefined;
@@ -1288,7 +1281,7 @@ export class GpuResourceStore {
           sampleCount: 1,
           dimension: '2d',
           format: tex.format,
-          usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
+          usage: TEXTURE_BINDING | COPY_DST,
           viewFormats: [],
         });
         const equirectGpuTex = unwrap(equirectGpuTexRet);
@@ -1315,7 +1308,7 @@ export class GpuResourceStore {
           fdevice.createBuffer({
             label: 'ibl-cube-verts',
             size: CUBEMAP_FACE_VERTICES.byteLength,
-            usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
+            usage: 0x20 | 0x08,
             mappedAtCreation: false,
           }),
         );
@@ -1501,6 +1494,10 @@ export class GpuResourceStore {
     if (device === undefined) return;
     const entry = this.meshGpuHandles.get(id);
     if (entry === undefined) return;
+
+    const GPU_BUFFER_USAGE_VERTEX = 0x20;
+    const GPU_BUFFER_USAGE_INDEX = 0x10;
+    const GPU_BUFFER_USAGE_COPY_DST = 0x08;
 
     // biome-ignore lint/suspicious/noExplicitAny: union of shim/raw return shapes
     const unwrapBuffer = (r: any): any => {

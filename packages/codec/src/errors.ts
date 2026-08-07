@@ -7,8 +7,17 @@
  * Union is order-locked and add-only-minor for Loop 2 additions.
  */
 
+/** Order-locked closed union of codec error codes. */
+export type CodecErrorCode =
+  | 'decompression-failed'
+  | 'codec-init-failed'
+  | 'ktx2-parse-failed'
+  | 'ktx2-unsupported-scheme'
+  | 'transcode-failed'
+  | 'ktx2-encode-failed';
+
 /** Per-code narrowed detail payloads. */
-interface CodecErrorDetails {
+export interface CodecErrorDetails {
   'decompression-failed': { readonly reason: string };
   'codec-init-failed': { readonly stage: string };
   'ktx2-parse-failed': { readonly reason: string };
@@ -17,26 +26,16 @@ interface CodecErrorDetails {
   'ktx2-encode-failed': { readonly mode: string; readonly reason: string };
 }
 
-/** Order-locked closed union of codec error codes. */
-export type CodecErrorCode = keyof CodecErrorDetails;
-
 /** Structured codec error with executable hint + per-code narrowed detail. */
-export type CodecError = {
-  [C in CodecErrorCode]: {
-    readonly ok: false;
-    readonly error: {
-      readonly code: C;
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: CodecErrorDetails[C];
-    };
+export interface CodecError {
+  readonly ok: false;
+  readonly error: {
+    readonly code: CodecErrorCode;
+    readonly expected: string;
+    readonly hint: string;
+    readonly detail: CodecErrorDetails[CodecErrorCode];
   };
-}[CodecErrorCode];
-
-type CodecErrorFor<C extends CodecErrorCode> = Extract<
-  CodecError,
-  { readonly error: { readonly code: C } }
->;
+}
 
 /** Success branch of a Result<T, CodecError>. */
 export interface CodecOk<T> {
@@ -51,7 +50,7 @@ export type CodecResult<T> = CodecOk<T> | CodecError;
 export function codecError<C extends CodecErrorCode>(
   code: C,
   detail: CodecErrorDetails[C],
-): CodecErrorFor<C> {
+): CodecError {
   const hints: Record<CodecErrorCode, string> = {
     'decompression-failed':
       'Check catalog row compression field and asset binary consistency; re-run asset import.',
@@ -75,5 +74,5 @@ export function codecError<C extends CodecErrorCode>(
       hint: hints[code],
       detail,
     },
-  } as CodecErrorFor<C>;
+  };
 }

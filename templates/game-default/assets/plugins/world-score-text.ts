@@ -13,9 +13,6 @@ const GAME_DEFAULT_FONT_SAMPLER_GUID = '019eb276-4d96-7313-b4f0-f5d55536acd2';
 export const GAME_DEFAULT_TTF_FONT_GUID = '57db8d79-bb62-4b2a-8400-67c9601870cd';
 const GAME_DEFAULT_TTF_FONT_SAMPLER_GUID = '852a14da-4f2d-4da9-b199-819b92f29606';
 const WORLD_SCORE_FONT_SIZE = 0.024;
-const WORLD_SCORE_TTF_FONT_SIZE = 0.030;
-const WORLD_SCORE_LEGACY_COLOR = [1, 0.8, 0.2, 1] as const;
-const WORLD_SCORE_TTF_COLOR = [0.42, 0.92, 1, 1] as const;
 const WORLD_SCORE_LIFETIME = 0.9;
 const WORLD_SCORE_RISE = 0.7;
 
@@ -30,8 +27,6 @@ export interface WorldScoreTextSnapshot {
   readonly position: readonly [number, number, number];
   readonly fontSource: WorldScoreFontSource;
   readonly fontGuid: string | null;
-  readonly fontSize: number;
-  readonly color: readonly [number, number, number, number];
   readonly toggles: number;
 }
 
@@ -42,16 +37,6 @@ export interface WorldScoreTextHandle {
   readonly reset: () => void;
   readonly snapshot: () => WorldScoreTextSnapshot;
   readonly dispose: () => void;
-}
-
-/** The authored score label makes the imported font legible in the same hit event. */
-export function worldScoreFontPresentation(source: WorldScoreFontSource): {
-  readonly fontSize: number;
-  readonly color: readonly [number, number, number, number];
-} {
-  return source === 'ttf-plugin'
-    ? { fontSize: WORLD_SCORE_TTF_FONT_SIZE, color: WORLD_SCORE_TTF_COLOR }
-    : { fontSize: WORLD_SCORE_FONT_SIZE, color: WORLD_SCORE_LEGACY_COLOR };
 }
 
 /**
@@ -98,13 +83,12 @@ export async function createWorldScoreText(
 
   const defaultFont = loadedFonts.find((font) => font.source === 'legacy-pack') ?? loadedFonts[0]!;
   let activeFont = defaultFont;
-  let presentation = worldScoreFontPresentation(activeFont.source);
   let toggles = 0;
   const entity = world.spawn(
     { component: Transform, data: { pos: [0, -100, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
     // A non-empty seed gives the renderer a resident mesh before the first hit;
     // the label is parked off-world until `show` supplies the real score.
-    { component: GlyphText, data: { fontHandle: activeFont.handle, text: '+0', fontSize: presentation.fontSize, color: presentation.color } },
+    { component: GlyphText, data: { fontHandle: activeFont.handle, text: '+0', fontSize: WORLD_SCORE_FONT_SIZE, color: [1, 0.8, 0.2, 1] } },
   ).unwrap();
 
   let active = false;
@@ -124,8 +108,7 @@ export async function createWorldScoreText(
     clear();
     activeFont = defaultFont;
     toggles = 0;
-    presentation = worldScoreFontPresentation(activeFont.source);
-    world.set(entity, GlyphText, { fontHandle: activeFont.handle, fontSize: presentation.fontSize, color: presentation.color });
+    world.set(entity, GlyphText, { fontHandle: activeFont.handle });
   };
 
   return {
@@ -143,8 +126,7 @@ export async function createWorldScoreText(
       const nextIndex = (loadedFonts.indexOf(activeFont) + 1) % loadedFonts.length;
       activeFont = loadedFonts[nextIndex]!;
       toggles += 1;
-      presentation = worldScoreFontPresentation(activeFont.source);
-      world.set(entity, GlyphText, { fontHandle: activeFont.handle, fontSize: presentation.fontSize, color: presentation.color });
+      world.set(entity, GlyphText, { fontHandle: activeFont.handle });
       return activeFont.source;
     },
     step: (delta, camera) => {
@@ -168,7 +150,6 @@ export async function createWorldScoreText(
     reset,
     snapshot: () => {
       const transform = world.get(entity, Transform);
-      const glyphText = world.get(entity, GlyphText);
       return {
         available: !disposed,
         baked: world.get(entity, MeshFilter).ok,
@@ -180,10 +161,6 @@ export async function createWorldScoreText(
           : [0, 0, 0],
         fontSource: activeFont.source,
         fontGuid: activeFont.guid,
-        fontSize: glyphText.ok ? glyphText.value.fontSize : presentation.fontSize,
-        color: glyphText.ok
-          ? [glyphText.value.color[0] ?? 0, glyphText.value.color[1] ?? 0, glyphText.value.color[2] ?? 0, glyphText.value.color[3] ?? 1]
-          : presentation.color,
         toggles,
       };
     },

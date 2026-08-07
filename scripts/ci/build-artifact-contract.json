@@ -78,16 +78,6 @@
         "app-dist-2"
       ]
     },
-    "coverage-perf": {
-      "description": "Uninstrumented ECS and render performance ratio gates",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ]
-    },
     "vitest-browser": {
       "description": "Browser-based vitest tests (chromium WebGPU)",
       "requiredArtifactClasses": [
@@ -235,12 +225,6 @@
       "consumer": "coverage-pnpm"
     },
     {
-      "jobIdentity": "coverage-perf",
-      "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
-      "consumer": "coverage-perf"
-    },
-    {
       "jobIdentity": "vitest-dawn",
       "artifactProvider": "core-build",
       "allowedNonArtifactPrerequisites": ["post-merge-gate"],
@@ -338,7 +322,6 @@
     "build-artifacts",
     "primary-pnpm",
     "coverage-pnpm",
-    "coverage-perf",
     "vitest-browser",
     "shared-inputs-browser",
     "smoke-fleet",

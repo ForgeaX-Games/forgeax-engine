@@ -2,7 +2,6 @@ packages:
   - "packages/*"
   - "apps/*"
   - "apps/hello/*"
-  - "apps/perf/*"
   - "apps/bevy/*"
   - "apps/shadertoy/*"
   - "apps/parity/*"

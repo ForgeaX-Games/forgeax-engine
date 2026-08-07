@@ -4,5 +4,5 @@ import { baseTsupConfig } from '../../tsup.base';
 export default defineConfig({
   ...baseTsupConfig,
   entry: ['src/index.ts'],
-  external: ['@forgeax/engine-pack', '@forgeax/engine-types'],
+  external: ['@forgeax/engine-types'],
 });
