@@ -24,6 +24,7 @@ import {
   type OfflineArtifactInput,
 } from './evidence/offline-evidence.js';
 import { readSourceInventory } from './evidence/source-inventory.js';
+import { isValidAssetGuidString } from './guid.js';
 import { parsePackV2 } from './index.js';
 import { scan } from './scanner.js';
 
@@ -39,8 +40,6 @@ interface AssetCtx {
   /** Optional cwd override (defaults to `process.cwd()`); enables hermetic tests. */
   readonly cwd?: string;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ScanErrShape {
   code: string;
@@ -255,7 +254,7 @@ async function runLookup(rest: string[], ctx: AssetCtx): Promise<number> {
       hint: 'pass a 36-char dash-form UUID positional argument',
     });
   }
-  if (!UUID_RE.test(guid)) {
+  if (!isValidAssetGuidString(guid)) {
     return emitError(ctx, {
       code: 'pack-guid-malformed',
       expected: '36-char RFC 4122 dash-form GUID (8-4-4-4-12 lowercase hex)',
@@ -422,7 +421,7 @@ function artifactInputs(
 async function runEvidence(rest: string[], ctx: AssetCtx): Promise<number> {
   const options = parseEvidenceOptions(rest, ctx);
   if (options === undefined) return 1;
-  if (!UUID_RE.test(options.guid)) {
+  if (!isValidAssetGuidString(options.guid)) {
     return emitError(ctx, {
       code: 'pack-guid-malformed',
       expected: '36-char RFC 4122 dash-form GUID (8-4-4-4-12 lowercase hex)',

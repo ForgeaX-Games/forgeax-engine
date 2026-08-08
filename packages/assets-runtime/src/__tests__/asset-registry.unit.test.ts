@@ -6,6 +6,7 @@
 
 import {
   authoringCapabilityForAssetKind,
+  createStandaloneRuntimeAssetBinding,
   type MaterialAsset,
   type MeshAsset,
   type TilesetAsset,
@@ -261,6 +262,21 @@ describe('invalidate / invalidateAll', () => {
     expect(reg.lookup(GUID_A)).toBeUndefined();
     // Idempotent: a second call reports 0.
     expect(reg.invalidateAll().clearedCount).toBe(0);
+  });
+
+  it('runtime binding transitions preserve engine-owned builtin meshes', async () => {
+    const reg = makeRegistry();
+    const builtinGuid = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
+    const before = reg.lookup<MeshAsset>(builtinGuid);
+    expect(before?.kind).toBe('mesh');
+
+    reg.configureRuntimeBinding(createStandaloneRuntimeAssetBinding('game-a'));
+
+    const after = reg.lookup<MeshAsset>(builtinGuid);
+    expect(after).toBe(before);
+    const loaded = await reg.loadByGuid<MeshAsset>(reg.parseGuid(builtinGuid));
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) expect(loaded.value).toBe(before);
   });
 });
 

@@ -13,6 +13,11 @@ import {
 } from '../errors/render';
 import { GpuBuffer } from '../gpu-resource';
 import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
+} from '../gpu-usage';
+import {
   assembleMaterialWithSkylightEntries,
   type EmissiveAoBindGroupResources,
 } from '../ibl/skylight-bind-group';
@@ -24,13 +29,10 @@ import type { DispatchEntry } from '../render-system-extract';
 import { matchPass } from '../systems/pass-selector';
 import { worldEntityKey } from './frame-snapshot';
 import {
-  COPY_DST_USAGE,
   getOrCreateFromChain,
   getOrCreatePerEntity,
   MAX_UNIFORM_INSTANCES,
   MESH_PER_ENTITY_STRIDE,
-  STORAGE_USAGE,
-  UNIFORM_USAGE,
 } from './mesh-ssbo';
 
 /**
@@ -581,8 +583,8 @@ function recordShadowCasterDraws(
         shadowInstanceBuffer = pipelineState.identityInstanceBuffer;
       } else {
         const bufUsage = uniformFallback
-          ? UNIFORM_USAGE | COPY_DST_USAGE
-          : STORAGE_USAGE | COPY_DST_USAGE;
+          ? GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST
+          : GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST;
         const requestedBytes = shadowInst.transforms.byteLength;
         const cached = c.frameState.instanceBuffers.get(
           worldEntityKey(entry.source.worldId, shadowInst.cacheKey),

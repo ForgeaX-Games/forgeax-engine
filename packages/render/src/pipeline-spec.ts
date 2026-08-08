@@ -28,6 +28,7 @@ import {
   type PrimitiveTopology,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
+import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from './gpu-stage';
 import { createHdrpBindGroupLayoutDescriptor } from './hdrp-buffers';
 import {
   appendInjection,
@@ -522,11 +523,6 @@ export interface BindGroupLayoutDescriptorOutput {
   readonly entries: GPUBindGroupLayoutEntry[];
 }
 
-// WebGPU shader-stage flags — mirrors pbr-pipeline.ts constants. Re-declared
-// here so the dispatcher does not import bit-flag literals from a sibling
-// module (charter F1: pipeline-spec.ts is the SSOT for the dispatcher).
-const GPU_SHADER_STAGE_FRAGMENT = 0x2;
-
 /**
  * Build a `GPUBindGroupLayoutDescriptor` from a PipelineSpec, dispatching on
  * `options.kind` to one of 9 closed BGL shapes (D-13 round-2).
@@ -617,7 +613,7 @@ export function buildBindGroupLayoutDescriptor(
         entries: [
           {
             binding: 0,
-            visibility: 0x1 | 0x2,
+            visibility: GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
         ],
@@ -633,7 +629,7 @@ export function buildBindGroupLayoutDescriptor(
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
             buffer: { type: meshBufType, hasDynamicOffset: false },
           },
         ],
@@ -649,12 +645,12 @@ export function buildBindGroupLayoutDescriptor(
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
           {
             binding: 1,
-            visibility: 0x1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
         ],

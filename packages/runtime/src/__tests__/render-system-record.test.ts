@@ -42,7 +42,7 @@ import { describe, expect, it } from 'vitest';
 {
   // render-system-record-pbr-ubo-stable - feat-20260527-sprite-nineslice M2 / w6.
   //
-  // PBR Material UBO 128 B byte-sequence regression net (D-7 isolation):
+  // PBR Material UBO byte-sequence regression net (D-7 isolation):
   // any deviation in the PBR write path's byte sequence (even 1 byte) caused
   // by the sprite-branch schema-driven UBO extension (w11) MUST fail this test
   // — that triggers R-8 fallback (revert D-7 to physically isolated sprite
@@ -60,7 +60,7 @@ import { describe, expect, it } from 'vitest';
   // asserts the PBR baseline against literal byte values.
   //
   // Coverage:
-  //   - 128 B payload (STANDARD_PBR_UBO_SIZE)
+  //   - 304 B payload (STANDARD_PBR_UBO_SIZE)
   //   - slot 0 = baseColor.rgb + 1 (alpha hardcoded)
   //   - slot 1 first 8 B = metallic, roughness (f32x2)
   //   - slot 1 last 4 u32 (channelMap) = [2, 1, 0, 0]
@@ -111,7 +111,7 @@ import { describe, expect, it } from 'vitest';
       expect(typeof mod.buildPbrMaterialUboPayload).toBe('function');
     });
 
-    it('288 B payload size + standard PBR slot layout (baseline)', () => {
+    it('304 B payload size + standard PBR slot layout (baseline)', () => {
       if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet');
       }
@@ -126,7 +126,7 @@ import { describe, expect, it } from 'vitest';
         clearcoatRoughness: 0.12,
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(288);
+      expect(buf.byteLength).toBe(304);
       const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at
@@ -159,13 +159,14 @@ import { describe, expect, it } from 'vitest';
       // clearcoat layer (offsets 72..79).
       expect(f32[18]).toBeCloseTo(0.85);
       expect(f32[19]).toBeCloseTo(0.12);
+      expect(f32[72]).toBe(1);
     });
 
     it('keeps engine-owned texture UV tails aligned across PBR and sprite layouts', () => {
       const apply = mod.applyMaterialTextureUvScales;
       if (typeof apply !== 'function') throw new Error('helper not exported yet');
       const world = new World();
-      const pbrPayload = new ArrayBuffer(288);
+      const pbrPayload = new ArrayBuffer(304);
       apply(pbrPayload, makePbrSnapshot({}), world);
       const pbrF32 = new Float32Array(pbrPayload);
       expect(pbrF32[26]).toBe(1);

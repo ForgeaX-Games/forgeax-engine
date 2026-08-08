@@ -6,13 +6,8 @@
 // narrowing / ImageErrorDetail per-code shape trips CI (charter P4 explicit
 // failure -- typechecker acts as the reviewer).
 //
-// Note on discriminant choice: the SSOT `ImageError` interface (packages/
-// types/src/index.ts) carries `.code: ImageErrorCode` AND
-// `.detail: ImageErrorDetail` where the detail union has its own `.code`
-// discriminant. TypeScript does NOT auto-correlate two independent
-// discriminants across a nested field, so per-code detail narrowing must
-// switch on `err.detail.code` (charter P4 explicit failure -- the detail
-// union is the SSOT for per-arm shape).
+// The SSOT `ImageError` type correlates the envelope `.code` with its
+// per-code `.detail` shape, so consumers switch on one discriminant.
 
 import type { ImageError, Result, TextureAsset } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
@@ -34,13 +29,12 @@ describe('decodeImageBytes signature (AC-05 / AC-06 / opts compat)', () => {
     }
   });
 
-  it('AC-06: `switch (err.detail.code)` narrows err.detail per-code (exhaustive)', async () => {
+  it('AC-06: `switch (err.code)` narrows err.detail per-code (exhaustive)', async () => {
     const r = await decodeImageBytes(new Uint8Array(), 'image/png');
     if (r.ok) return;
-    // Exhaustive over the ImageErrorDetail discriminated union so a future
-    // minor-add to ImageErrorCode fails compilation here until this file
-    // catches up (charter P4 -- typechecker forces the arm addition).
-    switch (r.error.detail.code) {
+    // Exhaustive over the correlated ImageError union so a future minor-add
+    // to ImageErrorCode fails compilation here until this file catches up.
+    switch (r.error.code) {
       case 'image-decode-failed': {
         expectTypeOf(r.error.detail.reason).toBeString();
         expectTypeOf(r.error.detail.path).toEqualTypeOf<string | undefined>();

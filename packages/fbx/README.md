@@ -88,15 +88,11 @@ vs Family B comparison, max_gloss convention).
 Errors are structured: every error object carries `.code`, `.expected`,
 `.hint`, and `.detail`. AI users switch on `.code` for exhaustive handling.
 
-**FbxErrorCode** (this package, closed union): single member
-`'fbx-mesh-type-unsupported'` (NURBS/patch surfaces). The SDK-era
-`'fbx-binding-not-built'` code retired with the native addon removal.
-Source SSOT: `src/errors.ts` -- do not copy-paste the member list; the
-source is the authoritative closed union.
+**FbxErrorCode** (this package, closed union): source SSOT is `src/errors.ts`.
+Do not copy-paste the member list; inspect the source for the current union.
 
-**ImportErrorCode** (in `@forgeax/engine-types`, 5 members): runtime
-dispatch errors -- `importer-not-registered`, `source-read-failed`,
-`import-produced-no-assets`, `guid-mismatch`, `import-internal-error`.
+**ImportErrorCode** (in `@forgeax/engine-types`): source SSOT is
+`packages/types/src/index.ts`; it owns the runtime importer-dispatch union.
 
 ## Contributor toolchain
 

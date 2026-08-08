@@ -9,6 +9,7 @@ export const GAME_DEFAULT_INPUT_MAP: readonly ActionConfig[] = [
   { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }, { type: 'key', key: 'D' }, { type: 'gamepadAxis', axis: 0, sign: 1 }] },
   { action: 'jump', bindings: [{ type: 'key', key: ' ' }, { type: 'gamepadButton', button: 0 }] },
   { action: 'shoot', bindings: [{ type: 'key', key: 'f' }, { type: 'key', key: 'F' }, { type: 'gamepadButton', button: 7 }] },
+  { action: 'charge', bindings: [{ type: 'key', key: 'c' }, { type: 'key', key: 'C' }, { type: 'gamepadButton', button: 6 }] },
   { action: 'meshUv', bindings: [{ type: 'key', key: 'g' }, { type: 'key', key: 'G' }, { type: 'gamepadButton', button: 3 }] },
   { action: 'jpegTexture', bindings: [{ type: 'key', key: 'l' }, { type: 'key', key: 'L' }] },
   { action: 'videoTexture', bindings: [{ type: 'key', key: 'm' }, { type: 'key', key: 'M' }] },

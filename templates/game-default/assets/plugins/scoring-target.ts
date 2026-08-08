@@ -7,6 +7,9 @@ import {
   type EntityHandle,
   type World,
 } from '@forgeax/engine-ecs';
+import { Name } from '@forgeax/engine-scene';
+
+const PRIMARY_TARGET_NAME = 'RedBox';
 
 /** Transient gameplay marker whose hooks keep the scoring index in sync. */
 export const ScoringTarget = defineComponent(
@@ -51,13 +54,18 @@ export function activeScoringTargetEntities(world: World, query: ScoringTargetQu
 }
 
 export function firstScoringTarget(world: World, query: ScoringTargetQuery): EntityHandle | undefined {
-  let first: EntityHandle | undefined;
+  let fallback: EntityHandle | undefined;
+  let primary: EntityHandle | undefined;
   queryRun(query.active, world, (bundle) => {
-    if (first !== undefined) return;
-    const entity = bundle.Entity.self[0];
-    if (entity !== undefined) first = entity as EntityHandle;
+    for (const entity of bundle.Entity.self) {
+      if (entity === undefined) continue;
+      const handle = entity as EntityHandle;
+      fallback ??= handle;
+      const name = world.get(handle, Name);
+      if (name.ok && name.value.value === PRIMARY_TARGET_NAME) primary = handle;
+    }
   });
-  return first;
+  return primary ?? fallback;
 }
 
 /** Read the ECS-owned score contract; no parallel entity→points index is needed. */

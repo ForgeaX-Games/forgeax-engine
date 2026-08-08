@@ -6,8 +6,8 @@
 //
 // AC-01: HDRP buildGraph includes g-buffer + lighting + forward passes.
 // AC-02: g-buffer pass writes 3 color RT + depth; lighting pass reads g-buffer
-//   + cluster buffers + writes hdrColor; forward pass reads depth + cluster
-//   buffers + writes hdrColor.
+//   + cluster buffers + writes sceneColor; forward pass reads depth + cluster
+//   buffers + writes sceneColor.
 //
 // This test runs in the unit layer (no GPU): it mocks the runtime + device
 // caps and verifies the pass list + reads/writes topology via RenderGraph's
@@ -150,7 +150,7 @@ describe('HDRP buildGraph g-buffer topology (w9)', () => {
     expect(gbufferPass.writes).toContain('hdrDepth');
   });
 
-  it('lighting pass reads g-buffer + cluster buffers and writes hdrColor', () => {
+  it('lighting pass reads g-buffer + cluster buffers and writes sceneColor', () => {
     const runtime = mockRuntime({ maxColorAttachments: 8 });
     const ctx = mockCtx(runtime);
 
@@ -171,10 +171,10 @@ describe('HDRP buildGraph g-buffer topology (w9)', () => {
     expect(lightingPass.reads).toContain('hdrpClusterGrid');
     expect(lightingPass.reads).toContain('hdrpLightIndexList');
     expect(lightingPass.reads).toContain('hdrpClusterUniform');
-    expect(lightingPass.writes).toContain('hdrColor');
+    expect(lightingPass.writes).toContain('sceneColor');
   });
 
-  it('forward pass reads depth + cluster buffers and writes hdrColor', () => {
+  it('forward pass reads depth + cluster buffers and writes sceneColor', () => {
     const runtime = mockRuntime({ maxColorAttachments: 8 });
     const ctx = mockCtx(runtime);
 
@@ -192,7 +192,7 @@ describe('HDRP buildGraph g-buffer topology (w9)', () => {
     expect(forwardPass.reads).toContain('hdrpClusterGrid');
     expect(forwardPass.reads).toContain('hdrpLightIndexList');
     expect(forwardPass.reads).toContain('hdrpClusterUniform');
-    expect(forwardPass.writes).toContain('hdrColor');
+    expect(forwardPass.writes).toContain('sceneColor');
   });
 
   it('g-buffer color targets have correct formats', () => {
