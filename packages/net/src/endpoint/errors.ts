@@ -110,12 +110,9 @@ type EndpointErrorVariant<C extends EndpointErrorCode> = EndpointErrorClass & {
   readonly detail: EndpointErrorDetailFor<C>;
 };
 
-export type EndpointError =
-  | EndpointErrorVariant<'peer-not-found'>
-  | EndpointErrorVariant<'connection-closed'>
-  | EndpointErrorVariant<'send-failed'>
-  | EndpointErrorVariant<'already-closed'>
-  | EndpointErrorVariant<'connection-failed'>;
+export type EndpointError = {
+  [C in EndpointErrorCode]: EndpointErrorVariant<C>;
+}[EndpointErrorCode];
 
 interface EndpointErrorConstructor {
   new <C extends EndpointErrorCode>(args: {

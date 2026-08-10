@@ -1,5 +1,15 @@
 # Game Default
 
+## Public VFX extension seam
+
+Template consumers import only `@forgeax/engine-vfx` and
+`@forgeax/engine-vfx-render`. Create a typed `VfxEffectContract`, keep patches
+and channel submissions on one `ParticleEffectInstance`, and call
+`host.inspect(world)` for structured evidence. Cook source with
+`scripts/asset-cook-contract.mjs`; runtime never compiles WGSL. Advanced
+renderer declarations execute as billboard, mesh, ribbon, trail, or beam
+resources and must not be replaced with a demo-side custom mesh.
+
 This is ForgeaX's canonical first game: a small target-range mission that teaches scene assets,
 ECS behavior, physics, picking, rendering, UiAssets, spatial audio, and a host-defined asset plugin
 through one coherent loop. Real projectile hits must earn Score 50 before the collapsed Asset Lab

@@ -219,3 +219,33 @@ Without an injected transport (shipped form), the same sentinel surfaces as `ass
 > Static assets publish as Pack v2 and are navigated by `packageUrl`; runtime-only bytes remain a separate exception.
 
 The derived `AssetEvidence` view joins catalog navigation, cook receipt freshness, and artifact verification. Discover it with `lookup/verify --guid --project --catalog --json`; `notCooked`, `stale`, and `unknown` require different recovery actions.
+
+## Indexed producer recovery
+
+This is the shortest path from a catalog symptom to a producer repair:
+
+1. **Inspect** the catalog row, source Meta, DDC head, receipt, and Pack
+   verification together. Branch on structured `code`, `detail`, `expected`,
+   and `hint`; do not classify a row from a URL suffix or log string.
+2. **Repair the producer boundary** named by `detail.stage`: register the
+   declared importer, repair source or Meta, or remove an invalid derived DDC
+   entry. The source package plus Meta remains the author authority.
+3. **Rebuild or cold-cook** the source package through the registered importer
+   or native cooker. The producer finalizer is the only writer of the DDC
+   product and Pack body.
+4. **Verify** the new receipt, package digest, artifacts, and Catalog
+   lifecycle. A `lastKnownGood` product is read-only evidence, not current
+   output.
+5. **Retry** the same GUID only after verification passes. A failed producer
+   attempt must not be hidden by a raw-source or custom-mesh fallback.
+
+`producerReadiness: 'before-consume'` requires every source-package importer
+or native cooker needed by the scanned Meta declarations before a consumer can
+load the row. `producerReadiness: 'on-demand'` still requires both the Vite
+producer registration and the host's dev import transport. Missing either
+side is a structured producer failure, not permission for runtime compilation.
+
+The plugin owns Catalog projection and dev/build route wiring. It does not own
+source authoring, DDC persistence policy, runtime payload semantics, or Editor
+write operations. Those boundaries remain in the source package, producer,
+assets-runtime, and asset-authoring gateway respectively.

@@ -54,6 +54,20 @@ material-shader prewarm before the feature can enter the host. A duplicate ident
 object returns `render-feature-registration-conflict`; there is no parallel
 feature registry.
 
+## Asset producer readiness boundary
+
+Runtime consumes the validated Catalog and Pack/DDC projection; it does not
+make a source package ready. For a missing or failed asset, the host follows
+`inspect` -> producer `rebuild` or `cold-cook` -> `verify` -> retry of the same
+GUID. Branch on structured asset errors and evidence details, never on console
+text or a guessed file suffix.
+
+Importer registration, source plus Meta repair, DDC persistence, receipt
+creation, and Catalog publication belong to the build or dev producer host.
+`createRenderer` does not add a hidden importer registry or runtime source
+fallback. This keeps browser startup, player bundles, and render assembly
+outside the asset authoring and cooking boundary.
+
 ## Assemble prepared graphics without a private seam
 
 Prepared graphics is still assembled by the runtime host. A producer imports

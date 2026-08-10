@@ -1,6 +1,6 @@
 ---
 name: forgeax-engine-vfx
-description: ForgeaX code-first GPU particles: author two WGSL hooks, cook Pack v2, play through ECS, and render persistent compute state with billboard or mesh output. Use when creating, loading, debugging, or extending VFX effects.
+description: ForgeaX code-first GPU VFX: author two WGSL hooks, cook Pack v2, play through ECS, and render executable billboard, mesh, ribbon, trail, or beam output. Use when creating, loading, debugging, or extending VFX effects.
 ---
 
 # ForgeaX VFX
@@ -13,11 +13,22 @@ Use one path:
 4. Create one `createVfxRuntimeHost({ camera })`, attach each `{ world, assets }`, and register `host.feature` with the Renderer.
 5. Load by GUID with `loadVfxGpuEffect`, allocate a shared `ParticleEffectAsset` ref, and spawn `ParticleEffectPlayer`.
 
-Read [`packages/vfx/README.md`](../../packages/vfx/README.md) for the author ABI and lifecycle, [`packages/vfx-compiler/README.md`](../../packages/vfx-compiler/README.md) for cook errors, and [`packages/vfx-render/README.md`](../../packages/vfx-render/README.md) for GPU/render ownership.
+Read [`packages/vfx/README.md`](../../packages/vfx/README.md) for the author ABI and lifecycle, [`packages/vfx-compiler/README.md`](../../packages/vfx-compiler/README.md) for reflection and cook errors, and [`packages/vfx-render/README.md`](../../packages/vfx-render/README.md) for GPU/render ownership.
 
 > [!IMPORTANT]
 > Behavior belongs in WGSL code, not a node/operator graph. Do not add CPU mirrors, runtime compilation, backend-name checks, direct RHI access, particle readback, or demo-side render workarounds.
 
-Switch on structured error codes and use `detail` plus `hint`. Unknown source fields fail closed. Batch A does not accept CPU fallback, parent/value variants, live parameters, texture sheets, particle sorting, ribbons, beams, or events.
+Switch on structured error codes and use `detail` plus `hint`. Unknown source fields fail closed. Batch B accepts executable billboard advanced fields and independent ribbon, trail, and beam topologies. It does not add CPU fallback, runtime compilation, raw author bindings, CPU particle mirrors, gameplay readback, graph authoring, or VFX RPC.
 
-Verify engine/RHI changes with all required smoke gates. For VFX specifically, run Boss Lightning `smoke:browser`, `smoke`, and `smoke:falsify`; Browser and Dawn are required because Null structural success cannot prove compute validation or pixels.
+Inspect with `host.inspect(world)` and recover through the owning generation/LKG path. For asset changes, run `node scripts/asset-cook-contract.mjs`; a package-local scripts path is invalid. Verify with:
+
+```sh
+pnpm --filter @forgeax/hello-boss-lightning smoke:browser
+pnpm --filter @forgeax/hello-boss-lightning smoke
+pnpm --filter @forgeax/hello-boss-lightning smoke:falsify
+node apps/hello/boss-lightning/scripts/smoke-public-only.mjs
+pnpm metrics:check
+pnpm metrics:run
+```
+
+Browser and Dawn are required because Null structural success cannot prove compute validation, topology draws, or pixels. Visual evidence records `advanced-renderers-visible`, `live-patch-continuity`, `event-sub-emitter-visible`, and `hmr-last-known-good-visible` with a PNG and falsifier result.

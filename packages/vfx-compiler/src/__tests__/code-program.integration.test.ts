@@ -44,11 +44,34 @@ describe('code-first VFX program cook', () => {
       'forgeax_vfx_scan_block_offsets_main',
       'forgeax_vfx_add_offsets_main',
       'forgeax_vfx_compact_main',
+      'forgeax_vfx_sort_main',
+      'forgeax_vfx_event_main',
       'forgeax_vfx_billboard_main',
       'forgeax_vfx_mesh_main',
+      'forgeax_vfx_ribbon_main',
+      'forgeax_vfx_trail_history_main',
+      'forgeax_vfx_trail_main',
+      'forgeax_vfx_beam_main',
     ]);
     expect(emitter.wgsl).toContain('@compute');
     expect(emitter.wgsl).toContain('forgeax_vfx_particles');
+    expect(emitter.wgsl).toContain('fn forgeax_vfx_sort_main');
+    expect(emitter.wgsl).toContain('fn forgeax_vfx_trail_history_main');
+    expect(emitter.wgsl).toContain('forgeax_vfx_runtime.topology');
+  });
+
+  it('carries explicit data imports into the cooked reflection', async () => {
+    const result = await cookParticleCodeProgram(source, {
+      'sparks.vfx.wgsl': {
+        entry: `${entry}\n#import forgeax_vfx::data::camera\n#import forgeax_vfx::data::scene_depth`,
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.program.emitters[0]?.reflection.dataInterfaces).toEqual([
+      expect.objectContaining({ token: 'vfx:camera', binding: 8 }),
+      expect.objectContaining({ token: 'vfx:scene-depth', binding: 9 }),
+    ]);
   });
 
   it('is byte deterministic and rejects reserved author bindings', async () => {
@@ -90,5 +113,15 @@ describe('code-first VFX program cook', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.program.emitters[0]?.wgsl).toContain('fn vfx_spawn');
+  });
+
+  it('does not produce an artifact when reflected declarations are invalid', async () => {
+    const invalid = await cookParticleCodeProgram(source, {
+      'sparks.vfx.wgsl': {
+        entry: `${entry}\nstruct VfxParameters { value: mat3x3<f32>, }`,
+      },
+    });
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.error.code).toBe('vfx-reflection-unknown-type');
   });
 });

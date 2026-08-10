@@ -44,7 +44,7 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Materials, Skylight } from '@forgeax/engine-render';
 import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import { PointLight } from '@forgeax/engine-render';
@@ -56,7 +56,6 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 // 2. scene constants — faithful LO 5.9 SSAO scene (room + model)
 
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
-const PACK_INDEX_URL = '/pack-index.json';
 const runtimeBinding = createStandaloneRuntimeAssetBinding(
   import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-9-ssao',
 );
@@ -136,7 +135,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    forgeaxBundlerAdapter(),
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
@@ -157,7 +156,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
 
   // Wire the __learnRenderErrors bus for onerror-gate coverage.
   const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;

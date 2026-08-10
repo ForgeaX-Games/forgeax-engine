@@ -15,8 +15,12 @@
 //       (C-7); switch on PluginErrorCode compiles without default branch
 //       and does not accept AppErrorCode members.
 
-import { describe, expect, it } from 'vitest';
-import type { PluginErrorCode } from '@forgeax/engine-plugin';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type {
+  PluginError as PluginErrorType,
+  PluginErrorCode,
+  PluginErrorDetailFor,
+} from '@forgeax/engine-plugin';
 import { isPluginError, PLUGIN_ERROR_HINTS, PLUGIN_EXPECTED, PluginError } from '@forgeax/engine-plugin';
 
 // ---------------------------------------------------------------------------
@@ -177,6 +181,86 @@ describe('PluginError.detail -- discriminated union per code (D-7)', () => {
       expect(err.detail.cause).toBe('bare failure');
       expect(err.detail.failures).toBeUndefined();
     }
+  });
+});
+
+describe('PluginError derives its public variants from PluginErrorCode (W159)', () => {
+  it('keeps exactly PluginErrorCode as its public discriminant', () => {
+    expectTypeOf<PluginErrorType['code']>().toEqualTypeOf<PluginErrorCode>();
+  });
+
+  it('preserves the detail resolver for each code', () => {
+    type DuplicatePluginError = Extract<PluginErrorType, { readonly code: 'duplicate-plugin' }>;
+    type PluginBuildFailedError = Extract<PluginErrorType, { readonly code: 'plugin-build-failed' }>;
+
+    expectTypeOf<DuplicatePluginError['detail']>().toEqualTypeOf<
+      PluginErrorDetailFor<'duplicate-plugin'>
+    >();
+    expectTypeOf<PluginBuildFailedError['detail']>().toEqualTypeOf<
+      PluginErrorDetailFor<'plugin-build-failed'>
+    >();
+  });
+
+  it('rejects mismatched code and detail pairs', () => {
+    const mismatchedDuplicate = () =>
+      new PluginError({
+        code: 'duplicate-plugin',
+        expected: PLUGIN_EXPECTED['duplicate-plugin'],
+        hint: PLUGIN_ERROR_HINTS['duplicate-plugin'],
+        // @ts-expect-error duplicate-plugin requires PluginDetailDuplicatePlugin
+        detail: { pluginName: 'physics', cause: 'WASM init error' },
+      });
+    const mismatchedBuildFailure = () =>
+      new PluginError({
+        code: 'plugin-build-failed',
+        expected: PLUGIN_EXPECTED['plugin-build-failed'],
+        hint: PLUGIN_ERROR_HINTS['plugin-build-failed'],
+        // @ts-expect-error plugin-build-failed requires PluginDetailBuildFailed
+        detail: { name: 'physics' },
+      });
+
+    void mismatchedDuplicate;
+    void mismatchedBuildFailure;
+  });
+
+  it('narrows detail exhaustively from the PluginError discriminant', () => {
+    const describe = (error: PluginErrorType): string => {
+      switch (error.code) {
+        case 'duplicate-plugin':
+          return error.detail.name;
+        case 'plugin-build-failed':
+          return error.detail.cause;
+      }
+    };
+
+    expect(describe(
+      new PluginError({
+        code: 'duplicate-plugin',
+        expected: PLUGIN_EXPECTED['duplicate-plugin'],
+        hint: PLUGIN_ERROR_HINTS['duplicate-plugin'],
+        detail: { name: 'physics' },
+      }),
+    )).toBe('physics');
+  });
+
+  it('infers the correlated constructor variant from a literal code', () => {
+    const duplicate = new PluginError({
+      code: 'duplicate-plugin',
+      expected: PLUGIN_EXPECTED['duplicate-plugin'],
+      hint: PLUGIN_ERROR_HINTS['duplicate-plugin'],
+      detail: { name: 'physics' },
+    });
+    const buildFailure = new PluginError({
+      code: 'plugin-build-failed',
+      expected: PLUGIN_EXPECTED['plugin-build-failed'],
+      hint: PLUGIN_ERROR_HINTS['plugin-build-failed'],
+      detail: { pluginName: 'physics', cause: 'WASM init error' },
+    });
+
+    expectTypeOf(duplicate.code).toEqualTypeOf<'duplicate-plugin'>();
+    expectTypeOf(duplicate.detail).toEqualTypeOf<PluginErrorDetailFor<'duplicate-plugin'>>();
+    expectTypeOf(buildFailure.code).toEqualTypeOf<'plugin-build-failed'>();
+    expectTypeOf(buildFailure.detail).toEqualTypeOf<PluginErrorDetailFor<'plugin-build-failed'>>();
   });
 });
 

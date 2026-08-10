@@ -26,6 +26,23 @@ describe('Boss Lightning Dawn pixel probe contract', () => {
     expect(source).toContain('process.exit(0)');
   });
 
+  it('keeps the depth provider and soft-particle oracle explicit', () => {
+    const source = readFileSync(smokePath, 'utf8');
+    expect(source).toContain('scene-depth');
+    expect(source).toContain('depthProviderReady');
+    expect(source).toContain('softParticle');
+    expect(source).toContain('missing-depth');
+  });
+
+  it('keeps independent advanced topology oracles in the Dawn path', () => {
+    const source = readFileSync(smokePath, 'utf8');
+    for (const topology of ['textureSheet', 'pivot', 'softParticle', 'sorting', 'ribbon', 'trail', 'beam']) {
+      expect(source).toContain(topology);
+    }
+    expect(source).toContain('topologyCounters');
+    expect(source).toContain('indirectDraws');
+  });
+
   it('accepts only bounded next-frame preparation warm-up before readiness', () => {
     const { warmupErrors, persistentErrors } = classifyDawnErrors(
       [

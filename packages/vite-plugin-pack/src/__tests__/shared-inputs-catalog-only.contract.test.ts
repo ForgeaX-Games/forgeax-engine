@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { loadSharedPackInput } from '../shared-build-inputs.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const buildSourcePath = join(here, '..', 'build', 'plugin-build.ts');
 
 describe('shared-inputs catalog-only contract', () => {
   it('emits the catalog before the full import arm', async () => {
-    const source = await readFile(join(here, '..', 'index.ts'), 'utf8');
+    const source = await readFile(buildSourcePath, 'utf8');
     expect(source).toMatch(/FORGEAX_SHARED_APP_INPUTS_MODE === ['"]catalog-only['"]/);
     expect(source).toMatch(/projectSharedPackCatalog\(entries, opts\.base\)/);
     expect(source).toMatch(/assets\/\$\{entry\.guid\.toLowerCase\(\)\}\.bin/);

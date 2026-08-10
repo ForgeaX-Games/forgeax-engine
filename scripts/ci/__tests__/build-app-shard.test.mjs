@@ -531,10 +531,9 @@ test('repair: trusted coverage owns the perf ratio gate outside instrumentation'
     /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
   );
   assert.doesNotMatch(coverage, /github\.event\.pull_request\.head\.repo/);
-  assert.match(
-    coverage,
-    /--coverage --project='@forgeax\/\*' --project=hello-triangle --project=unit/,
-  );
+  assert.match(coverage, /node scripts\/ci\/run-split-vitest-coverage\.mjs/);
+  assert.match(coverage, /--group-size=4/);
+  assert.match(coverage, /--max-workers=1/);
   assert.doesNotMatch(coverage, /--project=ecs-perf/);
   assert.match(perf, /name: ECS performance ratio gates \(uninstrumented\)/);
   assert.match(perf, /--project=ecs-perf/);

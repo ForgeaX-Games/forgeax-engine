@@ -1,60 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
-import { gltfImporter } from '@forgeax/engine-gltf';
-import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
-import { createParticleCodeNativeCooker } from '@forgeax/engine-vfx-compiler';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
-import { websocketListenerCommands } from './packages/net-websocket/__tests__/support/ws-listener-commands';
-import materialContractInventory from './scripts/material-contract-inventory.json' with {
-  type: 'json',
-};
-import { targetProfileImporter } from './templates/game-default/assets/plugins/target-profile-importer';
-
-// Monorepo-root anchor for pluginPack roots (see browser project below).
-// `new URL('.', import.meta.url)` already yields this file's directory
-// (vitest.config.ts sits at the monorepo root), so `fileURLToPath` directly
-// produces the repo root. No `dirname()` wrapper - that would walk up to
-// `.worktrees/` under worktree checkouts and break pluginPack root resolution.
-// charter F1 prefers the single-step explicit form for grep traceability.
-const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const materialPackages = materialContractInventory.materialPackages;
-const vfxModules = Object.fromEntries(
-  ['hit.vfx.wgsl', 'charge.vfx.wgsl'].map((name) => [
-    name,
-    {
-      entry: readFileSync(resolve(rootDir, 'templates/game-default/assets', name), 'utf8'),
-    },
-  ]),
-);
-// Keep authored WGSL sidecars under the template's single assets/ content
-// root without handing build-only shader sources to the runtime catalog. The
-// browser project must mirror apps/preview's explicit pack boundary so a
-// shader diagnostic cannot downgrade the scoped catalog and turn every GUID
-// load into a misleading ImportTransport miss.
-const templatePackRoots = [
-  'animated-target-material.pack.json',
-  'base-material.pack.json',
-  'charge-vfx-effect.pack.json',
-  'hit-flash-material.pack.json',
-  'hit-vfx-effect.pack.json',
-  'hit-vfx-materials.pack.json',
-  'multi-material-target.pack.json',
-  'scene.pack.json',
-  'target-profile.json.meta.json',
-  'ui/hud.pack.json',
-  'ui/settings.pack.json',
-].map((relativePath) => resolve(rootDir, 'templates/game-default/assets', relativePath));
-// The entity-visibility screenshot test gets a fresh browser process because
-// Chromium's shared GPU device can outlive a Vitest file but not its teardown.
-const entityVisibilityBrowserTest =
-  'apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts';
-const runEntityVisibilityBrowserTest = process.env.FORGEAX_BROWSER_ENTITY_VISIBILITY === '1';
+import { createBrowserProject } from './vitest-browser-project';
 
 // Root vitest config - declares projects per K-3 split policy:
 //
@@ -76,7 +23,8 @@ const runEntityVisibilityBrowserTest = process.env.FORGEAX_BROWSER_ENTITY_VISIBI
 //   - `pnpm test:unit`    = `vitest run --project '!browser' --project '!dawn'`
 //                          (per-package + marker 'unit' coverage; leaves
 //                          dawn/browser untouched)
-//   - `pnpm test:browser` = `vitest run --project browser`
+//   - `pnpm test:browser` = the entity-visibility process plus
+//     `scripts/ci/run-split-vitest-browser.mjs` (fresh bounded processes)
 //   - `pnpm test:dawn`    = `vitest run --project dawn`
 //   - `pnpm test:all`     = three commands serial (K-3 warning: do NOT
 //                          fold into the root `pnpm test`, otherwise a
@@ -162,153 +110,7 @@ export default defineConfig({
           include: ['packages/render/src/**/*.perf.test.ts'],
         },
       },
-      // -- browser layer: vitest browser mode (AC-05) --
-      //
-      // M5-followup (feat-20260518-pbr-direct-lighting-mvp): inject
-      // `forgeaxShader()` at the project level so the dev server serves
-      // `/shaders/manifest.json` with the composed pbr.wgsl + unlit.wgsl
-      // entries. Browser tests that call `Engine.create({ canvas })` rely on
-      // the default manifest URL — without the plugin the manifest is empty
-      // and createRenderer's f_schlick / unlit detection (createRenderer.ts
-      // post-w22.9 path) rejects with 'shader-compile-failed'. The previous
-      // `EMPTY_MANIFEST_URL` data-URL workaround silently lied: the empty
-      // entries array satisfies schema validation but fails the f_schlick
-      // identity check downstream. Plugin runs in dev only via
-      // configureServer (no build cost).
-      {
-        // tweak-20260521 D-1: mount pluginPack() alongside forgeaxShader() so
-        // vitest browser project tests reach the binding's scoped catalog
-        // through the plugin's configureServer middleware (real texture fetch path) rather
-        // than the silent untextured fallback. Roots are explicit 6-entry SSOT
-        // (charter F1 single-grep): four learn-render section local assets/
-        // dirs (1.4 / 1.5 / 1.6 / 1.7) plus the two shared NonCommercial
-        // submodule subtrees (learn-opengl/textures + learn-opengl/meshes).
-        // Order: local-assets first (per-section .pack.json + image meta
-        // sidecars), then shared submodule (container.jpg + cube-mesh stub
-        // sidecars). Mirrors each section's vite.config.ts plugin order so
-        // an AI user reading either entry point sees the same shape.
-        //
-        // feat-learn-render-3.1: the Sponza model-loading onerror-gate also
-        // needs `khronos-gltf-samples/Sponza` scanned (glTF + 69 textures) so
-        // its loadByGuid<TextureAsset> path resolves through the pluginPack
-        // middleware; the HDR equirect for the Skylight IBL is already covered
-        // by the learn-opengl/textures root. `server.fs.allow` widens the dev
-        // server sandbox to the monorepo root so main.ts's import.meta.url
-        // fetch of Sponza.gltf (outside the per-test dir) is served.
-        plugins: [
-          forgeaxShader({ materialPackages }),
-          pluginPack({
-            runtimeBinding: createStandaloneRuntimeAssetBinding('browser-tests'),
-            roots: [
-              resolve(rootDir, 'apps/learn-render/1.getting-started/4.textures/assets'),
-              resolve(rootDir, 'apps/learn-render/1.getting-started/5.transformations/assets'),
-              resolve(rootDir, 'apps/learn-render/1.getting-started/6.coordinate-systems/assets'),
-              resolve(rootDir, 'apps/learn-render/1.getting-started/7.camera/assets'),
-              resolve(rootDir, 'forgeax-engine-assets/learn-opengl/textures'),
-              resolve(rootDir, 'forgeax-engine-assets/learn-opengl/meshes'),
-              // feat-learn-render-5.9 ssao: the SSAO demo loadByGuid<SceneAsset>
-              // the LearnOpenGL backpack (learn-opengl/objects/backpack/), so its
-              // onerror-gate (shipped path, no ImportTransport) needs the objects/
-              // root scanned for the gltf scene + diffuse/specular/normal textures.
-              resolve(rootDir, 'forgeax-engine-assets/learn-opengl/objects'),
-              resolve(
-                rootDir,
-                'forgeax-engine-assets/khronos-gltf-samples/Sponza/Sponza.gltf.meta.json',
-              ),
-              // apps/preview e2e (preview.browser.test.ts): the game-default
-              // template's assets/ holds the scene pack + material packs (the
-              // scene is a GUID-discoverable asset, forge.json.defaultScene); the
-              // submodule subtree holds sky.hdr (loaded via loadByGuid through
-              // this middleware). Select its sidecar explicitly so the
-              // mirrored UI sidecars are not scanned twice; explicit file
-              // roots are supported by the pack scanner.
-              ...templatePackRoots,
-              resolve(
-                rootDir,
-                'forgeax-engine-assets/demo-assets/template-game-default/sky.hdr.meta.json',
-              ),
-              // game-default spatial hit SFX (ordinary MP3 sidecar/GUID path).
-              resolve(rootDir, 'forgeax-engine-assets/sfx'),
-            ],
-            // feat-learn-render-5.9 ssao: the backpack is a .gltf scene whose
-            // sub-assets (mesh / material / textures) must be importable through
-            // the middleware for the SSAO onerror-gate. Without these the gltf
-            // meta resolves to importer-not-registered (422). imageImporter also
-            // covers any non-pre-baked image sidecars under the scanned roots.
-            importers: [imageImporter, gltfImporter, audioImporter, targetProfileImporter()],
-            cookers: [createParticleCodeNativeCooker(vfxModules)],
-          }),
-        ],
-        server: {
-          fs: { allow: [rootDir] },
-        },
-        define: {
-          'import.meta.env.FORGEAX_RUNTIME_SCOPE_ID': JSON.stringify('browser-tests'),
-        },
-        test: {
-          name: 'browser',
-          include: ['**/*.browser.test.ts'],
-          exclude: [
-            '**/node_modules/**',
-            '**/dist/**',
-            '**/.worktrees/**',
-            '**/.claude/worktrees/**',
-            ...(runEntityVisibilityBrowserTest ? [] : [entityVisibilityBrowserTest]),
-          ],
-          // Chromium's lavapipe WebGPU device is shared by browser workers.
-          // A renderer/page teardown in one file can destroy that device for
-          // a live sibling page, closing Vitest's transport and producing
-          // zero-pixel readback in an otherwise healthy test. Browser Mode's
-          // page/module isolation does not isolate the Chromium GPU process,
-          // so one worker is the lifecycle boundary for this real-WebGPU
-          // project. Keep the suite parallelism explicit and bounded here;
-          // the dawn project remains separately isolated below.
-          fileParallelism: false,
-          maxWorkers: 1,
-          browser: {
-            enabled: true,
-            commands: websocketListenerCommands,
-            // playwright provider launchOptions: channel = 'chrome-beta'
-            // picks the system Chrome Beta binary (full WebGPU build, unlike
-            // the bundled chromium_headless_shell which strips WebGPU).
-            // launchOptions.args inject the same flag set Three.js + Babylon
-            // use for headless WebGPU on ubuntu-latest + lavapipe. Prior CI
-            // relied on the smoke harness's `playwright install chrome-beta`
-            // step to seed the binary; smoke moved to dawn-node
-            // (feat-20260509-lavapipe-mapasync-lifecycle w2 K-1 amend C-ii)
-            // so ci.yml installs chrome-beta independently. charter
-            // proposition 4 explicit-failure: when WebGPU is unreachable
-            // the test throws code: 'webgpu-unavailable'.
-            //
-            // launchOptions MUST live at the playwright() factory call
-            // (single global config) - the provider only reads
-            // `this.options.launchOptions`, not per-instance launchOptions
-            // (verified at @vitest/browser-playwright@4.1.5/dist/index.js:869).
-            provider: playwright({
-              launchOptions: {
-                channel: 'chrome-beta',
-                args: [
-                  '--enable-unsafe-webgpu',
-                  '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-                  '--use-vulkan=swiftshader',
-                  '--disable-vulkan-surface',
-                  '--ignore-gpu-blocklist',
-                  '--disable-gpu-driver-bug-workarounds',
-                  '--disable-dawn-features=disallow_unsafe_apis',
-                  // feat-20260619-audio-resource-ownership-deterministic-reclaim M5:
-                  // browser tests need AudioContext to start in 'running' state
-                  // without a real user gesture (headless chromium autoplay policy
-                  // gate). The engine's production gesture-resume listener is correct
-                  // and must NOT be altered; this flag lifts the gate in test only.
-                  '--autoplay-policy=no-user-gesture-required',
-                ],
-              },
-            }),
-            instances: [{ browser: 'chromium' }],
-            headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0' && !!process.env.CI,
-          },
-        },
-      },
+      createBrowserProject(),
       // -- browser-no-webgpu layer: chromium WITHOUT WebGPU flags --
       //
       // feat-20260525-rhi-delete-webgl2-stub M4: verifies that when

@@ -24,6 +24,7 @@ export interface NativeCookDraft<P = unknown> {
 
 export interface NativeCooker<P = unknown, I = unknown> {
   readonly key: string;
+  readonly discover?: (input: unknown) => I | Promise<I>;
   cook(input: I): NativeCookDraft<P> | Promise<NativeCookDraft<P>>;
 }
 
@@ -98,7 +99,8 @@ export class NativeCookerRegistry {
     }
     let draft: NativeCookDraft<P>;
     try {
-      draft = await cooker.cook(input);
+      const typedInput = cooker.discover === undefined ? input : await cooker.discover(input);
+      draft = await cooker.cook(typedInput);
     } catch (error) {
       return failure(key, { guid: 'unknown', producer: String(error) });
     }

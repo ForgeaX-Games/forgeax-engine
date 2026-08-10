@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
@@ -12,18 +11,12 @@ import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
 import { targetProfileImporter } from '../../templates/game-default/assets/plugins/target-profile-importer';
-import { createParticleCodeNativeCooker } from '@forgeax/engine-vfx-compiler';
+import { createParticleCodeNativeCookerFromRoots } from '@forgeax/engine-vfx-compiler';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
 const templatesDir = resolve(monorepoRoot, 'templates');
 const templateAssetRoot = resolve(templatesDir, 'game-default', 'assets');
-const vfxModules = Object.fromEntries(
-  ['hit.vfx.wgsl', 'charge.vfx.wgsl'].map((name) => [
-    name,
-    { entry: readFileSync(resolve(templateAssetRoot, name), 'utf8') },
-  ]),
-);
 // Keep the authored WGSL tree under assets/ so the template has one visible
 // content root, but do not hand build-only shader sidecars to vite-plugin-pack.
 // Pack is a runtime catalog; forgeaxShader owns WGSL compilation and manifest
@@ -122,7 +115,7 @@ export default defineConfig(({ command }) => ({
         submoduleSpriteAtlasDir,
       ],
       importers: [audioImporter, imageImporter, fbxImporter, gltfImporter, fontImporter, targetProfileImporter()],
-      cookers: [createParticleCodeNativeCooker(vfxModules)],
+      cookers: [createParticleCodeNativeCookerFromRoots([templateAssetRoot])],
     }) as never,
   ],
   server: {

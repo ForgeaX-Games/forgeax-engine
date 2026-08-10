@@ -767,6 +767,11 @@ function executeGraphOwnedRenderFeaturePass(
       : contributionPass.descriptor.reads
           .map((name) => resolveContext.resolve(name))
           .find((view): view is unknown => view !== undefined);
+  const samplesAttachedDepth =
+    targetDepth !== undefined &&
+    (contributionPass.graphics?.sampledTargets ?? []).some(
+      (sampled) => sampled.resource === targetDepth.resource,
+    );
   const colorViews =
     targetColorAttachment !== undefined
       ? [
@@ -805,14 +810,18 @@ function executeGraphOwnedRenderFeaturePass(
       loadOp: 'load',
       storeOp: 'store',
     })),
-    ...(resolvedDepth !== undefined
+    ...(targetDepthAttachment !== undefined && resolvedDepth !== undefined
       ? {
           depthStencilAttachment: {
             view: resolvedDepth as unknown as GPUTextureView,
-            depthLoadOp: 'load',
-            depthStoreOp: 'store',
-            stencilLoadOp: 'load',
-            stencilStoreOp: 'store',
+            ...(samplesAttachedDepth
+              ? { depthReadOnly: true, stencilReadOnly: true }
+              : {
+                  depthLoadOp: 'load' as const,
+                  depthStoreOp: 'store' as const,
+                  stencilLoadOp: 'load' as const,
+                  stencilStoreOp: 'store' as const,
+                }),
           },
         }
       : {}),
@@ -828,6 +837,39 @@ function executeGraphOwnedRenderFeaturePass(
         vertex: 0,
         index: 0,
         draw: 0,
+        resolveTargetBindings: (resource) => {
+          if (resource.pipeline === undefined || resource.descriptor === undefined)
+            return undefined;
+          const sceneDepth = resource.descriptor.values.sceneDepth;
+          if (sceneDepth === undefined) return undefined;
+          const layout = (
+            resource.pipeline as RenderPipeline & {
+              getBindGroupLayout?: (index: number) => import('@forgeax/engine-rhi').BindGroupLayout;
+            }
+          ).getBindGroupLayout?.(resource.descriptor.values.group === 1 ? 1 : 0);
+          const depthTexture = internalContext.frameState.perFrameGraph?.getColorTargetTexture(
+            sceneDepth.resource,
+          );
+          if (layout === undefined || depthTexture === undefined) return undefined;
+          const depthOnlyView = context.runtime.device.createTextureView(depthTexture as Texture, {
+            aspect: 'depth-only',
+            dimension: '2d',
+          });
+          if (!depthOnlyView.ok) {
+            context.runtime.errorRegistry.fire(depthOnlyView.error);
+            return undefined;
+          }
+          const created = context.runtime.device.createBindGroup({
+            layout,
+            entries: [
+              {
+                binding: 0,
+                resource: { kind: 'textureView', value: depthOnlyView.value },
+              },
+            ],
+          });
+          return created.ok ? created.value : undefined;
+        },
         setPipeline: (handle) => activePass.setPipeline(handle as RenderPipeline),
         setBindGroupAt: (index, handle, dynamicOffsets) =>
           activePass.setBindGroup(index, handle as BindGroup, dynamicOffsets),
@@ -884,6 +926,9 @@ export interface RenderFeatureGraphicsRecordingLedger {
   setPipeline?: (handle: unknown) => void;
   setBindGroup?: (handle: unknown) => void;
   setBindGroupAt?: (index: number, handle: unknown, dynamicOffsets?: readonly number[]) => void;
+  resolveTargetBindings?: (
+    resource: Extract<PreparedGraphicsResolvedResource, { readonly kind: 'bindings' }>,
+  ) => unknown;
   setVertexBuffer?: (slot: number, handle: unknown) => void;
   setIndexBuffer?: (handle: unknown, format: 'uint16' | 'uint32') => void;
   recordDraw?: (
@@ -922,7 +967,10 @@ export function recordResolvedRenderFeatureGraphicsPass(
   if (!validated.ok) return validated;
   const resolvedDraws: Array<{
     readonly pipeline: PreparedGraphicsResolvedResource;
-    readonly bindings: readonly Extract<PreparedGraphicsResolvedResource, { kind: 'bindings' }>[];
+    readonly bindings: readonly Extract<
+      PreparedGraphicsResolvedResource,
+      { readonly kind: 'bindings' }
+    >[];
     readonly vertexData: readonly {
       readonly slot: number;
       readonly resource: PreparedGraphicsResolvedResource;
@@ -953,7 +1001,10 @@ export function recordResolvedRenderFeatureGraphicsPass(
     }
     resolvedDraws.push({
       pipeline,
-      bindings: bindings as Extract<PreparedGraphicsResolvedResource, { kind: 'bindings' }>[],
+      bindings: bindings as Extract<
+        PreparedGraphicsResolvedResource,
+        { readonly kind: 'bindings' }
+      >[],
       vertexData: vertexData as {
         readonly slot: number;
         readonly resource: PreparedGraphicsResolvedResource;
@@ -967,10 +1018,14 @@ export function recordResolvedRenderFeatureGraphicsPass(
     ledger.setPipeline?.(resolvedDraw.pipeline.handle);
     for (const [index, binding] of resolvedDraw.bindings.entries()) {
       ledger.binding += 1;
+      const handle = binding.handle ?? ledger.resolveTargetBindings?.(binding);
+      if (handle === undefined) {
+        return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+      }
       if (ledger.setBindGroupAt !== undefined) {
-        ledger.setBindGroupAt(index, binding.handle, binding.dynamicOffsets);
+        ledger.setBindGroupAt(index, handle, binding.dynamicOffsets);
       } else {
-        ledger.setBindGroup?.(binding.handle);
+        ledger.setBindGroup?.(handle);
       }
     }
     for (const vertex of resolvedDraw.vertexData) {

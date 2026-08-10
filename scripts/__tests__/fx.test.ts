@@ -36,7 +36,9 @@ describe('package.json wiring', () => {
   it('registers fx + test:fx scripts and typechecks scripts/tsconfig.json', () => {
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(pkg.scripts.fx).toBe('bun scripts/fx.ts');
-    expect(pkg.scripts['test:fx']).toBe('vitest run scripts/__tests__/fx.test.ts');
+    expect(pkg.scripts['test:fx']).toBe(
+      'vitest run --project=scripts scripts/__tests__/fx.test.ts',
+    );
     expect(pkg.scripts.typecheck).toContain('tsc -p scripts/tsconfig.json');
   });
 });

@@ -140,3 +140,26 @@ The runtime load path is **identical** in both forms — `ddcLoad` has zero
 branches on transport. The only difference is whether `transportOrFail` is
 reached on DDC miss (studio: it calls the transport; shipped: it returns the
 error immediately).
+
+## Indexed source-package lifecycle
+
+Use this sequence when an import or Pack consumer reports a missing product:
+
+1. **Inspect** the source Meta, declared GUID closure, Catalog row, DDC head,
+   and producer receipt. Read the closed error union's `code` and `detail`.
+2. **Repair** the source, Meta, or registered importer named by the detail.
+   `ImporterRegistry` owns dispatch, while the source plus Meta remains the
+   author authority.
+3. **Rebuild** when the existing DDC entry can be replaced safely; **cold-cook**
+   when integrity, receipt, or lifecycle state says the derived entry is
+   invalid. Both paths use `runImport` and the shared finalizer.
+4. **Verify** GUID closure, receipt freshness, DDC integrity, Pack artifacts,
+   and the projected Catalog row.
+5. **Retry** the same GUID after verification. Never parse an error message or
+   turn an unverified source file into a runtime payload.
+
+The import package stops at build-time source conversion and product
+publication. It does not write authoring state, own Editor operations, or add
+runtime transport branches. A dev `ImportTransport` is an explicit host
+adapter; a shipped bundle must carry its build-time product and keeps
+`asset-not-imported` fail-fast semantics.

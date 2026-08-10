@@ -13,30 +13,129 @@ import {
 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { err, type MaterialAsset, type MeshAsset, ok } from '@forgeax/engine-types';
+import type { ParticleRendererSource } from '@forgeax/engine-vfx';
 import {
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
   type VfxGpuTickIntent,
 } from '@forgeax/engine-vfx';
+import type { VfxDataInterfaceRegistry } from '../host/data-interface-providers.js';
 import type { ParticleRenderCamera } from './camera.js';
 import {
+  encodeEventInputs,
+  eventCapacity,
+  eventInputCapacity,
+  VFX_EVENT_BYTES,
+  VFX_EVENT_INPUT_BYTES,
+} from './event-resources.js';
+import {
   canonicalMeshVertices,
+  createTopologyResourcePlan,
   PARTICLE_SHADER_IDENTIFIERS,
   particleMaterialPass,
   particleMaterialUsesBindings,
 } from './particle-resources.js';
+import {
+  observeStagePlan,
+  stageDispatches,
+  type VfxStageReadiness,
+  type VfxValidatedStagePlan,
+  validatedStagePlan,
+} from './stage-plan.js';
 
 const IDENTITY = 'forgeax.vfx-render.gpu-particles';
 const WORKGROUP_SIZE = 256;
 const PARTICLE_BYTES = 80;
-const BILLBOARD_INSTANCE_BYTES = 23 * 4;
+const BILLBOARD_INSTANCE_BYTES = 31 * 4;
 const MESH_INSTANCE_BYTES = 28 * 4;
-const RUNTIME_BYTES = 60 * 4;
+const COUNTERS_BYTES = 24;
+const RUNTIME_BYTES = 72 * 4;
 const MAX_TICK_RINGS = 8;
 const IDENTITY_MATRIX = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
+export interface VfxRenderInspectInput {
+  readonly topology: 'billboard' | 'mesh' | 'ribbon' | 'trail' | 'beam';
+  readonly capacity: number;
+  readonly produced: number;
+  readonly dropped: number;
+  readonly stageReadiness: readonly unknown[];
+  readonly providerReadiness: unknown;
+  readonly gpuTiming: unknown;
+}
+
+export function createVfxRenderInspectSnapshot(input: VfxRenderInspectInput) {
+  return {
+    topology: input.topology,
+    counters: { capacity: input.capacity, produced: input.produced, dropped: input.dropped },
+    stageReadiness: input.stageReadiness,
+    providerReadiness: input.providerReadiness,
+    gpuTiming: input.gpuTiming,
+  } as const;
+}
+
+export interface BillboardAdvancedSample {
+  readonly age: number;
+  readonly lifetime: number;
+  readonly particleDepth: number;
+  readonly sceneDepth: number;
+  readonly depthAvailable: boolean;
+}
+
+export function resolveBillboardAdvancedState(
+  renderer: Extract<ParticleRendererSource, { readonly kind: 'billboard' }>,
+  sample: BillboardAdvancedSample,
+) {
+  if (renderer.softParticle !== undefined && !sample.depthAvailable) {
+    return err({
+      code: 'vfx-renderer-depth-missing' as const,
+      expected: 'a scene-depth provider for soft particles',
+      hint: 'attach the scene-depth data interface or disable soft particles',
+      detail: { path: 'renderer.softParticle' },
+    });
+  }
+  const sheet = renderer.textureSheet;
+  const frameCount = sheet?.frameCount ?? (sheet === undefined ? 1 : sheet.columns * sheet.rows);
+  const frameIndex =
+    sheet === undefined || sheet.frameRate === 0
+      ? 0
+      : Math.min(
+          frameCount - 1,
+          Math.max(0, Math.floor(Math.max(0, sample.age) * sheet.frameRate)),
+        );
+  const softParticleFade =
+    renderer.softParticle === undefined
+      ? 1
+      : Math.max(
+          0,
+          Math.min(
+            1,
+            (sample.sceneDepth - sample.particleDepth) / renderer.softParticle.fadeDistance,
+          ),
+        );
+  return ok({
+    frameIndex,
+    pivot: renderer.pivot ?? ([0, 0] as const),
+    softParticleFade,
+    sortingKey: renderer.sorting === 'back-to-front' ? sample.particleDepth : 0,
+  });
+}
+
+export function topologyRecoveryHint(
+  topology: 'ribbon' | 'trail' | 'beam',
+  reason: 'capacity' | 'broken' | 'degenerate' | 'device',
+): string {
+  if (reason === 'capacity')
+    return `${topology} capacity overflow was bounded; increase its explicit capacity`;
+  if (reason === 'broken')
+    return `${topology} continuity broke; inspect its explicit source key and keep the last valid segment`;
+  if (reason === 'degenerate')
+    return `${topology} produced no drawable segment; preserve zero output and inspect source endpoints`;
+  return `${topology} device resources recovered from the last known good generation`;
+}
+
 interface GpuParticleFeatureOptions {
   readonly camera: { read(world: World): ParticleRenderCamera | undefined };
+  readonly dataInterfaces?: Pick<VfxDataInterfaceRegistry, 'resolve'>;
   readonly material?: { read(world: World, guid: string): MaterialAsset | undefined };
   readonly mesh?: { read(world: World, guid: string): MeshAsset | undefined };
 }
@@ -61,7 +160,8 @@ interface GpuRefs {
   readonly indirect: RenderFeatureGpuBufferRef;
   readonly scratch: RenderFeatureGpuBufferRef;
   readonly billboardInstances: RenderFeatureGpuBufferRef;
-  readonly meshInstances: RenderFeatureGpuBufferRef;
+  readonly eventInputs: RenderFeatureGpuBufferRef;
+  readonly events: RenderFeatureGpuBufferRef;
 }
 
 interface TickRing {
@@ -70,9 +170,12 @@ interface TickRing {
 }
 
 interface RendererProjection {
-  readonly kind: 'billboard' | 'mesh';
+  readonly kind: ParticleRendererSource['kind'];
   readonly ring: TickRing;
   readonly instances: RenderFeatureGpuBufferRef;
+  readonly workgroups: number;
+  readonly historyWorkgroups?: number;
+  readonly sorting?: 'none' | 'emitter' | 'back-to-front';
 }
 
 interface EmitterState {
@@ -91,6 +194,11 @@ interface EmitterState {
   culled: boolean;
   lastIntent?: VfxGpuTickIntent;
   draws: RenderFeatureDrawRecord[];
+  depthSampledDraws: RenderFeatureDrawRecord[];
+  stagePlan?: VfxValidatedStagePlan;
+  lastKnownGoodStage?: VfxValidatedStagePlan;
+  stageReadiness: readonly VfxStageReadiness[];
+  stageOutput: 'active' | 'last-known-good' | 'empty';
 }
 
 function finite(value: unknown, fallback: number): number {
@@ -108,6 +216,8 @@ function runtimeData(
   camera: ParticleRenderCamera,
   material: MaterialAsset | undefined,
   localToWorld: Float32Array,
+  renderer?: ParticleRendererSource,
+  rendererIndex = 0,
 ): Uint8Array {
   const storage = new ArrayBuffer(RUNTIME_BYTES);
   const floats = new Float32Array(storage);
@@ -133,6 +243,31 @@ function runtimeData(
   floats[42] = finite(values.clearcoat, 0);
   floats[43] = finite(values.clearcoatRoughness, 0.5);
   floats.set(localToWorld, 44);
+  words[60] = rendererIndex;
+  words[61] = renderer?.kind === 'trail' ? renderer.historyLength : 0;
+  words[62] =
+    renderer?.kind === 'ribbon' || renderer?.kind === 'trail' || renderer?.kind === 'beam'
+      ? renderer.capacity
+      : intent.emitter.capacity;
+  words[63] =
+    renderer?.kind === 'billboard' && renderer.sorting === 'back-to-front'
+      ? 2
+      : renderer?.kind === 'billboard' && renderer.sorting === 'emitter'
+        ? 1
+        : 0;
+  floats[64] =
+    renderer?.kind === 'billboard'
+      ? (renderer.pivot?.[0] ?? 0)
+      : renderer?.kind === 'ribbon' || renderer?.kind === 'trail' || renderer?.kind === 'beam'
+        ? (renderer.width ?? 0.1)
+        : 0.1;
+  floats[65] = renderer?.kind === 'billboard' ? (renderer.pivot?.[1] ?? 0) : 0;
+  floats[66] = renderer?.kind === 'billboard' ? (renderer.softParticle?.fadeDistance ?? 0) : 0;
+  const sheet = renderer?.kind === 'billboard' ? renderer.textureSheet : undefined;
+  floats[68] = sheet?.columns ?? 1;
+  floats[69] = sheet?.rows ?? 1;
+  floats[70] = sheet?.frameRate ?? 0;
+  floats[71] = sheet?.frameCount ?? (sheet === undefined ? 1 : sheet.columns * sheet.rows);
   return new Uint8Array(storage);
 }
 
@@ -190,6 +325,12 @@ function target(
   return targets.find((entry) => entry.kind === kind);
 }
 
+function requiresSceneDepth(intent: VfxGpuTickIntent): boolean {
+  return (intent.emitter.reflection.dataInterfaces ?? []).some(
+    (requirement) => requirement.kind === 'scene-depth',
+  );
+}
+
 export function gpuParticleRenderFeature(
   options: GpuParticleFeatureOptions,
 ): RenderFeature<ExtractedFrame> {
@@ -223,10 +364,13 @@ export function gpuParticleRenderFeature(
       rings: [],
       projections: [],
       draws: [],
+      depthSampledDraws: [],
       colorTarget: undefined,
       depthTarget: undefined,
       indirectInitialized: false,
       culled: false,
+      stageReadiness: [],
+      stageOutput: 'empty',
     };
     states.set(key, state);
     return state;
@@ -243,7 +387,14 @@ export function gpuParticleRenderFeature(
         const camera = options.camera.read(world);
         if (camera === undefined) continue;
         const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
-        extracted.push({ world, runtime, camera, intents: runtime.snapshot() });
+        const intents = runtime.snapshot().filter((intent) => {
+          const requirements = intent.emitter.reflection.dataInterfaces ?? [];
+          if (requirements.length === 0) return true;
+          return (
+            options.dataInterfaces?.resolve(requirements, intent.instanceGeneration).ok === true
+          );
+        });
+        extracted.push({ world, runtime, camera, intents });
       }
       return ok({ worlds: extracted, frameNumber: context.frameNumber });
     },
@@ -257,129 +408,180 @@ export function gpuParticleRenderFeature(
       // the first pending module serialized effect startup across emitters and
       // could outlive a short authored burst on a slow runner.
       let pendingProgramError: RenderFeaturePreparationFailedError | undefined;
+      const preparedIntents: Array<{
+        readonly entry: ExtractedWorld;
+        readonly intent: VfxGpuTickIntent;
+        readonly state: EmitterState;
+      }> = [];
       for (const entry of frame.worlds) {
         for (const intent of entry.intents) {
-          const state = stateFor(entry.world, intent);
+          const key = keyOf(entry.world, intent);
+          let state = states.get(key);
+          const candidate = validatedStagePlan(
+            intent.emitter.reflection.stages,
+            intent.instanceGeneration,
+          );
+          if (!candidate.ok) {
+            if (state === undefined) {
+              return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
+            }
+            const observation = observeStagePlan(
+              candidate,
+              intent.instanceGeneration,
+              state.lastKnownGoodStage,
+            );
+            state.stagePlan = observation.validatedStagePlan;
+            state.stageReadiness = observation.stageReadiness;
+            state.stageOutput = observation.stageOutput;
+            continue;
+          }
+          if (state !== undefined && state.fingerprint !== intent.programFingerprint) {
+            states.delete(key);
+            state = undefined;
+          }
+          state ??= stateFor(entry.world, intent);
+          const observation = observeStagePlan(
+            candidate,
+            intent.instanceGeneration,
+            state.lastKnownGoodStage,
+          );
+          state.stagePlan = observation.validatedStagePlan;
+          state.lastKnownGoodStage = candidate.value;
+          state.stageReadiness = observation.stageReadiness;
+          state.stageOutput = observation.stageOutput;
           const program = gpu.prepareProgram(`${state.names}.program`, {
             wgsl: intent.emitter.wgsl,
             entryPoints: intent.emitter.reflection.entryPoints,
             bindings: intent.emitter.reflection.bindings,
           });
-          if (program.ok) continue;
-          if (
-            program.error.code !== 'render-feature-preparation-failed' ||
-            program.error.detail.recovery !== 'next-frame'
-          ) {
-            return program;
+          if (!program.ok) {
+            if (
+              program.error.code !== 'render-feature-preparation-failed' ||
+              program.error.detail.recovery !== 'next-frame'
+            ) {
+              return program;
+            }
+            pendingProgramError ??= program.error;
           }
-          pendingProgramError ??= program.error;
+          preparedIntents.push({ entry, intent, state });
         }
       }
       if (pendingProgramError !== undefined) return err(pendingProgramError);
       let pendingGraphicsError: RenderFeaturePreparationFailedError | undefined;
-      for (const entry of frame.worlds) {
-        for (const intent of entry.intents) {
-          const state = stateFor(entry.world, intent);
-          if (intent.reset) state.indirectInitialized = false;
-          state.lastIntent = intent;
-          const base = state.names;
-          const program = gpu.prepareProgram(`${base}.program`, {
-            wgsl: intent.emitter.wgsl,
-            entryPoints: intent.emitter.reflection.entryPoints,
-            bindings: intent.emitter.reflection.bindings,
+      for (const { entry, intent, state } of preparedIntents) {
+        if (intent.reset) state.indirectInitialized = false;
+        state.lastIntent = intent;
+        const base = state.names;
+        const program = gpu.prepareProgram(`${base}.program`, {
+          wgsl: intent.emitter.wgsl,
+          entryPoints: intent.emitter.reflection.entryPoints,
+          bindings: intent.emitter.reflection.bindings,
+        });
+        if (!program.ok) return program;
+        const prepare = (
+          name: string,
+          size: number,
+          usage: readonly ('storage' | 'uniform' | 'indirect' | 'vertex')[],
+          data?: ArrayBufferView,
+        ) =>
+          gpu.prepareBuffer(`${base}.${name}`, {
+            size,
+            usage,
+            ...(data === undefined ? {} : { data }),
           });
-          if (!program.ok) return program;
-          const prepare = (
-            name: string,
-            size: number,
-            usage: readonly ('storage' | 'uniform' | 'indirect' | 'vertex')[],
-            data?: ArrayBufferView,
-          ) =>
-            gpu.prepareBuffer(`${base}.${name}`, {
-              size,
-              usage,
-              ...(data === undefined ? {} : { data }),
-            });
-          const particles = prepare(
-            'particles',
-            state.capacity * PARTICLE_BYTES,
-            ['storage'],
-            intent.reset ? resetData(state.capacity * PARTICLE_BYTES) : undefined,
-          );
-          if (!particles.ok) return particles;
-          const aliveIndices = prepare('alive-indices', state.capacity * 4, ['storage']);
-          if (!aliveIndices.ok) return aliveIndices;
-          const counters = prepare(
-            'counters',
-            8,
-            ['storage'],
-            intent.reset ? resetData(8) : undefined,
-          );
-          if (!counters.ok) return counters;
-          const indirect = prepare('indirect', Math.max(1, intent.emitter.renderers.length) * 20, [
-            'storage',
-            'indirect',
-          ]);
-          if (!indirect.ok) return indirect;
-          const scratchBytes =
-            (state.capacity * 2 + Math.ceil(state.capacity / WORKGROUP_SIZE)) * 4;
-          const scratch = prepare(
-            'scratch',
-            scratchBytes,
-            ['storage'],
-            intent.reset ? resetData(scratchBytes) : undefined,
-          );
-          if (!scratch.ok) return scratch;
-          const billboardInstances = prepare(
-            'billboard-instances',
-            state.capacity * BILLBOARD_INSTANCE_BYTES,
-            ['storage', 'vertex'],
-          );
-          if (!billboardInstances.ok) return billboardInstances;
-          const meshInstances = prepare('mesh-instances', state.capacity * MESH_INSTANCE_BYTES, [
-            'storage',
-            'vertex',
-          ]);
-          if (!meshInstances.ok) return meshInstances;
-          state.refs = {
-            program: program.value,
-            particles: particles.value,
-            aliveIndices: aliveIndices.value,
-            counters: counters.value,
-            indirect: indirect.value,
-            scratch: scratch.value,
-            billboardInstances: billboardInstances.value,
-            meshInstances: meshInstances.value,
-          };
-          const ringIndex = intent.tick % MAX_TICK_RINGS;
-          const runtime = gpu.prepareBuffer(`${base}.runtime.${ringIndex}`, {
-            size: RUNTIME_BYTES,
-            usage: ['uniform'],
-            data: runtimeData(
-              intent,
-              entry.camera,
-              undefined,
-              emitterTransform(entry.world, intent),
-            ),
-          });
-          if (!runtime.ok) return runtime;
-          const refs = state.refs;
-          const bindings = gpu.prepareBindings(`${base}.bindings.${ringIndex}`, {
-            program: refs.program,
-            entries: [
-              { binding: 0, buffer: refs.particles },
-              { binding: 1, buffer: runtime.value },
-              { binding: 2, buffer: refs.aliveIndices },
-              { binding: 3, buffer: refs.counters },
-              { binding: 4, buffer: refs.indirect },
-              { binding: 5, buffer: refs.scratch },
-              { binding: 6, buffer: refs.billboardInstances },
-              { binding: 7, buffer: refs.meshInstances },
-            ],
-          });
-          if (!bindings.ok) return bindings;
-          state.rings[ringIndex] = { runtime: runtime.value, bindings: bindings.value };
-        }
+        const particles = prepare(
+          'particles',
+          state.capacity * PARTICLE_BYTES,
+          ['storage'],
+          intent.reset ? resetData(state.capacity * PARTICLE_BYTES) : undefined,
+        );
+        if (!particles.ok) return particles;
+        const aliveIndices = prepare('alive-indices', state.capacity * 4, ['storage']);
+        if (!aliveIndices.ok) return aliveIndices;
+        const counters = prepare(
+          'counters',
+          COUNTERS_BYTES,
+          ['storage'],
+          intent.reset ? resetData(COUNTERS_BYTES) : undefined,
+        );
+        if (!counters.ok) return counters;
+        const indirect = prepare('indirect', Math.max(1, intent.emitter.renderers.length) * 20, [
+          'storage',
+          'indirect',
+        ]);
+        if (!indirect.ok) return indirect;
+        const scratchBytes = (state.capacity * 2 + Math.ceil(state.capacity / WORKGROUP_SIZE)) * 4;
+        const scratch = prepare(
+          'scratch',
+          scratchBytes,
+          ['storage'],
+          intent.reset ? resetData(scratchBytes) : undefined,
+        );
+        if (!scratch.ok) return scratch;
+        const billboardInstances = prepare(
+          'billboard-instances',
+          state.capacity * Math.max(BILLBOARD_INSTANCE_BYTES, MESH_INSTANCE_BYTES),
+          ['storage', 'vertex'],
+        );
+        if (!billboardInstances.ok) return billboardInstances;
+        const events = prepare(
+          'events',
+          eventCapacity(intent.emitter) * VFX_EVENT_BYTES,
+          ['storage'],
+          intent.reset ? resetData(eventCapacity(intent.emitter) * VFX_EVENT_BYTES) : undefined,
+        );
+        if (!events.ok) return events;
+        const initialEventInputs = prepare(
+          'event-inputs',
+          eventInputCapacity(intent.emitter) * VFX_EVENT_INPUT_BYTES,
+          ['storage'],
+          encodeEventInputs(intent),
+        );
+        if (!initialEventInputs.ok) return initialEventInputs;
+        state.refs = {
+          program: program.value,
+          particles: particles.value,
+          aliveIndices: aliveIndices.value,
+          counters: counters.value,
+          indirect: indirect.value,
+          scratch: scratch.value,
+          billboardInstances: billboardInstances.value,
+          eventInputs: initialEventInputs.value,
+          events: events.value,
+        };
+        const ringIndex = intent.tick % MAX_TICK_RINGS;
+        const runtime = gpu.prepareBuffer(`${base}.runtime.${ringIndex}`, {
+          size: RUNTIME_BYTES,
+          usage: ['uniform'],
+          data: runtimeData(intent, entry.camera, undefined, emitterTransform(entry.world, intent)),
+        });
+        if (!runtime.ok) return runtime;
+        const refs = state.refs;
+        const updatedEventInputs = gpu.prepareBuffer(`${base}.event-inputs`, {
+          size: eventInputCapacity(intent.emitter) * VFX_EVENT_INPUT_BYTES,
+          usage: ['storage'],
+          data: encodeEventInputs(intent),
+        });
+        if (!updatedEventInputs.ok) return updatedEventInputs;
+        const bindings = gpu.prepareBindings(`${base}.bindings.${ringIndex}`, {
+          program: refs.program,
+          entries: [
+            { binding: 0, buffer: refs.particles },
+            { binding: 1, buffer: runtime.value },
+            { binding: 2, buffer: refs.aliveIndices },
+            { binding: 3, buffer: refs.counters },
+            { binding: 4, buffer: refs.indirect },
+            { binding: 5, buffer: refs.scratch },
+            { binding: 6, buffer: refs.billboardInstances },
+            { binding: 8, buffer: updatedEventInputs.value },
+            { binding: 9, buffer: refs.events },
+          ],
+        });
+        if (!bindings.ok) return bindings;
+        state.rings[ringIndex] = {
+          runtime: runtime.value,
+          bindings: bindings.value,
+        };
       }
 
       for (const [key, state] of states) {
@@ -409,6 +611,7 @@ export function gpuParticleRenderFeature(
           state.culled = true;
           state.projections = [];
           state.draws = [];
+          state.depthSampledDraws = [];
           continue;
         }
         if (
@@ -418,11 +621,16 @@ export function gpuParticleRenderFeature(
         ) {
           state.projections = [];
           state.draws = [];
+          state.depthSampledDraws = [];
           continue;
         }
         state.culled = false;
         const colorTarget = target(context.targets, 'scene-color');
         const depthTarget = target(context.targets, 'scene-depth');
+        const softParticle = requiresSceneDepth(intent);
+        if (softParticle && depthTarget === undefined) continue;
+        const eventRing = state.rings[intent.tick % MAX_TICK_RINGS];
+        if (eventRing === undefined) continue;
         const meshes = renderers.map((renderer) =>
           renderer.kind === 'mesh' ? options.mesh?.read(state.world, renderer.mesh) : undefined,
         );
@@ -440,12 +648,20 @@ export function gpuParticleRenderFeature(
           const mesh = meshes[index];
           const submesh =
             renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
+          const topologyPlan =
+            renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam'
+              ? createTopologyResourcePlan(renderer)
+              : undefined;
+          if (topologyPlan !== undefined && !topologyPlan.ok)
+            return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
           indirectWords[index * 5] =
             renderer.kind === 'billboard'
               ? 6
-              : mesh?.indices === undefined
-                ? (submesh?.vertexCount ?? 0)
-                : (submesh?.indexCount ?? 0);
+              : renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam'
+                ? 6
+                : mesh?.indices === undefined
+                  ? (submesh?.vertexCount ?? 0)
+                  : (submesh?.indexCount ?? 0);
           indirectWords[index * 5 + 2] =
             renderer.kind === 'mesh' && mesh?.indices !== undefined
               ? (submesh?.indexOffset ?? 0)
@@ -459,9 +675,15 @@ export function gpuParticleRenderFeature(
         if (!indirectInit.ok) return indirectInit;
         state.indirectInitialized = true;
         const draws: RenderFeatureDrawRecord[] = [];
+        const depthSampledDraws: RenderFeatureDrawRecord[] = [];
         const projections: RendererProjection[] = [];
         for (const [rendererIndex, renderer] of renderers.entries()) {
           const isBillboard = renderer.kind === 'billboard';
+          const isTopology =
+            renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam';
+          const topologyPlan = isTopology ? createTopologyResourcePlan(renderer) : undefined;
+          if (topologyPlan !== undefined && !topologyPlan.ok)
+            return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
           const mesh = meshes[rendererIndex];
           const submesh =
             renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
@@ -469,14 +691,39 @@ export function gpuParticleRenderFeature(
             mesh?.indices instanceof Uint32Array ? ('uint32' as const) : ('uint16' as const);
           const material = options.material?.read(state.world, renderer.material);
           const materialPass = particleMaterialPass(renderer.kind, material);
+          const particleBlend = renderer.kind === 'billboard' ? renderer.blend : 'alpha';
           const projectionInstances = gpu.prepareBuffer(
             `${state.names}.renderer.${rendererIndex}.instances`,
             {
-              size: state.capacity * (isBillboard ? BILLBOARD_INSTANCE_BYTES : MESH_INSTANCE_BYTES),
+              size: isTopology
+                ? topologyPlan?.ok
+                  ? topologyPlan.value.vertexBytes
+                  : 0
+                : state.capacity * (isBillboard ? BILLBOARD_INSTANCE_BYTES : MESH_INSTANCE_BYTES),
               usage: ['storage', 'vertex'],
             },
           );
           if (!projectionInstances.ok) return projectionInstances;
+          const projectionHistory = gpu.prepareBuffer(
+            `${state.names}.renderer.${rendererIndex}.history`,
+            {
+              size:
+                renderer.kind === 'trail'
+                  ? Math.max(16, renderer.capacity * renderer.historyLength * 16)
+                  : 16,
+              usage: ['storage'],
+              ...(intent.reset
+                ? {
+                    data: resetData(
+                      renderer.kind === 'trail'
+                        ? Math.max(16, renderer.capacity * renderer.historyLength * 16)
+                        : 16,
+                    ),
+                  }
+                : {}),
+            },
+          );
+          if (!projectionHistory.ok) return projectionHistory;
           const projectionRuntime = gpu.prepareBuffer(
             `${state.names}.renderer.${rendererIndex}.runtime`,
             {
@@ -487,6 +734,8 @@ export function gpuParticleRenderFeature(
                 extracted.camera,
                 material,
                 localToWorld,
+                renderer,
+                rendererIndex,
               ),
             },
           );
@@ -501,15 +750,10 @@ export function gpuParticleRenderFeature(
                 { binding: 2, buffer: refs.aliveIndices },
                 { binding: 3, buffer: refs.counters },
                 { binding: 4, buffer: refs.indirect },
-                { binding: 5, buffer: refs.scratch },
-                {
-                  binding: 6,
-                  buffer: isBillboard ? projectionInstances.value : refs.billboardInstances,
-                },
-                {
-                  binding: 7,
-                  buffer: isBillboard ? refs.meshInstances : projectionInstances.value,
-                },
+                { binding: 5, buffer: projectionHistory.value },
+                { binding: 6, buffer: projectionInstances.value },
+                { binding: 8, buffer: refs.eventInputs },
+                { binding: 9, buffer: refs.events },
               ],
             },
           );
@@ -517,7 +761,21 @@ export function gpuParticleRenderFeature(
           projections.push({
             kind: renderer.kind,
             instances: projectionInstances.value,
-            ring: { runtime: projectionRuntime.value, bindings: projectionBindings.value },
+            ring: {
+              runtime: projectionRuntime.value,
+              bindings: projectionBindings.value,
+            },
+            workgroups: Math.ceil(
+              (renderer.kind === 'trail'
+                ? renderer.capacity * Math.max(1, renderer.historyLength - 1)
+                : renderer.kind === 'ribbon' || renderer.kind === 'beam'
+                  ? renderer.capacity
+                  : state.capacity) / WORKGROUP_SIZE,
+            ),
+            ...(renderer.kind === 'trail'
+              ? { historyWorkgroups: Math.ceil(renderer.capacity / WORKGROUP_SIZE) }
+              : {}),
+            ...(renderer.kind === 'billboard' ? { sorting: renderer.sorting ?? 'none' } : {}),
           });
           const pipeline = context.graphics.preparePipeline(
             `${state.names}.renderer.${rendererIndex}.${renderer.kind}.pipeline`,
@@ -525,7 +783,9 @@ export function gpuParticleRenderFeature(
               shader: materialPass.shader,
               vertexLayout: isBillboard
                 ? RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance
-                : RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance,
+                : isTopology
+                  ? RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance
+                  : RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance,
               colorFormats: [colorTarget?.format ?? 'rgba8unorm-srgb'],
               ...(depthTarget === undefined ? {} : { depthFormat: depthTarget.format }),
               sampleCount: colorTarget?.sampleCount ?? 1,
@@ -533,20 +793,21 @@ export function gpuParticleRenderFeature(
               ...(mesh?.indices === undefined ? {} : { indexFormat }),
               ...(materialPass.renderState !== undefined
                 ? { renderState: materialPass.renderState }
-                : isBillboard
+                : isBillboard || isTopology
                   ? {
                       renderState: {
                         cullMode: 'none',
                         depthCompare: 'less-equal',
-                        depthWriteEnabled: renderer.blend === 'opaque-cutout',
-                        ...(renderer.blend === 'opaque-cutout'
+                        depthWriteEnabled:
+                          softParticle || isTopology ? false : particleBlend === 'opaque-cutout',
+                        ...(particleBlend === 'opaque-cutout'
                           ? {}
                           : {
                               blend: {
                                 color: {
                                   srcFactor: 'one',
                                   dstFactor:
-                                    renderer.blend === 'additive' ? 'one' : 'one-minus-src-alpha',
+                                    particleBlend === 'additive' ? 'one' : 'one-minus-src-alpha',
                                   operation: 'add',
                                 },
                                 alpha: {
@@ -575,7 +836,10 @@ export function gpuParticleRenderFeature(
             `${state.names}.renderer.${rendererIndex}.${renderer.kind}.binding`,
             {
               pipeline: pipeline.value,
-              values: { group: 0 },
+              values: {
+                group: 0,
+                ...(isBillboard && depthTarget !== undefined ? { sceneDepth: depthTarget } : {}),
+              },
             },
           );
           if (!graphicsBindings.ok) return graphicsBindings;
@@ -599,22 +863,25 @@ export function gpuParticleRenderFeature(
             graphicsBindings.value,
             ...(materialBindings === undefined ? [] : [materialBindings.value]),
           ];
-          if (isBillboard) {
+          if (isBillboard || isTopology) {
             const vertexData = context.graphics.prepareVertexData(
-              `${state.names}.billboard.vertices`,
+              `${state.names}.${isTopology ? renderer.kind : 'billboard'}.vertices`,
               {
-                layout: RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance,
+                layout: isTopology
+                  ? RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance
+                  : RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance,
                 buffer: projectionInstances.value,
               },
             );
             if (!vertexData.ok) return vertexData;
-            draws.push({
+            const draw: RenderFeatureDrawRecord = {
               kind: 'draw-indirect',
               pipeline: pipeline.value,
               bindings: drawBindings,
               vertexData: [{ slot: 0, resource: vertexData.value }],
               command: { buffer: refs.indirect, offset: rendererIndex * 20 },
-            });
+            };
+            (isBillboard ? depthSampledDraws : draws).push(draw);
             continue;
           }
           if (mesh === undefined) {
@@ -666,26 +933,24 @@ export function gpuParticleRenderFeature(
                   },
                 );
           if (indices !== undefined && !indices.ok) return indices;
+          const vertexData = [
+            { slot: 0, resource: geometry.value },
+            { slot: 1, resource: instances.value },
+          ];
           draws.push(
             indices === undefined
               ? {
                   kind: 'draw-indirect',
                   pipeline: pipeline.value,
                   bindings: drawBindings,
-                  vertexData: [
-                    { slot: 0, resource: geometry.value },
-                    { slot: 1, resource: instances.value },
-                  ],
+                  vertexData,
                   command: { buffer: refs.indirect, offset: rendererIndex * 20 },
                 }
               : {
                   kind: 'draw-indexed-indirect',
                   pipeline: pipeline.value,
                   bindings: drawBindings,
-                  vertexData: [
-                    { slot: 0, resource: geometry.value },
-                    { slot: 1, resource: instances.value },
-                  ],
+                  vertexData,
                   indexData: { resource: indices.value, format: indexFormat },
                   command: { buffer: refs.indirect, offset: rendererIndex * 20 },
                 },
@@ -693,6 +958,7 @@ export function gpuParticleRenderFeature(
         }
         state.projections = projections;
         state.draws = draws;
+        state.depthSampledDraws = depthSampledDraws;
         state.colorTarget = colorTarget;
         state.depthTarget = depthTarget;
       }
@@ -706,9 +972,16 @@ export function gpuParticleRenderFeature(
         if (refs === undefined) continue;
         const extracted = frame.worlds.find((entry) => entry.world === state.world);
         if (extracted === undefined) continue;
-        const intents = extracted.intents.filter(
+        const currentIntents = extracted.intents.filter(
           (intent) => intent.player === state.player && intent.emitter.id === state.emitterId,
         );
+        const intents = currentIntents.some(
+          (intent) => intent.programFingerprint === state.fingerprint,
+        )
+          ? currentIntents.filter((intent) => intent.programFingerprint === state.fingerprint)
+          : state.lastIntent === undefined
+            ? []
+            : [state.lastIntent];
         const groups = Math.ceil(state.capacity / WORKGROUP_SIZE);
         const dispatches = intents.flatMap((intent) => {
           const bindings = state.rings[intent.tick % MAX_TICK_RINGS]?.bindings;
@@ -716,6 +989,15 @@ export function gpuParticleRenderFeature(
           return [
             { entryPoint: 'forgeax_vfx_spawn_main', workgroups: [groups] as const, bindings },
             { entryPoint: 'forgeax_vfx_update_main', workgroups: [groups] as const, bindings },
+            ...stageDispatches(
+              state.stagePlan ?? {
+                stages: [],
+                fingerprint: '',
+                generation: intent.instanceGeneration,
+              },
+              groups,
+              bindings,
+            ),
             { entryPoint: 'forgeax_vfx_scan_blocks_main', workgroups: [groups] as const, bindings },
             {
               entryPoint: 'forgeax_vfx_scan_block_offsets_main',
@@ -724,15 +1006,36 @@ export function gpuParticleRenderFeature(
             },
             { entryPoint: 'forgeax_vfx_add_offsets_main', workgroups: [groups] as const, bindings },
             { entryPoint: 'forgeax_vfx_compact_main', workgroups: [groups] as const, bindings },
+            {
+              entryPoint: 'forgeax_vfx_event_main',
+              workgroups: [Math.ceil(eventInputCapacity(intent.emitter) / 64)] as const,
+              bindings,
+            },
           ];
         });
         for (const projection of state.projections) {
+          if (projection.kind === 'billboard' && projection.sorting === 'back-to-front') {
+            dispatches.push({
+              entryPoint: 'forgeax_vfx_sort_main',
+              workgroups: [1],
+              bindings: projection.ring.bindings,
+            });
+          }
+          if (projection.kind === 'trail') {
+            dispatches.push({
+              entryPoint: 'forgeax_vfx_trail_history_main',
+              workgroups: [projection.historyWorkgroups ?? 1],
+              bindings: projection.ring.bindings,
+            });
+          }
           dispatches.push({
             entryPoint:
               projection.kind === 'billboard'
                 ? 'forgeax_vfx_billboard_main'
-                : 'forgeax_vfx_mesh_main',
-            workgroups: [groups],
+                : projection.kind === 'mesh'
+                  ? 'forgeax_vfx_mesh_main'
+                  : `forgeax_vfx_${projection.kind}_main`,
+            workgroups: [projection.workgroups],
             bindings: projection.ring.bindings,
           });
         }
@@ -749,9 +1052,17 @@ export function gpuParticleRenderFeature(
           dispatches,
         });
         if (!compute.ok) return compute;
-        if (state.draws.length > 0) {
+        for (const intent of intents) {
+          extracted.runtime.markEventDispatched(state.player, intent.eventCounters);
+        }
+        for (const [drawKind, passDraws] of [
+          ['regular', state.draws],
+          ['depth-sampled', state.depthSampledDraws],
+        ] as const) {
+          if (passDraws.length === 0) continue;
+          const samplesDepth = drawKind === 'depth-sampled';
           const draw = context.staging.addGraphicsPass(
-            `${state.names}.draw`,
+            `${state.names}.draw.${drawKind}`,
             {
               attachments: {
                 colors: [
@@ -773,7 +1084,10 @@ export function gpuParticleRenderFeature(
                       },
                     }),
               },
-              draws: state.draws,
+              ...(state.depthTarget === undefined || !samplesDepth
+                ? {}
+                : { sampledTargets: [state.depthTarget] }),
+              draws: passDraws,
             },
             { dependsOn: [{ featureIdentity: IDENTITY, passIdentity: computePassIdentity }] },
           );

@@ -581,7 +581,7 @@ export interface RenderSystemRuntime {
   ) => RenderPipeline | null;
   readonly getMaterialShaderBindingContract?: (
     materialShaderId: string,
-  ) => 'group-0' | 'view-only' | 'render-material';
+  ) => 'group-0' | 'group-0-resource' | 'view-only' | 'render-material';
   /**
    * feat-20260527 M2 / w7: schema lookup for material param overlay.
    * Returns the paramSchema for a registered material shader, or
@@ -2122,8 +2122,17 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         return pipeline === null ? err(makePreparedPipelinePendingError()) : ok(pipeline);
       },
       resolveBindings: (descriptor, pipeline) => {
+        const materialShaderId = preparedMaterialPipelineShaders.get(pipeline as object);
+        const bindingContract =
+          materialShaderId === undefined
+            ? undefined
+            : internals.getMaterialShaderBindingContract?.(materialShaderId);
+        if (bindingContract === 'group-0-resource') {
+          return descriptor.values.sceneDepth === undefined
+            ? err(new Error('prepared group-0 resource pipeline requires a scene target'))
+            : ok(undefined);
+        }
         if (preparedGroup0Pipelines.has(pipeline as object)) {
-          const materialShaderId = preparedMaterialPipelineShaders.get(pipeline as object);
           const layout =
             (materialShaderId === undefined
               ? undefined
@@ -2148,7 +2157,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           return ok(preparedViewBindGroup);
         }
         const group = descriptor.values.group;
-        const materialShaderId = preparedMaterialPipelineShaders.get(pipeline as object);
         const layout =
           (materialShaderId !== undefined
             ? (internals.getMaterialBindGroupLayout?.(materialShaderId) ??

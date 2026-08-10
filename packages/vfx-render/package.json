@@ -42,8 +42,8 @@
         "reason": "renderer feature package has no host frame loop"
       },
       "bench": {
-        "enabled": false,
-        "reason": "no adapter-qualified frame benchmark is frozen yet; structural scaling remains an integration gate"
+        "enabled": true,
+        "reportSchema": "vfx-batch-b"
       },
       "gate": {
         "enabled": true,

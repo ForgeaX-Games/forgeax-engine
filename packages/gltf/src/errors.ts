@@ -21,37 +21,7 @@ export {
   type Result,
 } from '@forgeax/engine-types';
 
-// === GltfErrorCode — closed union SSOT (15 members) ===
-
-/**
- * Closed `GltfErrorCode` union - 15 members (9 original + 4 skin/animation
- * added in feat-20260523 + `gltf-image-extract-failed` added in
- * feat-20260608 M3 D-6 + `gltf-skin-attr-asymmetric` added in
- * feat-20260611 M1 w3).
- *
- * Domain-separated from `AssetErrorCode` (runtime registry surface) and
- * `ImportErrorCode` (importer dispatch surface). AI users face these 15
- * alternatives at the importer surface.
- */
-export type GltfErrorCode =
-  | 'gltf-malformed-header'
-  | 'gltf-version-unsupported'
-  | 'gltf-buffer-out-of-bounds'
-  | 'gltf-extension-unsupported'
-  | 'gltf-accessor-type-mismatch'
-  | 'gltf-texture-load-failed'
-  | 'gltf-meta-missing'
-  | 'gltf-instancing-count-mismatch'
-  | 'gltf-image-mime-unsupported'
-  | 'gltf-skin-joint-count-exceeded'
-  | 'gltf-animation-cubicspline-unsupported'
-  | 'gltf-morph-unsupported'
-  | 'gltf-skin-joint-name-missing'
-  | 'gltf-image-extract-failed'
-  | 'gltf-skin-attr-asymmetric'
-  | 'gltf-animation-target-invalid';
-
-// === Per-code detail shapes (15 interfaces, 1 discriminated union) ===
+// === Per-code detail shapes (16 interfaces, 1 discriminated union) ===
 
 /** `gltf-malformed-header` payload: GLB magic / chunk header surface. */
 export interface GltfMalformedHeaderDetail {
@@ -166,108 +136,21 @@ export interface GltfAnimationTargetInvalidDetail {
   readonly nodeIndex: number;
 }
 
-/** Discriminated detail family unifying all 15 GltfError variants. */
+/** Discriminated detail family unifying all 16 GltfError variants. */
 export type GltfErrorDetail = DetailFor[GltfErrorCode];
 
-// === GltfError discriminated union (15 variants) ===
+// === GltfErrorCode and GltfError discriminated union ===
 
-export type GltfError =
-  | {
-      readonly code: 'gltf-malformed-header';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfMalformedHeaderDetail;
-    }
-  | {
-      readonly code: 'gltf-version-unsupported';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfVersionUnsupportedDetail;
-    }
-  | {
-      readonly code: 'gltf-buffer-out-of-bounds';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfBufferOutOfBoundsDetail;
-    }
-  | {
-      readonly code: 'gltf-extension-unsupported';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfExtensionUnsupportedDetail;
-    }
-  | {
-      readonly code: 'gltf-accessor-type-mismatch';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfAccessorTypeMismatchDetail;
-    }
-  | {
-      readonly code: 'gltf-meta-missing';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfMetaMissingDetail;
-    }
-  | {
-      readonly code: 'gltf-texture-load-failed';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfTextureLoadFailedDetail;
-    }
-  | {
-      readonly code: 'gltf-instancing-count-mismatch';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfInstancingCountMismatchDetail;
-    }
-  | {
-      readonly code: 'gltf-image-mime-unsupported';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfImageMimeUnsupportedDetail;
-    }
-  | {
-      readonly code: 'gltf-skin-joint-count-exceeded';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfSkinJointCountExceededDetail;
-    }
-  | {
-      readonly code: 'gltf-animation-cubicspline-unsupported';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfAnimationCubicsplineUnsupportedDetail;
-    }
-  | {
-      readonly code: 'gltf-morph-unsupported';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfMorphUnsupportedDetail;
-    }
-  | {
-      readonly code: 'gltf-skin-joint-name-missing';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfSkinJointNameMissingDetail;
-    }
-  | {
-      readonly code: 'gltf-image-extract-failed';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfImageExtractFailedDetail;
-    }
-  | {
-      readonly code: 'gltf-skin-attr-asymmetric';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfSkinAttrAsymmetricDetail;
-    }
-  | {
-      readonly code: 'gltf-animation-target-invalid';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: GltfAnimationTargetInvalidDetail;
-    };
+export type GltfErrorCode = keyof DetailFor;
+
+export type GltfError = {
+  readonly [C in GltfErrorCode]: {
+    readonly code: C;
+    readonly expected: string;
+    readonly hint: string;
+    readonly detail: DetailFor[C];
+  };
+}[GltfErrorCode];
 
 // === GLTF_ERROR_HINTS (Record<GltfErrorCode, string>) ===
 

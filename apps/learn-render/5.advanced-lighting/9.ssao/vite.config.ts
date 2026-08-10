@@ -25,6 +25,7 @@ export default withRhiDebug({
     pluginPack({
       runtimeBinding,
       refresh: reloadAssetHost(),
+      producerReadiness: 'before-consume',
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects')],
       importers: [imageImporter, gltfImporter],
     }),

@@ -345,3 +345,22 @@ loud, not silent.
 > Static assets load from Pack v2 through `packageUrl`. Runtime-only bytes are the separate exception.
 
 `AssetEvidence` joins `packageUrl`, cook freshness, artifact verification, and optional runtime state. Use `lookup/verify --guid --project --catalog --json` or the SDK `inspect(guid)` / `verifyByGuid(guid)` surface. `notCooked`, `stale`, and `unknown` are distinct recovery states; `unknown` is not verification success.
+
+## Indexed consumer recovery
+
+The runtime consumer follows a read-only handoff:
+
+1. **Inspect** with `assets.inspect(guid)` or `assets.verifyByGuid(guid)` and
+   branch on the structured result's `code`, `detail`, and evidence states.
+2. **Repair and rebuild or cold-cook** in the producer host. The runtime never
+   writes source Meta, Pack, DDC, receipts, or Catalog authority.
+3. **Verify** source freshness, receipt, package integrity, and artifact
+   status through the injected evidence source or Pack CLI.
+4. **Retry** the same GUID after a verified Catalog projection is available.
+   Do not parse log strings, compile raw source in the player, or substitute a
+   custom mesh/material for a missing engine product.
+
+`AssetRegistry` consumes a producer projection and exposes structured not-ready
+errors. It does not register importers, run `runImport`, own DDC lifecycle, or
+expand the runtime transport surface. `unknown` means that required evidence
+was unavailable; it is never a successful verification result.

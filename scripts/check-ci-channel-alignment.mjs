@@ -47,7 +47,12 @@ const ALIGNED_GATES = [
   { id: 'r12-lint', runMatchers: ['r12-lint'] },
   {
     id: 'vitest-unit',
-    runMatchers: ['pnpm run test:type', 'bun run test:portability', '--typecheck --coverage'],
+    runMatchers: [
+      'pnpm run test:type',
+      'bun run test:portability',
+      '--typecheck --coverage',
+      'run-split-vitest-coverage.mjs',
+    ],
   },
   // tweak-20260521-bun-portability-script-gates-expansion w1: 16 portability
   // gates folded in (4 non-grep + 12 grep:*). Each runMatcher is the full
@@ -418,13 +423,15 @@ function runOwnershipCheck({
       ...extractStepRuns(priBlock),
       ...(coverageBlock ? extractStepRuns(coverageBlock) : []),
     ];
-    const vitestSteps = coverageSteps.filter(
-      (s) => s.run.includes('vitest run') && s.run.includes('--typecheck'),
+    const coverageOwners = coverageSteps.filter(
+      (s) =>
+        (s.run.includes('vitest run') && s.run.includes('--typecheck')) ||
+        s.run.includes('run-split-vitest-coverage.mjs'),
     );
-    const isSingleOwner = vitestSteps.length === 1 && Boolean(coverageBlock);
+    const isSingleOwner = coverageOwners.length === 1 && Boolean(coverageBlock);
     if (!isSingleOwner) {
       issues.push(
-        `[ownership] FAIL: coverage-pnpm must own exactly one vitest+typecheck command (found ${vitestSteps.length})\n` +
+        `[ownership] FAIL: coverage-pnpm must own exactly one vitest+typecheck command (found ${coverageOwners.length})\n` +
           `  Project: primary-pnpm/coverage-pnpm\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
@@ -532,14 +539,17 @@ function runOwnershipSelfTest() {
   const ecsConf = readFileSync(path.join(rootDir, 'packages/ecs/vitest.config.ts'), 'utf8');
   const pkgText = readFileSync(path.join(rootDir, 'package.json'), 'utf8');
   const primaryWithoutPerf = ciText.replace(/ --project=ecs-perf/g, '');
-  // Remove BOTH vitest run --typecheck commands from primary-pnpm to exercise the
-  // zero-candidate guard (F-1: silently green when all primary ownership commands
-  // are deleted).
-  const zeroVitestTypecheck = ciText.replace(/--typecheck/g, '--no-typecheck');
+  // Remove the split coverage owner from coverage-pnpm to exercise the
+  // zero-candidate guard (F-1: silently green when the ownership command is
+  // deleted).
+  const zeroVitestTypecheck = ciText.replace(
+    /node scripts\/ci\/run-split-vitest-coverage\.mjs/g,
+    'node scripts/ci/missing-coverage-owner.mjs',
+  );
   const duplicateVitestTypecheck = ciText.replace(
     '      - name: Vitest coverage (v8) + typecheck (feat-20260608-ci-time-cut)\n',
     '      - name: Duplicate coverage owner\n' +
-      '        run: pnpm exec vitest run --typecheck --coverage\n' +
+      '        run: node scripts/ci/run-split-vitest-coverage.mjs --group-size=1\n' +
       '      - name: Vitest coverage (v8) + typecheck (feat-20260608-ci-time-cut)\n',
   );
   const portabilityMarker = 'run: bun run test:portability';

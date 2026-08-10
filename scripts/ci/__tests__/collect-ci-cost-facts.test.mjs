@@ -77,13 +77,24 @@ function fixture() {
       .filter((consumer) => !consumer.notApplicable)
       .map((consumer) => ({
         name: consumer.jobIdentity,
-        started_at: '2026-07-16T00:00:20Z',
-        completed_at: '2026-07-16T00:01:00Z',
+        started_at:
+          consumer.jobIdentity === 'webkit-fallback'
+            ? '2026-07-16T00:00:05Z'
+            : consumer.allowedNonArtifactPrerequisites?.includes('webkit-fallback')
+              ? '2026-07-16T00:01:20Z'
+              : '2026-07-16T00:00:20Z',
+        completed_at:
+          consumer.jobIdentity === 'webkit-fallback'
+            ? '2026-07-16T00:00:10Z'
+            : consumer.allowedNonArtifactPrerequisites?.includes('webkit-fallback')
+              ? '2026-07-16T00:02:00Z'
+              : '2026-07-16T00:01:00Z',
         conclusion: 'success',
         run_attempt: 1,
       })),
   ];
   for (const [index, job] of jobs.entries()) {
+    job.created_at = job.started_at ? '2026-07-16T00:00:00Z' : null;
     job.id = 100 + index;
     job.runner_id = 200 + index;
     job.runner_name = `runner-${index}`;
@@ -429,7 +440,7 @@ test('rejects aggregate and selected producer attempt mismatches per family', ()
   assert.deepEqual(row.detail, { observedProducerAttempt: 2 });
 });
 
-test('keeps native job and runner observations without queue or effect claims', () => {
+test('derives neutral timing and pool facts from native job observations', () => {
   const result = run(fixture());
   assert.equal(result.exitCode, 0, result.stdout);
   const job = result.facts.jobs.find(({ name }) => name === 'core-build');
@@ -437,6 +448,7 @@ test('keeps native job and runner observations without queue or effect claims', 
     jobId: 101,
     name: 'core-build',
     runAttempt: 1,
+    createdAt: '2026-07-16T00:00:00Z',
     startedAt: '2026-07-16T00:00:00Z',
     completedAt: '2026-07-16T00:00:00Z',
     result: 'success',
@@ -444,8 +456,103 @@ test('keeps native job and runner observations without queue or effect claims', 
     runnerName: 'runner-1',
     runnerGroupId: 300,
     labels: ['self-hosted', 'heavy'],
+    pool: 'heavy',
+    queueWaitSeconds: 0,
+    activeSeconds: 0,
+    totalSeconds: 0,
+    status: 'valid',
   });
-  assert.doesNotMatch(JSON.stringify(result.facts), /queue|criticalPath|runnerCost|speedup|Effect/);
+  assert.doesNotMatch(JSON.stringify(result.facts), /criticalPath|runnerCost|speedup|Effect/);
+});
+
+test('attributes standard and heavy pools, including matrix children, independently', () => {
+  const input = fixture();
+  const aggregate = input.jobPages[0].jobs.find((job) => job.name === 'smoke-fleet');
+  aggregate.labels = ['self-hosted', 'heavy'];
+  input.jobPages[0].jobs.push(
+    {
+      id: 900,
+      name: 'smoke-fleet-0',
+      created_at: '2026-07-16T00:00:10Z',
+      started_at: '2026-07-16T00:00:20Z',
+      completed_at: '2026-07-16T00:00:50Z',
+      conclusion: 'success',
+      run_attempt: 1,
+      runner_id: 901,
+      runner_name: 'matrix-standard',
+      runner_group_id: 300,
+      labels: ['self-hosted', 'standard'],
+    },
+    {
+      id: 902,
+      name: 'smoke-fleet-1',
+      created_at: '2026-07-16T00:00:15Z',
+      started_at: '2026-07-16T00:00:30Z',
+      completed_at: '2026-07-16T00:01:00Z',
+      conclusion: 'success',
+      run_attempt: 1,
+      runner_id: 903,
+      runner_name: 'matrix-heavy',
+      runner_group_id: 300,
+      labels: ['self-hosted', 'heavy'],
+    },
+  );
+  input.jobPages[0].total_count += 2;
+  const result = run(input);
+  assert.equal(result.exitCode, 0, result.stdout);
+  assert.equal(result.facts.jobs.find(({ name }) => name === 'core-build').pool, 'heavy');
+  assert.equal(result.facts.jobs.find(({ name }) => name === 'shared-app-inputs').pool, 'standard');
+  assert.deepEqual(
+    result.facts.jobs
+      .filter(({ name }) => name.startsWith('smoke-fleet-'))
+      .map(({ name, pool, queueWaitSeconds, activeSeconds, totalSeconds }) => ({
+        name,
+        pool,
+        queueWaitSeconds,
+        activeSeconds,
+        totalSeconds,
+      })),
+    [
+      {
+        name: 'smoke-fleet-0',
+        pool: 'standard',
+        queueWaitSeconds: 10,
+        activeSeconds: 30,
+        totalSeconds: 40,
+      },
+      {
+        name: 'smoke-fleet-1',
+        pool: 'heavy',
+        queueWaitSeconds: 15,
+        activeSeconds: 30,
+        totalSeconds: 45,
+      },
+    ],
+  );
+});
+
+test('fails closed for missing/reversed timestamps and missing/dual pool labels', () => {
+  for (const [code, mutate] of [
+    ['ci-cost-job-timing-missing', (job) => (job.created_at = null)],
+    ['ci-cost-job-timing-reversed', (job) => (job.completed_at = '2026-07-15T23:59:59Z')],
+    ['ci-cost-job-pool-invalid', (job) => (job.labels = ['self-hosted'])],
+    ['ci-cost-job-pool-invalid', (job) => (job.labels = ['self-hosted', 'standard', 'heavy'])],
+  ]) {
+    const input = fixture();
+    mutate(input.jobPages[0].jobs.find((job) => job.name === 'core-build'));
+    const result = run(input);
+    assert.equal(result.exitCode, 0, result.stdout);
+    const row = result.facts.jobs.find(({ name }) => name === 'core-build');
+    assert.equal(row.status, 'invalidEvidence');
+    assert.equal(row.code, code);
+    assert.equal(row.pool, null);
+    assert.equal(row.queueWaitSeconds, null);
+    assert.equal(row.activeSeconds, null);
+    assert.equal(row.totalSeconds, null);
+    assert.equal(typeof row.expected, 'object');
+    assert.equal(typeof row.hint, 'string');
+    assert.equal(typeof row.detail, 'object');
+  }
 });
 
 test('monitor runtime failure emits ten recoverable invalid rows without blocking', () => {
@@ -489,6 +596,24 @@ test('monitor runtime failure emits ten recoverable invalid rows without blockin
       ),
       true,
     );
+    assert.deepEqual(
+      facts.jobs.map(({ name }) => name),
+      contract.requiredCIJobRoster,
+    );
+    assert.equal(
+      facts.jobs.every(
+        ({ status, code, pool, queueWaitSeconds, activeSeconds, totalSeconds }) =>
+          status === 'invalidEvidence' &&
+          code === 'ci-cost-job-timing-missing' &&
+          pool === null &&
+          queueWaitSeconds === null &&
+          activeSeconds === null &&
+          totalSeconds === null,
+      ),
+      true,
+    );
+    assert.deepEqual(facts.producerAttempts, {});
+    assert.deepEqual(facts.wallClock.requiredJobRoster, contract.requiredCIJobRoster);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

@@ -7,6 +7,7 @@ import {
   createPreparedGraphicsStore,
   type PreparedGraphicsItem,
 } from '../features/prepared-graphics-store';
+import { createRenderFeatureTarget } from '../features/targets';
 import {
   createPreparedGraphicsResolver,
   type PreparedGraphicsResolverInput,
@@ -33,6 +34,45 @@ function failure<T>(result: Result<T, unknown>): {
 }
 
 describe('prepared graphics resolver', () => {
+  it('lets the render owner decide whether a scene target is a deferred binding', async () => {
+    const currentDevice = await device();
+    const store = createPreparedGraphicsStore();
+    const transaction = store.beginFrame('resolver.scene-target', 1);
+    const pipeline = transaction.prepare('pipeline', 'forward', {
+      shader: 'synthetic::view-only',
+      vertexLayout: 'position',
+      colorFormats: ['rgba8unorm'],
+    });
+    const bindings = transaction.prepare('bindings', 'view', {
+      pipeline: pipeline.unwrap(),
+      values: {
+        sceneDepth: createRenderFeatureTarget({
+          resource: 'scene-depth',
+          kind: 'scene-depth',
+          format: 'depth24plus-stencil8',
+          sampleCount: 1,
+        }),
+      },
+    });
+    transaction.commit().unwrap();
+    const lookup = resultMap(store.snapshot('resolver.scene-target').items);
+    const resolvedView = {} as BindGroup;
+    const resolveBindings = vi.fn(() => ok(resolvedView));
+    const resolver = createPreparedGraphicsResolver({
+      device: currentDevice,
+      generation: 1,
+      capabilityAvailable: true,
+      lookup: (reference) => lookup.get(reference),
+      resolvePipeline: () => ok({} as RenderPipeline),
+      resolveBindings,
+    });
+
+    const result = resolver.resolve(bindings.unwrap());
+
+    expect(result.ok && result.value.handle).toBe(resolvedView);
+    expect(resolveBindings).toHaveBeenCalledOnce();
+  });
+
   it('releases producer binding resources exactly once', async () => {
     const currentDevice = await device();
     const store = createPreparedGraphicsStore();

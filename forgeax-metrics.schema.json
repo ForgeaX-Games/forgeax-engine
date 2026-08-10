@@ -142,6 +142,11 @@
           "minLength": 1,
           "description": "Optional vitest bench suite name to filter against when multiple suites coexist in one workspace."
         },
+        "reportSchema": {
+          "type": "string",
+          "enum": ["vfx-batch-b"],
+          "description": "Optional executable report protocol consumed by the Batch B VFX benchmark dispatcher."
+        },
         "pixelDiff": {
           "type": "object",
           "additionalProperties": false,

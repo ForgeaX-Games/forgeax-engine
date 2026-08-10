@@ -19,6 +19,10 @@ import { describe, expect, it } from 'vitest';
 import { compressArtifact } from '../compress-artifact.js';
 
 const indexSource = readFileSync(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8');
+const buildSource = readFileSync(
+  fileURLToPath(new URL('../build/plugin-build.ts', import.meta.url)),
+  'utf8',
+);
 
 describe('compress-artifact SSOT structural check (AC-08)', () => {
   it('D-7: compressArtifact is exported from compress-artifact.ts, not index.ts', () => {
@@ -27,12 +31,18 @@ describe('compress-artifact SSOT structural check (AC-08)', () => {
     expect(indexSource).not.toMatch(/function\s+compressArtifact/);
   });
 
-  it('AC-08: index.ts imports compressArtifact from the single SSOT module', () => {
+  it('AC-08: compression owners import the single SSOT module', () => {
     expect(indexSource).toMatch(
       /import\s*\{\s*compressArtifact\s*\}\s*from\s*['"]\.\/compress-artifact\.js['"]/,
     );
-    // The three live compression points reference the one imported symbol.
-    const uses = indexSource.match(/compressArtifact\s*\(/g) ?? [];
+    expect(buildSource).toMatch(
+      /import\s*\{\s*compressArtifact\s*\}\s*from\s*['"]\.\.\/compress-artifact\.js['"]/,
+    );
+    // The live compression points remain split between the dev entry and the
+    // extracted build lifecycle, while both reference the one imported symbol.
+    const uses = [indexSource, buildSource].flatMap(
+      (source) => source.match(/compressArtifact\s*\(/g) ?? [],
+    );
     expect(uses.length).toBeGreaterThanOrEqual(3);
   });
 

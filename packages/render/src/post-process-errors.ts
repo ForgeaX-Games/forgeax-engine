@@ -267,7 +267,7 @@ type PostProcessErrorVariant<C extends PostProcessErrorCode> = PostProcessErrorC
 };
 
 /**
- * Public PostProcessError type - discriminated union of the 7 variants.
+ * Public PostProcessError type - mapped from the authoritative code union.
  *
  * ```ts
  * function recover(err: PostProcessError): string {
@@ -279,14 +279,9 @@ type PostProcessErrorVariant<C extends PostProcessErrorCode> = PostProcessErrorC
  * }
  * ```
  */
-export type PostProcessError =
-  | PostProcessErrorVariant<'post-process-already-registered'>
-  | PostProcessErrorVariant<'post-process-not-found'>
-  | PostProcessErrorVariant<'fullscreen-input-not-found'>
-  | PostProcessErrorVariant<'ssao-radius-non-positive'>
-  | PostProcessErrorVariant<'ssao-bias-negative'>
-  | PostProcessErrorVariant<'params-size-mismatch'>
-  | PostProcessErrorVariant<'params-update-size-mismatch'>;
+export type PostProcessError = {
+  [C in PostProcessErrorCode]: PostProcessErrorVariant<C>;
+}[PostProcessErrorCode];
 
 interface PostProcessErrorConstructor {
   new <C extends PostProcessErrorCode>(args: {

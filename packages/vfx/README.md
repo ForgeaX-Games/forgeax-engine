@@ -44,8 +44,10 @@ export const sparks = defineParticleEffectSourceV2({
 
 The parser rejects unknown fields. This Batch A slice is GPU-only and requires
 `backend: { required: 'gpu' }`; missing GPU capability fails structurally rather
-than selecting a hidden backend. CPU fallback, parent variants, live parameters,
-per-particle alpha sorting, ribbons, and events are not accepted as dormant declarations.
+than selecting a hidden backend. CPU fallback, runtime compilation, raw author
+bindings, and CPU particle mirrors are not accepted. Batch B renderer metadata is
+executable: billboard advanced fields, ribbon strips, trail history, and beam
+endpoints each produce reflected resources and an indirect topology draw.
 
 New authoring tools may use `PARTICLE_CODE_DEFAULT_MODULE_ID` as an immediately
 cookable seed. The compiler owns that minimal WGSL module; advanced effects name
@@ -54,6 +56,28 @@ game-authored `.vfx.wgsl` modules and remain code-first.
 A mesh renderer selects exactly one draw surface with `submesh` (default `0`):
 `{ kind: 'mesh', mesh, material, submesh: 2 }`. An out-of-range index fails
 preparation instead of silently drawing another submesh.
+
+## Batch B renderers and control
+
+```ts
+renderers: [
+  {
+    kind: 'billboard', material: SPARK_MATERIAL, blend: 'additive',
+    capacity: 4096, overflow: 'drop-oldest',
+    textureSheet: { columns: 4, rows: 4, frameRate: 12 },
+    pivot: [0.5, 0.25], softParticle: { distance: 0.4 }, sorting: 'back-to-front',
+  },
+  { kind: 'ribbon', stripKey: 'alive-index', capacity: 1024, overflow: 'drop-newest', width: 0.2 },
+  { kind: 'trail', historyLength: 8, capacity: 1024, overflow: 'drop-oldest', width: 0.15 },
+  { kind: 'beam', endpointField: 'velocity', capacity: 256, overflow: 'drop-newest', width: 0.08 },
+]
+```
+
+`ribbon`, `trail`, and `beam` have independent capacities, resource plans,
+shader entry points, and indirect draws. A renderer is never silently changed to
+a billboard. `textureSheet`, `pivot`, `softParticle`, and `sorting` are reflected
+into the billboard GPU path; soft particles require the explicitly registered
+scene-depth provider. Capacity overflow is reported through inspection.
 
 ## Author WGSL
 

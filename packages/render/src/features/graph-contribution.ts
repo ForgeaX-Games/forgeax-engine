@@ -230,12 +230,13 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
       descriptor.attachments.depthStencil === undefined
         ? undefined
         : qualifyAttachment(this.identity, descriptor.attachments.depthStencil.resource);
+    const sampledTargets = (descriptor.sampledTargets ?? []).map((sampled) => sampled.resource);
     const contributionPass: RenderFeatureContributionPass<Ctx> = {
       featureIdentity: this.identity,
       order: this.order,
       name: qualifiedName,
       descriptor: {
-        reads: qualifiedDepth === undefined ? [] : [qualifiedDepth],
+        reads: [...(qualifiedDepth === undefined ? [] : [qualifiedDepth]), ...sampledTargets],
         writes: qualifiedResources,
       },
       dependsOn: (options.dependsOn ?? []).map((dependency) =>

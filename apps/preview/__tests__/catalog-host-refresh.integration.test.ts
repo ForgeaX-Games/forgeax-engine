@@ -10,6 +10,7 @@ import previewConfig from '../vite.config';
 const previewRoot = dirname(fileURLToPath(new URL('../vite.config.ts', import.meta.url)));
 const templateAssets = join(previewRoot, '..', '..', 'templates', 'game-default', 'assets');
 const sourceMaterial = join(templateAssets, 'base-material.pack.json');
+const previewConfigSource = new URL('../vite.config.ts', import.meta.url);
 
 async function loadPreviewConfig(): Promise<NonNullable<Parameters<typeof createServer>[0]>> {
   return await (typeof previewConfig === 'function'
@@ -26,6 +27,20 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
 }
 
 describe('preview host catalog refresh', () => {
+  it('uses the generated VFX catalog producer without an app-owned module map', async () => {
+    const source = await readFile(previewConfigSource, 'utf8');
+    expect(source).toContain('createParticleCodeNativeCookerFromRoots');
+    expect(source).not.toContain('vfxModules');
+    expect(source).toContain('createParticleCodeNativeCookerFromRoots([templateAssetRoot])');
+  });
+
+  it('keeps candidate and last-known-good generations observable at the host boundary', async () => {
+    const lifecycleSource = await readFile(new URL('../../../packages/vite-plugin-pack/src/dev/native-cooker-lifecycle.ts', import.meta.url), 'utf8');
+    expect(lifecycleSource).toContain('candidateGeneration');
+    expect(lifecycleSource).toContain('lastKnownGoodGeneration');
+    expect(lifecycleSource).toContain('recoveryHint');
+  });
+
   it('observes a watched preview asset mutation and requests the configured host reload', async () => {
     const baseline = await readFile(sourceMaterial, 'utf8');
     const previewInlineConfig = await loadPreviewConfig();

@@ -37,8 +37,9 @@ const MATRIX_CONTEXTS = new Map([
 
 const NEEDS_RESULT = /\$\{\{ needs\.([a-zA-Z0-9_-]+)\.result \}\}/g;
 const MATRIX_VALUE = /\$\{\{ matrix\.([a-zA-Z0-9_-]+) \}\}/g;
-const SHARED_ARTIFACT_ID_OUTPUT = /\$\{\{ steps\.upload-shared-inputs\.outputs\.artifact-id \}\}/g;
 const SHARED_ARTIFACT_ID_EXPRESSION = '$' + '{{ steps.upload-shared-inputs.outputs.artifact-id }}';
+const STEP_OUTPUT_EXPRESSION =
+  /\$\{\{\s*steps\.([a-zA-Z0-9_-]+)\.outputs\.([a-zA-Z0-9_-]+)\s*\}\}/g;
 
 const SETUP_ONLY = [
   /^echo "value=\$\(cat \.pnpm-version\)" >> \$GITHUB_OUTPUT$/,
@@ -70,6 +71,7 @@ export function extractRunSteps(block) {
     while (end < lines.length && !/^ {6}- /.test(lines[end])) end += 1;
     const step = lines.slice(start, end);
     const shell = step.map((line) => line.match(/^ {8}shell:\s*(.+)$/)?.[1].trim()).find(Boolean);
+    const id = step.map((line) => line.match(/^ {8}id:\s*(.+)$/)?.[1].trim()).find(Boolean);
     const environment = stepEnvironment(step);
     const condition = step.map((line) => line.match(/^ {8}if:\s*(.+)$/)?.[1].trim()).find(Boolean);
     const runIndex = step.findIndex((line) => /^ {8}run: /.test(line));
@@ -88,6 +90,7 @@ export function extractRunSteps(block) {
         steps.push({
           command,
           shell,
+          ...(id === undefined ? {} : { id: yamlScalar(id) }),
           ...(Object.keys(environment).length > 0 ? { environment } : {}),
           ...(condition ? { condition } : {}),
         });
@@ -233,7 +236,39 @@ function provideLocalShardReports() {
   cpSync(source, destination, { recursive: true, force: true });
 }
 
-export function substituteLocalNeedsOutputs(command, attempt = '1') {
+function outputValue(outputs, owner, name) {
+  const values = outputs instanceof Map ? outputs.get(owner) : outputs?.[owner];
+  return values?.[name];
+}
+
+function staticUploadOutput(step, output, attempt, runtime) {
+  const artifactNames = {
+    'upload-core-build': 'core-build',
+    'upload-app-dist-0': 'app-dist-0',
+    'upload-app-dist-1': 'app-dist-1',
+    'upload-app-dist-2': 'app-dist-2',
+    'upload-shared-inputs': 'shared-app-inputs',
+    'upload-shared-provenance': 'shared-provenance',
+    'upload-metrics-report': 'metrics-report',
+    'upload-webkit-status': 'webkit-status',
+  };
+  const artifactName = artifactNames[step];
+  if (artifactName === undefined) return undefined;
+  const values = {
+    'artifact-id':
+      step === 'upload-shared-inputs'
+        ? runtime.SHARED_ARTIFACT_ID
+        : `local-${artifactName}-a${attempt}`,
+    'artifact-name': `${artifactName}-a${attempt}`,
+    'upload-started-at': '1970-01-01T00:00:00.000Z',
+    'upload-completed-at': '1970-01-01T00:00:00.000Z',
+    'upload-elapsed-seconds': '0',
+    'upload-transfer-attempt': '1',
+  };
+  return values[output];
+}
+
+export function substituteLocalNeedsOutputs(command, attempt = '1', needsOutputs = new Map()) {
   const outputs = {
     'core-build.core_artifact_name': `core-build-a${attempt}`,
     'core-build.core_artifact_id': `local-core-build-a${attempt}`,
@@ -244,10 +279,21 @@ export function substituteLocalNeedsOutputs(command, attempt = '1') {
     'app-shard-2.app_dist_artifact_name': `app-dist-2-a${attempt}`,
     'app-shard-2.app_dist_artifact_id': `local-app-dist-2-a${attempt}`,
   };
+  for (const producer of ['core-build', 'app-shard-0', 'app-shard-1', 'app-shard-2']) {
+    const source = resolve(ROOT, `provenance-${producer}-a${attempt}.json`);
+    if (existsSync(source)) {
+      outputs[`${producer}.provenance_payload`] = encodeLocalProvenancePayload(source);
+    }
+  }
   return command.replace(
     /\$\{\{ needs\.([a-zA-Z0-9_-]+)\.outputs\.([a-zA-Z0-9_]+) \}\}/g,
-    (expression, job, output) => outputs[`${job}.${output}`] ?? expression,
+    (expression, job, output) =>
+      outputValue(needsOutputs, job, output) ?? outputs[`${job}.${output}`] ?? expression,
   );
+}
+
+export function encodeLocalProvenancePayload(source) {
+  return readFileSync(source).toString('base64');
 }
 
 export function substituteLocalNeedsResults(value, results) {
@@ -267,8 +313,15 @@ export function substituteLocalMatrix(value, matrix) {
   });
 }
 
-export function substituteLocalStepOutputs(value, runtime) {
-  return value.replace(SHARED_ARTIFACT_ID_OUTPUT, runtime.SHARED_ARTIFACT_ID);
+export function substituteLocalStepOutputs(value, runtime, stepOutputs = new Map()) {
+  const attempt = runtime.GITHUB_RUN_ATTEMPT ?? '1';
+  return value.replace(
+    STEP_OUTPUT_EXPRESSION,
+    (expression, step, output) =>
+      outputValue(stepOutputs, step, output) ??
+      staticUploadOutput(step, output, attempt, runtime) ??
+      expression,
+  );
 }
 
 export function contextJob(context) {
@@ -430,6 +483,31 @@ export function jobEnvironment(block) {
   return environment;
 }
 
+export function jobOutputExpressions(block) {
+  const lines = block.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^ {4}outputs:\s*$/.test(line));
+  if (start === -1) return {};
+  const outputs = {};
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const match = lines[index].match(/^ {6}([a-zA-Z0-9_-]+):\s*(.*)$/);
+    if (match) {
+      outputs[match[1]] = yamlScalar(match[2]);
+      continue;
+    }
+    if (lines[index].trim() && !/^ {6}#/.test(lines[index])) break;
+  }
+  return outputs;
+}
+
+function resolveJobOutputs(block, stepOutputs, runtime) {
+  return Object.fromEntries(
+    Object.entries(jobOutputExpressions(block)).map(([name, expression]) => [
+      name,
+      substituteLocalStepOutputs(expression, runtime, stepOutputs),
+    ]),
+  );
+}
+
 export function matrixCombinations(block) {
   const lines = block.split(/\r?\n/);
   const matrixStart = lines.findIndex((line) => /^ {6}matrix:\s*$/.test(line));
@@ -531,12 +609,27 @@ export function plansFor(job, workflow, selectedMatrix) {
   }));
 }
 
-function run(step, dryRun, environment, matrix, needsResults, githubEnvironment, codemodBaseline) {
+function run(
+  step,
+  dryRun,
+  environment,
+  matrix,
+  needsResults,
+  needsOutputs,
+  githubEnvironment,
+  stepOutputs,
+  codemodBaseline,
+) {
   const runtime = localGitHubRuntime(process.env);
   const command = substituteLocalMatrix(
     substituteLocalNeedsOutputs(
-      step.command.replaceAll(GITHUB_RUN_ATTEMPT, runtime.GITHUB_RUN_ATTEMPT),
+      substituteLocalStepOutputs(
+        step.command.replaceAll(GITHUB_RUN_ATTEMPT, runtime.GITHUB_RUN_ATTEMPT),
+        runtime,
+        stepOutputs,
+      ),
       runtime.GITHUB_RUN_ATTEMPT,
+      needsOutputs,
     ),
     matrix,
   );
@@ -578,7 +671,14 @@ function run(step, dryRun, environment, matrix, needsResults, githubEnvironment,
         Object.entries({ ...environment, ...step.environment }).map(([name, value]) => [
           name,
           substituteLocalMatrix(
-            substituteLocalNeedsResults(substituteLocalStepOutputs(value, runtime), needsResults),
+            substituteLocalNeedsOutputs(
+              substituteLocalNeedsResults(
+                substituteLocalStepOutputs(value, runtime, stepOutputs),
+                needsResults,
+              ),
+              runtime.GITHUB_RUN_ATTEMPT,
+              needsOutputs,
+            ),
             matrix,
           ),
         ]),
@@ -598,6 +698,12 @@ function run(step, dryRun, environment, matrix, needsResults, githubEnvironment,
       });
     } finally {
       restoreLocalProvenance?.();
+    }
+    if (step.id !== undefined && githubFiles.GITHUB_OUTPUT) {
+      stepOutputs.set(step.id, {
+        ...(stepOutputs.get(step.id) ?? {}),
+        ...readLocalGitHubEnvironment(readFileSync(githubFiles.GITHUB_OUTPUT, 'utf8')),
+      });
     }
     if (githubFiles.GITHUB_ENV) {
       Object.assign(
@@ -626,10 +732,12 @@ export function main(argv = process.argv.slice(2)) {
   const targets = args.group ? targetsForGroup(args.group, workflow) : all;
   const codemodBaseline = args.list || args.dryRun ? undefined : codemodIdempotencyDiff();
   const needsResults = new Map();
+  const needsOutputs = new Map();
   const githubEnvironment = {};
   for (const target of targets) {
     const selectedMatrix = matrixSelection(args.group, target);
     const plans = plansFor(target, workflow, selectedMatrix);
+    const stepOutputs = new Map();
     for (const plan of plans) {
       const matrixLabel = Object.values(plan.matrix).join(',');
       console.log(`\n[ci] jobs.${plan.job}${matrixLabel ? `-${matrixLabel}` : ''}`);
@@ -669,7 +777,9 @@ export function main(argv = process.argv.slice(2)) {
           plan.environment,
           plan.matrix,
           needsResults,
+          needsOutputs,
           githubEnvironment,
+          stepOutputs,
           codemodBaseline,
         );
         if (status !== 0) {
@@ -680,6 +790,10 @@ export function main(argv = process.argv.slice(2)) {
       }
     }
     needsResults.set(target, 'success');
+    needsOutputs.set(
+      target,
+      resolveJobOutputs(jobBlock(workflow, target), stepOutputs, localGitHubRuntime(process.env)),
+    );
   }
   console.log(
     `\n[ci] PASS: ${targets.length} PR CI job${targets.length === 1 ? '' : 's'} projected from ci.yml`,

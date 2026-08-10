@@ -1,8 +1,13 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildCatalogResult, buildCatalogStrict, projectLegacyCatalog } from '../build-catalog.js';
+import {
+  type NativeCookerLifecycleSnapshot,
+  runNativeCookerLifecycle,
+} from '../dev/native-cooker-lifecycle.js';
 
 const roots: string[] = [];
 
@@ -11,6 +16,42 @@ afterEach(async () => {
 });
 
 describe('producer-owned catalog contract', () => {
+  it('commits a valid candidate and recovers the last-known-good draft on publication failure', async () => {
+    const registry = new NativeCookerRegistry();
+    registry.register({
+      key: 'lifecycle-fixture',
+      cook: (input: { readonly value: string }) => ({
+        guid: '01890000-0000-7000-8000-ffffffffffff',
+        payload: input,
+        refs: [],
+        artifacts: {},
+        inputFingerprint: `sha256:${input.value}`,
+      }),
+    });
+    const first = await runNativeCookerLifecycle<
+      { readonly value: string },
+      { readonly value: string }
+    >({
+      registry,
+      key: 'lifecycle-fixture',
+      input: { value: 'good' },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const previous: NativeCookerLifecycleSnapshot<{ readonly value: string }> = first.value;
+    const recovered = await runNativeCookerLifecycle({
+      registry,
+      key: 'lifecycle-fixture',
+      input: { value: 'candidate' },
+      previous,
+      publish: () => {
+        throw new Error('publication failed');
+      },
+    });
+    expect(recovered).toMatchObject({ ok: true, value: { status: 'recovered', generation: 1 } });
+    if (recovered.ok) expect(recovered.value.draft.payload).toEqual({ value: 'good' });
+  });
+
   it('does not expose a parallel MaterialCookResult completion contract', async () => {
     const source = await readFile(
       new URL('../material/cook-finalizer.ts', import.meta.url),

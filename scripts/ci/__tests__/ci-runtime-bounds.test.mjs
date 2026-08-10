@@ -5,7 +5,9 @@ import { test } from 'node:test';
 
 const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
 const benchWorkflow = readFileSync(resolve('.github/workflows/bench.yml'), 'utf8');
+const packageManifest = readFileSync(resolve('package.json'), 'utf8');
 const vitestConfig = readFileSync(resolve('vitest.config.ts'), 'utf8');
+const browserVitestConfig = readFileSync(resolve('vitest-browser-project.ts'), 'utf8');
 const uploadWithRetry = readFileSync(
   resolve('.github/actions/upload-artifact-with-retry/action.yml'),
   'utf8',
@@ -19,10 +21,30 @@ const mesaVulkanAction = readFileSync(
   'utf8',
 );
 
-test('coverage-pnpm derives a bounded Vitest worker budget on the shared self-hosted machine', () => {
-  assert.match(workflow, /id: vitest-workers[\s\S]*?node scripts\/ci\/resolve-vitest-workers\.mjs/);
-  assert.match(workflow, /--maxWorkers="\$MAX_WORKERS" --typecheck --coverage/);
-  assert.doesNotMatch(workflow, /--maxWorkers=4 --typecheck --coverage/);
+test('coverage-pnpm splits Vitest coverage into bounded fresh processes', () => {
+  assert.match(workflow, /node scripts\/ci\/run-split-vitest-coverage\.mjs/);
+  assert.match(workflow, /--group-size=4[\s\S]*?--max-workers=1/);
+  assert.match(
+    readFileSync(resolve('scripts/ci/run-split-vitest-coverage.mjs'), 'utf8'),
+    /--maxWorkers=\$\{maxWorkers\}[\s\S]*?--typecheck[\s\S]*?--coverage/,
+  );
+  assert.doesNotMatch(workflow, /heavy-(?:32g|256g)/i);
+});
+
+test('vitest-browser splits the full browser suite into bounded fresh processes', () => {
+  assert.match(packageManifest, /run-split-vitest-browser\.mjs --group-size=4 --max-workers=1/);
+  const browserRunner = readFileSync(resolve('scripts/ci/run-split-vitest-browser.mjs'), 'utf8');
+  assert.match(browserRunner, /--project=browser/);
+  assert.match(browserRunner, /--maxWorkers=\$\{maxWorkers\}/);
+  assert.match(browserRunner, /FORGEAX_BROWSER_ENTITY_VISIBILITY: '0'/);
+  assert.doesNotMatch(workflow, /heavy-(?:32g|256g)/i);
+  assert.match(
+    workflow.slice(
+      workflow.indexOf('  vitest-browser:\n'),
+      workflow.indexOf('  shared-inputs-browser:\n'),
+    ),
+    /NODE_OPTIONS: --max-old-space-size=4096/,
+  );
 });
 
 test('CI harness materialization uses a blob-filtered docs-only clone', () => {
@@ -37,8 +59,7 @@ test('CI harness materialization uses a blob-filtered docs-only clone', () => {
 });
 
 test('browser WebGPU project bounds workers to protect the shared device', () => {
-  const browserProject = vitestConfig.slice(vitestConfig.indexOf("name: 'browser'"));
-  assert.match(browserProject, /maxWorkers: 2/);
+  assert.match(browserVitestConfig, /maxWorkers: 1/);
 });
 
 test('Dawn project bounds forks to protect the shared software Vulkan backend', () => {
@@ -72,7 +93,35 @@ test('cold Ubuntu smoke and browser jobs keep their real runtime budget', () => 
     vitestStart,
     workflow.indexOf('  shared-inputs-browser:\n', vitestStart),
   );
+  assert.match(vitestBrowser, /timeout-minutes: 25/);
   assert.doesNotMatch(vitestBrowser, /Cache Playwright browsers/);
+});
+
+test('the VFX GPU benchmark has one owner after the smoke fleet releases the device', () => {
+  const smokeStart = workflow.indexOf('  smoke-fleet:\n');
+  const smokeFleet = workflow.slice(
+    smokeStart,
+    workflow.indexOf('  smoke-fleet-required-context:\n', smokeStart),
+  );
+  assert.doesNotMatch(smokeFleet, /VFX Batch B performance protocol|vfx-batch-b\.mjs/);
+
+  const metricsStart = workflow.indexOf('  metrics-validate:\n');
+  const metrics = workflow.slice(
+    metricsStart,
+    workflow.indexOf('  collectathon-boot-e2e:\n', metricsStart),
+  );
+  assert.match(metrics, /needs: \[[^\]]*smoke-fleet[^\]]*\]/);
+  assert.match(metrics, /needs\.smoke-fleet\.result == 'success'/);
+  assert.match(metrics, /run: pnpm metrics:run/);
+
+  const artifactContract = JSON.parse(
+    readFileSync(resolve('scripts/ci/build-artifact-contract.json'), 'utf8'),
+  );
+  const metricsTiming = artifactContract.timingRoster.find(
+    (entry) => entry.jobIdentity === 'metrics-validate',
+  );
+  assert.ok(metricsTiming);
+  assert.ok(metricsTiming.allowedNonArtifactPrerequisites.includes('smoke-fleet'));
 });
 
 test('self-hosted setup-node steps do not transfer the pnpm store archive', () => {

@@ -241,7 +241,7 @@ const POSITION_SIZE_COLOR_INSTANCE_VERTEX_BUFFERS = [
 
 const BILLBOARD_MATERIAL_INSTANCE_VERTEX_BUFFERS = [
   {
-    arrayStride: 23 * 4,
+    arrayStride: 31 * 4,
     stepMode: 'instance' as const,
     attributes: [
       { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
@@ -251,6 +251,21 @@ const BILLBOARD_MATERIAL_INSTANCE_VERTEX_BUFFERS = [
       { shaderLocation: 4, offset: 11 * 4, format: 'float32x4' as const },
       { shaderLocation: 5, offset: 15 * 4, format: 'float32x4' as const },
       { shaderLocation: 6, offset: 19 * 4, format: 'float32x4' as const },
+      { shaderLocation: 7, offset: 23 * 4, format: 'float32x4' as const },
+      { shaderLocation: 8, offset: 27 * 4, format: 'float32x4' as const },
+    ],
+  },
+] as unknown as readonly GPUVertexBufferLayout[];
+
+const TOPOLOGY_SEGMENT_INSTANCE_VERTEX_BUFFERS = [
+  {
+    arrayStride: 12 * 4,
+    stepMode: 'instance' as const,
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
+      { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
+      { shaderLocation: 2, offset: 6 * 4, format: 'float32x4' as const },
+      { shaderLocation: 3, offset: 10 * 4, format: 'float32x2' as const },
     ],
   },
 ] as unknown as readonly GPUVertexBufferLayout[];
@@ -585,7 +600,11 @@ void legacyLoadBackendPack;
  */
 export type LayoutKind = 'pbr' | 'pbr-skin' | 'hdrp-pbr' | 'sprite-urp';
 
-export type MaterialShaderBindingContract = 'group-0' | 'view-only' | 'render-material';
+export type MaterialShaderBindingContract =
+  | 'group-0'
+  | 'group-0-resource'
+  | 'view-only'
+  | 'render-material';
 export type MaterialShaderVertexInputContract = 'none' | 'render-material';
 
 export function resolveMaterialShaderBindingContract(
@@ -600,7 +619,8 @@ export function resolveMaterialShaderBindingContract(
     /@group\s*\(\s*0\s*\)\s*@binding\s*\(\s*0\s*\)\s*var\s*<\s*uniform\s*>\s*view(?:X_naga_oil_mod_[A-Z0-9]+)?\b/u.test(
       withoutComments,
     );
-  return declaresView && groups.every((group) => group === 0) ? 'view-only' : 'render-material';
+  if (declaresView && groups.every((group) => group === 0)) return 'view-only';
+  return groups.every((group) => group === 0) ? 'group-0-resource' : 'render-material';
 }
 
 export function resolveMaterialShaderVertexInputContract(
@@ -1434,6 +1454,10 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     pipelineLayout: PipelineLayout;
   } | null = null;
   let viewOnlyMaterialPipelineLayout: PipelineLayout | null = null;
+  const group0ResourceLayouts = new Map<
+    string,
+    { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout }
+  >();
   const preparedMaterialPipelineLayoutCache = new Map<string, PipelineLayout>();
   // feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): per-shader material
   // BGL + pipeline layout cache. A custom material shader declaring >3
@@ -1482,6 +1506,40 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     }
     viewOnlyMaterialPipelineLayout = plRes.value;
     return viewOnlyMaterialPipelineLayout;
+  };
+  const getOrBuildGroup0ResourceLayout = (
+    materialShaderId: string,
+  ): { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout } | null => {
+    const cached = group0ResourceLayouts.get(materialShaderId);
+    if (cached !== undefined) return cached;
+    const lookup = getShader().findMaterialArtifact(materialShaderId);
+    if (
+      !lookup.ok ||
+      !/@group\s*\(\s*0\s*\)\s*@binding\s*\(\s*0\s*\)[^;]*texture_depth_2d/u.test(
+        lookup.value.source,
+      )
+    ) {
+      return null;
+    }
+    const bgl = internals.device.createBindGroupLayout({
+      label: `material-group-0-resource-${materialShaderId}`,
+      entries: [
+        {
+          binding: 0,
+          visibility: 2,
+          texture: { sampleType: 'depth', viewDimension: '2d', multisampled: false },
+        },
+      ],
+    });
+    if (!bgl.ok) return null;
+    const pipelineLayout = internals.device.createPipelineLayout({
+      label: `material-group-0-resource-pl-${materialShaderId}`,
+      bindGroupLayouts: [bgl.value],
+    });
+    if (!pipelineLayout.ok) return null;
+    const built = { materialBgl: bgl.value, pipelineLayout: pipelineLayout.value };
+    group0ResourceLayouts.set(materialShaderId, built);
+    return built;
   };
   const getOrBuildPreparedMaterialPipelineLayout = (
     materialShaderId: string,
@@ -1701,6 +1759,10 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
               : 'render-material';
           })();
     const group0Layout = bindingContract === 'group-0' ? getOrBuildGroup0MaterialLayout() : null;
+    const group0ResourceLayout =
+      bindingContract === 'group-0-resource' && materialShaderId !== undefined
+        ? getOrBuildGroup0ResourceLayout(materialShaderId)
+        : null;
     const viewOnlyLayout =
       bindingContract === 'view-only' ? getOrBuildViewOnlyMaterialPipelineLayout() : null;
     const preparedMaterialLayout =
@@ -1722,13 +1784,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const pipelineLayout =
       group0Layout !== null
         ? group0Layout.pipelineLayout
-        : viewOnlyLayout !== null
-          ? viewOnlyLayout
-          : preparedMaterialLayout !== null
-            ? preparedMaterialLayout
-            : perShaderLayout !== null
-              ? perShaderLayout.pipelineLayout
-              : selectPipelineLayoutForVariant(pipelineState, variantSet, layoutKind);
+        : group0ResourceLayout !== null
+          ? group0ResourceLayout.pipelineLayout
+          : viewOnlyLayout !== null
+            ? viewOnlyLayout
+            : preparedMaterialLayout !== null
+              ? preparedMaterialLayout
+              : perShaderLayout !== null
+                ? perShaderLayout.pipelineLayout
+                : selectPipelineLayoutForVariant(pipelineState, variantSet, layoutKind);
     if (pipelineLayout === null) return null;
     // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w16 (D-4):
     // pbr-skin -> deriveVertexBufferLayout (single SSOT for skin/non-skin
@@ -1766,42 +1830,44 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           ? POSITION_SIZE_COLOR_INSTANCE_VERTEX_BUFFERS
           : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance
             ? BILLBOARD_MATERIAL_INSTANCE_VERTEX_BUFFERS
-            : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance
-              ? MESH_GEOMETRY_MATERIAL_INSTANCE_VERTEX_BUFFERS
-              : layoutKind === 'pbr-skin'
-                ? (deriveVertexBufferLayout(
-                    meshAttributes ??
-                      ({
-                        position: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                        normal: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                        uv: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                        tangent: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                        skinIndex: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                        skinWeight: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                      } satisfies VertexAttributeMap),
-                    resolvedUvSetCount !== undefined
-                      ? { shaderUvSetCount: resolvedUvSetCount }
-                      : undefined,
-                  ) as unknown as readonly GPUVertexBufferLayout[])
-                : meshAttributes !== undefined ||
-                    (resolvedUvSetCount !== undefined && resolvedUvSetCount > 1)
+            : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance
+              ? TOPOLOGY_SEGMENT_INSTANCE_VERTEX_BUFFERS
+              : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance
+                ? MESH_GEOMETRY_MATERIAL_INSTANCE_VERTEX_BUFFERS
+                : layoutKind === 'pbr-skin'
                   ? (deriveVertexBufferLayout(
-                      meshAttributes ?? DEFAULT_VERTEX_ATTRS,
-                      resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
+                      meshAttributes ??
+                        ({
+                          position: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                          normal: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                          uv: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                          tangent: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                          skinIndex: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                          skinWeight: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                        } satisfies VertexAttributeMap),
+                      resolvedUvSetCount !== undefined
                         ? { shaderUvSetCount: resolvedUvSetCount }
                         : undefined,
                     ) as unknown as readonly GPUVertexBufferLayout[])
-                  : ([
-                      {
-                        arrayStride: 12 * 4,
-                        attributes: [
-                          { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
-                          { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
-                          { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
-                          { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
-                        ],
-                      },
-                    ] as unknown as readonly GPUVertexBufferLayout[]);
+                  : meshAttributes !== undefined ||
+                      (resolvedUvSetCount !== undefined && resolvedUvSetCount > 1)
+                    ? (deriveVertexBufferLayout(
+                        meshAttributes ?? DEFAULT_VERTEX_ATTRS,
+                        resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
+                          ? { shaderUvSetCount: resolvedUvSetCount }
+                          : undefined,
+                      ) as unknown as readonly GPUVertexBufferLayout[])
+                    : ([
+                        {
+                          arrayStride: 12 * 4,
+                          attributes: [
+                            { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
+                            { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
+                            { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
+                            { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
+                          ],
+                        },
+                      ] as unknown as readonly GPUVertexBufferLayout[]);
     return {
       device: internals.device,
       shaderModuleFactory: getShaderModuleAdapter(),
@@ -2057,6 +2123,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           (vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.positionSizeColorInstance
             ? PREPARED_INSTANCE_VERTEX_ATTRS
             : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance ||
+                vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance ||
                 vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance
               ? PREPARED_MATERIAL_INSTANCE_VERTEX_ATTRS
               : DEFAULT_VERTEX_ATTRS),
@@ -2267,8 +2334,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const getMaterialBindGroupLayout = (materialShaderId: string): BindGroupLayout | undefined => {
     const lookup = getShader().findMaterialArtifact(materialShaderId);
     if (!lookup.ok) return undefined;
-    if (resolveMaterialShaderBindingContract(lookup.value.source) === 'group-0') {
+    const contract = resolveMaterialShaderBindingContract(lookup.value.source);
+    if (contract === 'group-0') {
       return getOrBuildGroup0MaterialLayout()?.materialBgl;
+    }
+    if (contract === 'group-0-resource') {
+      return getOrBuildGroup0ResourceLayout(materialShaderId)?.materialBgl;
     }
     return getOrBuildPerShaderMaterialLayout(materialShaderId)?.materialBgl ?? undefined;
   };

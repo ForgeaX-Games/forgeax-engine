@@ -9,6 +9,13 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-4-3-blending');
+const learnOpenGlTexturesRoot = resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures');
+const learnOpenGlTextureRoots = [
+  resolve(learnOpenGlTexturesRoot, 'metal.png.meta.json'),
+  resolve(learnOpenGlTexturesRoot, 'marble.jpg.meta.json'),
+  resolve(learnOpenGlTexturesRoot, 'grass.png.meta.json'),
+  resolve(learnOpenGlTexturesRoot, 'window.png.meta.json'),
+];
 
 export default defineConfig({
   plugins: [
@@ -17,10 +24,7 @@ export default defineConfig({
       runtimeBinding,
       refresh: reloadAssetHost(),
       importers: [imageImporter],
-      roots: [
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
-      ],
+      roots: learnOpenGlTextureRoots,
     }),
   ],
   server: {

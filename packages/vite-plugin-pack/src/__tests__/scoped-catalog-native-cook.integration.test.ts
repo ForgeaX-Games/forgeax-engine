@@ -146,7 +146,11 @@ describe('roots-scoped native catalog publication', () => {
         };
       },
     };
-    const plugin = pluginPack({ roots: [active, brokenSibling], importers: [importer] });
+    const plugin = pluginPack({
+      roots: [active, brokenSibling],
+      importers: [importer],
+      producerReadiness: 'on-demand',
+    });
     const middlewares: Middleware[] = [];
     plugin.configureServer({
       middlewares: { use: (middleware) => middlewares.push(middleware as never) },

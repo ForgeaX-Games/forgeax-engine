@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { POOL_LABELS } from './check-runner-pool-labels.mjs';
 
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf('--out');
@@ -46,6 +47,36 @@ if (result.status !== 0) {
     hint: 'Check the selected producer or consumer owner facts, then collect a new evidence sample.',
     detail: { owner: producer, field: 'runtimeCollection' },
   }));
+  const jobs = contract.requiredCIJobRoster.map((name) => ({
+    jobId: null,
+    name,
+    runAttempt: identity.runAttempt,
+    createdAt: null,
+    startedAt: null,
+    completedAt: null,
+    result: null,
+    runnerId: null,
+    runnerName: null,
+    runnerGroupId: null,
+    labels: [],
+    pool: null,
+    queueWaitSeconds: null,
+    activeSeconds: null,
+    totalSeconds: null,
+    status: 'invalidEvidence',
+    code: 'ci-cost-job-timing-missing',
+    expected: {
+      runId: identity.runId,
+      runAttempt: identity.runAttempt,
+      timestamps: ['createdAt', 'startedAt', 'completedAt'],
+      pool: POOL_LABELS,
+    },
+    hint: 'Check the run-scoped job timestamps and runner labels, then collect a new evidence sample.',
+    detail: {
+      runAttempt: identity.runAttempt,
+      missing: ['createdAt', 'startedAt', 'completedAt'],
+    },
+  }));
   writeFileSync(
     output,
     `${JSON.stringify({
@@ -57,6 +88,7 @@ if (result.status !== 0) {
         contractVersion: contract.version,
         families,
       },
+      producerAttempts: {},
       artifacts: [],
       physicalArtifacts: [],
       artifactBytes: {
@@ -66,7 +98,9 @@ if (result.status !== 0) {
         byClass: {},
       },
       consumers: [],
+      jobs,
       cache: { activeBytes: null },
+      wallClock: { requiredJobRoster: contract.requiredCIJobRoster },
       ac06: { status: 'invalidEvidence', perConsumer: [] },
       sharedProduction: { status: 'invalidEvidence' },
       monitorFailure: { code: 'ci-cost-facts-unavailable', exitCode: result.status },

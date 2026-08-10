@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseParticleEffectSourceV2 } from '../code-source.js';
+import { parseParticleEffectSourceV2, parseVfxStageDeclarations } from '../code-source.js';
 
 const source = {
   schemaVersion: 2,
@@ -18,12 +18,41 @@ const source = {
 };
 
 describe('ParticleCodeEffectSource v2', () => {
+  it('accepts typed bounded channels and same-effect visual events', () => {
+    const result = parseParticleEffectSourceV2({
+      ...source,
+      emitters: [
+        {
+          ...source.emitters[0],
+          channels: [{ id: 'impact', capacity: 2, overflow: 'drop-newest' }],
+          events: [
+            {
+              id: 'impact-event',
+              channel: 'impact',
+              subEmitter: 'sparks',
+              fanOut: 1,
+              recursionDepth: 1,
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts the code-first source without an operator stack', () => {
     const result = parseParticleEffectSourceV2(source);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.emitters[0]?.program.module).toBe('sparks.vfx.wgsl');
     }
+  });
+
+  it('keeps stage declarations in authored WGSL rather than the source manifest', () => {
+    const stage = parseVfxStageDeclarations(
+      '// #vfx stage turbulence entry=vfx_turbulence domain=particle resources=particles:read-write dependsOn=update iterationBudget=4',
+    );
+    expect(stage.ok).toBe(true);
   });
 
   it('rejects v1 with an executable recook hint', () => {
@@ -55,8 +84,18 @@ describe('ParticleCodeEffectSource v2', () => {
     ['schedule', { schedule: { rate: 1, legacyRate: 2 } }],
     ['burst', { schedule: { rate: 1, bursts: [{ time: 0, count: 1, once: true }] } }],
     ['program', { program: { module: 'sparks.vfx.wgsl', fallback: 'cpu' } }],
+    ['parameters', { parameters: { speed: 1 } }],
+    ['custom data', { customData: { value: 1 } }],
   ])('rejects unknown nested %s fields', (_name, override) => {
     const emitter = { ...source.emitters[0], ...override };
+    expect(parseParticleEffectSourceV2({ ...source, emitters: [emitter] }).ok).toBe(false);
+  });
+
+  it('keeps Data Interface requirements out of the source-side roster', () => {
+    const emitter = {
+      ...source.emitters[0],
+      dataInterfaces: [{ token: 'vfx:camera' }],
+    };
     expect(parseParticleEffectSourceV2({ ...source, emitters: [emitter] }).ok).toBe(false);
   });
 

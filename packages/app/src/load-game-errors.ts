@@ -142,10 +142,9 @@ type LoadGameErrorVariant<C extends LoadGameErrorCode> = LoadGameErrorClass & {
  * }
  * ```
  */
-export type LoadGameError =
-  | LoadGameErrorVariant<'module-not-found'>
-  | LoadGameErrorVariant<'invalid-format'>
-  | LoadGameErrorVariant<'import-failed'>;
+export type LoadGameError = {
+  [C in LoadGameErrorCode]: LoadGameErrorVariant<C>;
+}[LoadGameErrorCode];
 
 interface LoadGameErrorConstructor {
   new <C extends LoadGameErrorCode>(args: {

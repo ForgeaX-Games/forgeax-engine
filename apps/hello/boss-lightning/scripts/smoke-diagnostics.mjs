@@ -18,3 +18,24 @@ export function classifyDawnErrors(errors, readinessFrame) {
   }
   return { warmupErrors, persistentErrors };
 }
+
+export function assertAtomicPatchSnapshot(snapshot) {
+  const before = snapshot?.before;
+  const after = snapshot?.after;
+  if (before === undefined || after === undefined) {
+    throw new Error('atomic patch snapshot requires before and after blocks');
+  }
+  if (after.generation !== before.generation + 1) {
+    throw new Error('atomic patch generation did not advance exactly once');
+  }
+  if (!Array.isArray(before.payload) || !Array.isArray(after.payload)) {
+    throw new Error('atomic patch snapshot payloads must be arrays');
+  }
+  if (after.payload.length !== before.payload.length) {
+    throw new Error('atomic patch payload shape changed during FixedUpdate');
+  }
+  const changed = after.payload.filter((value, index) => value !== before.payload[index]);
+  if (changed.length > 0 && changed.length < after.payload.length) {
+    throw new Error('atomic patch exposed a partial generation');
+  }
+}

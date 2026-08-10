@@ -13,4 +13,19 @@ describe('Boss Lightning visual evidence contract', () => {
     expect(browserSmoke).toContain('seed: 42');
     expect(browserSmoke).toContain('boss-lightning');
   });
+
+  it('declares all Batch B expectations and image-read fields', () => {
+    for (const id of [
+      'advanced-renderers-visible',
+      'live-patch-continuity',
+      'event-sub-emitter-visible',
+      'hmr-last-known-good-visible',
+    ]) {
+      expect(browserSmoke).toContain(id);
+    }
+    expect(browserSmoke).toContain('observed');
+    expect(browserSmoke).toContain('verdict');
+    expect(browserSmoke).toContain('confidence');
+    expect(browserSmoke).toContain('screenshot');
+  });
 });

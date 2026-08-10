@@ -312,7 +312,7 @@
     {
       "jobIdentity": "metrics-validate",
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate", "webkit-fallback"],
+      "allowedNonArtifactPrerequisites": ["post-merge-gate", "webkit-fallback", "smoke-fleet"],
       "consumer": "metrics-validate"
     },
     {

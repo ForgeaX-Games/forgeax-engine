@@ -41,7 +41,9 @@ export type PreparedGraphicsResolvedResource =
   | {
       readonly kind: 'bindings';
       readonly reference: RenderFeaturePreparedRef;
-      readonly handle: BindGroup;
+      readonly handle: BindGroup | undefined;
+      readonly pipeline?: RenderPipeline;
+      readonly descriptor?: RenderFeatureBindingsDescriptor;
       readonly dynamicOffsets?: readonly number[];
     }
   | {
@@ -62,6 +64,7 @@ export interface PreparedGraphicsResolverInput {
     descriptor: RenderFeatureBindingsDescriptor,
     pipeline: RenderPipeline,
   ) => Result<
+    | undefined
     | BindGroup
     | {
         readonly handle: BindGroup;
@@ -319,12 +322,13 @@ export function createPreparedGraphicsResolver(
     const pipeline = resolve(descriptor.pipeline);
     if (!pipeline.ok || pipeline.value.kind !== 'pipeline') return pipeline;
     const created = input.resolveBindings(descriptor, pipeline.value.handle);
-    if (!created.ok || created.value === undefined) {
+    if (!created.ok) {
       return err(
         preparationFailure(item, input, reference.kind, item.name, 'bindings resolution failed'),
       );
     }
     const binding =
+      created.value !== undefined &&
       typeof created.value === 'object' &&
       created.value !== null &&
       'handle' in created.value &&
@@ -334,7 +338,9 @@ export function createPreparedGraphicsResolver(
     const resource: PreparedGraphicsResolvedResource = {
       kind: 'bindings',
       reference,
-      handle: binding?.handle ?? (created.value as BindGroup),
+      handle: binding?.handle ?? (created.value as BindGroup | undefined),
+      pipeline: pipeline.value.handle,
+      descriptor,
       ...(binding?.dynamicOffsets === undefined ? {} : { dynamicOffsets: binding.dynamicOffsets }),
     };
     if (binding !== undefined) {

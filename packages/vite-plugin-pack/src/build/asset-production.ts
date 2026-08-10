@@ -1,9 +1,9 @@
 import type { ImportProduct } from '@forgeax/engine-types';
-import { projectImportProductForBuild } from '../import-products.js';
+import { projectSourcePackageProduct } from '../import-products.js';
 
 export interface AssetProductionProjection {
   readonly product: Pick<ImportProduct<unknown>, 'assets'>;
-  readonly logicalPackage: ReturnType<typeof projectImportProductForBuild>;
+  readonly logicalPackage: ReturnType<typeof projectSourcePackageProduct>;
 }
 
 /** Build-time projection seam; DDC storage and Vite lifecycle stay outside it. */
@@ -12,6 +12,6 @@ export function projectAssetProduction(
 ): AssetProductionProjection {
   return {
     product,
-    logicalPackage: projectImportProductForBuild(product),
+    logicalPackage: projectSourcePackageProduct(product),
   };
 }

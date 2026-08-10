@@ -2,8 +2,9 @@
 // Verifies that EndpointErrorCode is a closed 5-member union and that
 // EndpointErrorDetailFor<C> narrows the detail per code.
 
+import { EndpointError } from '../src/endpoint/errors';
 import type {
-  EndpointError,
+  EndpointError as EndpointErrorType,
   EndpointErrorCode,
   EndpointErrorDetail,
   EndpointErrorDetailFor,
@@ -19,6 +20,8 @@ test('EndpointErrorCode is a 5-member closed union', () => {
   type ExpectedCodes = 'peer-not-found' | 'connection-closed' | 'send-failed' | 'already-closed' | 'connection-failed';
   expectTypeOf<EndpointErrorCode>().toEqualTypeOf<ExpectedCodes>();
   expectTypeOf<ExpectedCodes>().toEqualTypeOf<EndpointErrorCode>();
+  expectTypeOf<EndpointErrorType['code']>().toEqualTypeOf<EndpointErrorCode>();
+  expectTypeOf<EndpointErrorCode>().toEqualTypeOf<EndpointErrorType['code']>();
 });
 
 test('EndpointErrorDetailFor narrows detail per code', () => {
@@ -31,4 +34,84 @@ test('EndpointErrorDetailFor narrows detail per code', () => {
 
 test('EndpointErrorDetail derives from the complete code resolver', () => {
   expectTypeOf<EndpointErrorDetail>().toEqualTypeOf<EndpointErrorDetailFor<EndpointErrorCode>>();
+});
+
+test('EndpointError constructor preserves code-specific inference', () => {
+  const peerNotFound = new EndpointError({
+    code: 'peer-not-found',
+    expected: 'a peer',
+    hint: 'use a connected peer',
+    detail: { peerId: 1 },
+  });
+  const connectionClosed = new EndpointError({
+    code: 'connection-closed',
+    expected: 'an open connection',
+    hint: 'poll disconnects',
+    detail: { peerId: 1 },
+  });
+  const sendFailed = new EndpointError({
+    code: 'send-failed',
+    expected: 'delivered bytes',
+    hint: 'retry after reconnecting',
+    detail: { peerId: 1, cause: 'buffer full' },
+  });
+  const alreadyClosed = new EndpointError({
+    code: 'already-closed',
+    expected: 'an open endpoint',
+    hint: 'create a new endpoint',
+    detail: { cause: 'closed' },
+  });
+  const connectionFailed = new EndpointError({
+    code: 'connection-failed',
+    expected: 'a reachable address',
+    hint: 'verify the address',
+    detail: { address: '127.0.0.1:8787', cause: 'refused' },
+  });
+
+  expectTypeOf(peerNotFound.code).toEqualTypeOf<'peer-not-found'>();
+  expectTypeOf(peerNotFound.detail).toEqualTypeOf<EndpointDetailPeerNotFound>();
+  expectTypeOf(connectionClosed.code).toEqualTypeOf<'connection-closed'>();
+  expectTypeOf(connectionClosed.detail).toEqualTypeOf<EndpointDetailConnectionClosed>();
+  expectTypeOf(sendFailed.code).toEqualTypeOf<'send-failed'>();
+  expectTypeOf(sendFailed.detail).toEqualTypeOf<EndpointDetailSendFailed>();
+  expectTypeOf(alreadyClosed.code).toEqualTypeOf<'already-closed'>();
+  expectTypeOf(alreadyClosed.detail).toEqualTypeOf<EndpointDetailAlreadyClosed>();
+  expectTypeOf(connectionFailed.code).toEqualTypeOf<'connection-failed'>();
+  expectTypeOf(connectionFailed.detail).toEqualTypeOf<EndpointDetailConnectionFailed>();
+});
+
+test('EndpointError rejects mismatched code and detail pairs', () => {
+  // @ts-expect-error code/detail pairs remain correlated.
+  new EndpointError({
+    code: 'already-closed',
+    expected: 'an open endpoint',
+    hint: 'create a new endpoint',
+    detail: { peerId: 1 },
+  });
+});
+
+test('EndpointError narrows every detail payload exhaustively', () => {
+  const describe = (error: EndpointErrorType): string => {
+    switch (error.code) {
+      case 'peer-not-found':
+        expectTypeOf(error.detail).toEqualTypeOf<EndpointDetailPeerNotFound>();
+        return String(error.detail.peerId);
+      case 'connection-closed':
+        expectTypeOf(error.detail).toEqualTypeOf<EndpointDetailConnectionClosed>();
+        return String(error.detail.peerId);
+      case 'send-failed':
+        expectTypeOf(error.detail).toEqualTypeOf<EndpointDetailSendFailed>();
+        return `${error.detail.peerId}:${error.detail.cause}`;
+      case 'already-closed':
+        expectTypeOf(error.detail).toEqualTypeOf<EndpointDetailAlreadyClosed>();
+        return error.detail.cause;
+      case 'connection-failed':
+        expectTypeOf(error.detail).toEqualTypeOf<EndpointDetailConnectionFailed>();
+        return `${error.detail.address}:${error.detail.cause}`;
+    }
+    const exhaustive: never = error;
+    return exhaustive;
+  };
+
+  expectTypeOf(describe).returns.toEqualTypeOf<string>();
 });

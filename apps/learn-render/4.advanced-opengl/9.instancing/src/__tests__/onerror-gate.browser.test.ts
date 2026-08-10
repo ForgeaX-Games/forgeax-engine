@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
 
+const bootstrapWaitMs = 30_000;
+
 describe('learn-render 4.9 instancing onerror-gate (reverse expectation)', () => {
   let canvas: HTMLCanvasElement | undefined;
 
@@ -27,14 +29,14 @@ describe('learn-render 4.9 instancing onerror-gate (reverse expectation)', () =>
   // expected reaction once the gap closed.
   //
   // Flake guard (post-merge #426): wait for EITHER a SUT error OR the
-  // bootstrap-complete marker (full 15s budget), never a quiet timeout, so a
+  // bootstrap-complete marker (full cold-start budget), never a quiet timeout, so a
   // slow / device-lost-storming CI runner cannot end the wait before bootstrap
   // resolves.
   it(
     'SUT bootstrap fires no SUT-attributable error',
-    // Keep the 15s bootstrap contract below, but allow cold Vite/Basis/WASM
+    // Keep a 30s bootstrap budget, and allow cold Vite/Basis/WASM
     // imports to finish before Vitest's outer timeout interrupts the witness.
-    { timeout: 30_000 },
+    { timeout: bootstrapWaitMs + 15_000 },
     async () => {
       if (typeof navigator.gpu === 'undefined') {
         throw new Error(
@@ -56,18 +58,23 @@ describe('learn-render 4.9 instancing onerror-gate (reverse expectation)', () =>
         (globalThis as unknown as { __learnRenderBootstrapComplete?: boolean })
           .__learnRenderBootstrapComplete === true;
       const hasSutError = (): boolean => errors.some((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
-      for (let elapsed = 0; elapsed < 15000 && !hasSutError() && !bootstrapComplete(); elapsed += 50) {
+      for (
+        let elapsed = 0;
+        elapsed < bootstrapWaitMs && !hasSutError() && !bootstrapComplete();
+        elapsed += 50
+      ) {
         await new Promise((r) => setTimeout(r, 50));
       }
 
       const sutErrors = errors.filter((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
       if (sutErrors.length === 0 && !bootstrapComplete()) {
         // Bootstrap neither failed with a SUT error nor ran to completion within
-        // 15s — disrupted (e.g. device-lost storm) before the planet load.
+        // The cold-start budget elapsed — disrupted (e.g. device-lost storm)
+        // before the planet load.
         // Inconclusive on a flaky runner; throw with what was captured so the
         // failure is a clear "rerun" signal rather than a silent assert.
         throw new Error(
-          '[learn-render 4.9 instancing.onerror-gate] bootstrap inconclusive within 15s ' +
+          `[learn-render 4.9 instancing.onerror-gate] bootstrap inconclusive within ${bootstrapWaitMs / 1000}s ` +
             `(no SUT error, not complete); captured codes=[${errors.map((e) => e.code).join(', ')}] ` +
             '-> runner instability, rerun',
         );

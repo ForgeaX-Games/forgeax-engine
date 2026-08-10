@@ -11,3 +11,8 @@ export function classifyDawnErrors(
   warmupErrors: readonly unknown[];
   persistentErrors: readonly unknown[];
 };
+
+export function assertAtomicPatchSnapshot(snapshot: {
+  readonly before: { readonly generation: number; readonly payload: readonly number[] };
+  readonly after: { readonly generation: number; readonly payload: readonly number[] };
+}): void;

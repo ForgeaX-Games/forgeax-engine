@@ -1,4 +1,9 @@
 import {
+  type CatalogDiagnostic,
+  catalogOperationsFor,
+  type PackIndexEntry,
+} from '@forgeax/engine-types';
+import {
   canonicalizeLogicalPackage,
   type FinalizedPackage,
   type FinalizePolicy,
@@ -6,6 +11,49 @@ import {
   type LogicalPackage,
   type PackageSink,
 } from '../package-finalizer.js';
+import type { SourcePackageError } from '../producer/source-package-errors.js';
+import {
+  publishSourcePackage,
+  type SourcePackagePublicationInput,
+  type SourcePackagePublicationResult,
+} from '../producer/source-package-publication.js';
+
+export function projectSourcePackageFailure(
+  rows: readonly PackIndexEntry[],
+  error: SourcePackageError,
+): PackIndexEntry[] {
+  const affected = new Set(error.detail.affectedGuids.map((guid) => guid.toLowerCase()));
+  const diagnostic: CatalogDiagnostic = {
+    code: error.code,
+    severity: 'blocking',
+    authority: 'producer',
+    expected: error.expected,
+    ...(error.detail.reason === undefined ? {} : { actual: error.detail.reason }),
+    hint: error.hint,
+    evidence: [...affected].map((guid) => ({ type: 'asset', id: guid })),
+    recoveryIntents: [error.hint],
+  };
+  return rows.map((row) => {
+    if (!affected.has(row.guid.toLowerCase())) return row;
+    const subject = row.subject ?? 'imported-output';
+    const execution = row.execution ?? 'cooked';
+    const lifecycle = 'failed' as const;
+    return {
+      ...row,
+      lifecycle,
+      diagnostics: [...(row.diagnostics ?? []), diagnostic],
+      projection: {
+        subject,
+        execution,
+        lifecycle,
+        operations: catalogOperationsFor({ subject, execution, lifecycle }),
+        ...(row.projection?.lastKnownGood === undefined
+          ? {}
+          : { lastKnownGood: row.projection.lastKnownGood }),
+      },
+    };
+  });
+}
 
 export type PackageSourceInput =
   | { readonly origin: 'authoredPack'; readonly logicalPackage: LogicalPackage }
@@ -72,4 +120,11 @@ export function createPackageRoutes() {
       published.clear();
     },
   };
+}
+
+/** Route source packages through the same staged, verified publication owner. */
+export function publishSourcePackageRoute(
+  input: SourcePackagePublicationInput,
+): Promise<SourcePackagePublicationResult> {
+  return publishSourcePackage(input);
 }

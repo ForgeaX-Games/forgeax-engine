@@ -156,6 +156,13 @@ export function projectImportProductForBuild(
   return logicalPackageFromImportProduct(product);
 }
 
+/** Project the complete source-package product without introducing a second pack shape. */
+export function projectSourcePackageProduct(
+  product: Pick<ImportProduct<unknown>, 'assets'>,
+): LogicalPackage {
+  return projectImportProductForBuild(product);
+}
+
 function cookedPayload(asset: ImportedAsset<unknown>): Record<string, unknown> {
   const payload = asset.payload as unknown as Record<string, unknown>;
   if (Object.keys(asset.artifacts).length === 0) return payload;

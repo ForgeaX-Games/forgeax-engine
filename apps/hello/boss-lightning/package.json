@@ -53,10 +53,11 @@
     "@forgeax/engine-vfx-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-vfx-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@forgeax/engine-vfx-compiler": "workspace:*",
     "@webgpu/types": "^0.1.71",
+    "pngjs": "7.0.0",
     "vite": "8.0.10",
     "webgpu": "^0.4.0"
   }

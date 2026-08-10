@@ -133,9 +133,9 @@ type PipelineErrorVariant<C extends PipelineErrorCode> = PipelineErrorClass & {
  * }
  * ```
  */
-export type PipelineError =
-  | PipelineErrorVariant<'pipeline-already-registered'>
-  | PipelineErrorVariant<'pipeline-not-found'>;
+export type PipelineError = {
+  [C in PipelineErrorCode]: PipelineErrorVariant<C>;
+}[PipelineErrorCode];
 
 interface PipelineErrorConstructor {
   new <C extends PipelineErrorCode>(args: {

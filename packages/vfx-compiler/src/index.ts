@@ -21,9 +21,26 @@ export {
   cookParticleCodeEffect,
   cookParticleCodeProgram,
   createParticleCodeNativeCooker,
+  createParticleCodeNativeCookerFromRoots,
   PARTICLE_CODE_DEFAULT_MODULE,
   PARTICLE_CODE_PRELUDE,
   PARTICLE_CODE_PRELUDE_MODULE_ID,
   PARTICLE_CODE_PROGRAM_ARTIFACT_KEY,
   PARTICLE_CODE_PROGRAM_FORMAT,
 } from './code-program.js';
+export type {
+  ParticleManagedStage,
+  ParticleManagedStagePlan,
+  ParticleStagePlanError,
+} from './managed-program.js';
+export {
+  buildParticleStagePlan,
+  createParticleStageManagedRuntime,
+} from './managed-program.js';
+export type {
+  ParticleRendererReflection,
+  VfxReflectionError,
+  VfxReflectionErrorDetail,
+  VfxReflectionInput,
+} from './reflection.js';
+export { reflectVfxLayout, reflectVfxRenderer } from './reflection.js';

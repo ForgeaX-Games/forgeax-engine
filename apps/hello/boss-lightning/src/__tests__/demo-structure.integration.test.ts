@@ -8,10 +8,21 @@ const packPath = resolve(demoRoot, 'assets/boss-lightning.pack.json');
 const entryPath = resolve(demoRoot, 'src/main.ts');
 const scenePath = resolve(demoRoot, 'src/scene.ts');
 const materialsPath = resolve(demoRoot, 'assets/boss-lightning-materials.pack.json');
+const arcNovaEmitterIds = [
+  'charge-arcane-dial',
+  'charge-hex-seal',
+  'charge-prismatic-crown',
+  'release-axis-lance',
+  'release-radial-blades',
+  'impact-violet-shock',
+  'impact-cross-crown',
+  'decay-ember-facets',
+];
 const bossMaterialGuids = [
   '019e9c00-0000-7000-8000-000000000003',
   '019e9c00-0000-7000-8000-000000000004',
   '019e9c00-0000-7000-8000-000000000005',
+  '019e9c00-0000-7000-8000-000000000006',
 ];
 
 describe('Boss Lightning source and Pack declaration', () => {
@@ -42,16 +53,21 @@ describe('Boss Lightning source and Pack declaration', () => {
     if ('parent' in authored.value) throw new Error('Boss Lightning must be a root effect');
     expect(authored.value.emitters.map((emitter) => emitter.id)).toEqual([
       'mouth-charge',
+      'lightning-ribbon',
+      'lightning-trail',
+      'lightning-beam',
       'impact-mesh',
+      ...arcNovaEmitterIds,
     ]);
-    expect(authored.value.emitters.flatMap((emitter) => emitter.renderers.map((renderer) => renderer.kind))).toEqual([
-      'billboard',
-      'mesh',
-    ]);
-    expect(authored.value.emitters.map((emitter) => emitter.program.module)).toEqual([
-      'mouth-charge.vfx.wgsl',
-      'impact-mesh.vfx.wgsl',
-    ]);
+    expect(new Set(authored.value.emitters.flatMap((emitter) => emitter.renderers.map((renderer) => renderer.kind)))).toEqual(
+      new Set(['billboard', 'ribbon', 'trail', 'beam', 'mesh']),
+    );
+    for (const emitter of authored.value.emitters.slice(5)) {
+      expect(emitter.backend.required).toBe('gpu');
+      expect(emitter.space).toBe('world');
+      expect(emitter.schedule.loopDuration).toBe(2.4);
+      expect(() => readFileSync(resolve(demoRoot, 'assets', emitter.program.module), 'utf8')).not.toThrow();
+    }
     expect(pack.assets[0]?.refs).toEqual([]);
     expect(pack.assets[0]?.artifacts).toEqual({});
   });
@@ -59,7 +75,9 @@ describe('Boss Lightning source and Pack declaration', () => {
   it('does not retain the former source, sidecar, or importer path', () => {
     const vite = readFileSync(resolve(demoRoot, 'vite.config.ts'), 'utf8');
     expect(vite).not.toContain('particleEffectImporter');
-    expect(vite).toContain('createParticleCodeNativeCooker');
+    expect(vite).toContain('createParticleCodeNativeCookerFromRoots');
+    expect(vite).not.toContain('vfxModules');
+    expect(vite).toContain("createParticleCodeNativeCookerFromRoots([resolve(here, 'assets')])");
     expect(vite).toContain('cookers:');
     expect(() => readFileSync(resolve(demoRoot, 'assets/boss-lightning.particle-effect.json'), 'utf8')).toThrow();
     expect(() => readFileSync(resolve(demoRoot, 'assets/boss-lightning.particle-effect.json.meta.json'), 'utf8')).toThrow();

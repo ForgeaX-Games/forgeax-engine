@@ -4,7 +4,12 @@ import { err } from '@forgeax/engine-types';
 import type { VfxGpuTickIntent } from '@forgeax/engine-vfx';
 import { describe, expect, it, vi } from 'vitest';
 import { gpuParticleRenderFeature } from '../feature/gpu-particle-feature.js';
-import { createVfxRuntimeHost, PARTICLE_SHADER_IDENTIFIERS } from '../index.js';
+import {
+  createCameraProvider,
+  createSceneDepthProvider,
+  createVfxRuntimeHost,
+  PARTICLE_SHADER_IDENTIFIERS,
+} from '../index.js';
 
 describe('GPU VFX public host', () => {
   it('owns loader and FixedUpdate attachment without exposing simulation internals', async () => {
@@ -66,6 +71,32 @@ describe('GPU VFX public host', () => {
       playCycle: 0,
       spawnCount: 1,
       firstParticleId: 0,
+      instanceGeneration: 0,
+      instancePatchCount: 0,
+      parameterBlock: new Uint8Array(),
+      canonicalPayload: new Uint8Array(),
+      replayInput: {
+        seed: 1,
+        tick: 0,
+        generation: 0,
+        sequence: 1,
+        fingerprint: id,
+        payload: new Uint8Array(),
+        values: {},
+        channelInputs: [],
+        droppedCount: 0,
+      },
+      channelInputs: [],
+      eventCounters: {
+        queued: 0,
+        produced: 0,
+        consumed: 0,
+        dropped: 0,
+        overflow: 0,
+        fanOut: 0,
+        recursionDepth: 0,
+        lastSequence: -1,
+      },
     });
     const prepareProgram = vi.fn((name: string) =>
       err(
@@ -124,5 +155,28 @@ describe('GPU VFX public host', () => {
       error: { code: 'vfx-host-world-attach-failed' },
     });
     expect(first.detachWorld({ world })).toMatchObject({ ok: true });
+  });
+
+  it('keeps depth readiness on the host contract for a real renderer frame', () => {
+    const host = createVfxRuntimeHost({
+      camera: { read: () => undefined },
+      providers: [
+        createCameraProvider({ available: () => true }),
+        createSceneDepthProvider({ available: () => true }),
+      ],
+    });
+    const result = host.resolveDataInterfaces({
+      requirements: [
+        {
+          token: 'vfx:scene-depth',
+          kind: 'scene-depth',
+          binding: 9,
+          bindingType: 'sampled-depth',
+          lifetime: 'generation',
+        },
+      ],
+      generation: 1,
+    });
+    expect(result).toMatchObject({ ok: true, value: { readiness: 'ready' } });
   });
 });

@@ -1,4 +1,4 @@
-import { DdcEntryStore, type DdcHead, DdcLifecycle, ddcOutputDigest } from '@forgeax/engine-ddc';
+import { type DdcHead, DdcLifecycle, ddcOutputDigest } from '@forgeax/engine-ddc';
 import type {
   CatalogDelta,
   CatalogEntry,
@@ -7,6 +7,8 @@ import type {
   ResourceRevision,
 } from '@forgeax/engine-types';
 import { calculateCatalogDelta } from '../catalog-watch.js';
+import type { SourcePackageError } from '../producer/source-package-errors.js';
+import { publishSourcePackageDdc } from '../producer/source-package-publication.js';
 
 export interface ImportPublicationInput {
   readonly root: string;
@@ -21,10 +23,11 @@ export interface ImportPublicationInput {
 }
 
 export interface ImportPublicationError {
-  readonly code: 'ddc-publication-failed' | 'ddc-publication-invalid';
+  readonly code: SourcePackageError['code'];
   readonly expected: string;
   readonly hint: string;
   readonly detail: string;
+  readonly diagnostic: SourcePackageError;
 }
 
 export type ImportPublicationResult =
@@ -38,12 +41,13 @@ export type ImportPublicationResult =
     }
   | { readonly ok: false; readonly error: ImportPublicationError; readonly head: DdcHead };
 
-function failure(code: ImportPublicationError['code'], detail: string): ImportPublicationError {
+function failure(error: SourcePackageError): ImportPublicationError {
   return {
-    code,
-    expected: 'a complete validated DDC entry before Catalog current publication',
-    hint: 'keep the prior current/LKG entry and retry the explicit rebuild after correcting the failure',
-    detail,
+    code: error.code,
+    expected: error.expected,
+    hint: error.hint,
+    detail: error.detail.reason ?? error.detail.stage,
+    diagnostic: error,
   };
 }
 
@@ -91,11 +95,9 @@ export function projectPublishedCatalog(
 export async function publishImportPublication(
   input: ImportPublicationInput,
 ): Promise<ImportPublicationResult> {
-  const lifecycle = new DdcLifecycle(input.root);
-  const lease = await lifecycle.begin(input.guid, input.desiredKey);
-  try {
-    const store = new DdcEntryStore(input.root);
-    const entry = {
+  const publication = await publishSourcePackageDdc({
+    root: input.root,
+    entry: {
       key: input.desiredKey,
       guid: input.guid,
       payload: input.pack,
@@ -106,32 +108,30 @@ export async function publishImportPublication(
         key: input.desiredKey,
         producer: 'vite-plugin-pack/import-publication',
         inputFingerprint: input.desiredKey,
-        outputDigest: '',
+        outputDigest: ddcOutputDigest({
+          guid: input.guid,
+          payload: input.pack,
+          refs: [],
+          artifacts: {},
+        }),
       },
-    };
-    await store.write({
-      ...entry,
-      receipt: { ...entry.receipt, outputDigest: ddcOutputDigest(entry) },
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    await lifecycle.fail(lease, { code: 'ddc-publication-failed', detail });
+    },
+    context: {
+      sourceMeta: '<legacy-import-publication>',
+      anchorGuid: input.guid,
+      affectedGuids: input.publishedGuids,
+      producer: 'source-package/legacy-import-publication',
+      importer: 'legacy-import-publication',
+    },
+  });
+  if (!publication.ok) {
     return {
       ok: false,
-      error: failure('ddc-publication-failed', detail),
-      head: await lifecycle.inspect(input.guid, input.desiredKey),
+      error: failure(publication.error),
+      head: await inspectHead(input),
     };
   }
-
-  const commit = await lifecycle.commit(lease, input.desiredKey);
-  if (commit.result !== 'current') {
-    return {
-      ok: false,
-      error: failure('ddc-publication-invalid', `lifecycle commit returned ${commit.result}`),
-      head: await lifecycle.inspect(input.guid, input.desiredKey),
-    };
-  }
-  const head = await lifecycle.inspect(input.guid, input.desiredKey);
+  const head = publication.head;
   const observedAt = Date.now();
   const projected = projectPublishedCatalog(input, head, observedAt);
   const delta = calculateCatalogDelta(input.previousCatalog, projected.catalog, input.revisions);
@@ -144,4 +144,8 @@ export async function publishImportPublication(
     revision: projected.revision,
     ...(delta === undefined ? {} : { delta }),
   };
+}
+
+async function inspectHead(input: ImportPublicationInput): Promise<DdcHead> {
+  return new DdcLifecycle(input.root).inspect(input.guid, input.desiredKey);
 }

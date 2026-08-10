@@ -37,6 +37,14 @@ pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-
 
 # Expected-red control: keep the lamp mesh but remove its PointLight
 FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
+
+# Standard PBR emissiveIntensity witness: authored red emissive, intensity=2,
+# and no PointLight; the non-zero exit is not expected for this profile.
+FALSIFY_NO_LIGHT=1 FALSIFY_MATERIAL_EMISSIVE_INTENSITY=2 pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
+
+# Standard PBR metallicChannel witness: select the authored red metallic channel
+# from the engine-managed metallic-roughness texture; the command is expected green.
+FALSIFY_MATERIAL_METALLIC_CHANNEL=red pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
 ```
 
 The semantic smoke samples the cube center and requires a stable lit-orange channel ordering

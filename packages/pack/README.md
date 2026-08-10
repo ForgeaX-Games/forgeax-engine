@@ -42,6 +42,19 @@ Pack owns the offline half of the GUID evidence chain: `source inventory -> cata
 
 The catalog is a locator, not proof. `lookup/verify --guid --project --catalog --json` joins the source meta or authored pack, the catalog row, the receipt, and the package descriptors. Both commands emit one JSON record on stdout or one structured `{code, expected, hint, detail}` record on stderr; there is no runtime or WebSocket dependency.
 
+## VFX Pack v2 migration
+
+VFX source v2 is cooked in one atomic producer step. The executable contract is
+`scripts/asset-cook-contract.mjs`; a package-local scripts path is not valid.
+The cook publishes the Pack payload and
+`particle-effect/program.json` with the same source fingerprint. Runtime loads
+the GUID-indexed artifact and never compiles author WGSL.
+
+When adding a Batch B renderer, update the source declaration, explicit material
+or mesh refs, native-cook catalog, and receipt together. Re-run `lookup` and
+`verify`; stale output is repaired by the owning importer or native cooker, not
+by a demo-side mesh substitute.
+
 `notCooked` means a source declaration has no successful receipt. `ready/current` means the receipt fingerprint matches the source; `ready/stale` means it does not. `unknown` is reserved for missing evidence. Artifact and package status remain `notChecked`, `passed`, or `failed`; a historical receipt never upgrades an unchecked package.
 
 Build-time importers write source meta and producer receipts; the Vite plugin publishes the locator. Runtime packages consume the resulting Pack v2 bytes and must not import this Node-only evidence adapter. See [`packages/types/src/asset-evidence.ts`](../types/src/asset-evidence.ts) for the exact schema and closed errors.

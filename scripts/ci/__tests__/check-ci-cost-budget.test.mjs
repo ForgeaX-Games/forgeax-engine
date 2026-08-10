@@ -126,6 +126,7 @@ test('repair: cost summary renders Markdown with actual newline separators', () 
     assert.match(output, /Compressed bytes: 10\nExpanded bytes: 20\nCompression ratio: 0\.5/);
     assert.match(output, /\| engine-dist \| 10 \| 20 \| 0\.5 \|/);
     assert.match(output, /\| --- \| --- \| ---: \|\n\| primary-pnpm \| pass \| 0 \|/);
+    assert.match(output, /## Job timing/);
     assert.doesNotMatch(output, /\\\\n/);
   } finally {
     rmSync(temp, { recursive: true, force: true });
@@ -153,6 +154,49 @@ test('summary exposes invalid owner recovery fields without effect claims', () =
     assert.match(output, /engine-dist.*invalidEvidence.*owner-fact-missing/);
     assert.match(output, /Collect direct download timing from cost-reporter\./);
     assert.doesNotMatch(output, /speedup|critical.path effect|runner.cost effect/i);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('summary renders neutral timing and explicit invalid pool evidence', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'ci-cost-summary-timing-'));
+  const factsPath = join(temp, 'facts.json');
+  const summaryPath = join(temp, 'summary.md');
+  try {
+    const value = facts();
+    value.jobs = [
+      {
+        name: 'core-build',
+        status: 'valid',
+        pool: 'heavy',
+        createdAt: '2026-07-16T00:00:00Z',
+        startedAt: '2026-07-16T00:00:10Z',
+        completedAt: '2026-07-16T00:00:40Z',
+        queueWaitSeconds: 10,
+        activeSeconds: 30,
+        totalSeconds: 40,
+      },
+      {
+        name: 'matrix-0',
+        status: 'invalidEvidence',
+        pool: null,
+        createdAt: null,
+        startedAt: '2026-07-16T00:00:10Z',
+        completedAt: '2026-07-16T00:00:40Z',
+        queueWaitSeconds: null,
+        activeSeconds: null,
+        totalSeconds: null,
+        code: 'ci-cost-job-timing-missing',
+      },
+    ];
+    writeFileSync(factsPath, JSON.stringify(value));
+    execFileSync(process.execPath, [summaryScript, '--facts', factsPath, '--output', summaryPath]);
+    const output = readFileSync(summaryPath, 'utf8');
+    assert.match(output, /\| core-build \| valid \| heavy \| .* \| 10 \| 30 \| 40 \| N\/A \|/);
+    assert.match(output, /\| matrix-0 \| invalidEvidence \| N\/A \|/);
+    assert.match(output, /ci-cost-job-timing-missing/);
+    assert.doesNotMatch(output, /critical.path|speedup|runner.cost effect/i);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

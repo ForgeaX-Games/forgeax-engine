@@ -42,8 +42,11 @@ import type {
   LoadGameDetailImportFailed,
   LoadGameDetailInvalidFormat,
   LoadGameDetailModuleNotFound,
+  LoadGameError,
+  LoadGameErrorCode,
   LoadGameErrorDetail,
 } from '../src/load-game-errors';
+import { LoadGameError as LoadGameErrorConstructor } from '../src/load-game-errors';
 import type { App } from '../src/types';
 
 describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
@@ -234,6 +237,85 @@ describe('error detail unions derive from their code resolvers', () => {
       | LoadGameDetailInvalidFormat
       | LoadGameDetailImportFailed
     >();
+  });
+});
+
+describe('LoadGameError is a code-derived correlated union', () => {
+  it('matches the exact three-code owner', () => {
+    expectTypeOf<LoadGameErrorCode>().toEqualTypeOf<
+      'module-not-found' | 'invalid-format' | 'import-failed'
+    >();
+    expectTypeOf<'module-not-found'>().toMatchTypeOf<LoadGameErrorCode>();
+    expectTypeOf<'invalid-format'>().toMatchTypeOf<LoadGameErrorCode>();
+    expectTypeOf<'import-failed'>().toMatchTypeOf<LoadGameErrorCode>();
+    // @ts-expect-error -- unknown load-game codes are outside the closed union.
+    const _badCode: LoadGameErrorCode = 'unknown';
+    void _badCode;
+  });
+
+  it('preserves constructor inference and code-driven detail narrowing', () => {
+    const moduleNotFound = new LoadGameErrorConstructor({
+      code: 'module-not-found',
+      expected: '',
+      hint: '',
+      detail: { slug: 'game-default' },
+    });
+    const invalidFormat = new LoadGameErrorConstructor({
+      code: 'invalid-format',
+      expected: '',
+      hint: '',
+      detail: { exportKeys: ['default'] },
+    });
+    const importFailed = new LoadGameErrorConstructor({
+      code: 'import-failed',
+      expected: '',
+      hint: '',
+      detail: { cause: new Error('network') },
+    });
+    if (moduleNotFound.code === 'module-not-found') {
+      expectTypeOf(moduleNotFound.detail).toEqualTypeOf<LoadGameDetailModuleNotFound>();
+    }
+    if (invalidFormat.code === 'invalid-format') {
+      expectTypeOf(invalidFormat.detail).toEqualTypeOf<LoadGameDetailInvalidFormat>();
+    }
+    if (importFailed.code === 'import-failed') {
+      expectTypeOf(importFailed.detail).toEqualTypeOf<LoadGameDetailImportFailed>();
+    }
+  });
+
+  it('rejects invalid code/detail pairs at construction', () => {
+    // @ts-expect-error -- module-not-found requires the slug detail.
+    const _wrongModuleDetail = new LoadGameErrorConstructor({
+      code: 'module-not-found',
+      expected: '',
+      hint: '',
+      detail: { exportKeys: [] },
+    });
+    // @ts-expect-error -- invalid-format requires the exportKeys detail.
+    const _wrongFormatDetail = new LoadGameErrorConstructor({
+      code: 'invalid-format',
+      expected: '',
+      hint: '',
+      detail: { cause: new Error('wrong') },
+    });
+    void _wrongModuleDetail;
+    void _wrongFormatDetail;
+  });
+
+  it('supports exhaustive LoadGameError consumption without a default arm', () => {
+    function classify(error: LoadGameError): string {
+      switch (error.code) {
+        case 'module-not-found':
+          return error.detail.slug;
+        case 'invalid-format':
+          return error.detail.exportKeys.join(',');
+        case 'import-failed':
+          return error.detail.cause instanceof Error ? error.detail.cause.message : 'unknown';
+      }
+      const _unreachable: never = error;
+      return _unreachable;
+    }
+    expectTypeOf(classify).toBeFunction();
   });
 });
 

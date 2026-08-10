@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "cd16a32c-0fd2-4c02-861d-a5537baaa794",
+      "kind": "material",
+      "name": "Arc Nova Ember Facet",
+      "sourceKey": "arc-nova-ember-shard.wgsl",
+      "payload": {
+        "kind": "material",
+        "passes": [
+          {
+            "name": "particle-mesh",
+            "program": {
+              "module": "boss_lightning_vfx::arc_nova_ember_shard",
+              "vertexEntry": "vs_main",
+              "fragmentEntry": "fs_main"
+            },
+            "renderState": {
+              "cullMode": "none",
+              "depthCompare": "always",
+              "depthWriteEnabled": false,
+              "queue": 4000,
+              "blend": {
+                "color": { "srcFactor": "src-alpha", "dstFactor": "one", "operation": "add" },
+                "alpha": { "srcFactor": "one", "dstFactor": "one-minus-src-alpha", "operation": "add" }
+              }
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [1.0, 0.12, 0.015, 1.0],
+          "metallic": 0.64,
+          "roughness": 0.18,
+          "emissive": [1.0, 0.025, 0.002],
+          "emissiveIntensity": 3.8,
+          "clearcoat": 0.68,
+          "clearcoatRoughness": 0.08
+        }
+      },
+      "refs": []
+    }
+  ]
+}

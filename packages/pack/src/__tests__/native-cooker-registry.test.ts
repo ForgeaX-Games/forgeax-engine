@@ -32,4 +32,33 @@ describe('NativeCookerRegistry artifact boundary', () => {
       byteLength: bytes.byteLength,
     });
   });
+
+  it('discovers a typed producer input before cooking and preserves the typed output contract', async () => {
+    const registry = new NativeCookerRegistry();
+    registry.register({
+      key: 'typed-effect',
+      discover: (input) => {
+        if (typeof input !== 'object' || input === null || !('source' in input)) {
+          throw new Error('source is required');
+        }
+        return { source: String(input.source), revision: 3 };
+      },
+      cook: (input: { readonly source: string; readonly revision: number }) => ({
+        guid: '019e9c00-0000-7000-8000-000000000010',
+        payload: { source: input.source, revision: input.revision },
+        refs: [],
+        artifacts: {
+          'typed-effect/program.json': {
+            mediaType: 'application/json',
+            bytes: new TextEncoder().encode(JSON.stringify(input)),
+          },
+        },
+        inputFingerprint: `sha256:${input.source}`,
+      }),
+    });
+
+    const result = await registry.runDraft('typed-effect', { source: 'module.wgsl' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.payload).toEqual({ source: 'module.wgsl', revision: 3 });
+  });
 });

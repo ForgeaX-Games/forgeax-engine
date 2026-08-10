@@ -1,7 +1,7 @@
 // @forgeax/engine-vite-plugin-pack — Vite plugin for the forgeax engine asset package system.
 //
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
   IMPORT_ERROR_HINTS,
@@ -23,49 +23,36 @@ import {
 } from '@forgeax/engine-types';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { projectAssetProduction } from './build/asset-production.js';
-import {
-  buildCatalogProjection,
-  type CatalogLegacyProjection,
-  currentProjectionFor,
-} from './build-catalog.js';
-import { type AssetHostRefreshPolicy, CATALOG_DELTA_EVENT } from './catalog-client.js';
-import { calculateCatalogDelta } from './catalog-watch.js';
+import { createPluginBuild, type MinimalPluginContext } from './build/plugin-build.js';
+import { type CatalogLegacyProjection, currentProjectionFor } from './build-catalog.js';
+import type { AssetHostRefreshPolicy } from './catalog-client.js';
 import { compressArtifact } from './compress-artifact.js';
-import { readDdcMetrics, resolveDdcRoot, semanticDdcKey } from './ddc-cache.js';
-import { createAssetChangedEvent, emitAssetChanged } from './dev/asset-change-events.js';
+import { resolveDdcRoot, semanticDdcKey } from './ddc-cache.js';
 import { publishImportPublication } from './dev/import-publication.js';
+import { runNativeCookerLifecycle } from './dev/native-cooker-lifecycle.js';
 import { createPackageRoutes } from './dev/package-routes.js';
+import { createPluginServer, type PluginServerLike } from './dev/plugin-server.js';
 import { createUiDependencyIndex } from './dev/ui-dependency-index.js';
-import {
-  buildGuidToMetaMap,
-  buildUrlToAbsolute,
-  type WatchBatch,
-  watchDevRoots,
-} from './dev/watcher.js';
-import {
-  productAssetByGuid,
-  productAssetsByGuid,
-  productBinaryArtifacts,
-  projectUiBuildArtifacts,
-} from './import-products.js';
+import { productAssetByGuid, productBinaryArtifacts } from './import-products.js';
 import { importTextureEntry } from './import-texture.js';
 import {
   finalizePackage,
   type LogicalPackage,
   type LogicalPackageAsset,
 } from './package-finalizer.js';
+import type { ProducerReadiness } from './producer/source-package.js';
 import { PackRuntimeRealm } from './runtime-realm.js';
-import {
-  loadSharedPackInput,
-  projectPackIndexUrl,
-  projectSharedPackCatalog,
-  resolvePackBuildInputs,
-} from './shared-build-inputs.js';
-import { dedupeFinalizedUiEntries, finalizeUiArtifact } from './ui-pack-finalizer.js';
+import { finalizeUiArtifact } from './ui-pack-finalizer.js';
 
 export { projectAssetProduction } from './build/asset-production.js';
 export { CATALOG_DELTA_EVENT, createCatalogClient, reloadAssetHost } from './catalog-client.js';
 export { ASSET_CHANGED_EVENT, type AssetChangedPayload } from './dev/events.js';
+export {
+  type NativeCookerLifecycleOptions,
+  type NativeCookerLifecycleResult,
+  type NativeCookerLifecycleSnapshot,
+  runNativeCookerLifecycle,
+} from './dev/native-cooker-lifecycle.js';
 export {
   createMaterialCookFinalizer,
   type MaterialArtifactSink,
@@ -77,12 +64,12 @@ export {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+export type { ProducerReadiness } from './producer/source-package.js';
 // PackIndexEntry now lives in @forgeax/engine-types (feat-20260517 D-2 SSOT).
 // Re-export so existing consumers (tests, downstream packages) keep their
 // `import { PackIndexEntry } from '@forgeax/engine-vite-plugin-pack'` paths
 // working without a same-PR API break.
 export type { PackIndexEntry };
-
 /** Preserve the published Catalog LKG while a source is invalidated. */
 export function preserveInvalidatedCatalogLkg(
   previousCatalog: readonly PackIndexEntry[],
@@ -135,59 +122,15 @@ const AUTHORED_COOKED_CURRENT_PROJECTION = {
 //     returned `referenceId` and resolve the hashed filename via
 //     `getFileName(referenceId)` once Rollup has finished name resolution
 //     (research F1+F3).
-interface MinimalPluginContext {
-  emitFile(asset: {
-    type: 'asset';
-    fileName?: string;
-    name?: string;
-    originalFileName?: string;
-    source: string | Uint8Array;
-  }): string;
-  getFileName(referenceId: string): string;
-}
-
-type NextHandleFunction = (err?: unknown) => void;
-
-interface ServerResponseLike {
-  statusCode: number;
-  setHeader(name: string, value: string): void;
-  end(chunk: string | Uint8Array): void;
-}
-
-interface IncomingMessageLike {
-  readonly url?: string | undefined;
-}
-
-type ConnectMiddleware = (
-  req: IncomingMessageLike,
-  res: ServerResponseLike,
-  next: NextHandleFunction,
-) => void | Promise<void>;
-
-interface MiddlewaresLike {
-  use(handler: ConnectMiddleware): unknown;
-}
-
-interface ViteDevServerLike {
-  readonly middlewares: MiddlewaresLike;
-  readonly ws?: WsLike | undefined;
-}
-
-interface WsLike {
-  send(payload: { type: string } & Record<string, unknown>): void;
-}
-
 /** Shape of the plugin returned by pluginPack(). */
 export interface ForgeaXPackPlugin {
   readonly name: string;
-  /** Bind this dev producer to exactly one runtime scope. */
-  rebind(
-    binding: import('@forgeax/engine-types').RuntimeAssetBinding,
+  readonly rebind: (
+    binding: RuntimeAssetBinding,
     roots: readonly string[],
-  ): Promise<import('@forgeax/engine-types').RuntimeAssetBinding>;
-  /** Return the current scope binding, if this producer has been bound. */
-  runtimeBinding(): import('@forgeax/engine-types').RuntimeAssetBinding | undefined;
-  configureServer(server: ViteDevServerLike): void;
+  ) => Promise<RuntimeAssetBinding>;
+  readonly runtimeBinding: () => RuntimeAssetBinding | undefined;
+  configureServer(server: PluginServerLike): void;
   generateBundle(this: MinimalPluginContext): Promise<void>;
   writeBundle(options: { readonly dir?: string | undefined }): Promise<void>;
   closeBundle(): Promise<void>;
@@ -212,6 +155,12 @@ export interface PluginPackOptions {
    */
   readonly base?: string | undefined;
   /**
+   * Controls when configured source Meta packages become consumable in serve
+   * mode. Browser hosts use the default before-consume policy; Studio may opt
+   * into the existing request-triggered path explicitly.
+   */
+  readonly producerReadiness?: ProducerReadiness | undefined;
+  /**
    * M4 / w32 (AC-20): registered `Importer` instances the lazy-import
    * HTTP adapter (`POST /__import/:guid`) dispatches on `meta.importer`.
    * Each importer must carry a non-empty `key` + a `import` function.
@@ -223,13 +172,7 @@ export interface PluginPackOptions {
   readonly cookers?: readonly NativeCooker[] | undefined;
   /** Host-owned reaction to a real watched-byte change; absent means no reload. */
   readonly refresh?: AssetHostRefreshPolicy | undefined;
-  /**
-   * Host-owned build-input boundary. Matching paths are ignored by catalog
-   * projection and GUID-to-meta indexing, while their containing directories
-   * remain watched for normal HMR. This keeps build-only producers (for example
-   * shader sidecars owned by vite-plugin-shader) out of runtime Pack catalogs
-   * without forcing hosts to materialize one-off file roots.
-   */
+  /** Host-owned build-input boundary excluded from Pack catalog discovery. */
   readonly ignorePath?: (path: string) => boolean;
   /** Optional fixed single-game binding for standalone/static dev hosts. */
   readonly runtimeBinding?: RuntimeAssetBinding;
@@ -252,50 +195,14 @@ function mimeFromPath(path: string): 'image/jpeg' | 'image/png' | undefined {
   return undefined;
 }
 
-// Dev import DDC (Derived Data Cache) location. The imported `.bin` is derived
-// data -- delete it and the next `loadByGuid` re-derives it from the source.
-// The GUID overlay is deliberately generation-local: the same GUID may be
-// authored by two independent games, so a bare `<guid>.bin` path is not a
-// valid identity boundary. The semantic DDC payload remains content-addressed
-// by its desired key, while this path is only the disposable runtime overlay.
-function runtimeDdcRoot(cwd: string, binding: RuntimeAssetBinding | undefined): string {
-  const scope =
-    binding === undefined
-      ? 'unbound'
-      : `${binding.scopeId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${binding.generation}`;
-  return resolve(resolveDdcRoot(cwd), 'runtime', scope);
-}
-
-function ddcPath(cwd: string, guidLower: string, binding?: RuntimeAssetBinding): string {
-  return resolve(runtimeDdcRoot(cwd, binding), `${guidLower}.bin`);
-}
-
-/**
- * AC-01: read an explicit per-asset compression override from a meta sidecar's
- * `importSettings.compression`. Returns the narrowed union value, or undefined
- * when absent / malformed (falls back to the kind-keyed default table).
- */
+/** Read an explicit per-asset compression override from import settings. */
 function readCompressionOverride(importSettings: unknown): 'none' | 'zstd' | undefined {
   if (importSettings === null || typeof importSettings !== 'object') return undefined;
-  const c = (importSettings as { compression?: unknown }).compression;
-  return c === 'none' || c === 'zstd' ? c : undefined;
+  const compression = (importSettings as { compression?: unknown }).compression;
+  return compression === 'none' || compression === 'zstd' ? compression : undefined;
 }
 
-function isProceduralAliasMeta(meta: unknown): boolean {
-  if (meta === null || typeof meta !== 'object') return false;
-  const candidate = meta as { importer?: unknown; importSettings?: unknown };
-  if (candidate.importer !== 'gltf') return false;
-  if (candidate.importSettings === null || typeof candidate.importSettings !== 'object')
-    return false;
-  return (candidate.importSettings as { geometry?: unknown }).geometry === 'procedural';
-}
-
-/**
- * AC-01: read the explicit compression override from a meta sidecar path (used
- * by the texture arms, which reach compression via `importTextureEntry` and do
- * not otherwise parse the meta). Returns undefined when the path is unknown /
- * unreadable / has no override.
- */
+/** Read a compression override from a meta sidecar when one is available. */
 async function readOverrideFromMeta(
   metaPath: string | undefined,
 ): Promise<'none' | 'zstd' | undefined> {
@@ -308,21 +215,32 @@ async function readOverrideFromMeta(
   }
 }
 
+// Dev import DDC (Derived Data Cache) location. The imported `.bin` is derived
+// data -- delete it and the next `loadByGuid` re-derives it from the source.
+// Keying it by GUID under `node_modules/.cache/forgeax-ddc/` keeps it gitignored
+// everywhere (root `node_modules/` rule) so it never pollutes the source tree,
+// which for vendor assets (e.g. Sponza textures) is a tracked git submodule.
+// Deterministic from `(cwd, guid)`: the write site (importOneTexture) and the
+// warm-refresh reconstruction site (buildUrlToAbs) MUST agree on this formula.
+// GUIDs are globally unique (UUIDv5/v7 per sub-asset), so no collision with the
+// build arm's `dist/assets/<guid>-<hash>.bin` Rollup namespace.
+function runtimeDdcRoot(cwd: string, binding: RuntimeAssetBinding | undefined): string {
+  const scope =
+    binding === undefined
+      ? 'unbound'
+      : `${binding.scopeId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${binding.generation}`;
+  return resolve(resolveDdcRoot(cwd), 'runtime', scope);
+}
+
+function ddcPath(cwd: string, guidLower: string, binding?: RuntimeAssetBinding): string {
+  return resolve(runtimeDdcRoot(cwd, binding), `${guidLower}.bin`);
+}
+
 // ─── Main factory ───────────────────────────────────────────────────────────
 
 /** Vite plugin factory for the ForgeaX asset package system. */
 export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   const runtimeRealm = new PackRuntimeRealm();
-  let activeScopeToken: number | undefined;
-
-  const currentDdcPath = (cwd: string, guidLower: string): string =>
-    ddcPath(cwd, guidLower, runtimeRealm.snapshot()?.binding);
-
-  function assertCurrentRuntimeScope(token: number | undefined): void {
-    if (token !== undefined && !runtimeRealm.isCurrent(token)) {
-      throw new Error('forgeax: stale runtime scope publication rejected');
-    }
-  }
   // Mutable catalog state — rebuilt on startup and on file watch events.
   let catalog: PackIndexEntry[] = [];
   let catalogProjection: CatalogLegacyProjection = {
@@ -331,6 +249,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     authority: 'authoritative',
     diagnostics: [],
   };
+  let degradedCatalogEntries: PackIndexEntry[] = [];
   // Map from normalized `packageUrl` to absolute source path for serving
   // files that live outside the Vite root (e.g. submodule assets).
   let urlToAbs: Map<string, string> = new Map();
@@ -399,6 +318,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       authority: 'authoritative',
       diagnostics: [],
     };
+    degradedCatalogEntries = [];
     urlToAbs = new Map();
     guidToMeta = new Map();
     importedRows.clear();
@@ -479,16 +399,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         continue;
       }
       hasCookedAsset = true;
-      const result = await nativeCookerRegistry.runDraft(asset.kind, {
-        guid: asset.guid,
-        source: asset.payload,
+      const result = await runNativeCookerLifecycle({
+        registry: nativeCookerRegistry,
+        key: asset.kind,
+        input: { guid: asset.guid, source: asset.payload },
       });
       if (!result.ok) {
         throw new Error(
           `[forgeax-pack] native cook failed for ${asset.guid}: ${result.error.code} — ${result.error.hint}`,
         );
       }
-      const draft = result.value;
+      const draft = result.value.draft;
       const refs = [...draft.refs];
       refsByGuid.set(asset.guid.toLowerCase(), refs);
       assets.push({
@@ -517,30 +438,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // independent. Stage cooked bytes on disk and move them into the final
   // output after Rollup has written its bundle; pack JSON remains a small
   // Rollup asset and still gets normal output cleanup.
-  let buildArtifactStage: { readonly root: string; readonly files: Set<string> } | undefined;
-
-  async function stageBuildArtifact(path: string, bytes: Uint8Array): Promise<void> {
-    const normalized = path.replaceAll('\\', '/').replace(/^\/+/, '');
-    if (
-      normalized.length === 0 ||
-      normalized.split('/').some((part) => part === '..' || part.length === 0)
-    ) {
-      throw new Error(`build artifact path must stay output-relative: ${path}`);
-    }
-    if (buildArtifactStage === undefined) {
-      await mkdir(resolve(process.cwd(), 'node_modules/.cache'), { recursive: true });
-      const root = await mkdtemp(resolve(process.cwd(), 'node_modules/.cache/forgeax-pack-'));
-      buildArtifactStage = { root, files: new Set() };
-    }
-    const destination = resolve(buildArtifactStage.root, normalized);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, bytes);
-    buildArtifactStage.files.add(normalized);
-  }
-
-  // Overlay the persistent imported rows over a freshly scanned raw catalog,
-  // de-duplicating any stale raw row for a GUID that has been imported (so the
-  // imported `.bin` row uniquely wins, e.g. a legacy `.pack.json` duplicate).
   function applyImportedRows(raw: readonly PackIndexEntry[]): PackIndexEntry[] {
     const seen = new Set<string>();
     const out: PackIndexEntry[] = [];
@@ -568,6 +465,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // the marked projection and fail closed for lookup/import operations.
     const entries =
       projection.authority === 'authoritative' ? applyImportedRows(projection.entries) : [];
+    degradedCatalogEntries = projection.authority === 'degraded' ? [...projection.entries] : [];
     catalog = entries;
     catalogProjection = {
       ...projection,
@@ -583,80 +481,48 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
   function scopedPackageUrl(binding: RuntimeAssetBinding, packageUrl: string): string {
     const base = binding.packageUrlBase.replace(/\/+$/, '');
-    const scopedNamespace = runtimeScopePath(binding, 'asset');
-    // buildCatalog() receives the Vite host base, so an unscoped dev row may
-    // already be `/preview/__forgeax-ddc/<guid>.pack.json`. The binding's
-    // packageUrlBase owns that same host prefix plus the scoped namespace;
-    // remove the host prefix before placing the row under the scoped asset
-    // route. Otherwise `/preview` is inserted twice and loadByGuid receives
-    // a 404 even though the scoped package body exists.
-    const hostBase = base.endsWith(scopedNamespace) ? base.slice(0, -scopedNamespace.length) : '';
     const rawUrl = packageUrl.startsWith('/') ? packageUrl : `/${packageUrl}`;
+    const scopedNamespace = runtimeScopePath(binding, 'asset');
+    const hostBase = base.endsWith(scopedNamespace) ? base.slice(0, -scopedNamespace.length) : '';
     const internalUrl =
       hostBase.length > 0 && (rawUrl === hostBase || rawUrl.startsWith(`${hostBase}/`))
         ? rawUrl.slice(hostBase.length) || '/'
         : rawUrl;
     const scopedPath = runtimeScopePath(binding, `asset${internalUrl}`);
-    // `packageUrlBase` is the host-visible base (for example `/preview`),
-    // while `runtimeScopePath` is intentionally engine-relative. Keeping the
-    // two pieces separate lets the same realm contract work behind a Vite
-    // base, a Studio proxy, or a root standalone host.
     if (base.length === 0) return scopedPath;
-    if (base.endsWith(scopedNamespace)) {
-      return `${base}${internalUrl}`;
-    }
-    return `${base}${scopedPath}`;
-  }
-
-  function scopedCatalogEntries(
-    binding: RuntimeAssetBinding,
-    entries: readonly PackIndexEntry[],
-  ): readonly PackIndexEntry[] {
-    return entries.map((entry) => ({
-      ...entry,
-      packageUrl: scopedPackageUrl(binding, entry.packageUrl),
-    }));
+    return base.endsWith(scopedNamespace) ? `${base}${internalUrl}` : `${base}${scopedPath}`;
   }
 
   function scopedCatalogResponse(binding: RuntimeAssetBinding) {
     const response = legacyCatalogResponse();
-    if (!('authority' in response)) {
-      return {
-        schemaVersion: RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
-        scopeId: binding.scopeId,
-        generation: binding.generation,
-        authority: 'authoritative' as const,
-        entries: scopedCatalogEntries(binding, response),
-        diagnostics: [],
-      } as const;
-    }
+    const entries =
+      'authority' in response
+        ? response.entries.length > 0
+          ? response.entries
+          : degradedCatalogEntries
+        : response;
+    const diagnostics =
+      'authority' in response
+        ? response.diagnostics.map((diagnostic) => ({
+            code: diagnostic.code,
+            severity: 'blocking' as const,
+            message: diagnostic.message,
+            ...(diagnostic.expected === undefined ? {} : { expected: diagnostic.expected }),
+            ...(diagnostic.actual === undefined ? {} : { actual: diagnostic.actual }),
+            ...(diagnostic.hint === undefined ? {} : { hint: diagnostic.hint }),
+          }))
+        : [];
     return {
       schemaVersion: RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
       scopeId: binding.scopeId,
       generation: binding.generation,
-      authority: response.authority,
-      entries: scopedCatalogEntries(binding, response.entries),
-      diagnostics: response.diagnostics,
-    } as const;
-  }
-
-  function runtimeDiagnostics(
-    diagnostics: readonly {
-      readonly code: string;
-      readonly message: string;
-      readonly expected?: string;
-      readonly actual?: string;
-      readonly hint?: string;
-    }[],
-  ): RuntimeAssetBinding['diagnostics'] {
-    return diagnostics.map((diagnostic) => ({
-      code: diagnostic.code,
-      severity: 'blocking' as const,
-      message: diagnostic.message,
-      ...(diagnostic.expected === undefined ? {} : { expected: diagnostic.expected }),
-      ...(diagnostic.actual === undefined ? {} : { actual: diagnostic.actual }),
-      ...(diagnostic.hint === undefined ? {} : { hint: diagnostic.hint }),
-    }));
+      authority: 'authority' in response ? response.authority : ('authoritative' as const),
+      entries: entries.map((entry) => ({
+        ...entry,
+        packageUrl: scopedPackageUrl(binding, entry.packageUrl),
+      })),
+      diagnostics,
+    };
   }
   async function publishAuthoredDevPacks(
     raw: readonly PackIndexEntry[],
@@ -729,25 +595,22 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   }
 
   // Import exactly ONE texture GUID to the DDC
-  // generation-local runtime overlay and incrementally patch the live catalog
-  // + urlToAbs for that single row. No whole-catalog rebuild, no global swap.
-  // Idempotent: a GUID already in the import overlay returns its imported row
-  // without re-importing. Returns `[]` when the GUID is absent from the catalog
-  // or its row is not an importable texture (the caller fails fast rather than
-  // silently rebuilding).
+  // (`node_modules/.cache/forgeax-ddc/<guid>.bin`, see ddcPath -- gitignored,
+  // never written into the source tree) and incrementally patch the
+  // live catalog + urlToAbs for that single row. No whole-catalog rebuild, no
+  // global swap. Idempotent: a GUID already in the import overlay returns its
+  // imported row without re-importing. Returns `[]` when the GUID is absent from
+  // the catalog or its row is not an importable texture (the caller fails fast
+  // rather than silently rebuilding).
   async function importOneTexture(guidLower: string): Promise<PackIndexEntry[]> {
-    const scopeToken = activeScopeToken;
-    const scopeBinding = runtimeRealm.snapshot()?.binding;
-    const scopeDdcPath = (guid: string): string => ddcPath(process.cwd(), guid, scopeBinding);
     const already = importedRows.get(guidLower);
     if (already !== undefined) return [already];
-    const raw = rawRowForGuid(guidLower);
+    const raw = catalog.find((e) => e.guid.toLowerCase() === guidLower);
     if (raw === undefined) return [];
     const imported = await importTextureEntry(raw, {
       cwd: process.cwd(),
       metaPath: guidToMeta.get(guidLower),
     });
-    assertCurrentRuntimeScope(scopeToken);
     if ('skipped' in imported) {
       // Fail-fast (architecture-principles §5), mirroring the per-meta path's
       // `throw runResult.error`: a REAL cook failure (source read / decode /
@@ -768,13 +631,12 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
       return [];
     }
-    const binAbs = scopeDdcPath(guidLower);
+    const binAbs = ddcPath(process.cwd(), guidLower, runtimeRealm.snapshot()?.binding);
     await mkdir(dirname(binAbs), { recursive: true });
     // (A) Texture arm dev: compress after importTextureEntry, before writeFile (D-3).
     // M2 default 'none' → pass-through; M3 flips to 'zstd' in STRATEGY_TABLE.
     // AC-01: honor an explicit importSettings.compression override from the meta.
     const texOverride = await readOverrideFromMeta(guidToMeta.get(guidLower));
-    assertCurrentRuntimeScope(scopeToken);
     const compressed = await compressArtifact({
       bytes: imported.bytes,
       kind: 'texture',
@@ -789,7 +651,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         : {}),
     });
     await writeFile(binAbs, compressed.compressed);
-    assertCurrentRuntimeScope(scopeToken);
     const packageUrl = `${DEV_PACK_PREFIX}${guidLower}.pack.json`;
     const artifactUrl = `${DEV_PACK_PREFIX}${guidLower}/body.bin`;
     const artifactCodec =
@@ -858,7 +719,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       ...(raw.name !== undefined ? { name: raw.name } : {}),
       ...COOKED_CURRENT_PROJECTION,
     };
-    assertCurrentRuntimeScope(scopeToken);
     importedRows.set(guidLower, importedRow);
     const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
     if (idx >= 0) catalog[idx] = importedRow;
@@ -870,19 +730,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // DDC, overlays all produced rows onto the catalog, and returns the
   // resulting PackIndexEntry[] for all rows belonging to this meta.
   async function startMetaImport(metaPath: string): Promise<PackIndexEntry[]> {
-    const scopeToken = activeScopeToken;
-    const routeRegistry = packageRoutes;
-    const cwd = process.cwd();
     const scopeBinding = runtimeRealm.snapshot()?.binding;
-    const scopeDdcPath = (guid: string): string => ddcPath(cwd, guid, scopeBinding);
-    const scopeDdcRoot = (): string => runtimeDdcRoot(cwd, scopeBinding);
+    const cwd = process.cwd();
     const previousCatalog = [...catalog];
     const previousImportedRows = new Map(importedRows);
     const { paths } = loadAssetConfig(cwd);
     let rm: unknown;
     try {
       rm = JSON.parse(await readFile(metaPath, 'utf-8'));
-      assertCurrentRuntimeScope(scopeToken);
     } catch {
       throw new ImportError({
         code: 'import-internal-error',
@@ -926,7 +781,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     }
 
     const runResult = await runImport(runMeta, importerRegistry, fsForImport);
-    assertCurrentRuntimeScope(scopeToken);
     // Fail-fast (architecture-principles §5): a failed import must not collapse
     // to an empty result that the route can only report as a generic
     // `import-failed`. Throw the structured ImportError so the dev route can
@@ -981,7 +835,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const finalizedRoute =
       routeSubGuid === undefined
         ? undefined
-        : await routeRegistry.publish(
+        : await packageRoutes.publish(
             { origin: 'sourceMeta', cooked: true, logicalPackage },
             {
               write: (path, bytes) => {
@@ -1002,7 +856,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               artifactPath: (guid, key) => `${guid}/${key}.bin`,
             },
           );
-    assertCurrentRuntimeScope(scopeToken);
     if (finalizedRoute !== undefined && !finalizedRoute.ok) {
       throw new ImportError({
         code: 'import-internal-error',
@@ -1017,9 +870,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const guid = meta.subAssets[0]?.guid;
       if (guid === undefined) return [];
       uiDependencies.recordSuccess(guid, runResult.value.product.sourceDependencies);
-      const uiRow = rawRowForGuid(guid.toLowerCase());
+      const uiRow = catalog.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
       if (uiRow !== undefined) {
-        assertCurrentRuntimeScope(scopeToken);
         const packUrl = finalizedRoute?.ok
           ? finalizedRoute.value.packageUrl
           : `${DEV_PACK_PREFIX}${guid.toLowerCase()}.pack.json`;
@@ -1046,7 +898,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const packUrl =
       firstSubGuid !== undefined ? `${DEV_PACK_PREFIX}${firstSubGuid}.pack.json` : undefined;
     if (packUrl !== undefined) {
-      assertCurrentRuntimeScope(scopeToken);
       metaPackBodies.set(packUrl, JSON.stringify(pack));
     }
 
@@ -1054,14 +905,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // and overlay the imported form.
     for (const sub of meta.subAssets) {
       const guidLower = sub.guid.toLowerCase();
-      const raw = rawRowForGuid(guidLower);
+      const raw = catalog.find((e) => e.guid.toLowerCase() === guidLower);
       if (raw === undefined) continue;
 
       // If this sub-asset has binary data in bins, write it to the DDC
       // and rewrite the row to a .bin packageUrl.
       const bytes = bins?.get(guidLower);
       if (bytes !== undefined) {
-        const binAbs = scopeDdcPath(guidLower);
+        const binAbs = ddcPath(cwd, guidLower, scopeBinding);
         await mkdir(dirname(binAbs), { recursive: true });
         // (C) Mesh bins arm dev: compress after bins.get, before writeFile (D-3).
         const compressKind = raw.kind === 'mesh' ? 'mesh' : 'texture';
@@ -1072,7 +923,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           ...(metaOverride !== undefined ? { override: metaOverride } : {}),
         });
         await writeFile(binAbs, compressedBin.compressed);
-        assertCurrentRuntimeScope(scopeToken);
         // round-2 finding 4: overlay metadata.colorSpace / format / mipmap
         // from the imported TextureAsset payload so dev pack-index reflects
         // per-image truth (catalog default 'linear' is wrong for srgb
@@ -1134,7 +984,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             : nonBinAsset?.refs !== undefined
               ? { ...raw, refs: nonBinAsset.refs.map((ref) => ref.guid) }
               : raw;
-        assertCurrentRuntimeScope(scopeToken);
         importedRows.set(guidLower, importedRow);
         const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
         if (idx >= 0) catalog[idx] = importedRow;
@@ -1151,10 +1000,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const packJson = metaPackBodies.get(packUrl ?? '');
       if (packUrl !== undefined && packJson !== undefined && firstSubGuid !== undefined) {
         try {
-          const packPath = scopeDdcPath(`${firstSubGuid}.meta.pack`);
+          const packPath = ddcPath(cwd, `${firstSubGuid}.meta.pack`, scopeBinding);
           await mkdir(dirname(packPath), { recursive: true });
           await writeFile(packPath, packJson);
-          assertCurrentRuntimeScope(scopeToken);
         } catch (e) {
           console.warn('[forgeax-pack] persist DDC pack failed:', e);
         }
@@ -1172,9 +1020,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         cookProfile: 'dev',
         ...(meta.sourceOverrides === undefined ? {} : { sourceOverrides: meta.sourceOverrides }),
       });
-      assertCurrentRuntimeScope(scopeToken);
       const publication = await publishImportPublication({
-        root: scopeDdcRoot(),
+        root: resolveDdcRoot(cwd),
         guid: firstSubGuid,
         desiredKey,
         pack,
@@ -1183,7 +1030,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         publishedGuids: allEntries.map((entry) => entry.guid),
         onDelta: (delta) => publishCatalogDelta?.(delta),
       });
-      assertCurrentRuntimeScope(scopeToken);
       if (!publication.ok) {
         catalog = previousCatalog;
         importedRows.clear();
@@ -1207,7 +1053,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         const projected = publishedRows.get(current.guid.toLowerCase());
         if (projected !== undefined) allEntries[index] = projected;
       }
-      assertCurrentRuntimeScope(scopeToken);
       for (const entry of allEntries) importedRows.set(entry.guid.toLowerCase(), entry);
     }
 
@@ -1260,17 +1105,6 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   const registeredImporterKeys: ReadonlySet<string> = new Set(
     importerRegistry.registeredImporters(),
   );
-  const scanOptions = opts.ignorePath === undefined ? {} : { ignorePath: opts.ignorePath };
-  const projectCatalog = (roots: readonly string[]) =>
-    buildCatalogProjection(roots, opts.base, registeredImporterKeys, scanOptions);
-  const buildGuidToMeta = (roots: readonly string[]) => buildGuidToMetaMap(roots, scanOptions);
-
-  // Set by this plugin's generateBundle hook. These rows own the final hashed
-  // Pack v2 URLs and are emitted as one immutable single-game build catalog.
-  let productionCatalog: readonly PackIndexEntry[] | undefined;
-  function rawRowForGuid(guidLower: string): PackIndexEntry | undefined {
-    return catalog.find((entry) => entry.guid.toLowerCase() === guidLower);
-  }
 
   // M4 / w32 (AC-20) + feat-20260608 round-2: create the filesystem adapter
   // for the import runner. `decodeImage` and `readSibling` are wired here so
@@ -1391,1318 +1225,93 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     },
   };
 
-  // ─── configureServer (dev mode) ──────────────────────────────────────────
-
-  interface RuntimeScopeRoute {
-    readonly scopeId: string;
-    readonly generation: number;
-    readonly suffix: string;
-  }
-
-  function parseRuntimeScopeRoute(url: string): RuntimeScopeRoute | undefined {
-    const match = /^\/__pack\/scopes\/([^/]+)\/(\d+)(\/.*)?$/.exec(url);
-    if (match === null) return undefined;
-    let scopeId: string;
-    try {
-      const encodedScopeId = match[1];
-      if (encodedScopeId === undefined) return undefined;
-      scopeId = decodeURIComponent(encodedScopeId);
-    } catch {
-      return undefined;
-    }
-    const generation = Number(match[2]);
-    if (!Number.isSafeInteger(generation)) return undefined;
-    return { scopeId, generation, suffix: match[3] ?? '/' };
-  }
-
-  let stopRuntimeWatcher: () => void = () => {};
-  let rebindServer:
-    | ((binding: RuntimeAssetBinding, roots: readonly string[]) => Promise<RuntimeAssetBinding>)
-    | undefined;
-
-  function configureServer(server: ViteDevServerLike): void {
-    publishCatalogDelta = (delta) => {
-      const binding = runtimeRealm.snapshot()?.binding;
-      const scopedDelta =
-        binding === undefined
-          ? delta
-          : { ...delta, scopeId: binding.scopeId, generation: binding.generation };
-      server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: scopedDelta });
-    };
-    // Async startup: scan roots to build the initial catalog.
-    let roots = [...resolvePackBuildInputs(opts).roots];
-    const initialRuntimeToken =
-      opts.runtimeBinding === undefined
-        ? undefined
-        : runtimeRealm.beginBind(opts.runtimeBinding, roots);
-    activeScopeToken = initialRuntimeToken;
-    // Install the watcher before the async initial scan. A host can edit an
-    // asset as soon as the dev server exists; delaying watch registration until
-    // the scan resolves loses that first mutation (and its refresh signal).
-    let resolveStartupReady!: () => void;
-    let startupReady: Promise<void>;
-    const resetStartupReady = (): void => {
-      startupReady = new Promise<void>((resolve) => {
-        resolveStartupReady = resolve;
-      });
-    };
-    resetStartupReady();
-    let applyWatchBatch: ((batch: WatchBatch) => Promise<void>) | undefined;
-    let serialBatches = Promise.resolve();
-    let buildToken = 0;
-    let stopWatcher: () => void = () => {};
-    const startWatcher = (): void => {
-      stopWatcher = watchDevRoots({
-        roots,
-        onBatch: (batch) => {
-          const queuedBuildToken = buildToken;
-          serialBatches = serialBatches.then(async () => {
-            // A batch queued by a retired watcher must not observe the new
-            // roots or publish into the next runtime generation.
-            if (queuedBuildToken !== buildToken) return;
-            await startupReady;
-            if (queuedBuildToken !== buildToken) return;
-            await applyWatchBatch?.(batch);
-          });
-          return serialBatches;
-        },
-      });
-      stopRuntimeWatcher = stopWatcher;
-    };
-    startWatcher();
-    const initialBuildToken = ++buildToken;
-    Promise.all([projectCatalog(roots), buildGuidToMeta(roots)])
-      .then(async ([rawProjection, g2m]) => {
-        if (initialBuildToken !== buildToken) {
-          resolveStartupReady();
-          return;
-        }
-        // The dev catalog passes the discoverable bare-source texture rows
-        // straight through, with the per-asset import overlay applied so any
-        // already-imported `.bin` row survives the rebuild (monotonic import).
-        // The runtime loader (import-on-demand sentinel) routes any non-`.bin`
-        // texture row to the dev transport for lazy import; keeping the row
-        // discoverable is the precondition for Sponza's catalog-first
-        // findTextureGuidByFilename.
-        installCatalogProjection({
-          ...rawProjection,
-          entries: await publishAuthoredDevPacks(rawProjection.entries),
-        });
-        guidToMeta = g2m;
-        urlToAbs = buildUrlToAbsolute(catalog, {
-          cwd: process.cwd(),
-          ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
-        });
-        catalogReady = true;
-        if (initialRuntimeToken !== undefined) {
-          runtimeRealm.publish(
-            initialRuntimeToken,
-            rawProjection.authority === 'authoritative' ? 'ready' : 'degraded',
-            rawProjection.authority,
-            runtimeDiagnostics(rawProjection.diagnostics),
-          );
-        }
-
-        applyWatchBatch = async ({ sidecars, sources }) => {
-          let catalogChanged = false;
-          // A source edit invalidates the dev DDC overlay for rows whose
-          // declaring source changed. Without this, the full-reload signal
-          // reaches the browser but POST /__import returns the stale
-          // imported row from `importedRows` before the importer runs again.
-          // Resolve both watcher-relative filenames and catalog-relative
-          // source paths against their owning roots/cwd so this remains
-          // correct for roots outside the Vite project directory.
-          const changedSourcePaths = new Set<string>();
-          for (const info of sources) {
-            changedSourcePaths.add(resolve(info.filename));
-            for (const root of roots) changedSourcePaths.add(resolve(root, info.filename));
-          }
-          const invalidatedPackUrls = new Set<string>();
-          const invalidatedGuids = new Set<string>();
-          for (const [guid, row] of importedRows) {
-            if (!changedSourcePaths.has(resolve(process.cwd(), row.sourcePath))) continue;
-            invalidatedPackUrls.add(row.packageUrl);
-            invalidatedGuids.add(guid);
-            importedRows.delete(guid);
-          }
-          for (const packageUrl of invalidatedPackUrls) metaPackBodies.delete(packageUrl);
-          const importedRowsInvalidated = invalidatedPackUrls.size > 0;
-
-          // Rebuild on every source event, even after the failed import has
-          // already removed importedRows. The recovery upload still needs to
-          // carry the previous Catalog LKG into the fresh missing row.
-          if (sidecars.length > 0 || sources.length > 0 || importedRowsInvalidated) {
-            const previousCatalog = catalog;
-            try {
-              const [rawProjection2, g2m2] = await Promise.all([
-                projectCatalog(roots),
-                buildGuidToMeta(roots),
-              ]);
-              installCatalogProjection({
-                ...rawProjection2,
-                entries: preserveInvalidatedCatalogLkg(
-                  previousCatalog,
-                  await publishAuthoredDevPacks(rawProjection2.entries),
-                  invalidatedGuids,
-                ),
-              });
-              guidToMeta = g2m2;
-              urlToAbs = buildUrlToAbsolute(catalog, {
-                cwd: process.cwd(),
-                ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
-              });
-              const delta = calculateCatalogDelta(previousCatalog, catalog);
-              if (delta !== undefined) {
-                catalogChanged = true;
-                const binding = runtimeRealm.snapshot()?.binding;
-                const scopedDelta =
-                  binding === undefined
-                    ? delta
-                    : { ...delta, scopeId: binding.scopeId, generation: binding.generation };
-                server.ws?.send({
-                  type: 'custom',
-                  event: CATALOG_DELTA_EVENT,
-                  data: scopedDelta,
-                });
-              }
-            } catch (err: unknown) {
-              console.warn('[forgeax-pack] rebuild catalog error:', err);
-            }
-          }
-          if (opts.refresh !== undefined) opts.refresh(server);
-          else {
-            const hasCatalogSidecar = sidecars.some(
-              (info) =>
-                info.filename.endsWith('.meta.json') || info.filename.endsWith('.pack.json'),
-            );
-            if (!catalogChanged && !hasCatalogSidecar) server.ws?.send({ type: 'full-reload' });
-          }
-          const revision = Date.now();
-          for (const info of sidecars) {
-            emitAssetChanged(server, info.filename, info.eventType, 'sidecar');
-            const event = createAssetChangedEvent({
-              file: info.filename,
-              event: info.eventType,
-              kind: 'sidecar',
-              sourcePath: info.filename,
-              revision,
-              guids: uiDependencies.guidsForSource(info.filename),
-            });
-            if (event !== undefined) server.ws?.send(event);
-          }
-          for (const info of sources) {
-            emitAssetChanged(server, info.filename, info.eventType, 'source');
-            const event = createAssetChangedEvent({
-              file: info.filename,
-              event: info.eventType,
-              kind: 'source',
-              sourcePath: info.filename,
-              revision,
-              guids: uiDependencies.guidsForSource(info.filename),
-            });
-            if (event !== undefined) server.ws?.send(event);
-          }
-          const parts: string[] = [];
-          if (sidecars.length > 0) parts.push(`${sidecars.length} sidecar`);
-          if (sources.length > 0) parts.push(`${sources.length} source`);
-          console.warn(`[forgeax-pack] assets changed: ${parts.join(', ')} (reloaded)`);
-        };
-        resolveStartupReady();
-      })
-      .catch((err: unknown) => {
-        if (initialBuildToken !== buildToken) {
-          resolveStartupReady();
-          return;
-        }
-        console.warn('[forgeax-pack] startup scan error:', err);
-        catalogReady = true;
-        if (initialRuntimeToken !== undefined) {
-          runtimeRealm.publish(initialRuntimeToken, 'unavailable', undefined, [
-            {
-              code: 'runtime-scope-startup-failed',
-              severity: 'blocking',
-              message: err instanceof Error ? err.message : String(err),
-            },
-          ]);
-        }
-        resolveStartupReady();
-      });
-
-    rebindServer = async (binding, nextRoots) => {
-      const token = runtimeRealm.beginBind(binding, nextRoots);
-      activeScopeToken = token;
-      buildToken += 1;
-      // Let the first scan settle before replacing its shared state. This
-      // keeps rebind deterministic even when the host binds immediately after
-      // Vite creates the server, while the token guards stale publications.
-      const previousStartupReady = startupReady;
-      await previousStartupReady;
-      stopWatcher();
-      roots = [...nextRoots];
-      resetDevState();
-      serialBatches = Promise.resolve();
-      resetStartupReady();
-      startWatcher();
-      try {
-        const [rawProjection, g2m] = await Promise.all([
-          projectCatalog(roots),
-          buildGuidToMeta(roots),
-        ]);
-        if (!runtimeRealm.isCurrent(token)) {
-          throw new Error('forgeax: runtime scope was replaced during catalog bind');
-        }
-        installCatalogProjection({
-          ...rawProjection,
-          entries: await publishAuthoredDevPacks(rawProjection.entries),
-        });
-        guidToMeta = g2m;
-        urlToAbs = buildUrlToAbsolute(catalog, {
-          cwd: process.cwd(),
-          ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
-        });
-        catalogReady = true;
-        resolveStartupReady();
-        return (
-          runtimeRealm.publish(
-            token,
-            rawProjection.authority === 'authoritative' ? 'ready' : 'degraded',
-            rawProjection.authority,
-            runtimeDiagnostics(rawProjection.diagnostics),
-          ) ?? binding
-        );
-      } catch (error) {
-        if (runtimeRealm.isCurrent(token)) {
-          catalogReady = true;
-          resolveStartupReady();
-          runtimeRealm.publish(token, 'unavailable', undefined, [
-            {
-              code: 'runtime-scope-bind-failed',
-              severity: 'blocking',
-              message: error instanceof Error ? error.message : String(error),
-            },
-          ]);
-        }
-        throw error;
-      }
-    };
-
-    // Register connect middleware for /__pack/* routes + the
-    // dev-mode `/pack-index.json` route (charter P4 consistent
-    // abstraction: production emits the same file via generateBundle).
-    server.middlewares.use(async (req, res, next) => {
-      let url = req.url ?? '';
-      let scopedBinding: RuntimeAssetBinding | undefined;
-      const boundRuntime = runtimeRealm.snapshot()?.binding;
-      const parsed = parseRuntimeScopeRoute(url);
-      if (parsed !== undefined) {
-        const current = boundRuntime;
-        if (current === undefined) {
-          res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'runtime-scope-unbound' }));
-          return;
-        }
-        if (current.scopeId !== parsed.scopeId) {
-          res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'runtime-scope-not-found', scopeId: parsed.scopeId }));
-          return;
-        }
-        if (current.generation !== parsed.generation) {
-          res.statusCode = 410;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'runtime-scope-generation-expired',
-              scopeId: parsed.scopeId,
-              generation: parsed.generation,
-              currentGeneration: current.generation,
-            }),
-          );
-          return;
-        }
-        scopedBinding = current;
-        if (parsed.suffix === '/catalog.json') {
-          await startupReady;
-          const latest = runtimeRealm.snapshot()?.binding;
-          if (latest === undefined || latest.generation !== parsed.generation) {
-            res.statusCode = 410;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'runtime-scope-generation-expired' }));
-            return;
-          }
-          if (latest.status === 'transitioning' || latest.status === 'unavailable') {
-            res.statusCode = 503;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'runtime-scope-unavailable', status: latest.status }));
-            return;
-          }
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(scopedCatalogResponse(latest)));
-          return;
-        }
-        if (current.status === 'transitioning' || current.status === 'unavailable') {
-          res.statusCode = 503;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'runtime-scope-unavailable', status: current.status }));
-          return;
-        }
-        if (current.status === 'degraded' || current.authority === 'degraded') {
-          res.statusCode = 409;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'runtime-scope-catalog-degraded',
-              diagnostics: current.diagnostics ?? [],
-            }),
-          );
-          return;
-        }
-        if (parsed.suffix.startsWith('/import/')) {
-          const guid = parsed.suffix.slice('/import/'.length);
-          if (guid.length === 0 || guid.includes('/')) {
-            res.statusCode = 404;
-            res.end('');
-            return;
-          }
-          url = `/__import/${guid}`;
-        } else if (parsed.suffix.startsWith('/asset/')) {
-          url = parsed.suffix.slice('/asset'.length);
-        } else {
-          res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'runtime-scope-route-not-found' }));
-          return;
-        }
-      }
-      const requiresRuntimeScope =
-        url === '/__pack/index' ||
-        url === '/pack-index.json' ||
-        url.startsWith('/__pack/lookup/') ||
-        url.startsWith('/__import/') ||
-        url.startsWith(DEV_PACK_PREFIX);
-      if (requiresRuntimeScope && scopedBinding === undefined) {
-        res.statusCode = 404;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'global-runtime-scope-route-disabled' }));
-        return;
-      }
-
-      // M4 / w32 (AC-20): POST /__import/:guid — lazy import adapter.
-      // The dev form of ImportTransport calls this endpoint when a DDC is
-      // missing. The route reads the declaring meta sidecar, dispatches the
-      // importer via the import runner, writes the DDC (.pack.json) to the
-      // source directory, upgrades the catalog, and returns the updated
-      // PackIndexEntry[] for the imported GUID + its sub-assets.
-      const importPrefix = '/__import/';
-      if (url.startsWith(importPrefix)) {
-        // Only POST triggers import; GET returns 405 so AI users get a
-        // clear signal.
-        if ((req as { method?: string }).method !== 'POST') {
-          res.statusCode = 405;
-          res.setHeader('Allow', 'POST');
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'method-not-allowed',
-              hint: 'use POST to trigger lazy import',
-            }),
-          );
-          return;
-        }
-        if (!catalogReady) {
-          await new Promise<void>((resolve) => {
-            const interval = setInterval(() => {
-              if (catalogReady) {
-                clearInterval(interval);
-                resolve();
-              }
-            }, 5);
-          });
-        }
-        const guid = url.slice(importPrefix.length);
-        const guidLower = guid.toLowerCase();
-
-        // Precise 404: the GUID is declared by no sidecar at all (vs. declared
-        // but not an importable texture, which falls through to a 422 below).
-        if (guidToMeta.get(guidLower) === undefined && importedRows.get(guidLower) === undefined) {
-          // A sidecar can be written immediately before this request, before
-          // the debounced watcher flushes its catalog/index update. Refresh
-          // the lightweight GUID index once so the import endpoint remains
-          // race-free for just-written authoring sources.
-          guidToMeta = await buildGuidToMeta(roots);
-          const refreshedProjection = await projectCatalog(roots);
-          installCatalogProjection({
-            ...refreshedProjection,
-            entries: await publishAuthoredDevPacks(refreshedProjection.entries),
-          });
-          urlToAbs = buildUrlToAbsolute(catalog, {
-            cwd: process.cwd(),
-            ddcPath: (guid) => currentDdcPath(process.cwd(), guid),
-          });
-        }
-        if (guidToMeta.get(guidLower) === undefined && importedRows.get(guidLower) === undefined) {
-          res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'meta-not-found',
-              guid,
-              hint: 'no sidecar declares this GUID',
-            }),
-          );
-          return;
-        }
-
-        // M4 / w20 (D-2): per-meta import coalescing. When this GUID belongs
-        // to a gltf sidecar (whose import produces multiple sub-assets per
-        // meta), we import the WHOLE meta once and overlay all rows at once.
-        // Concurrent requests for the same metaPath share the same in-flight
-        // Promise via inFlightMetaImports. The per-asset path below
-        // (importOneTexture + inFlightImports) handles image sidecars where a
-        // single GUID maps to a single texture asset.
-        //
-        // Dispatch: if the GUID belongs to an already-imported row (per-asset
-        // path), return it immediately. Otherwise route through per-meta for
-        // gltf sidecars, per-asset for everything else.
-        const alreadyImported = importedRows.get(guidLower);
-        if (alreadyImported !== undefined) {
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify(
-              scopedBinding === undefined
-                ? [alreadyImported]
-                : scopedCatalogEntries(scopedBinding, [alreadyImported]),
-            ),
-          );
-          return;
-        }
-
-        const metaPath = guidToMeta.get(guidLower);
-        let resultEntries: PackIndexEntry[];
-
-        // Route registered non-image importers through the per-meta runner.
-        // gltf / fbx / ui are engine products with explicit multi-asset
-        // handling, while a registered host importer has the same contract:
-        // one source + meta sidecar produces a DDC pack that cannot be
-        // reconstructed by the texture-only path. The registry is the SSOT
-        // for whether a host importer is wired; an unregistered key still
-        // falls through to the raw-source catalog behavior. `image` remains
-        // on the per-asset path because its texture importer has a dedicated
-        // binary delivery arm and must not be re-run through a pack body.
-        // fbx behaves like gltf — a single .fbx source file produces multiple
-        // sub-asset rows (mesh / material / scene / texture / skeleton / skin /
-        // animation-clip) that need to be imported together via runImport
-        // (feat-20260615-fbx-importer-via-sdk).
-        let isMultiAssetMeta = false;
-        if (metaPath !== undefined) {
-          try {
-            const metaRaw = JSON.parse(await readFile(metaPath, 'utf-8')) as {
-              importer?: string;
-            };
-            // UI author sources are products with companion artifacts. They
-            // must use the per-meta importer path so startMetaImport can
-            // finalize HTML/CSS and publish the in-memory /__ui payloads;
-            // treating them as textures returns an empty result (422).
-            isMultiAssetMeta =
-              metaRaw.importer === 'gltf' ||
-              metaRaw.importer === 'fbx' ||
-              metaRaw.importer === 'ui' ||
-              (metaRaw.importer !== 'image' &&
-                metaRaw.importer !== undefined &&
-                importerRegistry.get(metaRaw.importer) !== undefined);
-          } catch {
-            // Unreadable meta — fall through to per-asset.
-          }
-        }
-
-        // Both arms throw the structured ImportError on a REAL failure
-        // (fail-fast): per-meta via `startMetaImport`'s `throw runResult.error`,
-        // per-asset via `importOneTexture`'s `throw new ImportError`. One shared
-        // catch preserves `.code` + `.detail` so AI/human users can consume
-        // the original structured failure (including source-validation
-        // diagnostics) instead of a generic `import-failed`.
-        try {
-          if (metaPath !== undefined && isMultiAssetMeta) {
-            // Per-meta path: coalesce on metaPath.
-            let inflightMeta = inFlightMetaImports.get(metaPath);
-            if (inflightMeta === undefined) {
-              inflightMeta = startMetaImport(metaPath).finally(() =>
-                inFlightMetaImports.delete(metaPath),
-              );
-              inFlightMetaImports.set(metaPath, inflightMeta);
-            }
-            resultEntries = await inflightMeta;
-            // Filter to the requested GUID's row.
-            const requested = resultEntries.find((e) => e.guid.toLowerCase() === guidLower);
-            resultEntries = requested !== undefined ? [requested] : [];
-          } else {
-            // Fallback per-asset path (image sidecars, single-texture import).
-            let inflight = inFlightImports.get(guidLower);
-            if (inflight === undefined) {
-              inflight = importOneTexture(guidLower).finally(() =>
-                inFlightImports.delete(guidLower),
-              );
-              inFlightImports.set(guidLower, inflight);
-            }
-            resultEntries = await inflight;
-          }
-        } catch (e) {
-          const err = e as {
-            code?: string;
-            hint?: string;
-            detail?: unknown;
-          };
-          res.statusCode = 422;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'import-failed',
-              guid,
-              code: err.code ?? 'import-internal-error',
-              detail: err.detail ?? { reason: e instanceof Error ? e.message : String(e) },
-              hint: err.hint ?? 'importer threw while converting the source',
-            }),
-          );
-          return;
-        }
-
-        if (resultEntries.length === 0) {
-          // Benign empty result: the GUID is declared but not an importable
-          // texture (non-texture kind / unknown extension -- `importOneTexture`
-          // returns `[]` for these), or the per-meta filter found no matching
-          // row. Real cook failures throw above and never reach here.
-          res.statusCode = 422;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'import-failed',
-              guid,
-              hint: 'GUID declared but not an importable texture (non-texture kind, unknown extension, or no matching sub-asset row)',
-            }),
-          );
-          return;
-        }
-        res.setHeader('Content-Type', 'application/json');
-        res.end(
-          JSON.stringify(
-            scopedBinding === undefined
-              ? resultEntries
-              : scopedCatalogEntries(scopedBinding, resultEntries),
-          ),
-        );
-        return;
-      }
-
-      // bug-20260610: serve in-memory `.pack.json` bodies produced by
-      // `startMetaImport` for non-binary gltf sub-assets (mesh / scene /
-      // material). The runtime's `fetchPackFile` GETs the catalog row's
-      // `packageUrl`; without this route the request would fall through to
-      // Vite's default 404 (or, worse, hit the raw `.gltf` URL when the row
-      // was not rewritten and serve gltf JSON, which has no `assets[]`).
-      const artifactBody = devArtifactBodies.get(url);
-      if (artifactBody !== undefined) {
-        res.statusCode = 200;
-        res.setHeader('Content-Type', artifactBody.mimeType);
-        res.end(artifactBody.bytes);
-        return;
-      }
-
-      if (url.startsWith(DEV_PACK_PREFIX)) {
-        let body: string | undefined;
-        try {
-          body = await ensureMetaPackBody(url);
-        } catch (error) {
-          res.statusCode = 422;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'pack-cook-failed',
-              url,
-              hint: error instanceof Error ? error.message : String(error),
-            }),
-          );
-          return;
-        }
-        if (body === undefined) {
-          res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(
-            JSON.stringify({
-              error: 'pack-body-not-found',
-              url,
-              hint: 'no startMetaImport has produced this pack URL yet',
-            }),
-          );
-          return;
-        }
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(body);
-        return;
-      }
-
-      // Serve external assets (e.g. submodule textures) that Vite
-      // cannot find under the app root.  The catalog's `packageUrl`
-      // paths are normalized (no `..` segments); the `urlToAbs` map
-      // resolves each URL to its absolute source path.
-      const absPath = urlToAbs.get(url);
-      if (absPath !== undefined) {
-        try {
-          const buf = await readFile(absPath);
-          const mime = mimeFromPath(absPath);
-          if (mime !== undefined) {
-            res.setHeader('Content-Type', mime);
-          }
-          res.statusCode = 200;
-          res.end(buf);
-          return;
-        } catch {
-          res.statusCode = 404;
-          res.end('Not found');
-          return;
-        }
-      }
-
-      next();
-    });
-  }
-
-  // ─── generateBundle (build mode) ─────────────────────────────────────────
-
-  async function generateBundle(this: MinimalPluginContext): Promise<void> {
-    const cwd = process.cwd();
-    const { roots, basePrefix } = resolvePackBuildInputs(opts);
-    const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
-    if (sharedManifest !== undefined) {
-      const shared = loadSharedPackInput(sharedManifest);
-      if (
-        shared.catalog !== undefined &&
-        process.env.FORGEAX_SHARED_APP_INPUTS_MODE !== 'catalog-only'
-      ) {
-        if (shared.payloadRoot === undefined) {
-          throw new Error(`shared pack manifest lacks payload for full mode: ${sharedManifest}`);
-        }
-        const emitted = new Set<string>();
-        for (const entry of shared.catalog) {
-          const outputPath = entry.packageUrl.replace(/^\/+/, '');
-          if (emitted.has(outputPath)) continue;
-          emitted.add(outputPath);
-          this.emitFile({
-            type: 'asset',
-            fileName: outputPath,
-            source: readFileSync(resolve(shared.payloadRoot, outputPath)),
-          });
-        }
-      }
-      if (shared.catalog !== undefined) {
-        this.emitFile({
-          type: 'asset',
-          fileName: 'pack-index.json',
-          source: JSON.stringify(projectSharedPackCatalog(shared.catalog, opts.base)),
-        });
-        return;
-      }
-      // A shader-only shared producer deliberately has no asset capability.
-      // Fall through to the app's own roots so pack remains the sole owner of
-      // its catalog, URL projection, and deployment payload.
-    }
-    const { paths } = loadAssetConfig(cwd);
-    const projection = await projectCatalog(roots);
-    if (projection.authority !== 'authoritative') {
-      throw new Error(
-        JSON.stringify({
-          code: 'catalog-degraded',
-          authority: projection.authority,
-          diagnostics: projection.diagnostics,
-        }),
-      );
-    }
-    const entries = [...projection.entries];
-
-    if (process.env.FORGEAX_SHARED_APP_INPUTS_MODE === 'catalog-only') {
-      // Catalog probes validate metadata and browser/HMR wiring; the producer job owns full payload import.
-      const catalog = projectSharedPackCatalog(entries, opts.base).map((entry) =>
-        entry.packageUrl.startsWith('/assets/')
-          ? entry
-          : {
-              ...entry,
-              packageUrl: projectPackIndexUrl(basePrefix, `assets/${entry.guid.toLowerCase()}.bin`),
-            },
-      );
-      this.emitFile({
-        type: 'asset',
-        fileName: 'pack-index.json',
-        source: JSON.stringify(catalog),
-      });
-      return;
-    }
-
-    // Import step (M3 / w28, AC-21): the image import no longer inlines
-    // `parseImage` here. It routes through the build-time `imageImporter`
-    // (@forgeax/engine-image) -- the same Importer the @forgeax/engine-import
-    // runner dispatches `meta.importer === 'image'` to (D-9: the image import
-    // SSOT lives in engine-image). For each `kind: 'texture'` row we build a
-    // one-subAsset `ImportContext` and call `imageImporter.import(ctx)`; the
-    // returned `TextureAsset` payload carries the imported RGBA bytes (`data`)
-    // plus `width` / `height`, which we extract into a hashed `.bin`
-    // (D-1: untouched bytes; D-2: `name: '<guid-lowercase>'` + Rollup default
-    // `assetFileNames` => `assets/<guid>-<hash>.bin`). The returned
-    // `referenceId` bridges the GUID namespace to Rollup's hash namespace;
-    // `getFileName(refId)` resolves the final hashed filename after emit.
-    //
-    // Pack-index entries are mutated in place (`packageUrl` -> hashed `.bin`;
-    // `metadata.width / height` from the imported image). Non-image rows
-    // (`mesh` / `scene` / `material`) flow through untouched. .hdr rows
-    // (D-2: .hdr extension -> imageImporter HDR arm) are imported here;
-    // other unknown extensions (no standard mime / no .hdr discriminant)
-    // are passed through with the raw packageUrl so the catalog is not
-    // silently dropped.
-    // AC-01: guid -> meta path so the texture arm can honor an explicit
-    // importSettings.compression override (built once, reused by the mesh arm
-    // below as allGuidToMeta).
-    const guidToMetaBuild = await buildGuidToMeta(roots);
-    const authoredPackUrls = new Map<string, string>();
-    const authoredPackUrlsBySource = new Map<string, string>();
-    const authoredCookedRefs = new Map<string, ReadonlyMap<string, readonly string[]>>();
-    for (const entry of entries) {
-      if (
-        !entry.packageUrl.endsWith('.pack.json') ||
-        entry.packageUrl.includes('/__forgeax-ddc/') ||
-        authoredPackUrls.has(entry.packageUrl)
-      ) {
-        continue;
-      }
-      const sourcePath = resolve(cwd, entry.sourcePath);
-      const source = readFileSync(sourcePath, 'utf-8');
-      const parsed = upgradeLegacyAuthoredPack(JSON.parse(source) as AuthoredPackInput);
-      if (parsed.schemaVersion !== '2.0.0') continue;
-      const cooked = await readCookedAuthoredPack(sourcePath);
-      if (cooked !== undefined) {
-        const firstGuid = entry.guid.toLowerCase();
-        const finalized = await finalizePackage(
-          cooked.logicalPackage,
-          { write: () => {} },
-          {
-            base: basePrefix === '' ? '/' : basePrefix,
-            packagePath: `assets/${firstGuid}.pack.json`,
-            artifactPath: (guid, key) => `${guid}/${key}.bin`,
-          },
-        );
-        for (const artifact of finalized.artifacts) {
-          await stageBuildArtifact(`assets/${artifact.path}`, artifact.bytes);
-        }
-        const packRef = this.emitFile({
-          type: 'asset',
-          name: `${firstGuid}.pack.json`,
-          originalFileName: sourcePath,
-          source: JSON.stringify(finalized.pack),
-        });
-        const packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
-        authoredPackUrls.set(entry.packageUrl, packUrl);
-        authoredPackUrlsBySource.set(entry.sourcePath, packUrl);
-        authoredCookedRefs.set(entry.packageUrl, cooked.refsByGuid);
-        continue;
-      }
-      const packRef = this.emitFile({
-        type: 'asset',
-        name: `${entry.guid.toLowerCase()}.pack.json`,
-        originalFileName: sourcePath,
-        source: JSON.stringify(parsed),
-      });
-      const packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
-      authoredPackUrls.set(entry.packageUrl, packUrl);
-      authoredPackUrlsBySource.set(entry.sourcePath, packUrl);
-    }
-    const importedEntries: PackIndexEntry[] = [];
-    for (const entry of entries) {
-      const metaPath = guidToMetaBuild.get(entry.guid.toLowerCase());
-      if (metaPath !== undefined) {
-        let metaRaw: unknown;
-        try {
-          metaRaw = JSON.parse(readFileSync(metaPath, 'utf-8'));
-        } catch {
-          metaRaw = undefined;
-        }
-        if (isProceduralAliasMeta(metaRaw)) {
-          // A procedural alias has no source payload to cook: the runtime
-          // resolves its GUID onto a process-static builtin mesh. Keeping the
-          // source-meta row in a production pack-index would advertise a
-          // package URL that cannot be emitted or fetched, while routing it
-          // through gltfImporter would reject the intentional `.stub` source.
-          continue;
-        }
-      }
-      // gap-3 (w5): the pure import logic now lives in the shared
-      // `importTextureEntry` SSOT (import-texture.ts), used by both this build
-      // arm and the dev POST /__import path (D-1). The shared fn returns
-      // `{ skipped }` for any row that is not an importable image / .hdr
-      // (non-texture kind, missing metadata, unknown extension, importer
-      // throw, or absent produced asset) -- pass those through unchanged.
-      const imported = await importTextureEntry(entry, {
-        cwd,
-        metaPath: guidToMetaBuild.get(entry.guid.toLowerCase()),
-      });
-      if ('skipped' in imported) {
-        // Surface real import failures as a warning; silent pass-through for
-        // benign non-importable rows (non-texture / unknown extension). The
-        // benign-vs-real classification is the shared fn's `real` flag (one
-        // SSOT), no longer a `skipped` string-prefix match here.
-        if (imported.real) {
-          console.warn(`[forgeax-pack] ${imported.skipped}`);
-        }
-        const packageUrl = authoredPackUrls.get(entry.packageUrl);
-        const cookedRefs = authoredCookedRefs.get(entry.packageUrl)?.get(entry.guid.toLowerCase());
-        importedEntries.push(
-          packageUrl === undefined
-            ? entry
-            : {
-                ...entry,
-                packageUrl,
-                ...(entry.sourcePath.endsWith('.pack.json')
-                  ? authoredCookedRefs.has(entry.packageUrl)
-                    ? AUTHORED_COOKED_CURRENT_PROJECTION
-                    : DIRECT_CURRENT_PROJECTION
-                  : COOKED_CURRENT_PROJECTION),
-                ...(cookedRefs === undefined ? {} : { refs: cookedRefs }),
-              },
-        );
-        continue;
-      }
-      // emitFile name '<guid-lowercase>' (D-2) + originalFileName for
-      // Rollup's automatic addWatchFile hook (research F1). The imported bytes
-      // (rgba8 / rgba16float) come from the shared import fn; the packageUrl
-      // rewrite (emitFile + getFileName) stays here, the build arm owning it.
-      // (B) Texture arm build: compress after importTextureEntry, before emitFile (D-3).
-      // AC-01: honor an explicit importSettings.compression override from the meta.
-      const texBuildOverride = await readOverrideFromMeta(
-        guidToMetaBuild.get(entry.guid.toLowerCase()),
-      );
-      const compressedTex = await compressArtifact({
-        bytes: imported.bytes,
-        kind: 'texture',
-        isPackJson: false,
-        ...(texBuildOverride !== undefined ? { override: texBuildOverride } : {}),
-        // Carry the importer's resolved delivery encoding so a Basis KTX2 row
-        // records its basis-* discriminant (loader transcode dispatch) instead
-        // of the STRATEGY_TABLE 'none' default (which fell through to a scheme=1
-        // KTX2 reject). Build path SSOT with the dev arm.
-        ...(imported.metadata.compression !== undefined
-          ? { alreadyCompressed: imported.metadata.compression }
-          : {}),
-      });
-      const texturePackagePath = `assets/${entry.guid.toLowerCase()}.pack.json`;
-      const artifactCodec =
-        compressedTex.compression === 'basis-etc1s'
-          ? { name: 'basis', profile: 'etc1s' }
-          : compressedTex.compression === 'basis-uastc'
-            ? { name: 'basis', profile: 'uastc-ldr' }
-            : compressedTex.compression === 'basis-uastc-hdr'
-              ? { name: 'basis', profile: 'uastc-hdr' }
-              : undefined;
-      const texturePackage = await finalizePackage(
-        {
-          schemaVersion: '2.0.0',
-          kind: 'internal-text-package',
-          assets: [
-            {
-              guid: entry.guid,
-              kind: entry.kind,
-              payload: {
-                kind: entry.kind,
-                width: imported.metadata.width ?? 0,
-                height: imported.metadata.height ?? 0,
-                format: imported.metadata.format,
-                colorSpace: imported.metadata.colorSpace,
-                mipmap: imported.metadata.mipmap,
-              },
-              refs: [],
-              artifacts: {
-                body: {
-                  mediaType: 'application/octet-stream',
-                  ...(artifactCodec === undefined ? {} : { assetCodec: artifactCodec }),
-                  bytes: compressedTex.compressed,
-                },
-              },
-            },
-          ],
-        },
-        { write: () => {} },
-        {
-          base: basePrefix === '' ? '/' : basePrefix,
-          packagePath: texturePackagePath,
-          artifactPath: (guid) => `${guid.toLowerCase()}/body.bin`,
-        },
-      );
-      for (const artifact of texturePackage.artifacts) {
-        await stageBuildArtifact(`assets/${artifact.path}`, artifact.bytes);
-      }
-      this.emitFile({
-        type: 'asset',
-        fileName: texturePackagePath,
-        originalFileName: resolve(cwd, entry.sourcePath),
-        source: JSON.stringify(texturePackage.pack),
-      });
-      const texturePackageUrl = texturePackage.packageUrl;
-      importedEntries.push({
-        // Keep the catalog's producer-owned identity/projection facts when the
-        // package URL moves from authored source to the shipped DDC package.
-        // Rebuilding this row from only four fields made production builds
-        // lose `name`, `sourcePath`, and imported-output lifecycle evidence;
-        // runtime then fell back to the generated GUID pack filename even
-        // though the authored source was still `sky.hdr`.
-        ...entry,
-        packageUrl: texturePackageUrl,
-        ...COOKED_CURRENT_PROJECTION,
-      });
-    }
-
-    // M4 / w33 (AC-21): full pre-import for the shipped form. For every meta
-    // sidecar, call the import runner to produce the DDC (.pack.json) and emit
-    // it as a Rollup asset. This ensures the shipped bundle carries all DDC
-    // artefacts, not just the texture .bin import output. After this step the
-    // catalog entries' packageUrl fields point to the hashed asset paths
-    // (Rollup names), matching the import step's convention.
-    //
-    // For meta files whose DDC already exists on disk (e.g. pre-generated by
-    // the CLI), the import runner re-imports them idempotently (GUID
-    // import-stable iron law produces the same output). The runner also
-    // validates the GUID set; `importer: 'shader'` is skipped.
-    //
-    // guidToMetaBuild (built above the texture arm) tells us which meta declares
-    // each entry's GUID. Group entries by their declaring meta so we call
-    // `runImport` once per meta (one pass produces all sub-assets).
-    const guidSeen = new Set<string>();
-    const finalizedUiUrls = new Map<string, string>();
-    const emittedPackUrls = new Map<string, string>();
-
-    for (const entry of importedEntries) {
-      if (guidSeen.has(entry.guid.toLowerCase())) continue;
-      const metaPath = guidToMetaBuild.get(entry.guid.toLowerCase());
-      if (metaPath === undefined) {
-        // Self-contained packs are already final payloads. Emit each source
-        // pack once and point every asset row in that pack at the shipped
-        // Rollup asset. They must not enter the importer/DDC path.
-        if (entry.sourcePath.endsWith('.pack.json')) {
-          let packUrl = emittedPackUrls.get(entry.sourcePath);
-          if (packUrl === undefined) {
-            packUrl = authoredPackUrlsBySource.get(entry.sourcePath);
-          }
-          if (packUrl === undefined) {
-            const packPath = resolve(cwd, entry.sourcePath);
-            const packRef = this.emitFile({
-              type: 'asset',
-              name: `${entry.guid.toLowerCase()}.pack.json`,
-              originalFileName: packPath,
-              source: await readFile(packPath, 'utf-8'),
-            });
-            packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
-            emittedPackUrls.set(entry.sourcePath, packUrl);
-          } else {
-            emittedPackUrls.set(entry.sourcePath, packUrl);
-          }
-          for (let index = 0; index < importedEntries.length; index += 1) {
-            const candidate = importedEntries[index];
-            if (candidate?.sourcePath === entry.sourcePath) {
-              importedEntries[index] = { ...candidate, packageUrl: packUrl };
-            }
-          }
-        }
-        // Non-meta rows are already final and do not need an importer.
-        guidSeen.add(entry.guid.toLowerCase());
-        continue;
-      }
-
-      // Parse the meta and call runImport for the whole sidecar at once.
-      let rm: unknown;
-      try {
-        rm = JSON.parse(await readFile(metaPath, 'utf-8'));
-      } catch {
-        // Skip unreadable meta; the entry stays in the catalog as-is.
-        guidSeen.add(entry.guid.toLowerCase());
-        continue;
-      }
-      const meta = rm as {
-        importer: string;
-        source?: string;
-        importSettings?: unknown;
-        sourceOverrides?: unknown;
-        subAssets: ReadonlyArray<{ guid: string; sourceIndex: number; kind: string }>;
-      };
-      const subAssets = meta.subAssets;
-
-      // Mark all sub-asset GUIDs as seen so we don't re-import this meta twice.
-      for (const sub of subAssets) {
-        guidSeen.add(sub.guid.toLowerCase());
-      }
-
-      // Pass1 (the import step above) already decoded these images, emitted the
-      // hashed `.bin`, and folded width/height/format/colorSpace/mipmap into the
-      // pack-index row's `packageUrl` + `metadata`. The runtime textureLoader
-      // dispatches on `entry.kind === 'texture'` and reads only that `.bin` + the
-      // inline pack-index metadata; it never fetches the per-image `.pack.json`
-      // that runImport would emit here. Re-running the full import for an
-      // `importer: 'image'` meta therefore re-decodes every image a second time
-      // and emits a `.pack.json` Rollup asset nothing consumes. Skip it. glTF /
-      // FBX metas (whose texture sub-assets are a disjoint GUID set produced by
-      // their own importer) and any other importer still flow through below.
-      if (meta.importer === 'image') {
-        continue;
-      }
-
-      const sourceResult = resolveAssetSource(metaPath, meta.source, paths);
-      if (!sourceResult.ok) {
-        console.warn(
-          `[forgeax-pack] source resolution failed for ${metaPath}: ${sourceResult.error.code} — skipping pre-import`,
-        );
-        continue;
-      }
-
-      const runMeta: RunImportMeta = {
-        importer: meta.importer,
-        source: sourceResult.value,
-        subAssets,
-        buildPack: false,
-      };
-      if (meta.importSettings !== undefined) {
-        (runMeta as { importSettings?: Readonly<Record<string, unknown>> }).importSettings =
-          meta.importSettings as Readonly<Record<string, unknown>>;
-      }
-      if (meta.sourceOverrides !== undefined) {
-        (runMeta as { sourceOverrides?: unknown }).sourceOverrides = meta.sourceOverrides;
-      }
-
-      const runResult = await runImport(runMeta, importerRegistry, fsForImport);
-      if (!runResult.ok) {
-        const reason =
-          (runResult.error.detail as { reason?: string } | undefined)?.reason ??
-          runResult.error.hint ??
-          '';
-        if (runResult.error.code === 'importer-not-registered') {
-          throw new Error(
-            `[forgeax-pack] no importer registered for ${metaPath}; raw-source fallback is forbidden (${reason})`,
-          );
-        }
-        // Any other failure means a WIRED importer failed to convert the source
-        // (e.g. fbx-mesh-type-unsupported surfacing as import-internal-error). The
-        // .pack.json DDC never overlays the catalog, so the build would emit a
-        // pack-index pointing at the raw source and ship a guaranteed
-        // blank-screen demo with only a stderr warning. Fail-fast
-        // (architecture-principles §5 + AGENTS.md "demo failures route to engine
-        // fixes") so the gap can never be mistaken for a green build.
-        throw new Error(
-          `[forgeax-pack] pre-import failed for ${metaPath}: ${runResult.error.code} - ${reason}`,
-        );
-      }
-      if ('skipped' in runResult.value) {
-        throw new Error(
-          `[forgeax-pack] importer skipped ${metaPath}: ${runResult.value.skipped}; cooked runtime output is required`,
-        );
-      }
-
-      if (meta.importer === 'ui') {
-        const uiGuid = subAssets[0]?.guid;
-        if (uiGuid === undefined) continue;
-        const artifactPaths = new Map<string, string>();
-        const uiAsset = runResult.value.product.assets[0];
-        const transportArtifacts = projectUiBuildArtifacts(
-          Object.entries(uiAsset?.artifacts ?? {}).map(([path, artifact]) => ({
-            path,
-            mimeType: artifact.mediaType,
-            bytes: artifact.bytes,
-          })),
-          (artifact) => artifact.path,
-        );
-        for (const artifact of transportArtifacts) {
-          const ref = this.emitFile({
-            type: 'asset',
-            name: artifact.path,
-            originalFileName: artifact.path,
-            source: artifact.bytes,
-          });
-          artifactPaths.set(artifact.path, this.getFileName(ref));
-        }
-        const finalized = finalizeUiArtifact(runResult.value.product as never, {
-          artifactUrl: (artifact) =>
-            projectPackIndexUrl(basePrefix, artifactPaths.get(artifact.path) ?? artifact.path),
-        });
-        if (!finalized.ok) {
-          throw new Error(
-            `[forgeax-pack] UI finalizer failed for ${metaPath}: ${finalized.error.code}`,
-          );
-        }
-        const uiProduct = {
-          ...runResult.value.product,
-          assets: runResult.value.product.assets.map((asset, index) =>
-            index === 0 ? { ...asset, payload: finalized.value.asset } : asset,
-          ),
-        };
-        const uiPackage = await finalizePackage(
-          projectAssetProduction(uiProduct).logicalPackage,
-          { write: () => {} },
-          {
-            base: basePrefix,
-            packagePath: `assets/${uiGuid}.pack.json`,
-            artifactPath: (_guid, key) => {
-              const emittedPath = artifactPaths.get(key);
-              if (emittedPath === undefined) {
-                throw new Error(`UI artifact ${key} was not emitted for ${metaPath}`);
-              }
-              return emittedPath.replace(/^assets\//, '');
-            },
-          },
-        );
-        const uiRef = this.emitFile({
-          type: 'asset',
-          name: `${uiGuid}.pack.json`,
-          originalFileName: metaPath,
-          source: JSON.stringify(uiPackage.pack),
-        });
-        const uiPath = projectPackIndexUrl(basePrefix, this.getFileName(uiRef));
-        finalizedUiUrls.set(uiGuid.toLowerCase(), uiPath);
-        const rowIndex = importedEntries.findIndex(
-          (entry) => entry.guid.toLowerCase() === uiGuid.toLowerCase(),
-        );
-        if (rowIndex >= 0 && importedEntries[rowIndex] !== undefined) {
-          importedEntries[rowIndex] = { ...importedEntries[rowIndex], packageUrl: uiPath };
-        }
-        continue;
-      }
-
-      // Emit the .pack.json DDC as a small Rollup asset. Binary artifacts are
-      // staged separately so Rollup never retains the complete cooked product
-      // graph while rendering the application bundle.
-      // Project the product once, then stop retaining the importer-owned POD
-      // graph. `logicalPackageFromImportProduct` removes inline mesh/texture
-      // payload bytes when the asset already has a body artifact; keeping the
-      // original product alive through finalization would otherwise retain a
-      // second large graph beside the artifact bytes.
-      const importedProduct = runResult.value.product;
-      const logicalPackage = projectAssetProduction(importedProduct).logicalPackage;
-      const productByGuid = productAssetsByGuid(importedProduct);
-      const packagePath = `assets/${subAssets[0]?.guid ?? 'pack'}.pack.json`;
-      const finalized = await finalizePackage(
-        logicalPackage,
-        { write: () => {} },
-        {
-          base: basePrefix,
-          packagePath,
-          artifactPath: (guid, key) => `${guid}-${key}.bin`,
-        },
-      );
-      for (const artifact of finalized.artifacts) {
-        await stageBuildArtifact(`assets/${artifact.path}`, artifact.bytes);
-      }
-      const pack = finalized.pack;
-      const packJson = JSON.stringify(pack);
-      const packRef = this.emitFile({
-        type: 'asset',
-        name: `${subAssets[0]?.guid ?? 'pack'}.pack.json`,
-        originalFileName: metaPath,
-        source: packJson,
-      });
-      const packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
-
-      // Update all entries from this meta to point to the Pack v2 envelope.
-      for (const sub of subAssets) {
-        const idx = importedEntries.findIndex(
-          (e) => e.guid.toLowerCase() === sub.guid.toLowerCase(),
-        );
-        if (idx >= 0 && importedEntries[idx] !== undefined) {
-          const existing = importedEntries[idx];
-          if (existing !== undefined) {
-            // Carry the DDC's outgoing dependency edges into the shipped
-            // pack-index row so the prod Content Browser dependency graph
-            // sees them without re-fetching the .pack.json body.
-            const ddcAsset = productByGuid.get(sub.guid.toLowerCase());
-            importedEntries[idx] = {
-              ...existing,
-              packageUrl: packUrl,
-              ...COOKED_CURRENT_PROJECTION,
-              ...(ddcAsset?.refs !== undefined
-                ? { refs: ddcAsset.refs.map((ref) => ref.guid) }
-                : {}),
-            };
-          }
-        }
-      }
-    }
-
-    productionCatalog = dedupeFinalizedUiEntries(importedEntries, finalizedUiUrls);
-    this.emitFile({
-      type: 'asset',
-      fileName: 'pack-index.json',
-      source: JSON.stringify(productionCatalog),
-    });
-  }
-
-  async function writeBundle(options: { readonly dir?: string | undefined }): Promise<void> {
-    const factsDir = process.env.FORGEAX_BUILD_METRICS_DIR;
-    if (factsDir !== undefined) {
-      try {
-        mkdirSync(factsDir, { recursive: true });
-        const metrics = readDdcMetrics();
-        writeFileSync(
-          resolve(factsDir, `pack-${process.pid}.json`),
-          `${JSON.stringify({
-            assetCookHitCount: metrics.hitCount,
-            assetCookMissCount: metrics.missCount,
-            assetCookWriteFailureCount: metrics.writeFailureCount,
-          })}\n`,
-        );
-      } catch {
-        // Build facts are diagnostic only; cache failures remain fail-open.
-      }
-    }
-    const stage = buildArtifactStage;
-    if (stage === undefined) return;
-    if (options.dir === undefined) {
-      throw new Error('forgeax:pack staged artifacts require a directory output');
-    }
-    const outputDir = resolve(process.cwd(), options.dir);
-    try {
-      for (const relative of stage.files) {
-        const source = resolve(stage.root, relative);
-        const destination = resolve(outputDir, relative);
-        await mkdir(dirname(destination), { recursive: true });
-        await rename(source, destination);
-      }
-    } finally {
-      await rm(stage.root, { recursive: true, force: true });
-      buildArtifactStage = undefined;
-    }
-  }
-
-  async function closeBundle(): Promise<void> {
-    stopRuntimeWatcher();
-    activeScopeToken = undefined;
-    runtimeRealm.clear();
-    const stage = buildArtifactStage;
-    buildArtifactStage = undefined;
-    if (stage !== undefined) await rm(stage.root, { recursive: true, force: true });
-  }
-
-  async function rebind(
-    binding: RuntimeAssetBinding,
-    roots: readonly string[],
-  ): Promise<RuntimeAssetBinding> {
-    if (rebindServer === undefined) {
-      throw new Error('forgeax:pack rebind requires configureServer first');
-    }
-    return rebindServer(binding, roots);
-  }
-
-  function runtimeBinding(): RuntimeAssetBinding | undefined {
-    return runtimeRealm.snapshot()?.binding;
-  }
-
+  const serverLifecycle = createPluginServer({
+    opts,
+    registeredImporterKeys,
+    runtimeRealm,
+    resetState: resetDevState,
+    scopedPackageUrl,
+    scopedCatalogResponse,
+    state: {
+      get catalog() {
+        return catalog;
+      },
+      set catalog(value) {
+        catalog = value;
+      },
+      get catalogProjection() {
+        return catalogProjection;
+      },
+      set catalogProjection(value) {
+        catalogProjection = value;
+      },
+      get urlToAbs() {
+        return urlToAbs;
+      },
+      set urlToAbs(value) {
+        urlToAbs = value;
+      },
+      get catalogReady() {
+        return catalogReady;
+      },
+      set catalogReady(value) {
+        catalogReady = value;
+      },
+      get guidToMeta() {
+        return guidToMeta;
+      },
+      set guidToMeta(value) {
+        guidToMeta = value;
+      },
+      importedRows,
+      metaPackBodies,
+      devArtifactBodies,
+      inFlightImports,
+      inFlightMetaImports,
+      uiDependencies,
+    },
+    callbacks: {
+      installCatalogProjection,
+      publishAuthoredDevPacks,
+      legacyCatalogResponse,
+      importOneTexture,
+      startMetaImport,
+      ensureMetaPackBody,
+      ddcPath,
+      setCatalogDeltaPublisher: (publisher) => {
+        publishCatalogDelta = publisher;
+      },
+      preserveInvalidatedCatalogLkg,
+    },
+  });
+  const configureServer = serverLifecycle.configureServer;
+  const rebind = serverLifecycle.rebind;
+  const runtimeBinding = serverLifecycle.runtimeBinding;
+  const buildLifecycle = createPluginBuild({
+    opts,
+    registeredImporterKeys,
+    importerRegistry,
+    fsForImport,
+    callbacks: {
+      upgradeLegacyAuthoredPack,
+      readCookedAuthoredPack,
+    },
+    cookedCurrentProjection: COOKED_CURRENT_PROJECTION,
+    directCurrentProjection: DIRECT_CURRENT_PROJECTION,
+    authoredCookedCurrentProjection: AUTHORED_COOKED_CURRENT_PROJECTION,
+  });
   return {
     name: 'forgeax:pack',
     rebind,
     runtimeBinding,
     configureServer,
-    generateBundle,
-    writeBundle,
-    closeBundle,
+    generateBundle: buildLifecycle.generateBundle,
+    writeBundle: buildLifecycle.writeBundle,
+    closeBundle: async () => {
+      serverLifecycle.close();
+      await buildLifecycle.closeBundle();
+    },
   };
 }
+
+/** Package version string (debug tag). */

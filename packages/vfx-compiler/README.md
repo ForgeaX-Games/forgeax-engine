@@ -54,7 +54,7 @@ fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>)
 fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>)
 ```
 
-The compiler owns compute entry points for spawn, update, hierarchical scan, stable compaction, billboard projection, and mesh projection. It also owns all eight runtime bindings. Author declarations that conflict with this surface fail with `vfx-reserved-surface-conflict`.
+The compiler owns compute entry points for spawn, update, hierarchical scan, stable compaction, billboard, mesh, ribbon, trail, and beam projection. It reflects each renderer's capacity and topology resources into the artifact. It also owns all runtime bindings. Author declarations that conflict with this surface fail with `vfx-reserved-surface-conflict`.
 
 | Helper | Determinism contract |
 |:--|:--|
@@ -71,6 +71,10 @@ The compiler owns compute entry points for spawn, update, hierarchical scan, sta
 | MIME | `application/vnd.forgeax.vfx-program+json` |
 | Fingerprint | SHA-256 of canonical program bytes |
 | Reflection | hooks, composed imports, resources, entry points, bind-group layouts |
+
+`reflectVfxRenderer` is the public compiler inspection helper for tooling and
+tests. It returns topology, capacity, overflow policy, authored GPU inputs, and
+resource identity that the runtime executes; it is not parser-only metadata.
 
 Canonical object keys are sorted. Emitter and renderer order remain authored order. Payload emitter identities/capacities and the artifact fingerprint are checked again by the runtime loader.
 

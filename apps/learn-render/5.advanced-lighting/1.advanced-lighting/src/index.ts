@@ -18,7 +18,6 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
@@ -31,16 +30,14 @@ const BLINN_PHONG_SHADER_ID = 'learn_render::5_1_blinn_phong' as const;
 
 // 2. example glue
 
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-1-advanced-lighting',
-);
-
 // LO 5.1 renders a wood FLOOR plane lit from above. The whole point of the
 // chapter is the grazing-angle floor where Blinn-Phong's half-vector
 // specular visibly differs from Phong's reflect-vector specular. Texture
 // GUID from forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json.
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-1-advanced-lighting',
+);
 
 // Floor geometry: LO uses a 20x20 plane on the XZ plane at y=-0.5 with
 // normal +Y. createPlaneGeometry produces an XY plane facing +Z, so we
@@ -80,7 +77,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    forgeaxBundlerAdapter(),
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.1 blinn-phong] createApp failed:', appRes.error);
@@ -96,8 +93,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
+  // Bind the scoped catalog for GUID-based texture loading.
   assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
 
   // Parse texture GUID.
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);

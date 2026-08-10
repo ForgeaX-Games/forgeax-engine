@@ -81,6 +81,12 @@ function summary(facts) {
   const evidenceRows = familyRows
     .map((row) => `| ${row.family} | ${row.status} | ${row.code ?? 'N/A'} | ${row.hint ?? 'N/A'} |`)
     .join('\n');
+  const jobRows = (facts.jobs ?? [])
+    .map(
+      (job) =>
+        `| ${job.name} | ${job.status ?? 'invalidEvidence'} | ${job.pool ?? 'N/A'} | ${job.createdAt ?? 'N/A'} | ${job.startedAt ?? 'N/A'} | ${job.completedAt ?? 'N/A'} | ${job.queueWaitSeconds ?? 'N/A'} | ${job.activeSeconds ?? 'N/A'} | ${job.totalSeconds ?? 'N/A'} | ${job.code ?? 'N/A'} |`,
+    )
+    .join('\n');
   const invalidCount = familyRows.filter(({ status }) => status === 'invalidEvidence').length;
   const validCount = familyRows.filter(({ status }) => status === 'valid').length;
   return [
@@ -125,6 +131,11 @@ function summary(facts) {
     '',
     '## Wall-clock',
     'Required roster recorded in ci-cost-facts.json',
+    '',
+    '## Job timing',
+    '| Job | Status | Pool | Created at | Started at | Completed at | Queue wait seconds | Active seconds | Total seconds | Evidence |',
+    '| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |',
+    jobRows,
     '',
   ].join('\n');
 }

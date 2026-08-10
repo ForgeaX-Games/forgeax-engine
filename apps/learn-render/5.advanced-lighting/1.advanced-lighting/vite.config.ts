@@ -23,6 +23,7 @@ export default withRhiDebug({
     pluginPack({
       runtimeBinding,
       refresh: reloadAssetHost(),
+      producerReadiness: 'before-consume',
       importers: [imageImporter],
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')],
     }),

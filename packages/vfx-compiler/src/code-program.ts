@@ -1,15 +1,33 @@
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import { compileShader } from '@forgeax/engine-shader-compiler';
 import type { BindGroupLayoutDescriptor, Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import {
   PARTICLE_CODE_DEFAULT_MODULE_ID,
+  type ParticleChannelSource,
   type ParticleCodeSourceError,
   type ParticleEmitterSourceV2,
+  type ParticleEventSource,
   type ParticleRendererSource,
   parseParticleEffectSourceV2,
+  type VfxDataInterfaceRequirement,
 } from '@forgeax/engine-vfx';
+import {
+  buildParticleStagePlan,
+  createParticleStageManagedRuntime,
+  PARTICLE_EVENT_MANAGED_RUNTIME,
+  type ParticleStagePlanError,
+} from './managed-program.js';
+import {
+  canonical,
+  type ParticleRendererReflection,
+  reflectVfxLayout,
+  reflectVfxRenderer,
+  type VfxReflectionError,
+} from './reflection.js';
 
 export const PARTICLE_CODE_PROGRAM_FORMAT = 'forgeax-vfx-program-2' as const;
 export const PARTICLE_CODE_PROGRAM_ARTIFACT_KEY = 'particle-effect/program.json' as const;
@@ -70,6 +88,29 @@ fn vfx_integrate(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) {
 }
 `;
 
+const PARTICLE_CODE_DATA_INTERFACE_MODULES: Readonly<Record<string, string>> = {
+  'forgeax_vfx::data::camera': `#define_import_path forgeax_vfx::data::camera
+struct VfxCameraData {
+  view_projection: mat4x4<f32>,
+}
+`,
+  'forgeax_vfx::data::scene_depth': `#define_import_path forgeax_vfx::data::scene_depth
+struct VfxSceneDepthData {
+  depth_scale: f32,
+}
+`,
+  'forgeax_vfx::data::noise': `#define_import_path forgeax_vfx::data::noise
+struct VfxNoiseData {
+  seed: u32,
+}
+`,
+  'forgeax_vfx::data::channel': `#define_import_path forgeax_vfx::data::channel
+struct VfxChannelData {
+  count: u32,
+}
+`,
+};
+
 export const PARTICLE_CODE_DEFAULT_MODULE = `#import forgeax_vfx::prelude::{VfxParticle, VfxSpawnContext, VfxUpdateContext, vfx_integrate}
 fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>) {
   (*particle).position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -114,11 +155,18 @@ struct ForgeaxVfxRuntime {
   emissiveIntensity: vec4<f32>,
   surface: vec4<f32>,
   localToWorld: mat4x4<f32>,
+  topology: vec4<u32>,
+  billboard: vec4<f32>,
+  textureSheet: vec4<f32>,
 }
 
 struct ForgeaxVfxCounters {
   aliveCount: atomic<u32>,
   droppedCount: atomic<u32>,
+  eventProduced: atomic<u32>,
+  eventConsumed: atomic<u32>,
+  eventDropped: atomic<u32>,
+  eventOverflow: atomic<u32>,
 }
 
 struct ForgeaxVfxIndirect {
@@ -136,7 +184,6 @@ struct ForgeaxVfxIndirect {
 @group(0) @binding(4) var<storage, read_write> forgeax_vfx_indirect: array<ForgeaxVfxIndirect>;
 @group(0) @binding(5) var<storage, read_write> forgeax_vfx_scratch: array<u32>;
 @group(0) @binding(6) var<storage, read_write> forgeax_vfx_billboard_instances: array<f32>;
-@group(0) @binding(7) var<storage, read_write> forgeax_vfx_mesh_instances: array<f32>;
 
 @compute @workgroup_size(256)
 fn forgeax_vfx_spawn_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
@@ -276,6 +323,33 @@ fn forgeax_vfx_compact_main(@builtin(global_invocation_id) invocation: vec3<u32>
   }
 }
 
+@compute @workgroup_size(1)
+fn forgeax_vfx_sort_main() {
+  if (forgeax_vfx_runtime.topology.w != 2u) { return; }
+  let aliveCount = atomicLoad(&forgeax_vfx_counters.aliveCount);
+  var index = 1u;
+  loop {
+    if (index >= aliveCount) { break; }
+    let candidate = forgeax_vfx_alive_indices[index];
+    let candidateDepth = forgeax_vfx_project(
+      forgeax_vfx_world_position(forgeax_vfx_particles[candidate].position.xyz),
+    ).z;
+    var cursor = index;
+    loop {
+      if (cursor == 0u) { break; }
+      let previous = forgeax_vfx_alive_indices[cursor - 1u];
+      let previousDepth = forgeax_vfx_project(
+        forgeax_vfx_world_position(forgeax_vfx_particles[previous].position.xyz),
+      ).z;
+      if (previousDepth >= candidateDepth) { break; }
+      forgeax_vfx_alive_indices[cursor] = previous;
+      cursor -= 1u;
+    }
+    forgeax_vfx_alive_indices[cursor] = candidate;
+    index += 1u;
+  }
+}
+
 fn forgeax_vfx_project(position: vec3<f32>) -> vec3<f32> {
   let clip = forgeax_vfx_runtime.viewProjection * vec4<f32>(position, 1.0);
   let inverseW = select(1.0, 1.0 / clip.w, abs(clip.w) > 0.000001);
@@ -304,7 +378,7 @@ fn forgeax_vfx_billboard_main(@builtin(global_invocation_id) invocation: vec3<u3
   let up = forgeax_vfx_project(
     worldPosition + upAxis * particle.size_rotation.y,
   ) - center;
-  let base = rank * 23u;
+  let base = rank * 31u;
   forgeax_vfx_billboard_instances[base] = center.x;
   forgeax_vfx_billboard_instances[base + 1u] = center.y;
   forgeax_vfx_billboard_instances[base + 2u] = center.z;
@@ -328,6 +402,16 @@ fn forgeax_vfx_billboard_main(@builtin(global_invocation_id) invocation: vec3<u3
   forgeax_vfx_billboard_instances[base + 20u] = forgeax_vfx_runtime.surface.y;
   forgeax_vfx_billboard_instances[base + 21u] = forgeax_vfx_runtime.surface.z;
   forgeax_vfx_billboard_instances[base + 22u] = forgeax_vfx_runtime.surface.w;
+  let frameCount = max(1.0, forgeax_vfx_runtime.textureSheet.w);
+  let frame = min(frameCount - 1.0, floor(max(0.0, particle.age) * forgeax_vfx_runtime.textureSheet.z));
+  forgeax_vfx_billboard_instances[base + 23u] = forgeax_vfx_runtime.billboard.x;
+  forgeax_vfx_billboard_instances[base + 24u] = forgeax_vfx_runtime.billboard.y;
+  forgeax_vfx_billboard_instances[base + 25u] = frame;
+  forgeax_vfx_billboard_instances[base + 26u] = frameCount;
+  forgeax_vfx_billboard_instances[base + 27u] = forgeax_vfx_runtime.textureSheet.x;
+  forgeax_vfx_billboard_instances[base + 28u] = forgeax_vfx_runtime.textureSheet.y;
+  forgeax_vfx_billboard_instances[base + 29u] = forgeax_vfx_runtime.billboard.z;
+  forgeax_vfx_billboard_instances[base + 30u] = f32(forgeax_vfx_runtime.topology.w);
 }
 
 @compute @workgroup_size(256)
@@ -348,34 +432,154 @@ fn forgeax_vfx_mesh_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
   )) - center;
   let forward = forgeax_vfx_project(forgeax_vfx_world_position(particle.position.xyz + vec3<f32>(0.0, 0.0, scale))) - center;
   let base = rank * 28u;
-  forgeax_vfx_mesh_instances[base] = center.x;
-  forgeax_vfx_mesh_instances[base + 1u] = center.y;
-  forgeax_vfx_mesh_instances[base + 2u] = center.z;
-  forgeax_vfx_mesh_instances[base + 3u] = right.x;
-  forgeax_vfx_mesh_instances[base + 4u] = right.y;
-  forgeax_vfx_mesh_instances[base + 5u] = right.z;
-  forgeax_vfx_mesh_instances[base + 6u] = up.x;
-  forgeax_vfx_mesh_instances[base + 7u] = up.y;
-  forgeax_vfx_mesh_instances[base + 8u] = up.z;
-  forgeax_vfx_mesh_instances[base + 9u] = forward.x;
-  forgeax_vfx_mesh_instances[base + 10u] = forward.y;
-  forgeax_vfx_mesh_instances[base + 11u] = forward.z;
-  forgeax_vfx_mesh_instances[base + 12u] = particle.color.x;
-  forgeax_vfx_mesh_instances[base + 13u] = particle.color.y;
-  forgeax_vfx_mesh_instances[base + 14u] = particle.color.z;
-  forgeax_vfx_mesh_instances[base + 15u] = particle.color.w;
-  forgeax_vfx_mesh_instances[base + 16u] = forgeax_vfx_runtime.baseColor.x;
-  forgeax_vfx_mesh_instances[base + 17u] = forgeax_vfx_runtime.baseColor.y;
-  forgeax_vfx_mesh_instances[base + 18u] = forgeax_vfx_runtime.baseColor.z;
-  forgeax_vfx_mesh_instances[base + 19u] = forgeax_vfx_runtime.baseColor.w;
-  forgeax_vfx_mesh_instances[base + 20u] = forgeax_vfx_runtime.emissiveIntensity.x;
-  forgeax_vfx_mesh_instances[base + 21u] = forgeax_vfx_runtime.emissiveIntensity.y;
-  forgeax_vfx_mesh_instances[base + 22u] = forgeax_vfx_runtime.emissiveIntensity.z;
-  forgeax_vfx_mesh_instances[base + 23u] = forgeax_vfx_runtime.emissiveIntensity.w;
-  forgeax_vfx_mesh_instances[base + 24u] = forgeax_vfx_runtime.surface.x;
-  forgeax_vfx_mesh_instances[base + 25u] = forgeax_vfx_runtime.surface.y;
-  forgeax_vfx_mesh_instances[base + 26u] = forgeax_vfx_runtime.surface.z;
-  forgeax_vfx_mesh_instances[base + 27u] = forgeax_vfx_runtime.surface.w;
+  forgeax_vfx_billboard_instances[base] = center.x;
+  forgeax_vfx_billboard_instances[base + 1u] = center.y;
+  forgeax_vfx_billboard_instances[base + 2u] = center.z;
+  forgeax_vfx_billboard_instances[base + 3u] = right.x;
+  forgeax_vfx_billboard_instances[base + 4u] = right.y;
+  forgeax_vfx_billboard_instances[base + 5u] = right.z;
+  forgeax_vfx_billboard_instances[base + 6u] = up.x;
+  forgeax_vfx_billboard_instances[base + 7u] = up.y;
+  forgeax_vfx_billboard_instances[base + 8u] = up.z;
+  forgeax_vfx_billboard_instances[base + 9u] = forward.x;
+  forgeax_vfx_billboard_instances[base + 10u] = forward.y;
+  forgeax_vfx_billboard_instances[base + 11u] = forward.z;
+  forgeax_vfx_billboard_instances[base + 12u] = particle.color.x;
+  forgeax_vfx_billboard_instances[base + 13u] = particle.color.y;
+  forgeax_vfx_billboard_instances[base + 14u] = particle.color.z;
+  forgeax_vfx_billboard_instances[base + 15u] = particle.color.w;
+  forgeax_vfx_billboard_instances[base + 16u] = forgeax_vfx_runtime.baseColor.x;
+  forgeax_vfx_billboard_instances[base + 17u] = forgeax_vfx_runtime.baseColor.y;
+  forgeax_vfx_billboard_instances[base + 18u] = forgeax_vfx_runtime.baseColor.z;
+  forgeax_vfx_billboard_instances[base + 19u] = forgeax_vfx_runtime.baseColor.w;
+  forgeax_vfx_billboard_instances[base + 20u] = forgeax_vfx_runtime.emissiveIntensity.x;
+  forgeax_vfx_billboard_instances[base + 21u] = forgeax_vfx_runtime.emissiveIntensity.y;
+  forgeax_vfx_billboard_instances[base + 22u] = forgeax_vfx_runtime.emissiveIntensity.z;
+  forgeax_vfx_billboard_instances[base + 23u] = forgeax_vfx_runtime.emissiveIntensity.w;
+  forgeax_vfx_billboard_instances[base + 24u] = forgeax_vfx_runtime.surface.x;
+  forgeax_vfx_billboard_instances[base + 25u] = forgeax_vfx_runtime.surface.y;
+  forgeax_vfx_billboard_instances[base + 26u] = forgeax_vfx_runtime.surface.z;
+  forgeax_vfx_billboard_instances[base + 27u] = forgeax_vfx_runtime.surface.w;
+}
+
+@compute @workgroup_size(256)
+fn forgeax_vfx_ribbon_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let rank = invocation.x;
+  let count = min(atomicLoad(&forgeax_vfx_counters.aliveCount), forgeax_vfx_runtime.topology.z);
+  if (rank == 0u) {
+    forgeax_vfx_indirect[forgeax_vfx_runtime.topology.x].instanceCount = select(0u, count - 1u, count > 1u);
+  }
+  if (rank + 1u >= count) { return; }
+  let particle = forgeax_vfx_particles[forgeax_vfx_alive_indices[rank]];
+  let next = forgeax_vfx_particles[forgeax_vfx_alive_indices[rank + 1u]];
+  let start = forgeax_vfx_project(forgeax_vfx_world_position(particle.position.xyz));
+  let endpoint = forgeax_vfx_project(forgeax_vfx_world_position(next.position.xyz));
+  let base = rank * 12u;
+  forgeax_vfx_billboard_instances[base] = start.x;
+  forgeax_vfx_billboard_instances[base + 1u] = start.y;
+  forgeax_vfx_billboard_instances[base + 2u] = start.z;
+  forgeax_vfx_billboard_instances[base + 3u] = endpoint.x;
+  forgeax_vfx_billboard_instances[base + 4u] = endpoint.y;
+  forgeax_vfx_billboard_instances[base + 5u] = endpoint.z;
+  forgeax_vfx_billboard_instances[base + 6u] = particle.color.x;
+  forgeax_vfx_billboard_instances[base + 7u] = particle.color.y;
+  forgeax_vfx_billboard_instances[base + 8u] = particle.color.z;
+  forgeax_vfx_billboard_instances[base + 9u] = particle.color.w;
+  forgeax_vfx_billboard_instances[base + 10u] = forgeax_vfx_runtime.billboard.x;
+  forgeax_vfx_billboard_instances[base + 11u] = 0.0;
+}
+
+@compute @workgroup_size(256)
+fn forgeax_vfx_trail_history_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let rank = invocation.x;
+  let count = min(atomicLoad(&forgeax_vfx_counters.aliveCount), forgeax_vfx_runtime.topology.z);
+  if (rank >= count) { return; }
+  let particle = forgeax_vfx_particles[forgeax_vfx_alive_indices[rank]];
+  let historyLength = max(2u, forgeax_vfx_runtime.topology.y);
+  let slot = forgeax_vfx_runtime.tick % historyLength;
+  let historyTarget = (rank * historyLength + slot) * 4u;
+  let position = forgeax_vfx_world_position(particle.position.xyz);
+  forgeax_vfx_scratch[historyTarget] = bitcast<u32>(position.x);
+  forgeax_vfx_scratch[historyTarget + 1u] = bitcast<u32>(position.y);
+  forgeax_vfx_scratch[historyTarget + 2u] = bitcast<u32>(position.z);
+  forgeax_vfx_scratch[historyTarget + 3u] = bitcast<u32>(1.0);
+}
+
+@compute @workgroup_size(256)
+fn forgeax_vfx_trail_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let historyLength = max(2u, forgeax_vfx_runtime.topology.y);
+  let segmentCount = historyLength - 1u;
+  let count = min(atomicLoad(&forgeax_vfx_counters.aliveCount), forgeax_vfx_runtime.topology.z);
+  let outputCount = count * segmentCount;
+  let outputRank = invocation.x;
+  if (outputRank == 0u) {
+    forgeax_vfx_indirect[forgeax_vfx_runtime.topology.x].instanceCount = outputCount;
+  }
+  if (outputRank >= outputCount) { return; }
+  let particleRank = outputRank / segmentCount;
+  let segment = outputRank % segmentCount;
+  let newest = forgeax_vfx_runtime.tick % historyLength;
+  let firstSlot = (newest + historyLength - segment) % historyLength;
+  let secondSlot = (newest + historyLength - segment - 1u) % historyLength;
+  let historyBase = particleRank * historyLength * 4u;
+  let firstBase = historyBase + firstSlot * 4u;
+  let secondBase = historyBase + secondSlot * 4u;
+  let first = vec4<f32>(
+    bitcast<f32>(forgeax_vfx_scratch[firstBase]),
+    bitcast<f32>(forgeax_vfx_scratch[firstBase + 1u]),
+    bitcast<f32>(forgeax_vfx_scratch[firstBase + 2u]),
+    bitcast<f32>(forgeax_vfx_scratch[firstBase + 3u]),
+  );
+  let second = vec4<f32>(
+    bitcast<f32>(forgeax_vfx_scratch[secondBase]),
+    bitcast<f32>(forgeax_vfx_scratch[secondBase + 1u]),
+    bitcast<f32>(forgeax_vfx_scratch[secondBase + 2u]),
+    bitcast<f32>(forgeax_vfx_scratch[secondBase + 3u]),
+  );
+  let particle = forgeax_vfx_particles[forgeax_vfx_alive_indices[particleRank]];
+  let start = forgeax_vfx_project(first.xyz);
+  let endpoint = forgeax_vfx_project(second.xyz);
+  let base = outputRank * 12u;
+  forgeax_vfx_billboard_instances[base] = start.x;
+  forgeax_vfx_billboard_instances[base + 1u] = start.y;
+  forgeax_vfx_billboard_instances[base + 2u] = start.z;
+  forgeax_vfx_billboard_instances[base + 3u] = endpoint.x;
+  forgeax_vfx_billboard_instances[base + 4u] = endpoint.y;
+  forgeax_vfx_billboard_instances[base + 5u] = endpoint.z;
+  forgeax_vfx_billboard_instances[base + 6u] = particle.color.x;
+  forgeax_vfx_billboard_instances[base + 7u] = particle.color.y;
+  forgeax_vfx_billboard_instances[base + 8u] = particle.color.z;
+  forgeax_vfx_billboard_instances[base + 9u] = particle.color.w;
+  forgeax_vfx_billboard_instances[base + 10u] = forgeax_vfx_runtime.billboard.x;
+  forgeax_vfx_billboard_instances[base + 11u] = f32(segment) / f32(segmentCount);
+}
+
+@compute @workgroup_size(256)
+fn forgeax_vfx_beam_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let rank = invocation.x;
+  let count = min(atomicLoad(&forgeax_vfx_counters.aliveCount), forgeax_vfx_runtime.topology.z);
+  if (rank == 0u) {
+    forgeax_vfx_indirect[forgeax_vfx_runtime.topology.x].instanceCount = count;
+  }
+  if (rank >= count) { return; }
+  let particle = forgeax_vfx_particles[forgeax_vfx_alive_indices[rank]];
+  let base = rank * 12u;
+  let worldStart = forgeax_vfx_world_position(particle.position.xyz);
+  let worldEndpoint = worldStart + particle.velocity.xyz * particle.lifetime;
+  let start = forgeax_vfx_project(worldStart);
+  let endpoint = forgeax_vfx_project(worldEndpoint);
+  forgeax_vfx_billboard_instances[base] = start.x;
+  forgeax_vfx_billboard_instances[base + 1u] = start.y;
+  forgeax_vfx_billboard_instances[base + 2u] = start.z;
+  forgeax_vfx_billboard_instances[base + 3u] = endpoint.x;
+  forgeax_vfx_billboard_instances[base + 4u] = endpoint.y;
+  forgeax_vfx_billboard_instances[base + 5u] = endpoint.z;
+  forgeax_vfx_billboard_instances[base + 6u] = particle.color.x;
+  forgeax_vfx_billboard_instances[base + 7u] = particle.color.y;
+  forgeax_vfx_billboard_instances[base + 8u] = particle.color.z;
+  forgeax_vfx_billboard_instances[base + 9u] = particle.color.w;
+  forgeax_vfx_billboard_instances[base + 10u] = forgeax_vfx_runtime.billboard.x;
+  forgeax_vfx_billboard_instances[base + 11u] = 0.0;
 }
 `;
 
@@ -387,27 +591,16 @@ export interface ParticleCodeModuleSet {
 export interface ParticleCodeProgramReflection {
   readonly hooks: readonly ['vfx_spawn', 'vfx_update'];
   readonly imports: readonly string[];
-  readonly resources: readonly [
-    'particles',
-    'runtime',
-    'aliveIndices',
-    'counters',
-    'indirect',
-    'scratch',
-    'billboardInstances',
-    'meshInstances',
-  ];
-  readonly entryPoints: readonly [
-    'forgeax_vfx_spawn_main',
-    'forgeax_vfx_update_main',
-    'forgeax_vfx_scan_blocks_main',
-    'forgeax_vfx_scan_block_offsets_main',
-    'forgeax_vfx_add_offsets_main',
-    'forgeax_vfx_compact_main',
-    'forgeax_vfx_billboard_main',
-    'forgeax_vfx_mesh_main',
-  ];
+  readonly resources: readonly string[];
+  readonly entryPoints: readonly string[];
   readonly bindings: readonly BindGroupLayoutDescriptor[];
+  readonly layout: import('@forgeax/engine-vfx').VfxEffectReflection;
+  readonly dataInterfaces: readonly VfxDataInterfaceRequirement[];
+  readonly eventChannels: readonly ParticleChannelSource[];
+  readonly events: readonly ParticleEventSource[];
+  readonly eventEntryPoint: 'forgeax_vfx_event_main';
+  readonly stages: readonly import('@forgeax/engine-vfx').VfxGpuStageReflection[];
+  readonly renderers: readonly ParticleRendererReflection[];
 }
 
 export interface CookedParticleCodeEmitter {
@@ -418,6 +611,8 @@ export interface CookedParticleCodeEmitter {
   readonly schedule: ParticleEmitterSourceV2['schedule'];
   readonly bounds: ParticleEmitterSourceV2['bounds'];
   readonly renderers: readonly ParticleRendererSource[];
+  readonly channels: readonly ParticleChannelSource[];
+  readonly events: readonly ParticleEventSource[];
   readonly simulationWhenCulled: 'continue' | 'pause' | 'restart-on-visible';
   readonly wgsl: string;
   readonly reflection: ParticleCodeProgramReflection;
@@ -454,13 +649,50 @@ export interface ParticleCodeNativeCookInput {
   readonly source: unknown;
 }
 
+function readParticleCodeModules(root: string): Record<string, ParticleCodeModuleSet> {
+  const modules: Record<string, ParticleCodeModuleSet> = {};
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    )) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile() && entry.name.endsWith('.vfx.wgsl')) {
+        if (modules[entry.name] !== undefined) {
+          throw new Error(`duplicate VFX module ${entry.name} under ${root}`);
+        }
+        modules[entry.name] = { entry: readFileSync(path, 'utf8') };
+      }
+    }
+  };
+  visit(root);
+  return modules;
+}
+
+/** Build a deterministic compiler input from authored WGSL roots. */
+export function createParticleCodeNativeCookerFromRoots(
+  roots: readonly string[],
+): NativeCooker<ParticleCodeEffectPayload, ParticleCodeNativeCookInput> {
+  const modules = roots.reduce<Record<string, ParticleCodeModuleSet>>((all, root) => {
+    for (const [name, module] of Object.entries(readParticleCodeModules(root))) {
+      if (all[name] !== undefined) throw new Error(`duplicate VFX module ${name}`);
+      all[name] = module;
+    }
+    return all;
+  }, {});
+  return createParticleCodeNativeCooker(modules);
+}
+
 export interface ParticleCodeCompileError {
   readonly code:
     | 'vfx-hook-missing'
     | 'vfx-hook-invalid'
     | 'vfx-reserved-surface-conflict'
     | 'vfx-module-missing'
-    | 'vfx-shader-invalid';
+    | 'vfx-shader-invalid'
+    | VfxReflectionError['code']
+    | ParticleStagePlanError['code'];
   readonly expected: string;
   readonly hint: string;
   readonly detail: {
@@ -472,7 +704,11 @@ export interface ParticleCodeCompileError {
   };
 }
 
-export type ParticleCodeCookError = ParticleCodeSourceError | ParticleCodeCompileError;
+export type ParticleCodeCookError =
+  | ParticleCodeSourceError
+  | ParticleCodeCompileError
+  | VfxReflectionError
+  | ParticleStagePlanError;
 
 function compileError(
   code: ParticleCodeCompileError['code'],
@@ -484,21 +720,15 @@ function compileError(
   return { code, expected, hint, detail: { emitterId, ...detail } };
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 async function compileEmitter(
   emitter: ParticleEmitterSourceV2,
   modules: Readonly<Record<string, ParticleCodeModuleSet>>,
-): Promise<Result<CookedParticleCodeEmitter, ParticleCodeCompileError>> {
+): Promise<
+  Result<
+    CookedParticleCodeEmitter,
+    ParticleCodeSourceError | ParticleCodeCompileError | VfxReflectionError | ParticleStagePlanError
+  >
+> {
   const moduleId = emitter.program.module;
   const module =
     moduleId === PARTICLE_CODE_DEFAULT_MODULE_ID
@@ -515,7 +745,8 @@ async function compileEmitter(
       ),
     );
   }
-  const entryCode = wgslCode(module.entry);
+  const authoredEntryCode = module.entry;
+  const entryCode = wgslCode(authoredEntryCode);
   if (RESERVED.test(entryCode)) {
     return err(
       compileError(
@@ -561,14 +792,27 @@ async function compileEmitter(
       ),
     );
   }
+  const stagePlan = buildParticleStagePlan(authoredEntryCode);
+  if (!stagePlan.ok) return stagePlan;
+  const layout =
+    module.imports === undefined
+      ? reflectVfxLayout({ root: entryCode })
+      : reflectVfxLayout({ root: entryCode, imports: module.imports });
+  if (!layout.ok) return layout;
+  const renderers = reflectVfxRenderer(emitter.renderers);
+  if (!renderers.ok) return renderers;
   const imports = {
     [PARTICLE_CODE_PRELUDE_MODULE_ID]: PARTICLE_CODE_PRELUDE,
+    ...PARTICLE_CODE_DATA_INTERFACE_MODULES,
     ...(module.imports ?? {}),
   };
-  const compiled = await compileShader(`${module.entry}\n${MANAGED_RUNTIME}`, {
-    id: `forgeax_vfx_effect::${emitter.id}`,
-    imports: imports as Record<string, string>,
-  });
+  const compiled = await compileShader(
+    `${module.entry}\n${MANAGED_RUNTIME}\n${createParticleStageManagedRuntime(stagePlan.value)}\n${PARTICLE_EVENT_MANAGED_RUNTIME}`,
+    {
+      id: `forgeax_vfx_effect::${emitter.id}`,
+      imports: imports as Record<string, string>,
+    },
+  );
   if (!compiled.ok) {
     return err(
       compileError(
@@ -598,6 +842,8 @@ async function compileEmitter(
     schedule: emitter.schedule,
     bounds: emitter.bounds,
     renderers: emitter.renderers,
+    channels: Object.freeze([...(emitter.channels ?? [])]),
+    events: Object.freeze([...(emitter.events ?? [])]),
     simulationWhenCulled: emitter.simulationWhenCulled ?? 'continue',
     wgsl: compiled.value.wgsl,
     reflection: {
@@ -611,7 +857,9 @@ async function compileEmitter(
         'indirect',
         'scratch',
         'billboardInstances',
-        'meshInstances',
+        'channelInputs',
+        'events',
+        'eventCounters',
       ],
       entryPoints: [
         'forgeax_vfx_spawn_main',
@@ -620,10 +868,24 @@ async function compileEmitter(
         'forgeax_vfx_scan_block_offsets_main',
         'forgeax_vfx_add_offsets_main',
         'forgeax_vfx_compact_main',
+        'forgeax_vfx_sort_main',
+        'forgeax_vfx_event_main',
         'forgeax_vfx_billboard_main',
         'forgeax_vfx_mesh_main',
+        'forgeax_vfx_ribbon_main',
+        'forgeax_vfx_trail_history_main',
+        'forgeax_vfx_trail_main',
+        'forgeax_vfx_beam_main',
+        ...stagePlan.value.stages.map((stage) => stage.entryPoint),
       ],
       bindings: compiled.value.bindings,
+      layout: layout.value,
+      dataInterfaces: layout.value.dataInterfaces ?? [],
+      eventChannels: Object.freeze([...(emitter.channels ?? [])]),
+      events: Object.freeze([...(emitter.events ?? [])]),
+      eventEntryPoint: 'forgeax_vfx_event_main',
+      stages: Object.freeze(stagePlan.value.stages),
+      renderers: renderers.value,
     },
   });
 }

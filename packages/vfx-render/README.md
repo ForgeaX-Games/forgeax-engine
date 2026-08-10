@@ -1,6 +1,6 @@
 # @forgeax/engine-vfx-render
 
-Production RenderFeature and host for persistent GPU particle simulation and indirect billboard/mesh drawing.
+Production RenderFeature and host for persistent GPU particle simulation and indirect billboard, mesh, ribbon, trail, and beam drawing.
 
 ## Host recipe
 
@@ -49,6 +49,9 @@ The generic render seam accepts persistent compute programs/buffers/bindings, ex
 | Tick uniforms | Bounded ring | One small write per fixed tick |
 | Renderer projection instances | Renderer instance | None after allocation |
 | Mesh geometry/index data | Prepared graphics cache | Initial upload |
+| Ribbon strip resources | Ribbon renderer | Initial allocation; GPU indirect count |
+| Trail history resources | Trail renderer | Initial allocation; GPU history updates |
+| Beam endpoint resources | Beam renderer | Initial allocation; GPU endpoint projection |
 
 There is no steady-state particle readback or CPU particle upload.
 Bindings retained by an attached player keep their transitive buffers alive. When a player,
@@ -77,10 +80,17 @@ use the same owner path.
 - Scene color/depth target formats and sample counts derive from RenderFeature targets.
 - Fixed bounds cull projection/draw before graph contribution; simulation follows the source culling policy.
 
-Texture sheets, soft-particle depth sampling, parent variants, live parameter mutation, particle
-sorting, ribbons, beams, and CPU counterparts remain Batch B work. Material texture/sampler binding
-is executable; animation-specific sheet fields remain intentionally absent until their own runtime
-and verification exist.
+Billboard texture sheets, pivot, soft-particle depth sampling, and sorting are
+executed from the reflected renderer contract. Ribbon, trail, and beam use
+independent resource plans and shader entry points. Parent variants and CPU
+counterparts remain outside this runtime boundary.
+
+Material texture and sampler bindings remain executable for particle materials;
+the advanced renderer fields augment that shared material path.
+
+`createVfxRenderInspectSnapshot` and `topologyRecoveryHint` expose structured
+readiness and recovery evidence. Device loss or a stale generation discards the
+affected topology resources and rebuilds them from cooked reflection.
 
 ## Capabilities and recovery
 
@@ -96,6 +106,22 @@ Expected first-use pipeline preparation may report bounded `render-feature-prepa
 |:--|:--|
 | `smoke:browser` | Dev Pack/import transport, Browser WebGPU validation, loader, runtime, camera readiness |
 | `smoke` | Dawn 300 frames, billboard and mesh pixel energy, readiness deadline, explicit recovery |
-| `smoke:falsify` | Disable-VFX, zero-emitter, and missing-material modes produce explicit zero output |
+| `smoke:falsify` | Disable-VFX, zero-emitter, missing-depth, and topology-fallback modes produce explicit structured failures |
+| `scripts/bench/vfx-batch-b.mjs` | Exact 10K/100K/1M total capacity, 30 warm-up plus 60 sampled frames, zero particle readback, and per-adapter p95 budget |
+
+```sh
+pnpm --filter @forgeax/hello-boss-lightning smoke:browser
+pnpm --filter @forgeax/hello-boss-lightning smoke
+pnpm --filter @forgeax/hello-boss-lightning smoke:falsify
+node apps/hello/boss-lightning/scripts/smoke-public-only.mjs
+node scripts/bench/vfx-batch-b.mjs
+```
+
+The hardware product target is p95 <= 33.34 ms. CI's forced lavapipe adapter is
+a software correctness reference, not evidence of hardware GPU throughput, so
+its p95 is recorded but is not treated as an FPS gate. Reports include
+`adapterClass`, `performanceGated`, the hardware target, and
+`allocatedCapacity`. A hardware run must satisfy the target, and every tier
+must allocate exactly the declared total capacity.
 
 Null/backend unit tests prove graph and resource structure; they do not replace Browser or Dawn execution.

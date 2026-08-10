@@ -33,6 +33,17 @@ describe('material shader binding contract', () => {
 
     expect(resolveMaterialShaderBindingContract(source)).toBe('render-material');
   });
+
+  it('recognizes a group-zero sampled depth resource without inventing a view uniform', () => {
+    const source = `
+      @group(0) @binding(0) var sceneDepth: texture_depth_2d;
+      @fragment fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+        return vec4<f32>(textureLoad(sceneDepth, vec2<i32>(position.xy), 0));
+      }
+    `;
+
+    expect(resolveMaterialShaderBindingContract(source)).toBe('group-0-resource');
+  });
 });
 
 describe('material shader vertex input contract', () => {

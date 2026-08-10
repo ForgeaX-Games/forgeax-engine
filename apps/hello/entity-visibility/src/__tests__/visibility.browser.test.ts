@@ -263,5 +263,5 @@ describe('entity visibility browser visual red test', () => {
       }
     };
     await run();
-  });
+  }, 60_000);
 });

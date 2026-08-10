@@ -1,5 +1,9 @@
 # `@forgeax/preview`
 
+VFX Batch B consumers use the public package barrels and the same inspect and
+recovery projection exposed by Preview tooling. The host does not provide a VFX
+RPC or raw RHI escape hatch.
+
 The preview app is a small, independent dogfood host for the UI authoring loop. It exposes the same loader, mount, scenario, refresh, and capture seam used by a future editor without adding an editor panel or a second asset format.
 
 ## Shortest path

@@ -1,17 +1,30 @@
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { err, FixedUpdate, ok, type World } from '@forgeax/engine-ecs';
 import type { MaterialAsset, Result } from '@forgeax/engine-types';
+import type {
+  VfxDataInterfaceError,
+  VfxDataInterfaceProvider,
+  VfxDataInterfaceRequirement,
+  VfxDataInterfaceResolution,
+} from '@forgeax/engine-vfx';
 import {
+  createVfxInspectSnapshot,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
+  type VfxGpuRuntime,
   vfxGpuEffectPackLoader,
   vfxGpuRuntimePlugin,
 } from '@forgeax/engine-vfx';
 import type { ParticleRenderCameraSource } from '../feature/camera.js';
 import { gpuParticleRenderFeature } from '../feature/gpu-particle-feature.js';
+import {
+  createVfxDataInterfaceRegistry,
+  type VfxDataInterfaceRegistry,
+} from './data-interface-providers.js';
 
 export interface VfxRuntimeHostOptions {
   readonly camera: ParticleRenderCameraSource;
   readonly maxQueuedTicks?: number;
+  readonly providers?: readonly VfxDataInterfaceProvider[];
 }
 
 export interface VfxRuntimeHostError {
@@ -26,6 +39,12 @@ export interface VfxRuntimeHostError {
 
 export interface VfxRuntimeHost {
   readonly feature: ReturnType<typeof gpuParticleRenderFeature>;
+  readonly dataInterfaces: VfxDataInterfaceRegistry;
+  inspect(world: World): ReturnType<typeof createVfxInspectSnapshot> | undefined;
+  resolveDataInterfaces(input: {
+    readonly requirements: readonly VfxDataInterfaceRequirement[];
+    readonly generation: number;
+  }): Result<VfxDataInterfaceResolution, VfxDataInterfaceError>;
   attachWorld(input: {
     readonly world: World;
     readonly assets: AssetRegistry;
@@ -47,8 +66,10 @@ function failure(
 export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntimeHost {
   const registries = new WeakSet<AssetRegistry>();
   const worlds = new WeakMap<World, AssetRegistry>();
+  const dataInterfaces = createVfxDataInterfaceRegistry(options.providers);
   const feature = gpuParticleRenderFeature({
     camera: options.camera,
+    dataInterfaces,
     material: {
       read: (world, guid) => {
         const asset = worlds.get(world)?.lookup(guid);
@@ -64,6 +85,22 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
   });
   return {
     feature,
+    dataInterfaces,
+    inspect: (world) => {
+      const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+      const intent = runtime.snapshot().at(-1) ?? [...runtime.diagnostics()].at(-1);
+      if (intent === undefined || !('emitter' in intent)) return undefined;
+      return createVfxInspectSnapshot({
+        layoutFingerprint:
+          intent.emitter.reflection.layout?.fingerprint ?? intent.programFingerprint,
+        parameterGeneration: intent.instanceGeneration,
+        patchCount: intent.instancePatchCount,
+        channels: runtime.eventCounters(intent.player),
+        renderers: { topology: intent.emitter.renderers.map((renderer) => renderer.kind) },
+      });
+    },
+    resolveDataInterfaces: ({ requirements, generation }) =>
+      dataInterfaces.resolve(requirements, generation),
     attachWorld: async ({ world, assets }) => {
       if (worlds.has(world)) return ok({ state: 'already-attached' });
       if (!registries.has(assets)) {

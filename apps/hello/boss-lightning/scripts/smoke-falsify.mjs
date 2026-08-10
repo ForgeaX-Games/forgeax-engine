@@ -5,17 +5,33 @@ import { fileURLToPath } from 'node:url';
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const smoke = resolve(appRoot, 'scripts/smoke-browser.mjs');
 
-function run(mode) {
+function run(mode, index) {
   return spawnSync('node', [smoke], {
-    env: { ...process.env, BOSS_LIGHTNING_FALSIFY: mode },
+    env: {
+      ...process.env,
+      BOSS_LIGHTNING_FALSIFY: mode,
+      BOSS_LIGHTNING_PORT: String(5180 + index),
+    },
     encoding: 'utf8',
   });
 }
 
-const cases = ['disable-vfx', 'emitter-zero', 'material-empty'];
+const cases = [
+  'billboard-fallback',
+  'freeze-generation',
+  'disable-vfx',
+  'emitter-zero',
+  'material-empty',
+  'missing-depth',
+  'event-queue-cleared',
+  'recursion-depth',
+  'stage-cycle',
+  'stage-hazard',
+  'stage-budget',
+];
 const failures = [];
-for (const mode of cases) {
-  const result = run(mode);
+for (const [index, mode] of cases.entries()) {
+  const result = run(mode, index);
   if (result.status !== 0) failures.push(`${mode} failed: ${result.stderr || result.stdout}`);
   else console.log(`[smoke-falsify] ${mode} preserved its explicit zero-output contract`);
 }

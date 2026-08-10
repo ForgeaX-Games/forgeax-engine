@@ -51,4 +51,23 @@ describe('Boss Lightning smoke probe contract', () => {
     expect(falsifySource).toContain("'material-empty'");
     expect(falsifySource).toContain('result.status !== 0');
   });
+
+  it('keeps each Batch B falsifier on the same observable path', () => {
+    for (const mode of [
+      'billboard-fallback',
+      'freeze-generation',
+      'event-queue-cleared',
+      'missing-depth',
+      'stage-cycle',
+      'stage-hazard',
+      'stage-budget',
+    ]) {
+      expect(falsifySource).toContain(`'${mode}'`);
+      expect(browserSource).toContain(mode);
+    }
+    expect(browserSource).toContain('screenshot');
+    expect(browserSource).toContain('visualEvidence');
+    expect(browserSource).not.toContain('cpuParticle');
+    expect(browserSource).not.toContain('readback');
+  });
 });

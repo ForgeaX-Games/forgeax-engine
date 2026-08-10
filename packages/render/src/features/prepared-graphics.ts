@@ -27,6 +27,7 @@ export type PreparedKind = 'pipeline' | 'bindings' | 'vertex-data' | 'index-data
 export const RENDER_FEATURE_VERTEX_LAYOUTS = Object.freeze({
   positionSizeColorInstance: 'position-size-color-instance',
   billboardMaterialInstance: 'billboard-material-instance',
+  topologySegmentInstance: 'topology-segment-instance',
   meshGeometryMaterialInstance: 'mesh-geometry-material-instance',
 } as const);
 
@@ -65,7 +66,10 @@ export interface RenderFeaturePipelineDescriptor {
 /** Declarative request for values bound through a prepared pipeline. */
 export interface RenderFeatureBindingsDescriptor {
   readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
-  readonly values: Readonly<Record<string, unknown>>;
+  readonly values: Readonly<Record<string, unknown>> & {
+    readonly group?: number;
+    readonly sceneDepth?: RenderFeatureTargetHandle;
+  };
 }
 
 /** CPU-owned vertex data and its canonical layout identity. */
@@ -219,6 +223,8 @@ export type RenderFeatureDrawRecord =
  */
 export interface RenderFeatureGraphicsPassDescriptor {
   readonly attachments: RenderFeatureGraphicsPassAttachments;
+  /** Targets sampled by shaders but not attached for writing in this pass. */
+  readonly sampledTargets?: readonly RenderFeatureTargetHandle[];
   readonly draws: readonly RenderFeatureDrawRecord[];
 }
 

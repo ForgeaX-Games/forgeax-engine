@@ -103,7 +103,7 @@ export function createBossScene(
     component: DirectionalLight,
     data: { direction: [-0.4, -0.8, -0.5], color: [0.5, 0.62, 1], intensity: 2.2, castShadow: false },
   }).unwrap();
-  const groundWarning = spawnMesh(world, HANDLE_CUBE, materials.groundWarning, [0.25, -1.15, 0], [3.5, 0.05, 1.8]);
-  const strike = spawnMesh(world, HANDLE_CUBE, materials.strike, [1.55, 0.65, 0], [0.14, 1.75, 0.14]);
+  const groundWarning = spawnMesh(world, HANDLE_CUBE, materials.groundWarning, [0.35, -1.12, 0], [2.2, 0.025, 0.8]);
+  const strike = spawnMesh(world, HANDLE_CUBE, materials.strike, [1.55, 0.72, 0], [0.05, 1.3, 0.05]);
   return { player, body, head, mouthGlow, mouthJoint, camera, groundWarning, strike };
 }

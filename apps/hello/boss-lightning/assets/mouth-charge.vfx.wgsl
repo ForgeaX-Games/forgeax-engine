@@ -1,5 +1,9 @@
 #import forgeax_vfx::prelude::{VfxParticle, VfxSpawnContext, VfxUpdateContext, vfx_integrate, vfx_random_spawn}
 
+struct VfxParameters {
+  intensity: f32,
+}
+
 fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>) {
   let angle = vfx_random_spawn(ctx, 0u) * 6.2831853;
   let radius = sqrt(vfx_random_spawn(ctx, 1u)) * 0.45;
@@ -17,6 +21,8 @@ fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>) {
 }
 
 fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) {
+  var parameters: VfxParameters;
+  _ = parameters.intensity;
   let drag = max(0.0, 1.0 - 0.12 * ctx.delta);
   (*particle).velocity = vec4<f32>(
     (*particle).velocity.x * drag,

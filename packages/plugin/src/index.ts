@@ -198,11 +198,11 @@ type PluginErrorVariant<C extends PluginErrorCode> = PluginErrorClass & {
 };
 
 /**
- * Public PluginError type -- discriminated union of the 2 variants.
+ * Public PluginError type -- discriminated union of every code variant.
  */
-export type PluginError =
-  | PluginErrorVariant<'duplicate-plugin'>
-  | PluginErrorVariant<'plugin-build-failed'>;
+export type PluginError = {
+  [C in PluginErrorCode]: PluginErrorVariant<C>;
+}[PluginErrorCode];
 
 interface PluginErrorConstructor {
   new <C extends PluginErrorCode>(args: {

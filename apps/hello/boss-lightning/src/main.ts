@@ -6,12 +6,22 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform, scenePlugin } from '@forgeax/engine-scene';
 import { createStandaloneRuntimeAssetBinding, type Handle, type MaterialAsset } from '@forgeax/engine-types';
 import {
+  createVfxEffectContract,
   loadVfxGpuEffect,
+  ParticleEffectInstance,
   ParticleEffectPlayer,
+  type VfxEffectReflection,
+  type VfxGpuEffectAsset,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
 } from '@forgeax/engine-vfx';
-import { createVfxRuntimeHost } from '@forgeax/engine-vfx-render';
+import {
+  createCameraProvider,
+  createSceneDepthProvider,
+  createVfxRuntimeHost,
+  observeStagePlan,
+  validatedStagePlan,
+} from '@forgeax/engine-vfx-render';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createBossScene, type BossSceneMaterials } from './scene';
 
@@ -19,8 +29,22 @@ const EFFECT_GUID = '019e9c00-0000-7000-8000-000000000000';
 const BOSS_BODY_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000003';
 const BOSS_ACCENT_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000004';
 const GROUND_WARNING_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000005';
-const STRIKE_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000002';
+const STRIKE_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000006';
 const MOUTH_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000001';
+
+export type BossLightningValues = {
+  readonly intensity: number;
+  readonly tint: readonly [number, number, number, number];
+};
+
+export function createBossLightningInstance(
+  reflection: VfxEffectReflection,
+): ParticleEffectInstance<BossLightningValues> {
+  const contract = createVfxEffectContract<BossLightningValues>(reflection);
+  return new ParticleEffectInstance(contract, {
+    initialValues: { intensity: 1, tint: [0.2, 0.5, 1, 1] },
+  });
+}
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('boss-lightning: missing canvas');
@@ -56,6 +80,46 @@ function cameraSource() {
   };
 }
 
+function stageEvidence(
+  effect: VfxGpuEffectAsset,
+  falsifyMode: string | null,
+  active: boolean,
+) {
+  const stages = effect.program.emitters.flatMap((emitter) => emitter.reflection.stages ?? []);
+  const lastKnownGood = validatedStagePlan(stages, 1);
+  const candidate = stageCandidatePlan(lastKnownGood, falsifyMode);
+  const observation = observeStagePlan(
+    candidate,
+    falsifyMode?.startsWith('stage-') ? 2 : 1,
+    lastKnownGood.ok ? lastKnownGood.value : undefined,
+  );
+  return {
+    stageReadiness: observation.stageReadiness,
+    stageOutput: active ? observation.stageOutput : 'empty',
+    stageDependencies: lastKnownGood.ok
+      ? lastKnownGood.value.stages.map((stage) => ({ id: stage.id, dependsOn: stage.dependsOn }))
+      : [],
+    stageDispatch: lastKnownGood.ok ? lastKnownGood.value.stages.map((stage) => stage.entryPoint) : [],
+    lastKnownGoodStage: observation.lastKnownGoodStage,
+  };
+}
+
+function stageCandidatePlan(
+  lastKnownGood: ReturnType<typeof validatedStagePlan>,
+  falsifyMode: string | null,
+) {
+  if (!lastKnownGood.ok || !falsifyMode?.startsWith('stage-')) return lastKnownGood;
+  const source = lastKnownGood.value.stages.map((stage) => ({
+    ...stage,
+    ...(falsifyMode === 'stage-cycle' ? { dependsOn: [stage.id] } : {}),
+    ...(falsifyMode === 'stage-hazard'
+      ? { resources: [...stage.resources, ...(stage.resources[0] === undefined ? [] : [stage.resources[0]])] }
+      : {}),
+    ...(falsifyMode === 'stage-budget' ? { iterationBudget: 65 } : {}),
+  }));
+  return validatedStagePlan(source, 2);
+}
+
 async function loadMaterial(
   world: World,
   assets: NonNullable<Awaited<ReturnType<typeof createRenderer>>['assets']>,
@@ -69,10 +133,21 @@ async function loadMaterial(
 export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const falsifyMode = new URLSearchParams(globalThis.location.search).get('boss-lightning-falsify');
   const world = new World();
-  const host = createVfxRuntimeHost({ camera: cameraSource() });
+  const host = createVfxRuntimeHost({
+    camera: cameraSource(),
+    providers: [
+      createCameraProvider({ available: () => cameraReady }),
+      createSceneDepthProvider({ available: () => cameraReady && falsifyMode !== 'missing-depth' }),
+    ],
+  });
   const renderer = await createRenderer(
     target,
-    { features: falsifyMode === 'disable-vfx' ? [] : [host.feature] },
+    {
+      features:
+        falsifyMode === 'disable-vfx' || falsifyMode === 'billboard-fallback'
+          ? []
+          : [host.feature],
+    },
     forgeaxBundlerAdapter(),
   );
   const ready = await renderer.ready;
@@ -120,6 +195,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp({ renderer, world, plugins: [scenePlugin()] });
   if (!appResult.ok) throw new Error(`boss-lightning: app assembly failed: ${appResult.error.hint}`);
   appResult.value.start();
+  let nextImpactSequence = 1;
   Object.assign(globalThis, {
     __forgeaxBossLightning: {
       app: appResult.value,
@@ -131,11 +207,76 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       scene,
       status: () => {
         const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+        const eventCounters = runtime.eventCounters(scene.player);
+        const stage = stageEvidence(loaded.value, falsifyMode, runtime.hasPlayer(scene.player));
         return {
           queuedIntents: runtime.snapshot().length,
           diagnostics: runtime.diagnostics(),
           hasPlayer: runtime.hasPlayer(scene.player),
+          renderFeatureEnabled:
+            falsifyMode !== 'disable-vfx' && falsifyMode !== 'billboard-fallback',
+          eventCounters,
+          gpuLocalEvents: eventCounters.consumed > 0,
+          eventQueueCleared: eventCounters.queued === 0,
+          dataInterfaceSnapshot: host.dataInterfaces.snapshot,
+          ...stage,
         };
+      },
+      inspect: () => host.inspect(world),
+      visualEvidence: () => {
+        const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+        const status = runtime.eventCounters(scene.player);
+        const committed = runtime.lastCommitted(scene.player);
+        const stage = stageEvidence(loaded.value, falsifyMode, runtime.hasPlayer(scene.player));
+        const renderers = loaded.value.program.emitters.flatMap((emitter) =>
+          emitter.renderers.map((renderer) => renderer.kind),
+        );
+        return {
+          expectations: [
+            {
+              id: 'advanced-renderers-visible',
+              observed: `renderers=${renderers.join(',')}`,
+              verdict: renderers.includes('ribbon') && renderers.includes('trail') && renderers.includes('beam') ? 'pass' : 'fail',
+              confidence: 1,
+            },
+            {
+              id: 'live-patch-continuity',
+              observed: `generation=${committed?.instanceGeneration ?? 0}`,
+              verdict: committed !== undefined && committed.instanceGeneration > 0 ? 'pass' : 'fail',
+              confidence: 1,
+            },
+            {
+              id: 'event-sub-emitter-visible',
+              observed: `consumed=${status.consumed} fanOut=${status.fanOut}`,
+              verdict: status.consumed > 0 ? 'pass' : 'fail',
+              confidence: 1,
+            },
+            {
+              id: 'hmr-last-known-good-visible',
+              observed: `stage=${stage.stageOutput} lkg=${stage.lastKnownGoodStage !== undefined}`,
+              verdict:
+                stage.stageOutput !== 'empty' && stage.lastKnownGoodStage !== undefined
+                  ? 'pass'
+                  : 'fail',
+              confidence: 1,
+            },
+          ],
+        };
+      },
+      publicApi: {
+        create: createBossLightningInstance,
+        inspect: () => host.inspect(world),
+        recover: () => renderer.recover(),
+      },
+      submitImpact: () => {
+        const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+        const instance = runtime.getInstance(scene.player);
+        if (falsifyMode !== 'freeze-generation') instance?.patch({ intensity: 1.25 });
+        return instance?.submit({
+          channel: 'impact',
+          payload: { position: [0.25, -0.7, 0], strength: 1 },
+          sequence: nextImpactSequence++,
+        });
       },
       validationErrors,
       get cameraReady() {

@@ -209,6 +209,35 @@ export function dispatchPixelDiffBench(_pkgName, pkgRoot, decl, opts = {}) {
 }
 
 export function dispatchBench(pkgName, pkgRoot, decl, opts = {}) {
+  if (decl?.reportSchema === 'vfx-batch-b') {
+    const root = opts.root ?? process.cwd();
+    const script = resolve(root, 'scripts/bench/vfx-batch-b.mjs');
+    const result = spawnSync(process.execPath, [script], { cwd: root, encoding: 'utf8' });
+    const line = (result.stdout ?? '').trim().split(/\r?\n/).at(-1);
+    let report;
+    try {
+      report = line === undefined ? undefined : JSON.parse(line);
+    } catch {
+      report = undefined;
+    }
+    const threshold = decl.baseline?.threshold ?? null;
+    const value = report?.frameBudget?.p95Ms;
+    const valid = result.status === 0 && report?.verdict === 'pass' && typeof value === 'number';
+    return {
+      kind: 'bench',
+      status: valid && (threshold === null || value <= threshold) ? 'ok' : 'unavailable',
+      value: typeof value === 'number' ? value : null,
+      threshold,
+      details: {
+        reportSchema: decl.reportSchema,
+        benchmark: report?.benchmark ?? null,
+        adapterClass: report?.frameBudget?.adapterClass ?? null,
+        hardwareTargetMs: report?.frameBudget?.hardwareTargetMs ?? null,
+        performanceGated: report?.frameBudget?.performanceGated ?? null,
+        exit: result.status ?? -1,
+      },
+    };
+  }
   // feat-20260512 M3 T-015: extension branch — pixelDiff sub-field
   // routes to the pixel-parity report consumer instead of the legacy
   // vitest bench median path. Both branches return the same shape so

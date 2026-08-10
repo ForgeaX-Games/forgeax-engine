@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   codemodCommandWithoutAssertion,
   contextJob,
+  encodeLocalProvenancePayload,
   executionPlan,
   extractRunCommands,
   extractRunSteps,
@@ -110,14 +111,14 @@ test('local PR CI projection covers every required context and maps matrix legs 
   const workflowXvfbCommands = extractRunSteps(workflow)
     .map((step) => step.command)
     .filter((command) => command.includes('xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0'));
-  assert.equal(workflowXvfbCommands.length, 2);
+  assert.equal(workflowXvfbCommands.length, 4);
   assert.equal(
     workflowXvfbCommands.reduce(
       (count, command) =>
         count + (command.match(/xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0/g) ?? []).length,
       0,
     ),
-    3,
+    5,
   );
   assert.ok(
     workflowXvfbCommands.every((command) => {
@@ -226,12 +227,64 @@ test('local PR CI projection covers every required context and maps matrix legs 
     ),
     `keep=${githubExpression('needs.unknown.outputs.value')} context=${githubExpression('github.run_id')}`,
   );
+  const provenanceRoot = mkdtempSync(join(tmpdir(), 'forgeax-local-provenance-'));
+  try {
+    const source = join(provenanceRoot, 'record.json');
+    const record = { producer: 'core-build', producerRunAttempt: 7 };
+    writeFileSync(source, `${JSON.stringify(record)}\n`);
+    assert.deepEqual(
+      JSON.parse(Buffer.from(encodeLocalProvenancePayload(source), 'base64').toString('utf8')),
+      record,
+    );
+  } finally {
+    rmSync(provenanceRoot, { recursive: true, force: true });
+  }
+  assert.equal(
+    substituteLocalNeedsOutputs(
+      `payload=${githubExpression('needs.core-build.outputs.provenance_payload')}`,
+      '7',
+      new Map([['core-build', { provenance_payload: 'encoded-core' }]]),
+    ),
+    'payload=encoded-core',
+  );
+  assert.equal(
+    substituteLocalStepOutputs(
+      `id=${githubExpression('steps.upload-core-build.outputs.artifact-id')} payload=${githubExpression('steps.write-core-provenance.outputs.payload')}`,
+      localGitHubRuntime({ GITHUB_RUN_ATTEMPT: '7' }),
+      new Map([['write-core-provenance', { payload: 'encoded-core' }]]),
+    ),
+    'id=local-core-build-a7 payload=encoded-core',
+  );
   assert.equal(
     substituteLocalStepOutputs(
       githubExpression('steps.upload-shared-inputs.outputs.artifact-id'),
       localGitHubRuntime({ GITHUB_RUN_ATTEMPT: '1' }),
     ),
     'local-shared-app-inputs-a1',
+  );
+  const uploadRuntime = localGitHubRuntime({ GITHUB_RUN_ATTEMPT: '7' });
+  assert.deepEqual(
+    [
+      'artifact-id',
+      'artifact-name',
+      'upload-started-at',
+      'upload-completed-at',
+      'upload-elapsed-seconds',
+      'upload-transfer-attempt',
+    ].map((output) =>
+      substituteLocalStepOutputs(
+        githubExpression(`steps.upload-app-dist-2.outputs.${output}`),
+        uploadRuntime,
+      ),
+    ),
+    [
+      'local-app-dist-2-a7',
+      'app-dist-2-a7',
+      '1970-01-01T00:00:00.000Z',
+      '1970-01-01T00:00:00.000Z',
+      '0',
+      '1',
+    ],
   );
   const sharedProvenanceDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.shared-app-inputs.outputs.provenance_artifact_id')}" --path provenance-records`;
   assert.equal(isLocalSharedProvenanceDownload(sharedProvenanceDownload), true);
@@ -336,6 +389,7 @@ test('local PR CI projection runs the WebKit dev-server step and carries its PID
     URL: 'http://localhost:5181/',
     TIMEOUT_MS: '25000',
     SCREENSHOT: '/tmp/hello-triangle-webkit.png',
+    PARITY_STATUS_OUTPUT: 'report/color-lighting-parity/webkit-status.json',
   });
 });
 

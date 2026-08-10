@@ -1,12 +1,15 @@
+import { readFileSync } from 'node:fs';
 import { World } from '@forgeax/engine-ecs';
 import { runPlugins } from '@forgeax/engine-plugin';
 import { describe, expect, it } from 'vitest';
+import { createVfxEffectContract } from '../effect-contract.js';
 import type { VfxGpuEffectAsset } from '../gpu-program.js';
 import {
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
   vfxGpuRuntimePlugin,
 } from '../gpu-runtime.js';
+import { ParticleEffectInstance } from '../instance.js';
 import { ParticleEffectPlayer } from '../player.js';
 
 const effect: VfxGpuEffectAsset = {
@@ -41,6 +44,96 @@ const effect: VfxGpuEffectAsset = {
 };
 
 describe('GPU VFX fixed-tick intents', () => {
+  it('keeps stage recovery scoped to the cooked generation', () => {
+    const source = readFileSync(new URL('../gpu-runtime.ts', import.meta.url), 'utf8');
+    expect(source).toContain('instanceGeneration');
+    expect(source).not.toContain('runtimeCompiler');
+  });
+
+  it('uploads channel inputs with the fixed tick and isolates per-player overflow', async () => {
+    const channelEffect = structuredClone(effect) as VfxGpuEffectAsset;
+    const channelEmitters = channelEffect.program.emitters as unknown as Array<
+      Record<string, unknown>
+    >;
+    channelEmitters[0] = {
+      ...channelEmitters[0],
+      channels: [{ id: 'impact', capacity: 1, overflow: 'drop-newest' }],
+      events: [
+        {
+          id: 'impact-event',
+          channel: 'impact',
+          subEmitter: 'sparks',
+          fanOut: 1,
+          recursionDepth: 1,
+        },
+      ],
+    };
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', channelEffect);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
+      })
+      .unwrap();
+    await runPlugins(world, [], [vfxGpuRuntimePlugin({ maxQueuedTicks: 2 })]);
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+    world.update(1 / 60).unwrap();
+    const instance = runtime.getInstance(player);
+    expect(instance).toBeDefined();
+    if (instance === undefined) return;
+    const first = (instance as unknown as { submit(input: unknown): { ok: boolean } }).submit({
+      channel: 'impact',
+      payload: { position: [0, 1, 0], strength: 1 },
+      sequence: 1,
+    });
+    const second = (instance as unknown as { submit(input: unknown): { ok: boolean } }).submit({
+      channel: 'impact',
+      payload: { position: [0, 1, 0], strength: 1 },
+      sequence: 2,
+    });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    world.update(1 / 60).unwrap();
+    expect(runtime.snapshot().find((intent) => intent.channelInputs.length > 0)).toMatchObject({
+      channelInputs: [{ channel: 'impact' }],
+    });
+  });
+
+  it('publishes multiple same-tick patches as one atomic instance generation', async () => {
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', effect);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
+      })
+      .unwrap();
+    const contract = createVfxEffectContract({
+      version: 1,
+      parameters: { name: 'VfxParameters', fields: [], size: 0, alignment: 1 },
+      custom: { name: 'VfxCustom', fields: [], size: 0, alignment: 1 },
+      fingerprint: 'sha256:atomic-patch',
+    });
+    const instance = new ParticleEffectInstance(contract);
+    const installed = await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    expect(installed.ok).toBe(true);
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+    runtime.attachInstance(player, instance);
+    expect(instance.patch({}).ok).toBe(true);
+    expect(instance.patch({}).ok).toBe(true);
+
+    world.update(1 / 60).unwrap();
+
+    expect(runtime.snapshot()).toHaveLength(1);
+    expect(runtime.snapshot()[0]).toMatchObject({
+      tick: 1,
+      instanceGeneration: 1,
+      instancePatchCount: 2,
+    });
+    expect(runtime.snapshot()[0]?.canonicalPayload).toBeInstanceOf(Uint8Array);
+  });
+
   it('fires time-zero once and keeps tick commands bounded and ordered', async () => {
     const world = new World();
     const handle = world.allocSharedRef('ParticleEffectAsset', effect);

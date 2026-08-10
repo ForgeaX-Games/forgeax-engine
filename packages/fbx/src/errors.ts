@@ -14,14 +14,14 @@ export { err, ok, type Result } from '@forgeax/engine-types';
 // === FbxErrorCode — closed union SSOT ===
 
 /**
- * Closed `FbxErrorCode` union. The source union below is the single authority
- * for parser diagnostics; the ufbx WASM parser needs no native-addon build
- * step.
+ * Closed `FbxErrorCode` union derived from the private `DetailFor` map below.
+ * That map is the single code/detail authority for parser diagnostics; the
+ * ufbx WASM parser needs no native-addon build step.
  *
  * Domain-separated from `ImportErrorCode` (importer dispatch surface in
  * @forgeax/engine-types) and `AssetErrorCode` (runtime registry surface).
  */
-export type FbxErrorCode = 'fbx-mesh-type-unsupported' | 'fbx-animation-target-invalid';
+export type FbxErrorCode = keyof DetailFor;
 
 // === Per-code detail shapes ===
 
@@ -53,19 +53,14 @@ export type FbxErrorDetail = DetailFor[FbxErrorCode];
 
 // === FbxError discriminated union ===
 
-export type FbxError =
-  | {
-      readonly code: 'fbx-mesh-type-unsupported';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: FbxMeshTypeUnsupportedDetail;
-    }
-  | {
-      readonly code: 'fbx-animation-target-invalid';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: FbxAnimationTargetInvalidDetail;
-    };
+export type FbxError = {
+  readonly [C in FbxErrorCode]: {
+    readonly code: C;
+    readonly expected: string;
+    readonly hint: string;
+    readonly detail: DetailFor[C];
+  };
+}[FbxErrorCode];
 
 // === FBX_ERROR_HINTS (Record<FbxErrorCode, string>) ===
 

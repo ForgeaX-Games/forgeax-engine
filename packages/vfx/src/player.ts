@@ -1,4 +1,6 @@
 import { defineComponent, type ShapeOf } from '@forgeax/engine-ecs';
+import type { VfxValueMap } from './effect-contract.js';
+import type { ParticleEffectInstance } from './instance.js';
 
 /** ECS author intent for one shared particle effect. */
 export const ParticleEffectPlayer = defineComponent('ParticleEffectPlayer', {
@@ -10,3 +12,8 @@ export const ParticleEffectPlayer = defineComponent('ParticleEffectPlayer', {
 
 /** The four serializable fields stored by {@link ParticleEffectPlayer}. */
 export type ParticleEffectPlayerData = ShapeOf<typeof ParticleEffectPlayer.schema>;
+
+/** Runtime-owned typed values associated with a player without extending ECS storage. */
+export interface ParticleEffectPlayerBinding<Values extends VfxValueMap = VfxValueMap> {
+  readonly instance: ParticleEffectInstance<Values>;
+}

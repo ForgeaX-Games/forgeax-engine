@@ -15,12 +15,22 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const smokeScript = join(here, '..', 'smoke-shared-inputs-browser.mjs');
+const viteConfig = join(here, '..', '..', 'vite.config.ts');
 
 test('shared-inputs browser probe uses catalog-only inputs', async () => {
   const source = await readFile(smokeScript, 'utf8');
   assert.match(source, /['"]--catalog-only['"]/);
   assert.match(source, /FORGEAX_SHARED_APP_INPUTS_MODE:\s*['"]catalog-only['"]/);
   assert.match(source, /process\.env\.FORGEAX_SHARED_APP_INPUTS_MODE = ['"]catalog-only['"]/);
+});
+
+test('blending pack roots whitelist only the runtime texture sidecars', async () => {
+  const source = await readFile(viteConfig, 'utf8');
+  for (const file of ['metal.png.meta.json', 'marble.jpg.meta.json', 'grass.png.meta.json', 'window.png.meta.json']) {
+    assert.match(source, new RegExp(file.replaceAll('.', '\\.'), 'u'));
+  }
+  assert.match(source, /roots:\s*learnOpenGlTextureRoots/u);
+  assert.doesNotMatch(source, /['"]meshes['"]/u);
 });
 
 test('application bootstrap rejects structured application errors', () => {

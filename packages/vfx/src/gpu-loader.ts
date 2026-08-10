@@ -59,7 +59,24 @@ async function fingerprint(bytes: Uint8Array): Promise<string> {
   return hex(await globalThis.crypto.subtle.digest('SHA-256', source));
 }
 
+function validReflectionLayout(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!record(value) || value.version !== 1) return false;
+  if (!record(value.parameters) || !Array.isArray(value.parameters.fields)) return false;
+  if (!record(value.custom) || !Array.isArray(value.custom.fields)) return false;
+  return typeof value.fingerprint === 'string' && value.fingerprint.startsWith('sha256:');
+}
+
+function stableLayouts(emitters: readonly VfxGpuEmitterProgram[]): boolean {
+  const fingerprints = emitters
+    .map((emitter) => emitter.reflection.layout?.fingerprint)
+    .filter((fingerprint): fingerprint is string => fingerprint !== undefined);
+  return fingerprints.every((fingerprint) => fingerprint === fingerprints[0]);
+}
+
 function validEmitter(value: unknown): value is VfxGpuEmitterProgram {
+  const reflection = record(value) && record(value.reflection) ? value.reflection : undefined;
+  const layout = reflection !== undefined ? reflection.layout : undefined;
   return (
     record(value) &&
     typeof value.id === 'string' &&
@@ -71,11 +88,15 @@ function validEmitter(value: unknown): value is VfxGpuEmitterProgram {
     typeof value.wgsl === 'string' &&
     value.wgsl.length > 0 &&
     record(value.reflection) &&
+    validReflectionLayout(layout) &&
     Array.isArray(value.reflection.entryPoints) &&
     value.reflection.entryPoints.includes('forgeax_vfx_spawn_main') &&
     value.reflection.entryPoints.includes('forgeax_vfx_compact_main') &&
     value.reflection.entryPoints.includes('forgeax_vfx_billboard_main') &&
-    value.reflection.entryPoints.includes('forgeax_vfx_mesh_main')
+    value.reflection.entryPoints.includes('forgeax_vfx_mesh_main') &&
+    value.reflection.entryPoints.includes('forgeax_vfx_ribbon_main') &&
+    value.reflection.entryPoints.includes('forgeax_vfx_trail_main') &&
+    value.reflection.entryPoints.includes('forgeax_vfx_beam_main')
   );
 }
 
@@ -125,7 +146,8 @@ export const vfxGpuEffectPackLoader = {
       !record(decoded) ||
       decoded.format !== VFX_GPU_PROGRAM_FORMAT ||
       !Array.isArray(decoded.emitters) ||
-      !decoded.emitters.every(validEmitter)
+      !decoded.emitters.every(validEmitter) ||
+      !stableLayouts(decoded.emitters as VfxGpuEmitterProgram[])
     ) {
       return failure(
         'vfx-asset-v2-invalid',

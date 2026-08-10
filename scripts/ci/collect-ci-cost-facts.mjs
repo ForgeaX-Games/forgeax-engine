@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { POOL_LABELS } from './check-runner-pool-labels.mjs';
 import { observeArtifactDownload } from './download-artifact-with-retry.mjs';
 import { isFingerprint } from './evidence/fingerprint.mjs';
 import { parseGhPages } from './parse-gh-pages.mjs';
@@ -51,6 +52,87 @@ function dateSeconds(value) {
 }
 function timestamp(value) {
   return typeof value === 'string' && dateSeconds(value) !== null ? value : null;
+}
+function timingSeconds(later, earlier) {
+  return Number((dateSeconds(later) - dateSeconds(earlier)).toFixed(6));
+}
+function timingInvalid(job, runAttempt, code, expected, detail) {
+  return {
+    jobId: job.id ?? null,
+    name: job.name,
+    runAttempt: job.run_attempt ?? null,
+    createdAt: job.created_at ?? null,
+    startedAt: job.started_at ?? null,
+    completedAt: job.completed_at ?? null,
+    result: job.conclusion ?? null,
+    runnerId: job.runner_id ?? null,
+    runnerName: job.runner_name ?? null,
+    runnerGroupId: job.runner_group_id ?? null,
+    labels: Array.isArray(job.labels) ? job.labels : [],
+    pool: null,
+    queueWaitSeconds: null,
+    activeSeconds: null,
+    totalSeconds: null,
+    status: 'invalidEvidence',
+    code,
+    expected,
+    hint: 'Check the run-scoped job timestamps and runner labels, then collect a new evidence sample.',
+    detail: {
+      runAttempt: Number.isInteger(runAttempt) ? runAttempt : null,
+      ...detail,
+    },
+  };
+}
+function jobTimingProjection(job, runId, runAttempt) {
+  const createdAt = timestamp(job.created_at);
+  const startedAt = timestamp(job.started_at);
+  const completedAt = timestamp(job.completed_at);
+  const labels = Array.isArray(job.labels) ? job.labels : [];
+  const pools = labels.filter((label) => POOL_LABELS.includes(label));
+  const baseExpected = {
+    runId,
+    runAttempt,
+    timestamps: ['createdAt', 'startedAt', 'completedAt'],
+    pool: POOL_LABELS,
+  };
+  if (!createdAt || !startedAt || !completedAt)
+    return timingInvalid(job, runAttempt, 'ci-cost-job-timing-missing', baseExpected, {
+      missing: ['createdAt', 'startedAt', 'completedAt'].filter(
+        (field) => !{ createdAt, startedAt, completedAt }[field],
+      ),
+    });
+  if (
+    dateSeconds(startedAt) < dateSeconds(createdAt) ||
+    dateSeconds(completedAt) < dateSeconds(startedAt)
+  )
+    return timingInvalid(job, runAttempt, 'ci-cost-job-timing-reversed', baseExpected, {
+      createdAt,
+      startedAt,
+      completedAt,
+    });
+  if (pools.length !== 1)
+    return timingInvalid(job, runAttempt, 'ci-cost-job-pool-invalid', baseExpected, {
+      labels,
+      pools,
+    });
+  return {
+    jobId: job.id ?? null,
+    name: job.name,
+    runAttempt: job.run_attempt ?? null,
+    createdAt,
+    startedAt,
+    completedAt,
+    result: job.conclusion ?? null,
+    runnerId: job.runner_id ?? null,
+    runnerName: job.runner_name ?? null,
+    runnerGroupId: job.runner_group_id ?? null,
+    labels,
+    pool: pools[0],
+    queueWaitSeconds: timingSeconds(startedAt, createdAt),
+    activeSeconds: timingSeconds(completedAt, startedAt),
+    totalSeconds: timingSeconds(completedAt, createdAt),
+    status: 'valid',
+  };
 }
 function requiredArtifactClasses(contract, timingEntry) {
   if (timingEntry.notApplicable) return [];
@@ -828,18 +910,7 @@ const result = {
     compressionRatio: compressionRatio(totalCompressedBytes, totalExpandedBytes),
     byClass: artifactBytesByClass,
   },
-  jobs: jobs.map((job) => ({
-    jobId: job.id ?? null,
-    name: job.name,
-    runAttempt: job.run_attempt ?? null,
-    startedAt: job.started_at ?? null,
-    completedAt: job.completed_at ?? null,
-    result: job.conclusion ?? null,
-    runnerId: job.runner_id ?? null,
-    runnerName: job.runner_name ?? null,
-    runnerGroupId: job.runner_group_id ?? null,
-    labels: Array.isArray(job.labels) ? job.labels : [],
-  })),
+  jobs: jobs.map((job) => jobTimingProjection(job, runId, runAttempt)),
   consumers,
   cache: {
     ...(input?.cache ?? {}),

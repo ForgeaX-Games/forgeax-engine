@@ -58,7 +58,7 @@ import passthroughShader from './shaders/passthrough.wgsl';
 import sharpenShader from './shaders/sharpen.wgsl';
 
 const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  'learn-render-4-5-framebuffers',
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-5-framebuffers',
 );
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json.
