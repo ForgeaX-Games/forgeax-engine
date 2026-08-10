@@ -40,7 +40,7 @@ function record(label, ok, detail) {
   const scriptBody = [
     '(async () => {',
     "  const ecs = await import('@forgeax/engine-ecs');",
-    "  return typeof ecs.createQueryState === 'function';",
+    "  return typeof ecs.World.prototype.query === 'function';",
     '})()',
   ].join('\n');
   try {
@@ -80,13 +80,13 @@ function record(label, ok, detail) {
     const script = [
       'return (async () => {',
       "  const ecs = await import('@forgeax/engine-ecs');",
-      "  return typeof ecs.createQueryState === 'function';",
+      "  return typeof ecs.World.prototype.query === 'function';",
       '})();',
     ].join('\n');
     const fn = new Function(script);
     const result = await fn();
     ok = result === true;
-    detail = `import resolved, createQueryState is function = ${result}`;
+    detail = `import resolved, World.query is function = ${result}`;
     record(label, ok, detail);
   } catch (e) {
     detail = e instanceof Error ? e.message : String(e);

@@ -1,6 +1,8 @@
 // check-extensions.ts - KHR / vendor extension gate.
 //
-// v1 allowlist contains only EXT_mesh_gpu_instancing
+// v1 required-extension support contains EXT_mesh_gpu_instancing and
+// KHR_lights_punctual. The exported legacy list remains the original mesh
+// extension list for callers that display the v1 mesh-only surface.
 // (feat-20260518-gltf-instancing-and-name-component plan-strategy section
 // 2 D-1 / D-3). Any extension listed in `extensionsRequired[]` outside
 // this allowlist triggers `gltf-extension-unsupported` (hard fail).
@@ -21,6 +23,7 @@ import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 
 /** Hard-coded v1 allowlist (plan-strategy decision section 2 D-1 / D-3). */
 export const EXTENSION_ALLOWLIST: readonly string[] = ['EXT_mesh_gpu_instancing'];
+const SUPPORTED_EXTENSIONS: readonly string[] = [...EXTENSION_ALLOWLIST, 'KHR_lights_punctual'];
 
 export interface ExtensionsCheckResult {
   /** Names listed in extensionsUsed but not in the allowlist. */
@@ -53,7 +56,7 @@ export function checkExtensions(
 ): Result<ExtensionsCheckResult, GltfError> {
   const required = json.extensionsRequired ?? [];
   for (const ext of required) {
-    if (!EXTENSION_ALLOWLIST.includes(ext)) {
+    if (!SUPPORTED_EXTENSIONS.includes(ext)) {
       return err(
         gltfErr('gltf-extension-unsupported', {
           extension: ext,
@@ -66,7 +69,7 @@ export function checkExtensions(
   const used = json.extensionsUsed ?? [];
   const unsupportedUsed: string[] = [];
   for (const ext of used) {
-    if (!EXTENSION_ALLOWLIST.includes(ext)) {
+    if (!SUPPORTED_EXTENSIONS.includes(ext)) {
       unsupportedUsed.push(ext);
     }
   }

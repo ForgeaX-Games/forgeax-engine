@@ -1,9 +1,21 @@
-import { Camera } from '@forgeax/engine-render';
+import { Camera, type Tonemap } from '@forgeax/engine-render';
 import { GlyphText, Tilemap } from '@forgeax/engine-render/authoring';
 
 void Camera;
 void GlyphText;
 void Tilemap;
+
+const publicToneModes: readonly Tonemap[] = [
+  'none',
+  'reinhard-extended',
+  'linear',
+  'reinhard',
+  'cineon',
+  'aces-filmic',
+  'agx',
+  'neutral',
+];
+void publicToneModes;
 
 // The host assembly factory belongs to engine-runtime, not the render barrel.
 // @ts-expect-error createRenderer is not a public render export

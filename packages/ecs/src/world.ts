@@ -18,11 +18,7 @@ import type {
   SceneEntity,
   SceneInstanceMount,
 } from '@forgeax/engine-types';
-import type { Archetype } from './archetype';
-import { type ArchetypeGraph, createArchetypeGraph } from './archetype-graph';
 import { BufferPool } from './buffer-pool';
-import { type ChangeTicks, createChangeTicks, NEVER_CHANGED_TICK } from './change-detection';
-import type { FieldView } from './column';
 import type {
   Component,
   ComponentSchema,
@@ -31,7 +27,7 @@ import type {
   ManagedArrayElementValue,
   ShapeOf,
 } from './component';
-import type { EntityHandle } from './entity-handle';
+import { type EntityHandle, entityGeneration, entityIndex } from './entity-handle';
 import type {
   ArrayPopEmptyError,
   CardinalityExceededError,
@@ -58,7 +54,21 @@ import type {
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
 } from './errors';
-import type { QueryDescriptor } from './query';
+import { ChangeEpochExhaustedError } from './errors';
+import type {
+  SharedKernelEligibilityError,
+  SharedKernelFailureError,
+  WorldPoisonedError,
+} from './execution/shared-kernel-errors';
+import {
+  createWorldIdentity,
+  healthyWorldExecutionState,
+  poisonedWorldExecutionState,
+  type WorldExecutionFault,
+  type WorldExecutionState,
+} from './execution/world-health';
+import type { QueryDescriptor } from './query/query';
+import { createQuery, type Query, type QueryCreationError } from './query/query';
 import { createResourceStore, type ResourceStore } from './resource';
 import {
   createSchedule,
@@ -71,6 +81,16 @@ import {
 } from './schedule';
 import { FixedUpdate, FrameEnd, Update } from './schedule-token';
 import { SharedRefStore } from './shared-ref-store';
+import type { Archetype } from './storage/archetype';
+import { type ArchetypeGraph, createArchetypeGraph } from './storage/archetype-graph';
+import {
+  type ChangeTicks,
+  markComponentChanged,
+  markComponentsAdded,
+  readComponentChange,
+} from './storage/change-detection';
+import type { FieldView } from './storage/column';
+import type { Table } from './storage/table';
 import {
   createFixedTimeResource,
   createTimeResource,
@@ -177,7 +197,10 @@ export type EcsError =
   | SystemSetNotRegisteredError
   | TimeDeltaInvalidError
   | TimeConfigInvalidError
-  | ScheduleScopeMismatchError;
+  | ScheduleScopeMismatchError
+  | SharedKernelEligibilityError
+  | SharedKernelFailureError
+  | WorldPoisonedError;
 
 /** Component data for spawn/addComponent: component token + initial values.
  *
@@ -237,7 +260,14 @@ export interface ArchetypeInfo {
   readonly componentNames: string[];
   /** Number of live entities in this archetype. */
   readonly entityCount: number;
-  /** Allocated row capacity. */
+  readonly tableId: number;
+}
+
+export interface TableInfo {
+  readonly id: number;
+  readonly key: string;
+  readonly componentNames: string[];
+  readonly entityCount: number;
   readonly capacity: number;
 }
 
@@ -252,6 +282,8 @@ export interface WorldInspection {
   readonly archetypeCount: number;
   /** Per-archetype details. */
   readonly archetypes: ArchetypeInfo[];
+  readonly tableCount: number;
+  readonly tables: TableInfo[];
   /**
    * Names of components that are currently active in this World — i.e.
    * every distinct component name appearing on at least one non-empty
@@ -333,7 +365,7 @@ export interface WorldScheduleData {
 export interface EntityRecord {
   generation: number;
   archetypeId: number; // -1 if no archetype (pending / despawned)
-  row: number;
+  archetypeRow: number;
 }
 
 /**
@@ -348,20 +380,18 @@ export class World {
 
   /** Entity records: index slot → record. */
   private readonly records: EntityRecord[] = [];
-  /** Monotonic change-detection clock advanced once per World.update. */
-  private changeTick = 0;
+  readonly identity = createWorldIdentity();
+  private executionState: WorldExecutionState = healthyWorldExecutionState(this.identity);
+  /** Monotonic clock advanced exactly once per successful mutation. */
+  private mutationEpoch = 0;
   /** Monotonic revision for successful entity/component structure writes. */
   private structureEpoch = 0;
-  /** Component change ticks keyed by packed entity handle, then component id. */
-  private readonly componentChanges = new Map<number, Map<number, ChangeTicks>>();
-  /** Resource change ticks keyed by resource name. */
-  private readonly resourceChanges = new Map<string, ChangeTicks>();
   /** Free index slots (LIFO stack). */
   private readonly freeIndices: number[] = [];
   /**
    * Relationship-sync reentry guard (feat-20260531 M2 / plan-strategy D-7).
    /** The archetype graph: manages all archetypes + edge caching. */
-  private readonly graph: ArchetypeGraph = createArchetypeGraph();
+  private readonly graph: ArchetypeGraph;
   /** DAG schedules for the two built-in execution scopes. */
   private readonly schedules = new Map([
     [Update, createSchedule(Update)],
@@ -410,25 +440,65 @@ export class World {
    * fixed in v1; runtime grow is reserved for the M4 carry-over path).
    */
   private readonly bufferPool: BufferPool = new BufferPool();
-  private readonly componentAccess = new WorldComponentAccess({
-    graph: this.graph,
-    records: this.records,
-    freeIndices: this.freeIndices,
-    bufferPool: this.bufferPool,
-    uniqueRefs: this.uniqueRefs,
-    sharedRefs: this.sharedRefs,
-    markComponentAdded: (entity, component) => this._markComponentAdded(entity, component),
-    markComponentChanged: (entity, component) => this._markComponentChanged(entity, component),
-    removeComponentChange: (entity, component) => this._removeComponentChange(entity, component),
-    markStructureChanged: () => this._markStructureChanged(),
-    routeError: (err, ctx) => this._routeError(err as EcsError, ctx),
-  });
+  private readonly componentAccess: WorldComponentAccess;
 
   constructor(options: WorldOptions = {}) {
+    this.graph = createArchetypeGraph(options.storage === 'shared');
+    this.componentAccess = new WorldComponentAccess({
+      graph: this.graph,
+      records: this.records,
+      freeIndices: this.freeIndices,
+      bufferPool: this.bufferPool,
+      uniqueRefs: this.uniqueRefs,
+      sharedRefs: this.sharedRefs,
+      markComponentAdded: (entity, component) => this._markComponentAdded(entity, component),
+      markComponentsAdded: (entity, components) => this._markComponentsAdded(entity, components),
+      markComponentChanged: (entity, component) => this._markComponentChanged(entity, component),
+      removeComponentChange: (entity, component) => this._removeComponentChange(entity, component),
+      markStructureChanged: () => this._markStructureChanged(),
+      routeError: (error, context) => this._routeError(error as EcsError, context),
+    });
     const policy = { ...DEFAULT_TIME_POLICY, ...options.time };
-    this.resources.data.set(TIME_RESOURCE_KEY, createTimeResource(policy));
-    this.resources.data.set(FIXED_TIME_RESOURCE_KEY, createFixedTimeResource(policy));
+    this.resources.entries.set(TIME_RESOURCE_KEY, {
+      value: createTimeResource(policy),
+      added: 0,
+      changed: 0,
+    });
+    this.resources.entries.set(FIXED_TIME_RESOURCE_KEY, {
+      value: createFixedTimeResource(policy),
+      added: 0,
+      changed: 0,
+    });
     initializeWorldScene(this);
+  }
+
+  /** Immutable integrity state for execution coordinators and headless callers. */
+  get execution(): WorldExecutionState {
+    return this.executionState;
+  }
+
+  /** Resolve a schedule token owned by this World realm without package singleton identity. */
+  scheduleToken(
+    name: import('./schedule-token').ScheduleName,
+  ): import('./schedule-token').ScheduleToken {
+    if (name === 'Update') return Update;
+    if (name === 'FixedUpdate') return FixedUpdate;
+    return FrameEnd;
+  }
+
+  /** @internal SharedKernel is the only writer; application code recovers by constructing a new World. */
+  _poisonExecution(fault: WorldExecutionFault): void {
+    if (this.executionState.health === 'healthy') {
+      this.executionState = poisonedWorldExecutionState(this.identity, fault);
+    }
+  }
+
+  query<
+    const R extends readonly Component[] = readonly [],
+    const W extends readonly Component[] = readonly [],
+    const O extends readonly Component[] = readonly [],
+  >(descriptor: QueryDescriptor<R, W, O>): Result<Query<R, W, O>, QueryCreationError> {
+    return createQuery(this, descriptor);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -440,19 +510,37 @@ export class World {
     return this.graph;
   }
 
-  /** @internal Current World change tick for query filters. */
-  _getChangeTick(): number {
-    return this.changeTick;
+  /** @internal Current upper bound for mutation observation. */
+  _getMutationEpoch(): number {
+    return this.mutationEpoch;
+  }
+
+  /** @internal Structure snapshot used to invalidate borrowed query facades. */
+  _getStructureEpoch(): number {
+    return this.structureEpoch;
+  }
+
+  /** @internal Resolve current logical identity for a packed entity handle. */
+  _getEntityArchetype(entity: EntityHandle): Archetype | undefined {
+    const record = this.records[entityIndex(entity)];
+    if (!this._recordIsLive(record, entityGeneration(entity))) return undefined;
+    return this.graph.archetypes[record.archetypeId];
   }
 
   /** @internal Component change state for query filters. */
   _getComponentChange(entity: EntityHandle, componentId: number): ChangeTicks | undefined {
-    return this.componentChanges.get(entity as number)?.get(componentId);
+    const record = this.records[entityIndex(entity)];
+    if (!this._recordIsLive(record, entityGeneration(entity))) return undefined;
+    return readComponentChange(this.graph, record, entity, componentId);
   }
 
-  /** @internal Advance the change clock at the start of each frame. */
-  _advanceChangeTick(): void {
-    this.changeTick += 1;
+  /** @internal Allocate one epoch after a mutation has succeeded. */
+  _nextMutationEpoch(): number {
+    if (this.mutationEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new ChangeEpochExhaustedError(this.mutationEpoch);
+    }
+    this.mutationEpoch += 1;
+    return this.mutationEpoch;
   }
 
   /** @internal Record one successful structural mutation. */
@@ -467,55 +555,67 @@ export class World {
 
   /** @internal Mark a component as both added and changed at the current tick. */
   _markComponentAdded(entity: EntityHandle, componentId: number): void {
-    let changes = this.componentChanges.get(entity as number);
-    if (changes === undefined) {
-      changes = new Map();
-      this.componentChanges.set(entity as number, changes);
-    }
-    changes.set(componentId, createChangeTicks(this.changeTick));
+    this._markComponentsAdded(entity, [componentId]);
+  }
+
+  /** @internal Mark one mutation's component instances with a shared epoch. */
+  _markComponentsAdded(entity: EntityHandle, componentIds: readonly number[]): void {
+    const record = this.records[entityIndex(entity)];
+    if (!this._recordIsLive(record, entityGeneration(entity))) return;
+    markComponentsAdded(this.graph, record, entity, componentIds, this._nextMutationEpoch());
   }
 
   /** @internal Mark an existing component as changed at the current tick. */
   _markComponentChanged(entity: EntityHandle, componentId: number): void {
-    let changes = this.componentChanges.get(entity as number);
-    if (changes === undefined) {
-      changes = new Map();
-      this.componentChanges.set(entity as number, changes);
-    }
-    const current = changes.get(componentId);
-    if (current === undefined) {
-      changes.set(componentId, { added: NEVER_CHANGED_TICK, changed: this.changeTick });
-    } else {
-      current.changed = this.changeTick;
-    }
+    const record = this.records[entityIndex(entity)];
+    if (!this._recordIsLive(record, entityGeneration(entity))) return;
+    markComponentChanged(this.graph, record, entity, componentId, () => this._nextMutationEpoch());
+  }
+
+  /** @internal Mark one contiguous component range with a single epoch. */
+  _markComponentRangeChanged(
+    table: Table,
+    componentId: number,
+    rowStart: number,
+    rowCount: number,
+  ): void {
+    const epochs = table.storage.get(componentId)?.epochs;
+    if (epochs === undefined || rowCount === 0) return;
+    epochs.changed.fill(this._nextMutationEpoch(), rowStart, rowStart + rowCount);
+  }
+
+  /** @internal Query facade write after the facade has already marked evidence. */
+  _setQueryRow(
+    entity: EntityHandle,
+    component: Component,
+    value: Record<string, unknown>,
+  ): Result<void, EcsError> {
+    return this.componentAccess.set(entity, component, value as never, false);
+  }
+
+  /** @internal Query facade read that does not re-enter the public World API. */
+  _getQueryRow(
+    entity: EntityHandle,
+    component: Component,
+  ): Result<Record<string, unknown>, EcsError> {
+    return this.componentAccess.get(entity, component) as Result<Record<string, unknown>, EcsError>;
   }
 
   /** @internal Remove one component's change state after archetype removal. */
   _removeComponentChange(entity: EntityHandle, componentId: number): void {
-    const changes = this.componentChanges.get(entity as number);
-    if (changes === undefined) return;
-    changes.delete(componentId);
-    if (changes.size === 0) this.componentChanges.delete(entity as number);
+    void entity;
+    void componentId;
   }
 
   /** @internal Remove all change state before an entity handle is retired. */
   _removeEntityChanges(entity: EntityHandle): void {
-    this.componentChanges.delete(entity as number);
-  }
-
-  /** @internal Mark a resource insertion/overwrite for resource change probes. */
-  _markResourceChanged(name: string, added: boolean): void {
-    const current = this.resourceChanges.get(name);
-    if (added || current === undefined) {
-      this.resourceChanges.set(name, createChangeTicks(this.changeTick));
-    } else {
-      current.changed = this.changeTick;
-    }
+    void entity;
   }
 
   /** Return resource change ticks for diagnostics and resource-driven systems. */
   getResourceChange(name: string): ChangeTicks | undefined {
-    return this.resourceChanges.get(name);
+    const entry = this.resources.entries.get(name);
+    return entry === undefined ? undefined : { added: entry.added, changed: entry.changed };
   }
 
   /**
@@ -588,7 +688,7 @@ export class World {
    *
    * `const Qs` mirrors the free `addSystem` signature so the call-site
    * `queries` tuple is locked literal-form, letting `descriptor.fn`'s first
-   * parameter recover per-query bundle shapes (S-5, KD-3 — class method
+   * parameter recover per-query row access shapes (S-5, KD-3 — class method
    * generic, not free function double track).
    *
    * @example
@@ -598,7 +698,7 @@ export class World {
    * world.addSystem(Update, {
    *   name: 'read-pos',
    *   queries: [{ with: [Position] }],
-   *   fn: (world, queryResults) => { void world; for (const _b of queryResults[0]) { void _b; } },
+   *   fn: (world, queries) => { void world; for (const row of queries[0]) { void row.entity; } },
    * });
    * ```
    */
@@ -753,7 +853,10 @@ export class World {
    */
   update(
     deltaSeconds = 0,
-  ): Result<void, TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError> {
+  ): Result<
+    void,
+    TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError | WorldPoisonedError
+  > {
     return worldUpdate(this, deltaSeconds);
   }
 

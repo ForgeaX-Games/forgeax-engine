@@ -266,7 +266,9 @@ export interface PointShadowSlotInfo {
 /**
  * Pack one PointLightSnapshot or SpotLightSnapshot into a 64-byte LightSlot
  * (16 floats, std430). Point lights fill `cosInner=1.0`, `direction=vec3(0)`,
- * `cosOuter=0.0`, `kind=POINT(0)`. Spot lights fill all fields verbatim.
+ * `cosOuter=0.0`, `kind=POINT(0)`. Spot lights fill all fields verbatim;
+ * `direction` is already normalized by extract and this owner never repeats
+ * that operation.
  *
  * feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
  * the optional `shadow` info threads through to bytes 52..64 as

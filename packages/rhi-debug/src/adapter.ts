@@ -210,7 +210,12 @@ function findEventIdxForDraw(
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     if (ev === undefined) continue;
-    if (ev.kind === 'draw' || ev.kind === 'drawIndexed' || ev.kind === 'dispatchWorkgroups') {
+    if (
+      ev.kind === 'draw' ||
+      ev.kind === 'drawIndexed' ||
+      ev.kind === 'dispatchWorkgroups' ||
+      ev.kind === 'dispatchWorkgroupsIndirect'
+    ) {
       if (count === drawIdx) return i;
       count++;
     }

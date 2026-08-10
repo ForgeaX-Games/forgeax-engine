@@ -82,6 +82,67 @@ export interface GameProjectionRegistrar {
   registerRead(def: GameReadDef): () => void;
 }
 
+/** The stable wire identity for asset-resident gameplay producers. */
+export const GAMEPLAY_PRODUCER_CONTRACT = 'forgeax.gameplay-producer' as const;
+/** Bump only when the producer context or descriptor meaning changes. */
+export const GAMEPLAY_PRODUCER_CONTRACT_VERSION = 1 as const;
+
+/** Public identity a host can discover without importing game implementation code. */
+export interface GamePluginDescriptor {
+  readonly contract: typeof GAMEPLAY_PRODUCER_CONTRACT;
+  readonly version: typeof GAMEPLAY_PRODUCER_CONTRACT_VERSION;
+  readonly id: string;
+  readonly title: string;
+}
+
+export type GamePluginDiagnosticCode =
+  | 'producer-report'
+  | 'producer-registration-failed'
+  | 'producer-reload-failed'
+  | 'producer-dispose-failed';
+
+export interface GamePluginDiagnostic {
+  readonly code: GamePluginDiagnosticCode;
+  readonly severity: 'info' | 'warn' | 'error';
+  readonly pluginId: string;
+  readonly message: string;
+}
+
+/** Structured terminal result for a producer-owned source/module recovery pass. */
+export type GamePluginReloadResult =
+  | {
+      readonly ok: true;
+      readonly value: { readonly pluginId: string; readonly status: 'reloaded' };
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: 'game-plugin-reload-unsupported' | 'game-plugin-reload-failed';
+        readonly pluginId: string;
+        readonly hint: string;
+      };
+    };
+
+/** Lifecycle hooks are owned by the producer but flushed by the host at Stop/reload. */
+export interface GamePluginLifecycle {
+  registerCleanup(fn: () => void): () => void;
+  registerReload(fn: () => void | Promise<void>): () => void;
+}
+
+/** Host-neutral context for one producer installation on one fresh Play World. */
+export interface GamePluginProducerContext {
+  readonly world: World;
+  readonly gameProjection?: GameProjectionRegistrar;
+  readonly lifecycle: GamePluginLifecycle;
+  report(diagnostic: Omit<GamePluginDiagnostic, 'pluginId'>): void;
+}
+
+/** The canonical named export (`gameplay`) of an asset-resident producer module. */
+export interface GamePluginProducer {
+  readonly descriptor: GamePluginDescriptor;
+  register(context: GamePluginProducerContext): void | Promise<void>;
+}
+
 /**
  * Narrow contract between preview host and game template entry point.
  *

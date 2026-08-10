@@ -3,11 +3,8 @@
 // mouse yaw/pitch, scroll speed, run modifier, and friction decay.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -43,12 +40,9 @@ export const FreeCamera = defineComponent('FreeCamera', {
 });
 
 function firstCamera(world: World): EntityHandle | null {
-  const state = createQueryState({ with: [Camera, Transform, FreeCamera, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Camera, Transform, FreeCamera] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 function colorMat(world: World, color: readonly [number, number, number, number]) {

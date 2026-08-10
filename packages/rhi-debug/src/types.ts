@@ -495,6 +495,13 @@ export interface RhiCallEventDispatchWorkgroups {
   readonly z: number;
 }
 
+export interface RhiCallEventDispatchWorkgroupsIndirect {
+  readonly kind: 'dispatchWorkgroupsIndirect';
+  readonly passHandleId: HandleId;
+  readonly indirectBufferHandleId: HandleId;
+  readonly indirectOffset: number;
+}
+
 export interface RhiCallEventEndComputePass {
   readonly kind: 'endComputePass';
   readonly passHandleId: HandleId;
@@ -576,6 +583,7 @@ export type RhiCallEvent =
   | RhiCallEventPassInsertDebugMarker
   | RhiCallEventSetComputePipeline
   | RhiCallEventDispatchWorkgroups
+  | RhiCallEventDispatchWorkgroupsIndirect
   | RhiCallEventEndComputePass
   | RhiCallEventInitialData;
 

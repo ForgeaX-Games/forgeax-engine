@@ -1,13 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
-import {
-  createParticleEffectNativeCooker,
-  createStockParticleOperatorRegistry,
-} from '@forgeax/engine-vfx-compiler';
+import { createParticleCodeNativeCooker } from '@forgeax/engine-vfx-compiler';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { playwright } from '@vitest/browser-playwright';
@@ -26,6 +24,14 @@ import { targetProfileImporter } from './templates/game-default/assets/plugins/t
 // charter F1 prefers the single-step explicit form for grep traceability.
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const materialPackages = materialContractInventory.materialPackages;
+const vfxModules = Object.fromEntries(
+  ['hit.vfx.wgsl', 'charge.vfx.wgsl'].map((name) => [
+    name,
+    {
+      entry: readFileSync(resolve(rootDir, 'templates/game-default/assets', name), 'utf8'),
+    },
+  ]),
+);
 // Keep authored WGSL sidecars under the template's single assets/ content
 // root without handing build-only shader sources to the runtime catalog. The
 // browser project must mirror apps/preview's explicit pack boundary so a
@@ -230,7 +236,7 @@ export default defineConfig({
             // meta resolves to importer-not-registered (422). imageImporter also
             // covers any non-pre-baked image sidecars under the scanned roots.
             importers: [imageImporter, gltfImporter, audioImporter, targetProfileImporter()],
-            cookers: [createParticleEffectNativeCooker(createStockParticleOperatorRegistry())],
+            cookers: [createParticleCodeNativeCooker(vfxModules)],
           }),
         ],
         server: {

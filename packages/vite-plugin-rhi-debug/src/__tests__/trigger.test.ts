@@ -3,7 +3,7 @@
 // t1: AC-02 sync 200 -- trigger handler returns after tape resolves the
 //     pending slot, returning HTTP 200 + { tapePath, reportPath, runId }.
 
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,7 +74,11 @@ function makeServer(): {
   };
 }
 
-function mountHandler(opts?: { triggerTimeoutMs?: number }): { handler: Handler; wsSpy: WsSpy } {
+function mountHandler(opts?: {
+  triggerTimeoutMs?: number;
+  captureBudgetBytesPerFrame?: number;
+  availableBytes?: () => number;
+}): { handler: Handler; wsSpy: WsSpy } {
   const cap = makeServer();
   const plugin = vitePluginRhiDebug(opts);
   const hook =
@@ -277,6 +281,56 @@ describe('POST /__forgeax-debug/trigger 503 timeout (t2)', () => {
       runId: string;
     };
     expect(body.tapePath.length).toBeGreaterThan(0);
+  });
+});
+
+describe('capture resource governance', () => {
+  it('removes interrupted staging directories when the dev server mounts', () => {
+    mkdirSync('.capture-tmp-interrupted');
+    writeFileSync(join('.capture-tmp-interrupted', 'partial.bin'), 'partial');
+
+    mountHandler();
+
+    expect(readdirSync('.').filter((name) => name.startsWith('.capture-tmp-'))).toEqual([]);
+  });
+
+  it('fails before broadcasting when the target volume cannot satisfy the capture budget', async () => {
+    const { handler, wsSpy } = mountHandler({
+      captureBudgetBytesPerFrame: 1024,
+      availableBytes: () => 100,
+    });
+
+    const res = await postTrigger(handler, { frames: 2 });
+
+    expect(res.statusCode).toBe(507);
+    expect(JSON.parse(res.body)).toMatchObject({
+      error: 'capture-disk-space-insufficient',
+      detail: { availableBytes: 100, requiredBytes: 2048, frames: 2 },
+    });
+    expect(wsSpy.sends).toHaveLength(0);
+  });
+
+  it('terminates the trigger immediately and removes staging state when artifact writing fails', async () => {
+    const tapeBody = await legalTapeBody();
+    const { handler, wsSpy } = mountHandler({
+      triggerTimeoutMs: 50,
+      availableBytes: () => Number.MAX_SAFE_INTEGER,
+    });
+    writeFileSync('.forgeax-debug', 'blocks capture directory creation');
+    const triggerPromise = postTrigger(handler, { frames: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const tape = await postTape(handler, tapeBody);
+    const trigger = await triggerPromise;
+
+    expect(tape.statusCode).toBe(500);
+    expect(trigger.statusCode).toBe(500);
+    expect(JSON.parse(trigger.body)).toMatchObject({ error: 'capture-artifact-write-failed' });
+    expect(readdirSync('.').filter((name) => name.startsWith('.capture-tmp-'))).toEqual([]);
+
+    const next = await postTrigger(handler, { frames: 1 });
+    expect(next.statusCode).toBe(503);
+    expect(wsSpy.sends).toHaveLength(2);
   });
 });
 

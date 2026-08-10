@@ -1,6 +1,5 @@
 import { createApp } from '@forgeax/engine-app';
-import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource, type AudioBackend, type AudioClipAsset } from '@forgeax/engine-audio';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource, type AudioBackend, type AudioClipAsset, audioPlugin } from '@forgeax/engine-audio';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { FixedTime, Update, FixedUpdate } from '@forgeax/engine-ecs';
 import { physicsPlugin, CollidingEntities } from '@forgeax/engine-physics';
@@ -101,7 +100,7 @@ if (clipResult.ok) {
   });
   content.ready = true;
   content.revision = 1;
-  content.bytes = clipResult.value.buffer.length;
+  content.bytes = clipResult.value.bytes.length;
 } else {
   throw new Error(`m8-capstone content load failed: ${clipResult.error.code}`);
 }

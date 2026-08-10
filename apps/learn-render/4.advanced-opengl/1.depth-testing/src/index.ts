@@ -12,8 +12,8 @@
 //       @builtin(position).z to read
 //       the fragment's clip-space depth.
 //
-// Textures are loaded through the GUID asset pipeline:
-//   configurePackIndex('/pack-index.json') + loadByGuid<TextureAsset>.
+// Textures are loaded through the scoped GUID asset pipeline:
+//   configureRuntimeBinding(runtimeBinding) + loadByGuid<TextureAsset>.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -32,7 +32,7 @@ import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -46,11 +46,12 @@ const DEPTH_VIZ_SHADER_ID = 'learn_render::depth_viz';
 // far=light). When false, the scene renders with PBR textured materials.
 const USE_DEPTH_VIZ = false;
 
-const PACK_INDEX_URL = '/pack-index.json';
-
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json
 const METAL_GUID_STR = '019e3969-1d47-760f-982e-7bad1ffd969c';
 const MARBLE_GUID_STR = '019e3969-1d46-7933-b14d-4faee5635ad6';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-1-depth-testing',
+);
 
 // Scene geometry: LO 4.1 exact parameters.
 // Floor: Y=-0.5, XZ 10x10 quad (HANDLE_QUAD is 1x1 in XY, scaled 5x in XY
@@ -90,7 +91,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.1 depth-testing] createApp failed:', appRes.error);
@@ -106,8 +107,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
-  // Wire the pack-index URL for GUID-based texture loading.
-  assets.configurePackIndex(PACK_INDEX_URL);
+  // Wire the scoped dev catalog for GUID-based texture loading.
+  assets.configureRuntimeBinding(runtimeBinding);
 
   // Parse texture GUIDs.
   const metalGuidRes = AssetGuid.parse(METAL_GUID_STR);

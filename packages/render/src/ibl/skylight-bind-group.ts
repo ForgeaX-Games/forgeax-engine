@@ -32,6 +32,8 @@
 // recordFrame branch (Skylight present vs absent) selects active vs
 // fallback resources when assembling the PBR material BindGroup
 // (charter P4 consistent abstraction -- one BG layout, one assembly path).
+// The irradiance texture uses the canonical irradianceEOverPi payload semantic;
+// sampling applies the single E/pi normalization at the shader callsite.
 
 import type {
   BindGroupEntry,

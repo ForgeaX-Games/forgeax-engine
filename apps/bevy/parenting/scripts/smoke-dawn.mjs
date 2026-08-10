@@ -94,7 +94,7 @@ const mockCanvas = {
 };
 
 // --- build the parenting World via the shared SSOT builder ---
-const { createQueryState, Entity, queryRun, World } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { ChildOf, Transform } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { propagateTransforms } = await import('@forgeax/engine-scene');
@@ -131,16 +131,11 @@ buildParentingWorld(world);
 // Find the child entity (the one with ChildOf) and read its local pos.
 let childLocalPos = [0, 0, 3];
 {
-  const st = createQueryState({ with: [ChildOf, Transform, Entity] });
-  queryRun(st, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    const posCol = bundle.Transform.pos;
-    for (let i = 0; i < selfCol.length; i++) {
-      const p = i * 3;
-      childLocalPos = [posCol[p] ?? 0, posCol[p + 1] ?? 0, posCol[p + 2] ?? 0];
-      break;
-    }
-  });
+  const query = world.query({ read: [Transform], with: [ChildOf] }).unwrap();
+  for (const row of query) {
+    childLocalPos = Array.from(row.get(Transform).pos);
+    break;
+  }
 }
 console.log(`[smoke] childLocalPos=${JSON.stringify(childLocalPos)}`);
 
@@ -169,18 +164,13 @@ async function capture(device) {
 
 // Read the child's world position from the Transform.world column.
 function readChildWorldPos(world) {
-  const st = createQueryState({ with: [ChildOf, Transform, Entity] });
+  const query = world.query({ read: [Transform], with: [ChildOf] }).unwrap();
   let result = [0, 0, 0];
-  queryRun(st, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    const worldCol = bundle.Transform.world;
-    for (let i = 0; i < selfCol.length; i++) {
-      const w = i * 16;
-      // world mat4 column-major: pos is at indices 12,13,14
-      result = [worldCol[w + 12] ?? 0, worldCol[w + 13] ?? 0, worldCol[w + 14] ?? 0];
-      break;
-    }
-  });
+  for (const row of query) {
+    const worldMatrix = row.get(Transform).world;
+    result = [worldMatrix[12] ?? 0, worldMatrix[13] ?? 0, worldMatrix[14] ?? 0];
+    break;
+  }
   return result;
 }
 

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 // apps/learn-render/1.getting-started/6.coordinate-systems - ambient declarations.
 //
 // Vite supports `?url` suffix imports that resolve to a string URL the

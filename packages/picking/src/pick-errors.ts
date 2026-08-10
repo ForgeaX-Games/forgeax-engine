@@ -1,6 +1,6 @@
 // @forgeax/engine-picking — pick error model (feat-20260529-picking-raycasting-screen-to-entity M3 / w9).
 //
-// Closed single-member PickErrorCode union + PickError class. The screen-to-entity
+// PickError code owner + derived PickErrorCode projection. The screen-to-entity
 // `pick(...)` free function returns `undefined` for the recoverable miss path (no ray
 // hit) and surfaces a structured PickError ONLY for the one unrecoverable precondition
 // failure: the supplied cameraEntity does not hold a `Camera` component, so no view /
@@ -17,20 +17,7 @@
 //          plan-strategy D-1; plan-tasks.json w9 acceptanceCheck; charter P3.
 
 /**
- * Closed union of picking precondition error codes.
- *
- * Single member today (`'camera-component-missing'`); minor add-only per the AGENTS.md
- * evolution contract. AI users perform exhaustive `switch (err.code)` without a default;
- * TS guards completeness.
- *
- * | code | class | trigger |
- * |:--|:--|:--|
- * | `'camera-component-missing'` | `PickError` | the `cameraEntity` passed to `pick()` holds no `Camera` component |
- */
-export type PickErrorCode = 'camera-component-missing';
-
-/**
- * Detail for `PickErrorCode 'camera-component-missing'`.
+ * Detail for the `PickError` camera-component-missing code.
  *
  * Carries the offending camera entity (packed `Entity` u32) so AI consumers can read
  * `.detail.cameraEntity` by property access (charter P4) — no string parsing of the
@@ -56,7 +43,7 @@ export interface PickCameraMissingDetail {
  * separate channel from the recoverable miss).
  */
 export class PickError extends Error {
-  readonly code: PickErrorCode = 'camera-component-missing';
+  readonly code = 'camera-component-missing';
   readonly expected: string;
   readonly hint: string;
   readonly detail: PickCameraMissingDetail;
@@ -73,3 +60,10 @@ export class PickError extends Error {
     this.detail = { cameraEntity };
   }
 }
+
+/**
+ * Closed union of picking precondition error codes, derived from the PickError owner.
+ *
+ * AI users perform exhaustive `switch (err.code)` without a default; TS guards completeness.
+ */
+export type PickErrorCode = PickError['code'];

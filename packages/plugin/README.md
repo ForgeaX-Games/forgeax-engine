@@ -66,7 +66,7 @@ remain owned by `runPlugins`; groups do not create a parallel lifecycle or error
 | `@forgeax/engine-runtime` | Direct `import ... from '@forgeax/engine-plugin'` | `transformPlugin()` / `animationPlugin()` / `timePlugin()` return `Plugin` |
 | `@forgeax/engine-state` | Direct | `statePlugin()` returns `Plugin` |
 | `@forgeax/engine-physics` | Direct | `physicsPlugin(backend)` returns `Plugin` AND constructs `PluginError` for WASM failures |
-| `@forgeax/engine-audio-webaudio` | Direct | `audioPlugin()` returns `Plugin` |
+| `@forgeax/engine-audio` | Direct | `audioPlugin()` returns a realm-neutral `Plugin` |
 | Capability package authors | Direct | Write `xxxPlugin(): Plugin` factories that return `{ name, build }` |
 
 > [!NOTE]

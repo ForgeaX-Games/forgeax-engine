@@ -39,6 +39,7 @@ import { Transform } from '@forgeax/engine-scene';
 import type {
   MaterialAsset,
   MaterialPassList,
+  MaterialValue,
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
@@ -65,6 +66,12 @@ declare global {
           afterTextureHandles: readonly [number, number];
           baseColorSlotChanged: boolean;
           detailSlotChanged: boolean;
+          baseColorParameterChanged: boolean;
+          baseColorUvTransformChanged: boolean;
+          beforeBaseColor: readonly [number, number, number, number];
+          afterBaseColor: readonly [number, number, number, number];
+          beforeBaseColorUvTransform: readonly [number, number, number, number];
+          afterBaseColorUvTransform: readonly [number, number, number, number];
           inheritanceBacked: boolean;
           afterComponentMaterialHandle: number | null;
           sourceRootGuid: string | null;
@@ -162,6 +169,7 @@ function materialFromCookedRecord(
   record: CookedMaterialRecord,
   textureHandles: Readonly<{ baseColor: number; detail: number }>,
   variant: 'true' | 'false' = 'true',
+  valueOverrides: Readonly<Record<string, MaterialValue>> = {},
 ): MaterialAsset {
   if (record.resolved.passes.length === 0)
     throw new Error('[hello-multi-uv] cooked material has no passes');
@@ -185,6 +193,7 @@ function materialFromCookedRecord(
     parameters: record.resolved.parameters,
     values: {
       ...record.resolved.values,
+      ...valueOverrides,
       baseColorTexture: textureHandles.baseColor,
       detailTexture: textureHandles.detail,
     },
@@ -302,7 +311,9 @@ if (!app.ok) {
   const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
   const switchedVariant: 'true' | 'false' = startupVariant === 'true' ? 'false' : 'true';
   const liveMaterialMode = params.get('live-material');
-  const inheritanceLiveMaterial = liveMaterialMode === 'inheritance-two-slot-swap-resize';
+  const inheritanceParameterMutation = liveMaterialMode === 'inheritance-parameter-mutation-resize';
+  const inheritanceLiveMaterial =
+    liveMaterialMode === 'inheritance-two-slot-swap-resize' || inheritanceParameterMutation;
   const liveVariantSwitch = inheritanceLiveMaterial && params.has('live-variant-switch');
   const liveMaterialEnabled =
     liveMaterialMode === 'two-slot-swap-resize' || inheritanceLiveMaterial;
@@ -540,12 +551,28 @@ if (!app.ok) {
   // built-in PBR is deliberately NOT used here so the engine core stays
   // single-UV-zero-regression clean.
   const falsifyDetailTexture = new URLSearchParams(location.search).has('falsify-texture');
+  const beforeBaseColor = [0.7, 0.7, 0.7, 1] as const;
+  const beforeBaseColorUvTransform = [0, 0, 1, 1] as const;
+  const liveBaseColor = [0.12, 0.86, 0.34, 1] as const;
+  const liveBaseColorUvTransform = [0.35, 0.05, 0.65, 0.9] as const;
+  const afterBaseColor =
+    inheritanceParameterMutation && !falsifyLiveMaterial ? liveBaseColor : beforeBaseColor;
+  const afterBaseColorUvTransform =
+    inheritanceParameterMutation && !falsifyLiveMaterial
+      ? liveBaseColorUvTransform
+      : beforeBaseColorUvTransform;
+  const parameterValueChanged = (before: readonly number[], after: readonly number[]) =>
+    before.some((value, index) => value !== after[index]);
   const materialAsset = (
     variant: 'true' | 'false',
     textures: { baseColor: number; detail: number } = {
       baseColor: baseColorTextureHandle,
       detail: detailTextureHandle,
     },
+    values: {
+      baseColor?: readonly [number, number, number, number];
+      baseColorUvTransform?: readonly [number, number, number, number];
+    } = {},
   ) => ({
     kind: 'material' as const,
     passes: [
@@ -561,7 +588,8 @@ if (!app.ok) {
       },
     ],
     values: {
-      baseColor: [0.7, 0.7, 0.7, 1],
+      baseColor: values.baseColor ?? beforeBaseColor,
+      baseColorUvTransform: values.baseColorUvTransform ?? beforeBaseColorUvTransform,
       baseColorTexture: textures.baseColor,
       ...(falsifyDetailTexture ? {} : { detailTexture: textures.detail }),
     },
@@ -600,6 +628,12 @@ if (!app.ok) {
           detail: falsifyLiveMaterial ? detailTextureHandle : liveDetailTextureHandle,
         },
         liveVariantSwitch ? switchedVariant : startupVariant,
+        inheritanceParameterMutation
+          ? {
+              baseColor: afterBaseColor,
+              baseColorUvTransform: afterBaseColorUvTransform,
+            }
+          : {},
       )
     : undefined;
 
@@ -693,11 +727,11 @@ if (!app.ok) {
         : null,
       beforeTextureHandles: [baseColorTextureHandle, detailTextureHandle],
       afterTextureHandles: [
-        inheritanceLiveMaterial && falsifyLiveMaterial
+        inheritanceLiveMaterial && (falsifyLiveMaterial || inheritanceParameterMutation)
           ? baseColorTextureHandle
           : liveBaseColorTextureHandle,
         inheritanceLiveMaterial
-          ? falsifyLiveMaterial
+          ? falsifyLiveMaterial || inheritanceParameterMutation
             ? detailTextureHandle
             : liveDetailTextureHandle
           : liveMaterial
@@ -707,9 +741,20 @@ if (!app.ok) {
             : detailTextureHandle,
       ],
       baseColorSlotChanged: inheritanceLiveMaterial
-        ? !falsifyLiveMaterial
+        ? inheritanceParameterMutation
+          ? false
+          : !falsifyLiveMaterial
         : liveBaseColorTextureHandle !== baseColorTextureHandle,
-      detailSlotChanged: !falsifyLiveMaterial,
+      detailSlotChanged: inheritanceParameterMutation ? false : !falsifyLiveMaterial,
+      baseColorParameterChanged: parameterValueChanged(beforeBaseColor, afterBaseColor),
+      baseColorUvTransformChanged: parameterValueChanged(
+        beforeBaseColorUvTransform,
+        afterBaseColorUvTransform,
+      ),
+      beforeBaseColor,
+      afterBaseColor,
+      beforeBaseColorUvTransform,
+      afterBaseColorUvTransform,
       inheritanceBacked: inheritanceLiveMaterial,
       afterComponentMaterialHandle: null,
       sourceRootGuid: inheritedMaterialPair?.root.record.guid ?? null,
@@ -719,9 +764,11 @@ if (!app.ok) {
       sourceRootCookInputDigest: inheritedMaterialPair?.root.record.receipt.inputDigest ?? null,
       sourceCookInputDigest: inheritedMaterialPair?.derived.record.receipt.inputDigest ?? null,
       falsifierMarker:
-        inheritanceLiveMaterial && falsifyLiveMaterial
-          ? 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
-          : null,
+        inheritanceParameterMutation && falsifyLiveMaterial
+          ? 'FALSIFY_EXPECTED_FAILURE:live-inheritance-parameters'
+          : inheritanceLiveMaterial && falsifyLiveMaterial
+            ? 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
+            : null,
       resizeHistory: [],
     },
     applyLiveMaterialRebind: () => {

@@ -49,7 +49,7 @@ import { Materials, Skylight } from '@forgeax/engine-render';
 import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import { PointLight } from '@forgeax/engine-render';
 
-import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, type MaterialAsset, type SceneAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -57,6 +57,9 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-9-ssao',
+);
 
 // Enclosing room: floor + ceiling + back/left/right walls, each a thin slab
 // with inward-facing surfaces (default culling, all in the g-buffer). The box
@@ -133,7 +136,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
@@ -153,6 +156,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 5.9 ssao] AssetRegistry is null');
     return;
   }
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Wire the __learnRenderErrors bus for onerror-gate coverage.

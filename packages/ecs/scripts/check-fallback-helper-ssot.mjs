@@ -35,7 +35,7 @@ const ROOTS = ['packages', 'apps', 'templates'];
 const SELF_EXEMPT_FILES = new Set([
   'packages/ecs/scripts/check-fallback-helper-ssot.mjs',
   'packages/ecs/src/component-default-fallback.ts',
-  'packages/ecs/src/component-default-fallback.test.ts',
+  'packages/ecs/src/__tests__/hierarchy.unit.test.ts',
 ]);
 
 const SKIP_DIRS = new Set([

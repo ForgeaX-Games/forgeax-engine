@@ -5,8 +5,6 @@
 // relationship mutations into public lifecycle behavior.
 
 import { err, isRetiredSlot, ok, pack, type Result } from '@forgeax/engine-types';
-import { type Archetype, appendEntity, removeEntity } from './archetype';
-import { getOrCreateArchetype } from './archetype-graph';
 import {
   type Component,
   type ComponentSchema,
@@ -16,6 +14,7 @@ import {
 } from './component';
 import { fillComponentDefaults, validateComponentDataKeys } from './component-default-fallback';
 import { validateSharedFieldValues } from './component-value-validate';
+import { Entity } from './entity';
 import {
   ENTITY_NULL_RAW,
   type EntityHandle,
@@ -30,7 +29,16 @@ import {
   StaleEntityError,
   validateEnumFieldValues,
 } from './errors';
+import { type Archetype, appendArchetypeRow, removeArchetypeRow } from './storage/archetype';
+import { getOrCreateArchetype, getTable } from './storage/archetype-graph';
+import { removeSparseTag } from './storage/sparse-tag-set';
+import { appendTableRow, removeTableRow } from './storage/table';
 import type { ComponentData, EcsError, World } from './world';
+
+function tableRow(world: World, record: { archetypeId: number; archetypeRow: number }): number {
+  const archetype = world._getGraph().archetypes[record.archetypeId];
+  return archetype?.rows[record.archetypeRow] ?? -1;
+}
 
 /**
  * Core implementation of `spawn` with a relationship reentry guard.
@@ -71,21 +79,25 @@ export function spawnCore(
     );
   const componentIds = componentDatas.map((cd) => cd.component.id);
   const components = componentDatas.map((cd) => cd.component);
-  const arch = getOrCreateArchetype(world._getGraph(), componentIds, components);
-  const row = appendEntity(arch, indexSlot);
+  const graph = world._getGraph();
+  const arch = getOrCreateArchetype(graph, componentIds, components);
+  const table = getTable(graph, arch.tableId);
+  const spawnedEntity = encodeEntity(indexSlot, record.generation);
+  const tableRow = appendTableRow(table, spawnedEntity);
+  const archetypeRow = appendArchetypeRow(arch, tableRow);
+  record.archetypeId = arch.id;
+  record.archetypeRow = archetypeRow;
   for (let i = 0; i < componentDatas.length; i++) {
     const cdi = componentDatas[i];
     const fdi = filledData[i];
     if (cdi === undefined || fdi === undefined) continue;
-    world._writeRow(arch, cdi.component, row, fdi as ShapeOf<ComponentSchema>);
+    world._writeRow(arch, cdi.component, tableRow, fdi as ShapeOf<ComponentSchema>);
   }
-  record.archetypeId = arch.id;
-  record.row = row;
-  const spawnedEntity = encodeEntity(indexSlot, record.generation);
-  world._writeEntitySelf(arch, row, spawnedEntity);
-  for (const cd of componentDatas) {
-    world._markComponentAdded(spawnedEntity, cd.component.id);
-  }
+  world._writeEntitySelf(arch, tableRow, spawnedEntity);
+  world._markComponentsAdded(spawnedEntity, [
+    Entity.id,
+    ...componentDatas.map((cd) => cd.component.id),
+  ]);
   for (let i = 0; i < componentDatas.length; i++) {
     const cd = componentDatas[i];
     const filled = filledData[i];
@@ -119,6 +131,10 @@ export function despawnCore(
   const arch = world._getGraph().archetypes[record?.archetypeId];
   const linkedChildren = arch ? relationshipLinkedSpawnChildren(world, entity, arch) : [];
   if (arch) {
+    const graph = world._getGraph();
+    const table = getTable(graph, arch.tableId);
+    const archetypeRow = record.archetypeRow;
+    const tableRow = arch.rows[archetypeRow] ?? 0;
     for (const comp of arch.components) {
       const onDiscard = comp.onDiscard;
       const onRemove = comp.onRemove;
@@ -126,23 +142,43 @@ export function despawnCore(
       const needsOldValue =
         onDiscard !== undefined || onRemove !== undefined || (rel !== undefined && !internal);
       if (needsOldValue) {
-        const oldValue = world._readRow(arch, comp, record?.row) as Record<string, unknown>;
+        const oldValue = world._readRow(arch, comp, tableRow) as Record<string, unknown>;
         if (onDiscard) onDiscard(entity, oldValue);
         if (onRemove) onRemove(entity, oldValue);
         if (rel !== undefined && !internal) world._relationshipOnRemove(entity, comp, oldValue);
       }
-      world._releaseManagedRefsOnRow(arch, comp, record?.row);
+      world._releaseManagedRefsOnRow(arch, comp, tableRow);
     }
-    const swapResult = removeEntity(arch, record?.row);
-    if (swapResult) {
-      const swappedRecord = world._getRecords()[swapResult.movedEntity];
-      if (swappedRecord) swappedRecord.row = swapResult.newRow;
+    for (const component of arch.components) {
+      if (component.storage !== 'sparse') continue;
+      const set = graph.sparseTags.get(component.id);
+      if (set !== undefined) removeSparseTag(set, entity);
+    }
+    const archetypeSwap = removeArchetypeRow(arch, archetypeRow);
+    if (archetypeSwap !== null) {
+      const movedEntity = (table.storage.get(Entity.id)?.fields.get('self')?.view[
+        archetypeSwap.movedTableRow
+      ] ?? 0) as EntityHandle;
+      const movedRecord = world._getRecords()[entityIndex(movedEntity)];
+      if (movedRecord?.generation === entityGeneration(movedEntity)) {
+        movedRecord.archetypeRow = archetypeSwap.newRow;
+      }
+    }
+    const tableSwap = removeTableRow(table, tableRow);
+    if (tableSwap !== null) {
+      const movedRecord = world._getRecords()[entityIndex(tableSwap.movedEntity)];
+      if (movedRecord?.generation === entityGeneration(tableSwap.movedEntity)) {
+        const movedArchetype = graph.archetypes[movedRecord.archetypeId];
+        if (movedArchetype !== undefined) {
+          movedArchetype.rows[movedRecord.archetypeRow] = tableSwap.newRow;
+        }
+      }
     }
   }
   if (record) {
     world._removeEntityChanges(entity);
     record.archetypeId = -1;
-    record.row = -1;
+    record.archetypeRow = -1;
     record.generation += 1;
     if (!isRetiredSlot(record.generation)) world._getFreeIndices().push(slot);
   }
@@ -232,13 +268,13 @@ export function worldRemoveChild<S extends ComponentSchema>(
       }),
     );
   }
-  if (!childArch.columns.has(holderComp.id)) {
+  if (!childArch.components.some((component) => component.id === holderComp.id)) {
     return err(
       new RelationshipDetachMismatchError(component.name, child as number, parent as number, 0),
     );
   }
 
-  const oldValue = world._readRow(childArch, holderComp, childRecord.row) as Record<
+  const oldValue = world._readRow(childArch, holderComp, tableRow(world, childRecord)) as Record<
     string,
     unknown
   >;
@@ -300,7 +336,7 @@ export function worldReparent<S extends ComponentSchema>(
       }),
     );
   }
-  if (childArch.columns.has(holderComp.id)) {
+  if (childArch.components.some((component) => component.id === holderComp.id)) {
     const removeResult = world.removeComponent(child, component);
     if (!removeResult.ok) return removeResult;
   }
@@ -331,12 +367,16 @@ export function worldIterAncestors(world: World, entity: EntityHandle): Iterable
 
         let foundParent = false;
         for (const component of currentArch.components) {
-          if (component.relationship === undefined || !currentArch.columns.has(component.id))
+          if (
+            component.relationship === undefined ||
+            !currentArch.components.some((candidate) => candidate.id === component.id)
+          )
             continue;
-          const value = world._readRow(currentArch, component, currentRecord.row) as Record<
-            string,
-            unknown
-          >;
+          const value = world._readRow(
+            currentArch,
+            component,
+            tableRow(world, currentRecord),
+          ) as Record<string, unknown>;
           const target = relationshipTargetEntity(component, value);
           if (target === null) continue;
           yield target;
@@ -371,7 +411,11 @@ export function worldIterDescendants(world: World, entity: EntityHandle): Iterab
         const currentArch = world._getGraph().archetypes[currentRecord.archetypeId];
         if (!currentArch) continue;
 
-        for (const child of descendantChildren(world, currentArch, currentRecord.row)) {
+        for (const child of descendantChildren(
+          world,
+          currentArch,
+          tableRow(world, currentRecord),
+        )) {
           const childSlot = entityIndex(child);
           const childGeneration = entityGeneration(child);
           const key = pack(childSlot, childGeneration);
@@ -390,7 +434,7 @@ export function worldIterDescendants(world: World, entity: EntityHandle): Iterab
 function descendantChildren(world: World, arch: Archetype, row: number): EntityHandle[] {
   const children: EntityHandle[] = [];
   for (const component of arch.components) {
-    if (!arch.columns.has(component.id)) continue;
+    if (!arch.components.some((candidate) => candidate.id === component.id)) continue;
     const value = world._readRow(arch, component, row) as Record<string, unknown>;
     for (const [fieldName, fieldType] of Object.entries(component.schema)) {
       if (fieldType !== 'array<entity>') continue;
@@ -432,11 +476,13 @@ function relationshipChainCycleHit(
     const currentRecord = world._getRecords()[currentSlot];
     if (!world._recordIsLive(currentRecord, currentGeneration)) return null;
     const currentArchetype = world._getGraph().archetypes[currentRecord.archetypeId];
-    if (!currentArchetype?.columns.has(holderComponent.id)) return null;
-    const value = world._readRow(currentArchetype, holderComponent, currentRecord.row) as Record<
-      string,
-      unknown
-    >;
+    if (!currentArchetype?.components.some((candidate) => candidate.id === holderComponent.id))
+      return null;
+    const value = world._readRow(
+      currentArchetype,
+      holderComponent,
+      tableRow(world, currentRecord),
+    ) as Record<string, unknown>;
     const target = relationshipTargetEntity(holderComponent, value);
     if (target === null) return null;
     const targetEntitySlot = entityIndex(target);
@@ -461,7 +507,8 @@ function relationshipLinkedSpawnChildren(
   entity: EntityHandle,
   arch: Archetype,
 ): EntityHandle[] {
-  const row = world._getRecords()[entityIndex(entity)]?.row ?? -1;
+  const record = world._getRecords()[entityIndex(entity)];
+  const row = record === undefined ? -1 : tableRow(world, record);
   const collected: EntityHandle[] = [];
   for (const component of arch.components) {
     const mirrorField = linkedSpawnMirrorField(component.name);

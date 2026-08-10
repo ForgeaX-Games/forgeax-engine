@@ -85,7 +85,7 @@ const mockCanvas = {
 };
 
 // --- build the camera-orbit World via the shared SSOT builder ---
-const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { CAMERA_PROJECTION_PERSPECTIVE } = await import('@forgeax/engine-render');
 const { Camera } = await import('@forgeax/engine-render');
@@ -147,7 +147,7 @@ async function capture(device) {
 // --- drive orthographic zoom, then switch and zoom perspective ---
 const CAPTURE_EARLY = Math.max(1, Math.floor(SMOKE_MIN_FRAMES * 0.05));
 const CAPTURE_LATE = Math.max(CAPTURE_EARLY + 1, Math.floor(SMOKE_MIN_FRAMES * 0.65));
-const cameraState = createQueryState({ with: [Camera, Transform, ZoomCamera, Entity] });
+const cameraQuery = world.query({ read: [Camera], with: [Transform, ZoomCamera] }).unwrap();
 let framesObserved = 0, earlyFrame, lateFrame, earlyZoom = Number.NaN, finalCamera;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   const r = renderer.draw([world], { owner: 0 }); if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`); framesObserved++;
@@ -157,7 +157,7 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   propagateTransforms(world);
 }
 const finalZoom = cameraZoomValue(world);
-queryRun(cameraState, world, (bundle) => { const h = bundle.Entity.self[0]; if (h === undefined) return; const c = world.get(h, Camera); if (c.ok) finalCamera = { projection: c.value.projection, fov: c.value.fov, left: c.value.left, right: c.value.right, bottom: c.value.bottom, top: c.value.top }; });
+for (const row of cameraQuery) { const c = row.get(Camera); finalCamera = { projection: c.projection, fov: c.fov, left: c.left, right: c.right, bottom: c.bottom, top: c.top }; break; }
 const device = sharedDevice;
 if (!device) {
   console.error('[smoke] FAIL - no shared device captured for readback');

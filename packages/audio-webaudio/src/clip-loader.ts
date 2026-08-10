@@ -23,10 +23,7 @@ export async function decodeAudioClipBytes(
   bytes: Uint8Array,
 ): Promise<Result<AudioClipAsset, AudioError>> {
   try {
-    const ctx = new AudioContext();
-    const buffer = await ctx.decodeAudioData(bytes.slice().buffer as ArrayBuffer);
-    await ctx.close();
-    return ok({ kind: 'audio', buffer });
+    return ok({ kind: 'audio', sourceKey: guid, bytes: bytes.slice() });
   } catch (e) {
     return err(
       new AudioError({

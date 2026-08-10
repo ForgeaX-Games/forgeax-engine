@@ -114,4 +114,49 @@ describe('resolved prepared graphics recording', () => {
     expect(result.ok).toBe(false);
     expect(calls).toEqual([]);
   });
+
+  it('forwards prepared binding dynamic offsets to the render pass', async () => {
+    const adapter = (await rhi.requestAdapter()).unwrap();
+    const device = (await adapter.requestDevice()).unwrap();
+    const buffer = device.createBuffer({ size: 4, usage: 40 }).unwrap();
+    const shader = (
+      await rhi.createShaderModule(device, { code: 'synthetic' })
+    ).unwrap() as unknown as GPUShaderModule;
+    const pipelineHandle = device
+      .createRenderPipeline({
+        layout: 'auto',
+        vertex: { module: shader, entryPoint: 'main', buffers: [] },
+        fragment: { module: shader, entryPoint: 'main', targets: [] },
+      })
+      .unwrap();
+    const layout = device.createBindGroupLayout({ entries: [] }).unwrap();
+    const bindingsHandle = device.createBindGroup({ layout, entries: [] }).unwrap();
+    const resources = new Map<object, PreparedGraphicsResolvedResource>([
+      [pipeline, { kind: 'pipeline', reference: pipeline, handle: pipelineHandle }],
+      [
+        bindings,
+        {
+          kind: 'bindings',
+          reference: bindings,
+          handle: bindingsHandle,
+          dynamicOffsets: [256],
+        },
+      ],
+      [vertices, { kind: 'vertex-data', reference: vertices, handle: buffer }],
+    ]);
+    const calls: unknown[] = [];
+    const result = recordResolvedRenderFeatureGraphicsPass(
+      'synthetic.dynamic-offset',
+      pass,
+      state,
+      { generation: 3, resolve: (reference) => resources.get(reference) },
+      {
+        ...ledger(calls),
+        setBindGroupAt: (index, handle, offsets) => calls.push([index, handle, offsets]),
+      },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(calls).toContainEqual([0, bindingsHandle, [256]]);
+  });
 });

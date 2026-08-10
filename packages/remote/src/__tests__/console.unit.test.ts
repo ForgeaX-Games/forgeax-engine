@@ -9,7 +9,7 @@
 //   - packages/console/src/__tests__/errors.test.ts
 //   - packages/console/src/__tests__/passthrough-policy.test.ts
 //   - packages/console/src/__tests__/wire-default-inspectors.test.ts
-//   - packages/console/test/e2e/pack-inspect.test.ts
+//   - packages/console/__tests__/e2e/pack-inspect.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.

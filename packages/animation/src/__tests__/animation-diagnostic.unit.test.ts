@@ -3,6 +3,7 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { subscribeAnimationDiagnostics } from '../animation-diagnostic';
 import { AnimationPlayer } from '../animation-player';
 import { AnimationTargetId, AnimationTargets } from '../animation-target';
 import { animationPlugin } from '../plugin';
@@ -48,6 +49,46 @@ afterEach(() => {
 });
 
 describe('animation runtime diagnostics', () => {
+  it('projects unique channels to subscribers while preserving per-channel console facts', async () => {
+    const world = new World();
+    const singleChannel = clip();
+    const firstChannel = singleChannel.channels[0];
+    if (firstChannel === undefined) throw new Error('fixture requires one animation channel');
+    const twoChannels: AnimationClip = {
+      ...singleChannel,
+      channels: [...singleChannel.channels, { ...firstChannel, property: 'rotation' }],
+    };
+    const player = await playerWithClip(world, twoChannels);
+    const observed: unknown[] = [];
+    const unsubscribe = subscribeAnimationDiagnostics((source, diagnostic) => {
+      if (source === world) observed.push(diagnostic);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    world.update(0.25);
+    world.update(0.25);
+    unsubscribe();
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(observed).toHaveLength(2);
+    expect(observed).toEqual([
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          player: player as number,
+          channel: 0,
+          targetId: TARGET_ID,
+        }),
+      }),
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          player: player as number,
+          channel: 1,
+          targetId: TARGET_ID,
+        }),
+      }),
+    ]);
+  });
+
   it('emits a readonly structured missing-target diagnostic once per full tuple and World', async () => {
     const first = new World();
     const second = new World();

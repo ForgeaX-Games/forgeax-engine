@@ -13,7 +13,7 @@ import { Update } from '../schedule-token';
 //      (charter proposition 4: errors are structured payloads, not strings).
 //   2. `addSystem`'s class-method generic shape is preserved (a method-level
 //      simplified counterpart of `types.test-d.ts:[w15]` — that file owns the
-//      `NestedColumnBundle` inference theme; this file owns the signature
+//      QueryRow inference theme; this file owns the signature
 //      shape theme; both coexist per plan-strategy §2 S-3 OQ-3).
 //
 // File structure mirrors `minimal-example.test-d.ts` (vitest test-d form,
@@ -120,15 +120,11 @@ describe('[w6] AC-L5 — world.addSystem<const Qs> method signature shape (simpl
     const world = new World();
     const ret = world.addSystem(Update, {
       name: 'ac-l5-shape-probe',
-      queries: [{ with: [Position] }],
+      queries: [{ read: [Position] }],
       fn: (_world, queryResults, commands) => {
-        // Method-level signature shape: queryResults is array; per-query bundle
-        // is array; per-component access yields the field-view dict; commands
-        // is `CommandBuffer`. Simplified vs. types.test-d.ts:[w15] which probes
-        // `bundle.Position.x → Float32Array` (NestedColumnBundle theme).
-        const sample = queryResults[0]?.[0];
-        if (sample) {
-          expectTypeOf(sample.Position.x).toEqualTypeOf<Float32Array>();
+        const query = queryResults[0];
+        if (query) {
+          for (const row of query) expectTypeOf(row.get(Position).x).toBeNumber();
         }
         expectTypeOf(commands).toEqualTypeOf<CommandBuffer>();
       },
@@ -160,6 +156,7 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
       switch (code) {
         case 'entity-index-overflow':
         case 'schema-unsupported-field':
+        case 'sparse-storage-requires-tag':
         case 'stale-entity':
         case 'component-already-present':
         case 'component-not-present':
@@ -190,7 +187,6 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'relationship-mirror-component-not-registered':
         case 'relationship-mirror-field-type-mismatch':
         case 'relationship-detach-mismatch':
-        case 'query-descriptor-with-optional-conflict':
         case 'component-not-defined':
         case 'remove-essential-component':
         case 'scene-override-type-mismatch':
@@ -198,7 +194,6 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'sprite-instances-count-mismatch':
         case 'sprite-instances-requires-sprite-shader':
         case 'sprite-instances-mutually-exclusive-with-instances':
-        case 'query-combinations-entity-required':
         // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9
         case 'shared-field-invalid-value':
         // feat-20260714-bevy-style-system-sets M1 / w3
@@ -207,7 +202,16 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'time-config-invalid':
         case 'schedule-scope-mismatch':
         case 'resource-protected':
+        case 'change-epoch-exhausted':
+        case 'query-descriptor-conflict':
+        case 'query-data-requires-fields':
+        case 'query-span-unavailable':
+        case 'query-iteration-invalidated':
+        case 'query-iteration-active':
         case 'component-field-invalid-value':
+        case 'shared-kernel-ineligible':
+        case 'shared-kernel-failed':
+        case 'world-poisoned':
           return code;
       }
     };

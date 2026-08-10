@@ -8,7 +8,7 @@ import { Update } from '@forgeax/engine-ecs';
 // Gates:
 //   1. 10 alternating switches (tutorial <-> street-a), with wall time
 //      retained as evidence; performance contracts belong to controlled metrics.
-//   2. player cross-state survival: world.queryRun([Player]) after all
+//   2. player cross-state survival: world.query({ with: [Player] }) after all
 //      transitions returns 1 row — fail = process.exit(1).
 //   3. globalThis draw counter > 0 (anti-frustum false-green).
 //      fail = process.exit(1).
@@ -114,7 +114,7 @@ const mockCanvas = {
 
 // --- Step 2: Engine boot ---
 
-const { ok: okResult, World, createQueryState, queryRun } = await import('@forgeax/engine-ecs');
+const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const runtime = await import('@forgeax/engine-runtime');
 const { createRenderer } = runtime;
 const { Materials } = await import('@forgeax/engine-render');
@@ -358,14 +358,10 @@ for (let i = 0; i < 5; i++) {
 }
 
 // AC-14 #2: Player survives through all transitions.
-// Player is a tag component (empty schema {}), so count via the Entity
-// self column length within the same query.
-const { Entity } = await import('@forgeax/engine-ecs');
-const playerQuery = createQueryState({ with: [Player, Entity] });
+// Player is a tag component (empty schema {}), so it is a filter-only role.
+const playerQuery = world.query({ with: [Player] }).unwrap();
 let playerCount = 0;
-queryRun(playerQuery, world, (bundle) => {
-  playerCount += bundle.Entity.self.length;
-});
+for (const _row of playerQuery) playerCount++;
 if (playerCount === 1) {
   console.log(`[smoke] GATE 2 PASS: playerCount === 1, player survived cross-state`);
 } else {
@@ -391,11 +387,9 @@ if (drawCount <= 0) {
 
 // Count entities with MeshFilter after all switches (scene geometry).
 // Should be 1 (current scene) + 1 (player) = 2 visible mesh entities.
-const meshQuery = createQueryState({ with: [MeshFilter] });
+const meshQuery = world.query({ with: [MeshFilter] }).unwrap();
 let meshEntityCount = 0;
-queryRun(meshQuery, world, (bundle) => {
-  meshEntityCount += bundle.MeshFilter.assetHandle.length;
-});
+for (const _row of meshQuery) meshEntityCount++;
 console.log(`[smoke] GATE 5 mesh entity count = ${meshEntityCount}`);
 
 // If scope-despawn were commented out in transitionStatesSystem, after

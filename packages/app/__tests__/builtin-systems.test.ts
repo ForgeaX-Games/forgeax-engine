@@ -114,7 +114,7 @@ describe('builtin-systems.test.ts', () => {
     it('animation system runs without an app-provided resolver resource', () => {
       const world = new World();
       registerAdvanceAnimationPlayer(world);
-      // No AnimationPlayer entities -> queryRun yields nothing, but the
+      // No AnimationPlayer entities -> its Query yields nothing, but the
       // canonical animation system still runs without resolver plumbing.
       expect(world.update(1 / 60).ok).toBe(true);
     });

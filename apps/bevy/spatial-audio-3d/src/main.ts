@@ -4,8 +4,8 @@
 // the loop, while the listener's ECS Transform drives Web Audio panning.
 
 import { createApp } from '@forgeax/engine-app';
-import { AudioSource } from '@forgeax/engine-audio';
-import { audioPlugin, WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { AudioSource, audioPlugin } from '@forgeax/engine-audio';
+import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { Update, Time } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';

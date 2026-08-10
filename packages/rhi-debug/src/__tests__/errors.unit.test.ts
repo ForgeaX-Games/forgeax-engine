@@ -146,6 +146,33 @@ describe('DebugError — construction surface', () => {
     expect(detail.stage).toBe('copy');
   });
 
+  it('snapshot-readback-failed: live map stage remains structurally narrow', () => {
+    const err = new DebugError({
+      code: 'snapshot-readback-failed',
+      expected: 'live rgba16float observation readback to succeed',
+      hint: 'map stage failed before the source lease retired',
+      detail: {
+        handleId: 'live-linear-hdr',
+        stage: 'map',
+      } satisfies SnapshotReadbackFailedDetail,
+    });
+    expect(err.detail).toEqual({ handleId: 'live-linear-hdr', stage: 'map' });
+  });
+
+  it('snapshot-readback-failed: copy stage remains the only live copy owner', () => {
+    const err = new DebugError({
+      code: 'snapshot-readback-failed',
+      expected: 'live rgba16float observation readback to succeed',
+      hint: 'copy stage failed before mapAsync',
+      detail: {
+        handleId: 'live-linear-hdr',
+        stage: 'copy',
+      } satisfies SnapshotReadbackFailedDetail,
+    });
+    expect(err.code).toBe('snapshot-readback-failed');
+    expect(err.detail).toEqual({ handleId: 'live-linear-hdr', stage: 'copy' });
+  });
+
   it('seed-initial-data-failed: code + expected + hint exist (detail undefined)', () => {
     const err = new DebugError({
       code: 'seed-initial-data-failed',

@@ -1,6 +1,6 @@
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import { CharacterController, Collider, ColliderShapeValue, CollidingEntities, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Materials, MeshFilter, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
@@ -10,6 +10,7 @@ import type { SceneAsset } from '@forgeax/engine-types';
 import { Rotatable } from './rotating-target';
 import { ScoringTarget } from './scoring-target';
 import { cloneWithClearcoat } from './clearcoat-material';
+import { BouncyBallHazard, DamageHazard, PlayerHealth } from './counterattack';
 
 export type MatHandle = Handle<'MaterialAsset', 'shared'>;
 export type GameContext = {
@@ -164,6 +165,8 @@ export function setupPlayerRoot(ctx: GameContext, entity: EntityHandle): void {
   ctx.world.addComponent(entity, { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } });
   ctx.world.addComponent(entity, { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.4 } });
   ctx.world.addComponent(entity, { component: CharacterController, data: {} });
+  ctx.world.addComponent(entity, { component: CollidingEntities, data: { entities: [] } });
+  ctx.world.addComponent(entity, { component: PlayerHealth, data: {} });
 }
 
 export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): ScenePhysics {
@@ -189,14 +192,15 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
     const hz = (scale?.[2] ?? 1) * 0.5;
     const sphereRadius = scale?.[0] ?? 1;
     const box = (restitution: number) => world.addComponent(entity, { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [hx, hy, hz], restitution, friction: 0.7 } });
-    const sphere = (restitution: number) => world.addComponent(entity, { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: sphereRadius, restitution, friction: 0.6 } });
+    const sphere = (restitution: number, isSensor = false) => world.addComponent(entity, { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: sphereRadius, restitution, friction: 0.6, isSensor } });
     const dynamic = () => world.addComponent(entity, { component: RigidBody, data: { type: RigidBodyTypeValue.dynamic, mass: 1, linearDamping: 0.05, angularDamping: 0.1, ccdEnabled: true } });
+    const kinematic = () => world.addComponent(entity, { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } });
     const staticBody = () => world.addComponent(entity, { component: RigidBody, data: { type: RigidBodyTypeValue.static } });
     switch (name) {
       case 'Ground': break;
       case 'TreeTrunk': staticBody(); box(0.2); break;
       case 'TreeCanopy': staticBody(); sphere(0.2); break;
-      case 'RedBox': dynamic(); box(0.25); props.push({ e: entity, materials: materialsOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 10 } }); break;
+      case 'RedBox': dynamic(); box(0.25); props.push({ e: entity, materials: materialsOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 10, relayStep: 2 } }); break;
       case 'BlueBall': {
         dynamic();
         sphere(0.55);
@@ -205,7 +209,7 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
         const mat = clearcoatMat ?? authoredMat;
         if (clearcoatMat !== undefined) world.set(entity, MeshRenderer, { materials: [clearcoatMat] });
         props.push({ e: entity, materials: [mat], clearcoat: clearcoatMat !== undefined });
-        world.addComponent(entity, { component: ScoringTarget, data: { points: 15 } });
+        world.addComponent(entity, { component: ScoringTarget, data: { points: 15, relayStep: 1 } });
         break;
       }
       case 'YellowPillar':
@@ -215,9 +219,16 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
         const materials = materialsOf(entity);
         props.push({ e: entity, materials });
         animatedMaterial = { e: entity, mat: materials[0] ?? (0 as MatHandle) };
-        world.addComponent(entity, { component: ScoringTarget, data: { points: 10 } });
+        world.addComponent(entity, { component: ScoringTarget, data: { points: 10, relayStep: 3 } });
         break;
-      case 'BouncyBall': dynamic(); sphere(0.92); props.push({ e: entity, materials: materialsOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 25 } }); break;
+      case 'BouncyBall':
+        kinematic();
+        sphere(0.92, true);
+        props.push({ e: entity, materials: materialsOf(entity) });
+        world.addComponent(entity, { component: ScoringTarget, data: { points: 25 } });
+        world.addComponent(entity, { component: BouncyBallHazard, data: {} });
+        world.addComponent(entity, { component: DamageHazard, data: {} });
+        break;
       case 'NestedTarget':
         dynamic();
         box(0.25);

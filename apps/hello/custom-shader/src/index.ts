@@ -9,7 +9,12 @@ import { Name, Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import {
+  acquireCanvasContext,
+  createDevImportTransport,
+  createRenderer,
+  EngineEnvironmentError,
+} from '@forgeax/engine-runtime';
 
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { toMaterialAsset, type GltfMaterialIr } from '@forgeax/engine-gltf';
@@ -23,6 +28,7 @@ import type {
   MaterialValue,
   TextureAsset,
 } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import './pulse-material.wgsl';
@@ -91,6 +97,7 @@ const UV0_SAMPLING_INPUT = {
   baseColorUvTransform: [0, 0, 1, 1],
   normalUvTransform: [0, 0, 1, 1],
 } as const;
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-custom-shader');
 
 function materialFromCookedRecord(
   record: CookedMaterialRecord,
@@ -177,7 +184,10 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const renderer = await createRenderer(target, {}, {
+    ...forgeaxBundlerAdapter(),
+    importTransport: createDevImportTransport(runtimeBinding),
+  });
   const rendererErrorCodes: string[] = [];
   const drawErrorCodes: string[] = [];
   const bindGroupCreateCounts: number[] = [];
@@ -212,7 +222,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  assets.configurePackIndex('/pack-index.json');
+  assets.configureRuntimeBinding(runtimeBinding);
   const rootGuid = AssetGuid.parse(ROOT_MATERIAL_GUID);
   const derivedGuid = AssetGuid.parse(DERIVED_MATERIAL_GUID);
   if (!rootGuid.ok || !derivedGuid.ok) throw new Error('[custom-shader] material GUID is malformed');

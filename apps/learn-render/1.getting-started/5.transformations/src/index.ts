@@ -19,7 +19,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //
 // charter mapping:
 //   - F1 (limited context):  three-section markers double as grep
-//     anchors (AC-06); `world.addSystem` / `bundles.Transform.quat` is
+//     anchors (AC-06); `world.addSystem` / `row.mut(Transform)` is
 //     the LO §1.5 -> forgeax animation idiom anchor.
 //   - F2 (text > image):     the LO §1.5 GLM chapter is documented as
 //     text in this file's comment block + the README LO folded
@@ -34,7 +34,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //     err.code and log structured detail.
 //   - P4 (consistent abstraction):  the same `createApp(canvas, opts)`
 //     factory + ECS spawn + `MeshRenderer` discriminator + 10 f32
-//     Transform column SoA (`bundles.Transform.quat` -> engine internal
+//     Transform column SoA (`row.mut(Transform)` -> engine internal
 //     mat4 compose) is the entry across every learn-render example;
 //     LO §1.5 just adds the per-frame system fn atop the LO §1.4
 //     textured cube baseline.
@@ -56,7 +56,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 // the system fn reads `world.getResource(Time).delta`
 // for the elapsed delta -- no fn-signature extension to ECS surface.
 import { createApp } from '@forgeax/engine-app';
-import { Entity, type World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
@@ -66,7 +66,7 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-wood.pack.json';
 import { computeTransformAt } from './transform-animation';
@@ -98,6 +98,9 @@ const CUBE_MATERIAL_GUID = '019e4906-23d4-72f8-bca5-7f18f5465e9a';
 // emit) per @forgeax/engine-vite-plugin-pack (charter P4 consistent
 // abstraction).
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-5-transformations',
+);
 
 interface MaterialPackEntry {
   readonly guid: string;
@@ -137,7 +140,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // four-verb redesign 2026-06-06: dev lazy-import transport for
     // raw-source texture rows (container.jpg). Absent => `loadByGuid`
     // returns `asset-not-imported` and the demo aborts.
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportBootstrapError(appRes.error);
@@ -154,6 +157,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const assets = renderer.assets;
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Parse the 3 GUID literals once (charter F1 single-grep entry).
@@ -270,28 +274,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   let tickCount = 0;
   world.addSystem(Update, {
     name: 'transformations-animate-cube',
-    queries: [{ with: [Transform, MeshFilter, Entity] }],
+    queries: [{ write: [Transform], with: [MeshFilter] }],
     fn: (world, queryResults) => {
       const time = world.getResource(Time);
       const dt = time.delta;
       elapsedSec += dt;
       const fields = computeTransformAt(elapsedSec);
-      for (const bundles of queryResults[0]) {
-        const count = bundles.Entity.self.length;
+      for (const row of queryResults[0]) {
+        const transform = row.mut(Transform);
         // Flat stride-N array columns: row i lanes at pos[i*3+a] /
         // quat[i*4+a] / scale[i*3+a] (feat-20260709 M2).
-        for (let i = 0; i < count; i++) {
-          bundles.Transform.pos[i * 3] = fields.pos[0];
-          bundles.Transform.pos[i * 3 + 1] = fields.pos[1];
-          bundles.Transform.pos[i * 3 + 2] = fields.pos[2];
-          bundles.Transform.quat[i * 4] = fields.quat[0];
-          bundles.Transform.quat[i * 4 + 1] = fields.quat[1];
-          bundles.Transform.quat[i * 4 + 2] = fields.quat[2];
-          bundles.Transform.quat[i * 4 + 3] = fields.quat[3];
-          bundles.Transform.scale[i * 3] = fields.scale[0];
-          bundles.Transform.scale[i * 3 + 1] = fields.scale[1];
-          bundles.Transform.scale[i * 3 + 2] = fields.scale[2];
-        }
+        transform.pos.set(fields.pos);
+        transform.quat.set(fields.quat);
+        transform.scale.set(fields.scale);
       }
       lastTickQuatZ = fields.quat[2];
       lastTickScaleX = fields.scale[0];

@@ -18,8 +18,8 @@
 import type { GuidResult } from '@forgeax/engine-pack/guid';
 import {
   GameProjectError,
+  type GameProjectErrorArgs,
   type GameProjectErrorCode,
-  type GameProjectErrorDetail,
 } from './errors.js';
 import { FORGE_JSON } from './paths.js';
 import type { GameProject } from './schema.js';
@@ -27,11 +27,11 @@ import { GameProjectSchema } from './schema.js';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-function err(
-  code: GameProjectErrorCode,
+function err<C extends GameProjectErrorCode>(
+  code: C,
   expected: string,
   hint: string,
-  detail: GameProjectErrorDetail,
+  detail: GameProjectErrorArgs<C>['detail'],
 ) {
   return { ok: false as const, error: new GameProjectError({ code, expected, hint, detail }) };
 }

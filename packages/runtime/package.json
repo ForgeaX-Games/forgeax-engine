@@ -60,7 +60,8 @@
     "@forgeax/engine-naga": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*",
-    "@forgeax/engine-vite-plugin-shader": "workspace:*"
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@types/node": "^20.14.0"
   },
   "forgeax": {
     "metrics": {

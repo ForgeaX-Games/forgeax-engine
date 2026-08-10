@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Inspector P0 server + CLI dual exits for forgeax-engine — script-executing WebSocket server (in-process via engine.startConsole) + standalone CLI binary (forgeax inspect / script / eval).",
+  "description": "ForgeaX live eval/introspection transport with structural World, renderer, assets, profiler, and execution roots plus CLI.",
   "bin": {
     "forgeax-engine-remote": "./dist/cli.mjs"
   },

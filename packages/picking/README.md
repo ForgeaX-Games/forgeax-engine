@@ -121,19 +121,19 @@ no `Tilemap`). `PickTileError` is a closed two-member discriminated union
 (`'tilemap-not-found'` / `'tilemap-component-missing'`), runtime-local (not
 exported through `@forgeax/engine-types`).
 
-## Error model (SSOT)
+## Error model
 
-`PickErrorCode` is this package's error-code SSOT (per AGENTS.md §Error model,
-`grep 'export type [A-Z]\w+ErrorCode'`):
+`PickError` owns the package-local precondition code in `src/pick-errors.ts`, and
+`PickErrorCode` derives from `PickError['code']`. The declaration proof at
+`src/__tests__/pick-errors.test-d.ts` checks that owner relationship, the closed
+surface, invalid literals, and exhaustive switching.
 
-| `PickError.code` | Trigger | Semantics |
-|:--|:--|:--|
-| `'camera-component-missing'` | the `cameraEntity` passed to `pick` / `pickVertex*` holds no `Camera` component | unrecoverable precondition — no view/projection matrix can be built; carries `.expected` / `.hint` / `.detail.cameraEntity` |
-
-Closed single-member union (minor add-only per the AGENTS.md evolution contract);
-AI users perform exhaustive `switch (err.code)` without a `default` (TS guards
-completeness — see `src/__tests__/pick-errors.test-d.ts`). `PickTileError` is the
-second closed union, returned (not thrown) via `Result`.
+When the `cameraEntity` passed to `pick` or `pickVertex*` has no `Camera`
+component, the functions throw `PickError`: no view/projection matrix can be
+built, and the error carries `.expected`, `.hint`, and `.detail.cameraEntity`.
+Attach a `Camera` with `world.set` as directed by `.hint`, then retry. Ordinary
+ray misses still return `undefined` / `[]`; `PickTileError` remains a separate
+two-member union returned (not thrown) through `Result`.
 
 ## Package boundary
 

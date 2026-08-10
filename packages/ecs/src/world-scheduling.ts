@@ -10,7 +10,13 @@ import {
   TimeConfigInvalidError,
   TimeDeltaInvalidError,
 } from './errors';
-import type { QueryDescriptor } from './query';
+import {
+  SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
+  type SharedKernelExecutor,
+} from './execution/executor';
+import type { SharedKernelDispatch } from './execution/shared-kernel';
+import { WorldPoisonedError } from './execution/shared-kernel-errors';
+import type { QueryDescriptor } from './query/query';
 import {
   getResource as resGet,
   hasResource as resHas,
@@ -60,6 +66,17 @@ function resourceName(key: ResourceKey): string {
   return typeof key === 'string' ? key : key.name;
 }
 
+function warmSharedKernel(world: World, descriptor: unknown): void {
+  if (
+    (descriptor as { readonly kind?: string }).kind !== 'shared-kernel' ||
+    !world.hasResource(SHARED_KERNEL_EXECUTOR_RESOURCE_KEY)
+  )
+    return;
+  world
+    .getResource<SharedKernelExecutor>(SHARED_KERNEL_EXECUTOR_RESOURCE_KEY)
+    .warmup?.(descriptor as SharedKernelDispatch);
+}
+
 function scheduleFor(
   world: World,
   token: ScheduleToken,
@@ -95,6 +112,7 @@ export function worldAddSystem<
   const target = scheduleFor(world, token);
   if (!target.ok) return target;
   scheduleAddSystem(target.value, descriptor);
+  warmSharedKernel(world, descriptor);
   return ok(undefined);
 }
 
@@ -119,7 +137,9 @@ export function worldReplaceSystem<
 ): ReturnType<typeof scheduleReplaceSystem> | Result<never, ScheduleScopeMismatchError> {
   const target = scheduleFor(world, token);
   if (!target.ok) return target;
-  return scheduleReplaceSystem(target.value, name, descriptor);
+  const replaced = scheduleReplaceSystem(target.value, name, descriptor);
+  if (replaced.ok) warmSharedKernel(world, descriptor);
+  return replaced;
 }
 
 export function worldAddSystems<
@@ -135,7 +155,11 @@ export function worldAddSystems<
   if (!target.ok) return target;
   const owner = setOwner(world, set);
   if (owner && owner !== token) return scopeError(token, owner, set.name);
-  return scheduleAddSystems(target.value, set, systems);
+  const added = scheduleAddSystems(target.value, set, systems);
+  if (added.ok) {
+    for (const system of systems) warmSharedKernel(world, system);
+  }
+  return added;
 }
 
 export function worldConfigureSets(
@@ -225,13 +249,18 @@ function discardFixedOverflow(fixed: FixedTimeResource, accumulator: { value: nu
 export function worldUpdate(
   world: World,
   deltaSeconds = 0,
-): Result<void, TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError> {
+): Result<
+  void,
+  TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError | WorldPoisonedError
+> {
+  if (world.execution.health === 'poisoned') {
+    return err(new WorldPoisonedError(world.identity, world.execution.fault));
+  }
   if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0)
     return err(new TimeDeltaInvalidError(deltaSeconds));
 
   const time = worldGetResource<TimeResource>(world, Time);
   const fixed = worldGetResource<FixedTimeResource>(world, FixedTime);
-  world._advanceChangeTick();
   if (time.maxDeltaSeconds < (fixed.maxStepsPerUpdate + 1) * fixed.delta) {
     return err(
       new TimeConfigInvalidError({
@@ -296,9 +325,7 @@ export function worldInsertResource<T>(world: World, key: ResourceKey, value: T)
   if (name === TIME_RESOURCE_KEY || name === FIXED_TIME_RESOURCE_KEY) {
     throw new ProtectedResourceError(name, 'insert');
   }
-  const existed = resHas(world._getResources(), name);
-  resInsert(world._getResources(), name, value);
-  world._markResourceChanged(name, !existed);
+  resInsert(world._getResources(), name, value, world._nextMutationEpoch());
 }
 
 export function worldGetResource<T>(world: World, key: ResourceKey): T {
@@ -314,7 +341,10 @@ export function worldRemoveResource(world: World, key: ResourceKey): void {
   if (name === TIME_RESOURCE_KEY || name === FIXED_TIME_RESOURCE_KEY) {
     throw new ProtectedResourceError(name, 'remove');
   }
-  resRemove(world._getResources(), name);
+  if (resHas(world._getResources(), name)) {
+    resRemove(world._getResources(), name);
+    world._nextMutationEpoch();
+  }
 }
 
 export function worldInspect(world: World): WorldInspection {
@@ -331,7 +361,7 @@ export function worldInspect(world: World): WorldInspection {
       key: arch.key,
       componentNames,
       entityCount: arch.size,
-      capacity: arch.capacity,
+      tableId: arch.tableId,
     });
     if (arch.size > 0) for (const name of componentNames) activeComponentSet.add(name);
   }
@@ -348,14 +378,23 @@ export function worldInspect(world: World): WorldInspection {
     return { schedule: token, systems };
   });
   const systems = schedules.flatMap((entry) => entry.systems);
+  const tables = graph.tables.map((table) => ({
+    id: table.id,
+    key: table.key,
+    componentNames: table.components.map((component) => component.name),
+    entityCount: table.size,
+    capacity: table.capacity,
+  }));
   return {
     entityCount,
     archetypeCount: archetypes.length,
     archetypes,
+    tableCount: tables.length,
+    tables,
     activeComponents: [...activeComponentSet],
     systemCount: systems.length,
     systems,
-    resourceKeys: [...resources.data.keys()],
+    resourceKeys: [...resources.entries.keys()],
     schedules,
     scheduleSystemCount(token: ScheduleToken): number {
       return schedules.find((entry) => entry.schedule === token)?.systems.length ?? 0;

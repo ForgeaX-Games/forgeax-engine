@@ -14,7 +14,17 @@
 // HTTP errors never enter DebugError (OOS-6 / D-9); illegal bodies and trigger
 // failures return a {error, hint} JSON envelope and write nothing (Fail Fast).
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statfsSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import { assembleReport, type PassOffset } from '@forgeax/engine-rhi-debug';
@@ -24,6 +34,8 @@ import type { Plugin, ViteDevServer } from 'vite';
 const DEFINE_KEY = 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG';
 const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const CAPTURE_FILES = new Set(['frame-0.tape.bin', 'frame-0.report.json']);
+const CAPTURE_TEMP_PREFIX = '.capture-tmp-';
+const DEFAULT_CAPTURE_BUDGET_BYTES_PER_FRAME = 512 * 1024 * 1024;
 // `bun fx start --rhi-debug` serves the reviewer from this separate Vite origin.
 // Do not widen this to `*`: captures can contain game assets and shader sources.
 const REVIEWER_ORIGIN = 'http://localhost:15274';
@@ -48,9 +60,22 @@ interface TriggerBody {
 const TIMEOUT_SENTINEL = Symbol('trigger-timeout');
 
 type TriggerResult = { tapePath: string; reportPath: string; runId: string };
+type TriggerFailure = {
+  status: number;
+  payload: { error: string; hint: string; detail?: Readonly<Record<string, unknown>> };
+};
+type TriggerOutcome =
+  | { readonly ok: true; readonly result: TriggerResult }
+  | { readonly ok: false; readonly failure: TriggerFailure };
 
 interface PendingTrigger {
-  resolve: (result: TriggerResult) => void;
+  resolve: (result: TriggerOutcome) => void;
+}
+
+export interface RhiDebugPluginOptions {
+  readonly triggerTimeoutMs?: number;
+  readonly captureBudgetBytesPerFrame?: number;
+  readonly availableBytes?: () => number;
 }
 
 // Standard base64 (RFC 4648) -- canonical padding, no whitespace. Validated with
@@ -186,7 +211,45 @@ async function readBody(req: AsyncIterable<Uint8Array>): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-/** Write the decoded tape to .forgeax-debug/<runId>, returning the two paths. */
+function cleanupStaleCaptureTemps(): void {
+  for (const name of readdirSync('.', { withFileTypes: true })) {
+    if (name.isDirectory() && name.name.startsWith(CAPTURE_TEMP_PREFIX)) {
+      rmSync(name.name, { recursive: true, force: true });
+    }
+  }
+}
+
+function volumeAvailableBytes(): number {
+  const stats = statfsSync('.');
+  return Number(stats.bavail) * Number(stats.bsize);
+}
+
+function captureWriteFailure(error: unknown): TriggerFailure {
+  const causeCode =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : 'unknown';
+  if (causeCode === 'ENOSPC') {
+    return {
+      status: 507,
+      payload: {
+        error: 'capture-disk-space-insufficient',
+        hint: 'free disk space on the capture volume, then retry the capture',
+        detail: { causeCode, cleaned: true },
+      },
+    };
+  }
+  return {
+    status: 500,
+    payload: {
+      error: 'capture-artifact-write-failed',
+      hint: 'the capture could not be persisted; check the capture directory and retry',
+      detail: { causeCode, cleaned: true },
+    },
+  };
+}
+
+/** Atomically write the decoded tape to .forgeax-debug/<runId>. */
 function writeTape(body: TapeBody): { tapePath: string; reportPath: string } {
   const blob = Buffer.from(body.blobBase64, 'base64');
   const report = assembleReport({
@@ -194,19 +257,32 @@ function writeTape(body: TapeBody): { tapePath: string; reportPath: string } {
     passOffsets: body.passOffsets,
     valid: body.valid,
   });
+  const stagingDir = `${CAPTURE_TEMP_PREFIX}${body.runId}-${randomUUID()}`;
   const outDir = join('.forgeax-debug', body.runId);
-  mkdirSync(outDir, { recursive: true });
-  const tapePath = join(outDir, 'frame-0.tape.bin');
-  const reportPath = join(outDir, 'frame-0.report.json');
-  writeFileSync(tapePath, blob);
-  // Pretty-print: the report is read by humans debugging captures; a single-line
-  // dump of hundreds of events is unreadable. 2-space indent keeps it diffable.
-  writeFileSync(reportPath, JSON.stringify(report, null, 2));
-  return { tapePath, reportPath };
+  try {
+    mkdirSync(stagingDir);
+    writeFileSync(join(stagingDir, 'frame-0.tape.bin'), blob);
+    // Pretty-print: the report is read by humans debugging captures; a single-line
+    // dump of hundreds of events is unreadable. 2-space indent keeps it diffable.
+    writeFileSync(join(stagingDir, 'frame-0.report.json'), JSON.stringify(report, null, 2));
+    mkdirSync('.forgeax-debug', { recursive: true });
+    rmSync(outDir, { recursive: true, force: true });
+    renameSync(stagingDir, outDir);
+  } catch (error) {
+    rmSync(stagingDir, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    tapePath: join(outDir, 'frame-0.tape.bin'),
+    reportPath: join(outDir, 'frame-0.report.json'),
+  };
 }
 
-export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin {
+export function vitePluginRhiDebug(opts?: RhiDebugPluginOptions): Plugin {
   const triggerTimeoutMs = opts?.triggerTimeoutMs ?? 30_000;
+  const captureBudgetBytesPerFrame =
+    opts?.captureBudgetBytesPerFrame ?? DEFAULT_CAPTURE_BUDGET_BYTES_PER_FRAME;
+  const availableBytes = opts?.availableBytes ?? volumeAvailableBytes;
 
   return {
     name: 'forgeax:rhi-debug',
@@ -218,6 +294,7 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
     },
 
     configureServer(server: ViteDevServer) {
+      cleanupStaleCaptureTemps();
       let pending: PendingTrigger | undefined;
 
       server.middlewares.use(async (req, res, next) => {
@@ -289,12 +366,23 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
             return;
           }
 
+          const frames = body.frames ?? 1;
+          const requiredBytes = frames * captureBudgetBytesPerFrame;
+          const freeBytes = availableBytes();
+          if (freeBytes < requiredBytes) {
+            sendJson(out, 507, {
+              error: 'capture-disk-space-insufficient',
+              hint: 'free disk space on the capture volume or request fewer frames, then retry',
+              detail: { availableBytes: freeBytes, requiredBytes, frames },
+            });
+            return;
+          }
+
           // Store resolver + await with timeout.
-          const deferred = new Promise<TriggerResult>((resolve) => {
+          const deferred = new Promise<TriggerOutcome>((resolve) => {
             pending = { resolve };
           });
 
-          const frames = body.frames ?? 1;
           const data: { frames: number; label?: string } = { frames };
           if (body.label !== undefined) {
             data.label = body.label;
@@ -316,8 +404,10 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
                 error: 'no-browser-tab',
                 hint: 'no browser tab responded to the capture request; confirm the dev-server is running and a browser tab with HMR is open, then retry',
               });
+            } else if (result.ok) {
+              sendJson(out, 200, result.result);
             } else {
-              sendJson(out, 200, result);
+              sendJson(out, result.failure.status, result.failure.payload);
             }
           } finally {
             if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
@@ -353,15 +443,27 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
             return;
           }
 
-          const { tapePath, reportPath } = writeTape(parsed.body);
-          const result: TriggerResult = { tapePath, reportPath, runId: parsed.body.runId };
+          let result: TriggerResult;
+          try {
+            const { tapePath, reportPath } = writeTape(parsed.body);
+            result = { tapePath, reportPath, runId: parsed.body.runId };
+          } catch (error) {
+            const failure = captureWriteFailure(error);
+            sendJson(out, failure.status, failure.payload);
+            const slot = pending;
+            if (slot !== undefined) {
+              pending = undefined;
+              slot.resolve({ ok: false, failure });
+            }
+            return;
+          }
           sendJson(out, 200, result);
 
           // One-shot latch: resolve pending trigger if one is waiting (D-1 / AC-06).
           const slot = pending;
           if (slot !== undefined) {
             pending = undefined;
-            slot.resolve(result);
+            slot.resolve({ ok: true, result });
           }
 
           return;

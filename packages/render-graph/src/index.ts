@@ -31,9 +31,32 @@ export type {
   ResolveContext,
   ResolvedBuffer,
   ResolvedBufferType,
+  ResolvedColorTargetDescriptor,
   ResourceDescriptor,
   ResourceInfo,
   ResourceKind,
   ResourceLifetime,
 } from './graph.js';
 export { RenderGraph } from './graph.js';
+export {
+  type CurrentFrameObservationDescriptor,
+  type CurrentFrameObservationLease,
+  type CurrentFrameObservationLifetime,
+  type CurrentFrameObservationSource,
+  createCurrentFrameObservationLease,
+  type ObservationSize,
+} from './observation.js';
+export {
+  COLOR_VALUE_DOMAINS,
+  type ColorDomainConnection,
+  type ColorDomainConversion,
+  type ColorDomainValidation,
+  type ColorResourceDescriptor,
+  type ColorValueDomain,
+  deserializeColorResourceDescriptor,
+  deserializeColorValueDomain,
+  isColorValueDomain,
+  serializeColorResourceDescriptor,
+  serializeColorValueDomain,
+  validateColorDomainConnection,
+} from './pipeline/color-value-domain.js';

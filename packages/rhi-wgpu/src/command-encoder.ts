@@ -60,6 +60,38 @@ export interface RawCommandEncoderLike {
   finish?(): unknown;
 }
 
+interface RawComputePassLike {
+  setPipeline?(pipeline: unknown): void;
+  setBindGroup?(index: number, bindGroup: unknown, dynamicOffsets?: readonly number[]): void;
+  dispatchWorkgroups?(x: number, y?: number, z?: number): void;
+  dispatchWorkgroupsIndirect?(buffer: unknown, offset: number | bigint): void;
+  end?(): void;
+}
+
+function makeRhiComputePassEncoder(raw: RawComputePassLike): RhiComputePassEncoder {
+  return {
+    setPipeline(pipeline) {
+      raw.setPipeline?.call(raw, pipeline);
+    },
+    setBindGroup(index, bindGroup, dynamicOffsets) {
+      raw.setBindGroup?.call(raw, index, bindGroup, dynamicOffsets);
+    },
+    dispatchWorkgroups(x, y, z) {
+      raw.dispatchWorkgroups?.call(raw, x, y, z);
+    },
+    dispatchWorkgroupsIndirect(indirectBuffer, indirectOffset) {
+      raw.dispatchWorkgroupsIndirect?.call(
+        raw,
+        unwrapBuffer(indirectBuffer),
+        BigInt(indirectOffset),
+      );
+    },
+    end() {
+      raw.end?.call(raw);
+    },
+  };
+}
+
 // bug-20260610 Gap 12: the earlier `unwrapBufferField` helper (which spread
 // the descriptor object and replaced `.buffer` with the raw handle) is
 // removed because the copy* methods now pass flat numeric args + bare
@@ -85,16 +117,9 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
   }
 
   beginComputePass(desc?: GPUComputePassDescriptor | undefined): RhiComputePassEncoder {
-    // M2 baseline stub — compute pass surface lands at M3 / w23 when the
-    // first AI-user compute path goes live.
-    void desc;
-    const stub = {
-      setPipeline(): void {},
-      setBindGroup(): void {},
-      dispatchWorkgroups(): void {},
-      end(): void {},
-    } as unknown as RhiComputePassEncoder;
-    return stub;
+    if (this.raw.beginComputePass === undefined) return makeRhiComputePassEncoder({});
+    const raw = this.raw.beginComputePass.call(this.raw, desc) as RawComputePassLike;
+    return makeRhiComputePassEncoder(raw);
   }
 
   copyBufferToBuffer(...args: unknown[]): void {

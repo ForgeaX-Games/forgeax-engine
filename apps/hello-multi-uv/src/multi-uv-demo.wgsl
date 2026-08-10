@@ -46,6 +46,10 @@ struct VsOut {
   @location(5) uv1 : vec2<f32>,
 };
 
+fn transformUv(uv : vec2<f32>, transform : vec4<f32>) -> vec2<f32> {
+  return uv * transform.zw + transform.xy;
+}
+
 @vertex
 fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   let instanceLocal = instances[idx].localFromInstance;
@@ -71,7 +75,14 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 #else
   let variantTint = vec3<f32>(0.85, 1.0, 0.85);
 #endif
-  let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
+  let parameterUv = transformUv(in.uv, material.baseColorUvTransform);
+  // Keep the default [0, 0, 1, 1] transform pixel-identical to the original
+  // multi-UV proof while making an authored transform visibly causal when it
+  // is changed at runtime.
+  let uvMutation = length(parameterUv - in.uv);
+  let uvParameterFactor = 1.0 +
+    0.45 * sin((parameterUv.x + parameterUv.y) * 6.2831853) * min(uvMutation, 1.0);
+  let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, parameterUv);
   let detail = textureSample(detailTexture, detailTexture_sampler, in.uv);
-  return vec4<f32>(material.baseColor.rgb * sampled.rgb * detail.rgb * pattern * variantTint, material.baseColor.a * sampled.a * detail.a);
+  return vec4<f32>(material.baseColor.rgb * sampled.rgb * detail.rgb * pattern * variantTint * uvParameterFactor, material.baseColor.a * sampled.a * detail.a);
 }

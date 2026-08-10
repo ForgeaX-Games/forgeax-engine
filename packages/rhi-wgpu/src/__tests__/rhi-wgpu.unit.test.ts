@@ -17,6 +17,7 @@
 // use restoreMocks() (mockClear) to prevent cross-block call-count leakage.
 
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { makeRhiCommandEncoder } from '../command-encoder';
 import { makeRhiDevice, type RawDeviceLike } from '../device';
 import { __resetForTests, ensureRhiWgpuReady, getRhiWgpuModule } from '../internal/wasm-loader';
 
@@ -67,6 +68,37 @@ function restoreMocks(): void {
   fakeWasmSurface.getConfiguration.mockClear();
   fakeWasmAdapter.requestDevice.mockClear();
 }
+
+describe('compute-pass forwarding', () => {
+  it('forwards pipeline, bindings, direct and indirect dispatch into the wasm handle', () => {
+    const rawPass = {
+      setPipeline: vi.fn(),
+      setBindGroup: vi.fn(),
+      dispatchWorkgroups: vi.fn(),
+      dispatchWorkgroupsIndirect: vi.fn(),
+      end: vi.fn(),
+    };
+    const beginComputePass = vi.fn(() => rawPass);
+    const encoder = makeRhiCommandEncoder({ beginComputePass });
+    const pass = encoder.beginComputePass({ label: 'compute' });
+    const pipeline = {};
+    const bindings = {};
+    const indirect = {};
+
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindings, [16]);
+    pass.dispatchWorkgroups(2, 3, 4);
+    pass.dispatchWorkgroupsIndirect(indirect, 8);
+    pass.end();
+
+    expect(beginComputePass).toHaveBeenCalledWith({ label: 'compute' });
+    expect(rawPass.setPipeline).toHaveBeenCalledWith(pipeline);
+    expect(rawPass.setBindGroup).toHaveBeenCalledWith(0, bindings, [16]);
+    expect(rawPass.dispatchWorkgroups).toHaveBeenCalledWith(2, 3, 4);
+    expect(rawPass.dispatchWorkgroupsIndirect).toHaveBeenCalledWith(indirect, 8n);
+    expect(rawPass.end).toHaveBeenCalledOnce();
+  });
+});
 
 function removeNavigatorGpu(): void {
   Object.defineProperty(globalThis, 'navigator', {
@@ -168,6 +200,29 @@ function setNavigatorGpu(gpu: unknown): void {
           expect(texture.format).toBe('bgra8unorm');
           expect(texture.usage).toBe(0x10);
         }
+      });
+
+      test('returned RhiCanvasContext.unconfigure presents the pending surface texture first', async () => {
+        const present = vi.fn();
+        (fakeWasmSurface.getCurrentTexture as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          getTexture: () => ({}),
+          present,
+        });
+
+        const { acquireCanvasContext } = await import('../index');
+        const mockCanvas = { width: 800, height: 600 } as unknown as HTMLCanvasElement;
+        const result = acquireCanvasContext(fakeWasmInstance, mockCanvas);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error('acquireCanvasContext should succeed');
+
+        const ctx = result.value;
+        expect(ctx.getCurrentTexture().ok).toBe(true);
+        ctx.unconfigure();
+        ctx.unconfigure();
+
+        expect(present).toHaveBeenCalledOnce();
+        expect(fakeWasmSurface.unconfigure).toHaveBeenCalledTimes(2);
       });
 
       test('returned RhiCanvasContext.getConfiguration delegates to wasm surface', async () => {

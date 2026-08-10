@@ -385,6 +385,11 @@ pub struct RhiWgpuRenderPass {
 }
 
 #[wasm_bindgen]
+pub struct RhiWgpuComputePass {
+    inner: Option<wgpu::ComputePass<'static>>,
+}
+
+#[wasm_bindgen]
 pub struct RhiWgpuQuerySet {
     inner: wgpu::QuerySet,
 }
@@ -2171,6 +2176,28 @@ fn aspect_from_u8(n: u8) -> wgpu::TextureAspect {
 
 #[wasm_bindgen]
 impl RhiWgpuCommandEncoder {
+    #[wasm_bindgen(js_name = beginComputePass, catch)]
+    pub fn begin_compute_pass(&mut self, desc_js: JsValue) -> Result<RhiWgpuComputePass, JsValue> {
+        let label = if desc_js.is_undefined() || desc_js.is_null() {
+            None
+        } else {
+            js_sys::Reflect::get(&desc_js, &JsValue::from_str("label"))
+                .ok()
+                .and_then(|value| value.as_string())
+                .map(leak_str)
+        };
+        let desc = wgpu::ComputePassDescriptor {
+            label,
+            timestamp_writes: None,
+        };
+        let encoder = self.inner.as_mut().expect("CommandEncoder already consumed");
+        let pass = encoder.begin_compute_pass(&desc);
+        // SAFETY: the pass is dropped by end() before the encoder can be finished,
+        // matching the existing render-pass lifetime bridge above.
+        let pass_static: wgpu::ComputePass<'static> = unsafe { core::mem::transmute(pass) };
+        Ok(RhiWgpuComputePass { inner: Some(pass_static) })
+    }
+
     #[wasm_bindgen(js_name = beginRenderPass, catch)]
     pub fn begin_render_pass(&mut self, desc_js: JsValue) -> Result<RhiWgpuRenderPass, JsValue> {
         let _desc: RenderPassDescriptorJs = serde_wasm_bindgen::from_value(desc_js.clone())?;
@@ -2575,6 +2602,56 @@ impl RhiWgpuCommandEncoder {
         if let Some(enc) = self.inner.as_mut() {
             enc.insert_debug_marker(&label);
         }
+    }
+}
+
+#[wasm_bindgen]
+impl RhiWgpuComputePass {
+    #[wasm_bindgen(js_name = setPipeline)]
+    pub fn set_pipeline(&mut self, pipeline: &RhiWgpuComputePipeline) {
+        if let Some(pass) = self.inner.as_mut() {
+            pass.set_pipeline(&pipeline.inner);
+        }
+    }
+
+    #[wasm_bindgen(js_name = setBindGroup)]
+    pub fn set_bind_group(
+        &mut self,
+        index: u32,
+        bind_group: &RhiWgpuBindGroup,
+        dynamic_offsets: JsValue,
+    ) {
+        if let Some(pass) = self.inner.as_mut() {
+            let offsets = if dynamic_offsets.is_undefined() || dynamic_offsets.is_null() {
+                Vec::new()
+            } else if let Ok(array) = dynamic_offsets.dyn_into::<js_sys::Array>() {
+                (0..array.length())
+                    .map(|i| array.get(i).as_f64().unwrap_or(0.0) as u32)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            pass.set_bind_group(index, &bind_group.inner, &offsets);
+        }
+    }
+
+    #[wasm_bindgen(js_name = dispatchWorkgroups)]
+    pub fn dispatch_workgroups(&mut self, x: u32, y: Option<u32>, z: Option<u32>) {
+        if let Some(pass) = self.inner.as_mut() {
+            pass.dispatch_workgroups(x, y.unwrap_or(1), z.unwrap_or(1));
+        }
+    }
+
+    #[wasm_bindgen(js_name = dispatchWorkgroupsIndirect)]
+    pub fn dispatch_workgroups_indirect(&mut self, buffer: &RhiWgpuBuffer, offset: u64) {
+        if let Some(pass) = self.inner.as_mut() {
+            pass.dispatch_workgroups_indirect(&buffer.inner, offset);
+        }
+    }
+
+    #[wasm_bindgen(js_name = end)]
+    pub fn end(&mut self) {
+        let _pass = self.inner.take();
     }
 }
 

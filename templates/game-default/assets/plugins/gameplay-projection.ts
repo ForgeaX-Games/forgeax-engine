@@ -20,6 +20,17 @@ import type { GltfMeshSwap } from './gltf-mesh-swap';
 import type { ViewMode } from './hud';
 import type { HitStreakHandle } from './hit-streak';
 import type { AssetLabActionResult } from './asset-lab-actions';
+import type { TargetRelayHandle } from './target-relay';
+import { deriveCounterattackPressure, type CounterattackHandle } from './counterattack';
+import type { HealthPickupHandle } from './health-pickup';
+import type { RepairCacheHandle } from './repair-cache';
+import type { EnergyCoreExtractionHandle } from './energy-core-extraction';
+import type { RewardChoiceHandle } from './reward-choice';
+import type { BarrierRouteHandle } from './barrier-route';
+import { GAME_DEFAULT_COMMAND_COUNTERS, type GameplayCommandCounters } from './resources/gameplay';
+import { Projectile } from './components/gameplay';
+
+const COUNTERATTACK_BASELINE = deriveCounterattackPressure(0);
 
 export type GameplayProjectionContext = {
   readonly host: BootstrapContext;
@@ -34,6 +45,7 @@ export type GameplayProjectionContext = {
   readonly jpegTextureSwap: JpegTextureSwap | undefined;
   readonly videoTexturePanel: VideoTexturePanel | undefined;
   readonly targetProfile: TargetProfileLoop | undefined;
+  readonly targetRelay: TargetRelayHandle;
   readonly applyTargetProfile: () => AssetLabActionResult;
   readonly applyFbxCompanion: () => AssetLabActionResult;
   readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
@@ -52,6 +64,13 @@ export type GameplayProjectionContext = {
   readonly setProjectileVisual: (visual: 'mesh' | 'sprite' | 'sprite-lit') => void;
   readonly visibilitySnapshot: () => ReturnType<VisibilityLoopHandle['snapshot']>;
   readonly hitStreak: HitStreakHandle | undefined;
+  readonly counterattack: CounterattackHandle | undefined;
+  readonly healthPickup: HealthPickupHandle | undefined;
+  readonly repairCache: RepairCacheHandle | undefined;
+  readonly extraction: EnergyCoreExtractionHandle | undefined;
+  readonly rewardChoice: RewardChoiceHandle | undefined;
+  readonly barrierRoute: BarrierRouteHandle | undefined;
+  readonly projectileEntities: () => readonly EntityHandle[];
 };
 
 const EMPTY_VIDEO_TEXTURE = { available: false, active: 'original', swaps: 0, hitReactions: 0, lastHitPlayhead: null, guid: null, name: null, kind: null, url: null } as const;
@@ -77,7 +96,7 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
     projection.registerRead({
       id: 'game-default.snapshot',
       title: 'Read gameplay snapshot',
-      description: 'Read phase, camera mode, fixed-step witness, and target lifecycle counts.',
+      description: 'Read phase, camera mode, shared player damage, charged barrier, authored pickup, extraction, reward lifecycle, and target counts.',
       read: (): GameProjectionValue => {
         const cameraData = args.world.get(args.camera, Camera);
         return asProjection({
@@ -90,12 +109,58 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
           jpegTexture: jpegTextureSnapshot(args.jpegTextureSwap),
           videoTexture: args.videoTexturePanel?.snapshot() ?? EMPTY_VIDEO_TEXTURE,
           targetProfile: targetProfileSnapshot(args.targetProfile),
+          targetRelay: args.targetRelay.snapshot(),
           spriteAtlas: spriteAtlasSnapshot(args.spriteAtlasLoop),
           multiWorld: args.multiWorldOverlay?.snapshot() ?? EMPTY_MULTI_WORLD,
           worldScoreText: args.worldScoreText?.snapshot() ?? EMPTY_WORLD_SCORE_TEXT,
           fbxSkinnedTarget: args.fbxSkinnedTarget?.snapshot() ?? EMPTY_FBX_SKINNED_TARGET,
           vfxHit: args.vfxHitLoop.snapshot(),
           hitStreak: args.hitStreak?.snapshot() ?? { hits: 0, elapsed: 0, multiplier: 1, state: 'ready' },
+          counterattack: args.counterattack?.snapshot() ?? {
+            playerHealth: 0, playerMaxHealth: 0, playerPosition: [0, 0, 0], hazardEntity: null,
+            hazardActive: false, hazardMode: 'unavailable', hazardPosition: null,
+            pressureTier: COUNTERATTACK_BASELINE.tier,
+            patrolSpeed: COUNTERATTACK_BASELINE.patrolSpeed,
+            chaseSpeed: COUNTERATTACK_BASELINE.chaseSpeed,
+            pursuitRadius: COUNTERATTACK_BASELINE.pursuitRadius,
+            cooldown: 0, acceptedHits: 0,
+          },
+          healthPickup: args.healthPickup?.snapshot() ?? {
+            pickups: [],
+          },
+          repairCache: args.repairCache?.snapshot() ?? {
+            targetLocalId: 0, targetEntity: 0, pickupLocalId: 0, opened: false,
+            opens: 0, ordinaryHits: 0, alreadyOpenHits: 0,
+            position: [0, 0, 0],
+          },
+          extraction: args.extraction?.snapshot() ?? {
+            status: 'locked', collected: 0, total: 0, active: false, collectedMask: 0,
+            wrongContacts: 0, refusedContacts: 0, victoryRequests: 0, deferredDespawns: 0,
+            cores: [],
+            beacon: {
+              authoredLocalId: 0, entity: null, available: false, position: [0, 0, 0],
+              sensor: false, physicsReady: false, activeVisual: false,
+            },
+          },
+          rewardChoice: args.rewardChoice?.snapshot() ?? {
+            state: 'none', available: false, unavailableRefusals: 0, nonPlayerRefusals: 0,
+            lockedRefusals: 0, simultaneousContacts: 0, selections: 0,
+            shieldConsumptions: 0, overchargeConsumptions: 0, pedestals: [],
+          },
+          barrierRoute: args.barrierRoute?.snapshot() ?? {
+            emitterEntity: 0, emitterLocalId: 0, barrierEntity: 0, barrierLocalId: 0,
+            active: false, activeVisual: false, damagingContact: false, physicsReady: false,
+            damageCooldown: 0, acceptedDamageHits: 0,
+            opens: 0, ordinaryHits: 0, alreadyOpenHits: 0,
+          },
+          projectiles: {
+            active: args.projectileEntities().length,
+            impactScales: args.projectileEntities().flatMap((entity) => {
+              const projectile = args.world.get(entity, Projectile);
+              return projectile.ok ? [projectile.value.impactScale] : [];
+            }),
+            ...args.world.getResource<GameplayCommandCounters>(GAME_DEFAULT_COMMAND_COUNTERS),
+          },
         });
       },
     }),

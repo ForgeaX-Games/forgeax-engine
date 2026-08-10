@@ -120,7 +120,7 @@ async function runRemoteLiveBrowser() {
     const health = await waitForBridge(env);
     const entities = liveEval(
       env,
-      "(async () => { const m = await _import('@forgeax/engine-ecs'); const r = []; const s = m.createQueryState({ with: [m.Entity] }); m.queryRun(s, world, b => { r.push(...Array.from(b.Entity.self)); }); return r; })()",
+      "(async () => { const q = world.query({}); if (!q.ok) throw q.error; return Array.from(q.value, row => row.entity); })()",
     );
     if (!Array.isArray(entities) || entities.length < 3) throw new Error(`unexpected live entities: ${JSON.stringify(entities)}`);
     const handle = entities[0];

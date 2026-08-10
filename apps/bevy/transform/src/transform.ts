@@ -3,11 +3,8 @@
 // turns smoothly toward a center sphere, and shrinks that sphere by travel distance.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
@@ -39,12 +36,9 @@ export const CenterSphere = defineComponent('CenterSphere', {
 });
 
 function firstHandleWith(world: World, component: typeof Orbiting | typeof CenterSphere): EntityHandle | null {
-  const state = createQueryState({ with: [Entity, component] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (handle === null && bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [component] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 /** Build the orbiting cube and center sphere scene from Bevy's transform example. */

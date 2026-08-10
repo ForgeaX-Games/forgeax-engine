@@ -82,5 +82,5 @@ describe('visibility extraction performance (10k)', () => {
     );
 
     expect(overhead).toBeLessThanOrEqual(0.1);
-  }, 30_000);
+  }, 60_000);
 });

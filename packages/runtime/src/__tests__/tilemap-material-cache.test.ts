@@ -15,7 +15,7 @@
 // Anchors: plan-tasks m0-t9 / m0-t10; plan-strategy §D-9 cache key shape;
 // charter P4 (atlases plural composite + binary cache key).
 
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import {
   encodeSortScope,
   TileLayer,
@@ -23,6 +23,8 @@ import {
   tilemapChunkExtractSystem,
 } from '@forgeax/engine-render/authoring';
 import {
+  Layer,
+  MeshFilter,
   MeshRenderer,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
@@ -74,29 +76,11 @@ function makeTileset(opts: {
 }
 
 function readDerivedMaterialHandles(world: World): number[] {
-  type GraphArch = {
-    key: string;
-    columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
-  };
-  const graph = (world as unknown as { _getGraph(): { archetypes: GraphArch[] } })._getGraph();
   const out: number[] = [];
-  for (const arch of world.inspect().archetypes) {
-    if (!arch.componentNames.includes('MeshFilter')) continue;
-    if (!arch.componentNames.includes('MeshRenderer')) continue;
-    if (!arch.componentNames.includes('Layer')) continue;
-    const derived = graph.archetypes.find((a) => a.key === arch.key);
-    if (!derived) continue;
-    const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as Uint32Array | undefined;
-    if (!entityCol) continue;
-    for (let i = 0; i < entityCol.length; i++) {
-      const e = entityCol[i];
-      if (e === undefined || e === 0) continue;
-      const renderer = world.get(e as never, MeshRenderer).unwrap();
-      const materials = renderer.materials as ArrayLike<number>;
-      const handle = materials[0];
-      if (handle === undefined) continue;
-      out.push(handle as unknown as number);
-    }
+  const query = world.query({ read: [MeshRenderer], with: [MeshFilter, Layer] }).unwrap();
+  for (const row of query) {
+    const handle = row.get(MeshRenderer).materials[0];
+    if (handle !== undefined) out.push(handle as unknown as number);
   }
   return out;
 }

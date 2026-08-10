@@ -51,9 +51,9 @@ import { Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import {
-  type ArchetypeLike,
   computeScreenRay,
   readWorldMatrix,
+  type TableLike,
   type WorldInternalView,
 } from './pick-core';
 
@@ -545,31 +545,31 @@ export function pickVertex(
   // ── walk renderable archetypes (Transform + MeshFilter + MeshRenderer) ──
   // Reuse pick.ts archetype walk skeleton (research Finding 1).
   const worldInternal = world as unknown as {
-    _getGraph(): { archetypes: ArchetypeLike[] };
+    _getGraph(): { tables: TableLike[] };
   };
   const graph = worldInternal._getGraph();
 
   const allCandidates: VertexHit[] = [];
 
-  for (const arch of graph.archetypes) {
-    if (!arch || arch.size === 0) continue;
-    if (!arch.components.some((c) => c.id === MeshRenderer.id)) continue;
-    if (!arch.components.some((c) => c.id === MeshFilter.id)) continue;
-    if (!arch.components.some((c) => c.id === Transform.id)) continue;
+  for (const table of graph.tables) {
+    if (!table || table.size === 0) continue;
+    if (!table.components.some((c) => c.id === MeshRenderer.id)) continue;
+    if (!table.components.some((c) => c.id === MeshFilter.id)) continue;
+    if (!table.components.some((c) => c.id === Transform.id)) continue;
 
-    const mfCols = arch.columns.get(MeshFilter.id);
+    const mfCols = table.storage.get(MeshFilter.id)?.fields;
     if (!mfCols) continue;
     const assetHandleView = mfCols.get('assetHandle')?.view as Uint32Array | undefined;
     if (!assetHandleView) continue;
 
-    for (let i = 0; i < arch.size; i++) {
+    for (let i = 0; i < table.size; i++) {
       const assetHandleRaw = Math.round(assetHandleView[i] ?? 0);
       if (assetHandleRaw === 0) continue;
       const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
       if (!meshRes.ok) continue;
 
       // read entity (mirrors pick.ts:190)
-      const entitySelfView = arch.columns.get(Entity.id)?.get('self')?.view as
+      const entitySelfView = table.storage.get(Entity.id)?.fields.get('self')?.view as
         | Uint32Array
         | undefined;
       const entity = (entitySelfView?.[i] ?? 0) as EntityHandle;

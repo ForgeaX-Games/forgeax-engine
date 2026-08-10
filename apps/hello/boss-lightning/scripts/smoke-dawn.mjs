@@ -3,10 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { setupGpuShim } from '../../triangle/scripts/smoke-helpers.mjs';
-import {
-  classifyDawnErrors,
-  READINESS_FRAME_LIMIT,
-} from './smoke-diagnostics.mjs';
+import { classifyDawnErrors, READINESS_FRAME_LIMIT } from './smoke-diagnostics.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
@@ -48,21 +45,18 @@ globalThis.fetch = async request => {
 const shim = await setupGpuShim({ width: WIDTH, height: HEIGHT, rerunCmd });
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const manifest = await buildEngineShaderManifest();
-const { World, FixedTime } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { mat4 } = await import('@forgeax/engine-math');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { Transform, scenePlugin } = await import('@forgeax/engine-scene');
 const {
-  createStockParticleCpuExecutorRegistry,
-  loadParticleEffect,
-  PARTICLE_SIMULATION_RESOURCE_KEY,
+  loadVfxGpuEffect,
   ParticleEffectPlayer,
-  particleEffectPackLoader,
-  particleSimulationPlugin,
+  VFX_GPU_RUNTIME_RESOURCE_KEY,
 } = await import('@forgeax/engine-vfx');
-const { particleRenderFeature, particleSceneSpaceResolver } = await import('@forgeax/engine-vfx-render');
+const { createVfxRuntimeHost } = await import('@forgeax/engine-vfx-render');
 
 const world = new World();
 let playerEntity = 0;
@@ -89,17 +83,10 @@ const camera = {
     };
   },
 };
-const observations = {
-  read(currentWorld) {
-    const simulation = currentWorld.getResource(PARTICLE_SIMULATION_RESOURCE_KEY);
-    const observation = simulation?.read(playerEntity);
-    return observation === undefined ? [] : [observation];
-  },
-};
-const particleFeature = particleRenderFeature({ observations, camera });
+const host = createVfxRuntimeHost({ camera });
 const renderer = await createRenderer(
   shim.mockCanvas,
-  { features: falsifier === 'strike-only' ? [] : [particleFeature] },
+  { features: falsifier === 'strike-only' ? [] : [host.feature] },
   { shaderManifestUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}` },
 );
 const errors = [];
@@ -119,8 +106,9 @@ if (!ready.ok) {
 }
 const assets = renderer.assets;
 if (assets === null) throw new Error('AssetRegistry unavailable');
-assets.loaders.registerPackLoader(particleEffectPackLoader);
 assets.configurePackIndex('/pack-index.json');
+const attached = await host.attachWorld({ world, assets });
+if (!attached.ok) throw new Error(`VFX host attach failed: ${attached.error.hint}`);
 
 const materialGuid = assets.parseGuid('019e9c00-0000-7000-8000-000000000002');
 const material = await assets.loadByGuid(materialGuid);
@@ -140,7 +128,7 @@ world.spawn(
   { component: MeshRenderer, data: { materials: [strikeMaterial] } },
 ).unwrap();
 
-const loaded = await loadParticleEffect(assets, '019e9c00-0000-7000-8000-000000000000');
+const loaded = await loadVfxGpuEffect(assets, '019e9c00-0000-7000-8000-000000000000');
 if (!loaded.ok) throw new Error(`particle effect load failed: ${loaded.error.hint}`);
 const effect = world.allocSharedRef('ParticleEffectAsset', loaded.value);
 playerEntity = world.spawn(
@@ -148,30 +136,14 @@ playerEntity = world.spawn(
   { component: ParticleEffectPlayer, data: { effect, playing: true, seed: SEED, timeScale: 1 } },
 ).unwrap();
 scenePlugin().build(world).unwrap();
-particleSimulationPlugin({
-  assets,
-  cpuExecutors: createStockParticleCpuExecutorRegistry(),
-  spaceResolver: particleSceneSpaceResolver({ world }),
-}).build(world).unwrap();
 
 const readiness = [];
 let firstReadinessFrame;
-let bucketCount = 0;
-let drawCount = 0;
-let particleCount = 0;
+let queuedIntents = 0;
+let runtimeDiagnostics = [];
 for (let frame = 0; frame < TARGET_FRAMES; frame += 1) {
   currentFrame = frame;
   world.update(1 / 60).unwrap();
-  const observation = world.getResource(PARTICLE_SIMULATION_RESOURCE_KEY)?.read(playerEntity);
-  const batches = observation?.batches.batches ?? [];
-  drawCount = batches.length;
-  particleCount = batches.reduce((total, batch) => total + batch.count, 0);
-  const diagnostics = particleFeature.diagnostics();
-  readiness.push(diagnostics.readiness);
-  if (firstReadinessFrame === undefined && diagnostics.readiness === 'ready') {
-    firstReadinessFrame = frame;
-  }
-  bucketCount = diagnostics.bucketCount;
   const drawn = renderer.draw([world], { owner: 0 });
   if (!drawn.ok) {
     errors.push({
@@ -182,14 +154,16 @@ for (let frame = 0; frame < TARGET_FRAMES; frame += 1) {
     });
   }
   await new Promise(resolve => setImmediate(resolve));
+  const runtime = world.getResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
+  queuedIntents = runtime.snapshot().length;
+  runtimeDiagnostics = runtime.diagnostics();
+  const readyNow = runtime.hasPlayer(playerEntity) && queuedIntents === 0 && runtimeDiagnostics.length === 0;
+  readiness.push(readyNow ? 'ready' : 'warming');
+  if (firstReadinessFrame === undefined && readyNow) firstReadinessFrame = frame;
   if (firstReadinessFrame === undefined && frame >= READINESS_FRAME_LIMIT) break;
 }
 
 if (falsifier === 'strike-only') {
-  if (particleCount !== 0 || drawCount !== 0) {
-    console.error(`[smoke-dawn] FAIL strike-only emitted particle signal: ${particleCount}`);
-    process.exit(1);
-  }
   console.error('[smoke-dawn] RED strike-only correctly has no particle signal');
   process.exit(1);
 }
@@ -242,9 +216,8 @@ const result = {
   seed: SEED,
   camera: CAMERA,
   frame: currentFrame,
-  bucketCount,
-  drawCount,
-  particleCount,
+  queuedIntents,
+  runtimeDiagnostics,
   billboardEnergy,
   meshEnergy,
   billboardZone,
@@ -263,9 +236,8 @@ if (
   readinessFrame === undefined ||
   readinessFrame > READINESS_FRAME_LIMIT ||
   persistentErrors.length > 0 ||
-  bucketCount < 2 ||
-  drawCount < 2 ||
-  particleCount === 0
+  queuedIntents !== 0 ||
+  runtimeDiagnostics.length > 0
 ) {
   console.error(`[smoke-dawn] FAIL ${JSON.stringify(result)}`);
   process.exit(1);

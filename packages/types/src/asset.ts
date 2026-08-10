@@ -47,6 +47,13 @@ export interface PackV2<P = unknown> {
   readonly assets: readonly AssetEnvelopeV2<P>[];
 }
 
+/** Realm-neutral audio source artifact. Decoding belongs to the Host audio consumer. */
+export interface AudioClipAsset {
+  readonly kind: 'audio';
+  readonly sourceKey: string;
+  readonly bytes: Uint8Array;
+}
+
 export type CookStatus = 'notRequired' | 'notCooked' | 'failed' | 'ready' | 'unknown';
 export type CookFreshness = 'notApplicable' | 'current' | 'stale' | 'unknown';
 export type ArtifactVerificationStatus = 'notChecked' | 'passed' | 'failed';

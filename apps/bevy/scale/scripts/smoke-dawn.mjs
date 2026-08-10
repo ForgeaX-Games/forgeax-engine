@@ -119,7 +119,7 @@ const mockCanvas = {
 };
 
 // --- build the scale World via the shared SSOT builder ---
-const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 
@@ -182,7 +182,7 @@ async function capture(device) {
 // stretch is near its visible maximum. The indices scale with the CI frame budget.
 const CAPTURE_EARLY = Math.max(1, Math.floor(SMOKE_MIN_FRAMES * 0.05));
 const CAPTURE_LATE = Math.max(CAPTURE_EARLY + 1, Math.floor(SMOKE_MIN_FRAMES * 0.3));
-const scalingState = createQueryState({ with: [Transform, Scaling, Entity] });
+const scalingQuery = world.query({ read: [Transform, Scaling] }).unwrap();
 let framesObserved = 0;
 let earlyFrame;
 let lateFrame;
@@ -198,22 +198,17 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   // explicitly so extraction cannot read stale matrices.
   stepScale(world, FIXED_DT);
   propagateTransforms(world);
-  queryRun(scalingState, world, (bundle) => {
-    if ((bundle.Scaling.scaleDirection[1] ?? 0) > 0.99) visitedYAxis = true;
-  });
+  for (const row of scalingQuery) {
+    if ((row.get(Scaling).scaleDirection[1] ?? 0) > 0.99) visitedYAxis = true;
+  }
 }
 let finalScale;
 let finalDirection;
-queryRun(scalingState, world, (bundle) => {
-  if (finalScale) return;
-  const handle = bundle.Entity.self[0];
-  if (handle === undefined) return;
-  const transform = world.get(handle, Transform);
-  const scaling = world.get(handle, Scaling);
-  if (!transform.ok || !scaling.ok) return;
-  finalScale = Array.from(transform.value.scale);
-  finalDirection = Array.from(scaling.value.scaleDirection);
-});
+for (const row of scalingQuery) {
+  finalScale = Array.from(row.get(Transform).scale);
+  finalDirection = Array.from(row.get(Scaling).scaleDirection);
+  break;
+}
 
 const device = sharedDevice;
 if (!device) {

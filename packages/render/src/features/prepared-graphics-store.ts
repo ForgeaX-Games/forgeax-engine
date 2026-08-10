@@ -28,12 +28,14 @@ export type PreparedGraphicsNormalizedDescriptor =
   | {
       readonly kind: 'vertex-data';
       readonly layout: string;
-      readonly data: readonly number[];
+      readonly data?: readonly number[];
+      readonly buffer?: import('./prepared-gpu-work').RenderFeatureGpuBufferRef;
     }
   | {
       readonly kind: 'index-data';
       readonly format: 'uint16' | 'uint32';
-      readonly data: readonly number[];
+      readonly data?: readonly number[];
+      readonly buffer?: import('./prepared-gpu-work').RenderFeatureGpuBufferRef;
     };
 
 export interface PreparedGraphicsItem<Kind extends PreparedGraphicsKind = PreparedGraphicsKind> {
@@ -152,7 +154,11 @@ function normalizeDescriptor(
   uploadBytes: readonly number[] | undefined;
 } {
   if ('signature' in request) {
-    return { descriptor: undefined, signature: request.signature, uploadBytes: undefined };
+    return {
+      descriptor: undefined,
+      signature: request.signature,
+      uploadBytes: undefined,
+    };
   }
   let descriptor: PreparedGraphicsNormalizedDescriptor;
   let bytes: readonly number[] | undefined;
@@ -166,6 +172,8 @@ function normalizeDescriptor(
         colorFormats: Object.freeze([...pipeline.colorFormats]),
         ...(pipeline.depthFormat === undefined ? {} : { depthFormat: pipeline.depthFormat }),
         ...(pipeline.sampleCount === undefined ? {} : { sampleCount: pipeline.sampleCount }),
+        ...(pipeline.topology === undefined ? {} : { topology: pipeline.topology }),
+        ...(pipeline.indexFormat === undefined ? {} : { indexFormat: pipeline.indexFormat }),
         ...(pipeline.renderState === undefined
           ? {}
           : {
@@ -190,9 +198,13 @@ function normalizeDescriptor(
       descriptor = Object.freeze({
         kind,
         layout: vertexData.layout,
-        data: valuesOf(vertexData.data),
+        ...('buffer' in vertexData && vertexData.buffer !== undefined
+          ? { buffer: vertexData.buffer }
+          : { data: valuesOf(vertexData.data) }),
       });
-      bytes = uploadBytes(vertexData.data, kind);
+      if ('data' in vertexData && vertexData.data !== undefined) {
+        bytes = uploadBytes(vertexData.data, kind);
+      }
       break;
     }
     case 'index-data': {
@@ -200,9 +212,13 @@ function normalizeDescriptor(
       descriptor = Object.freeze({
         kind,
         format: indexData.format,
-        data: valuesOf(indexData.data),
+        ...('buffer' in indexData && indexData.buffer !== undefined
+          ? { buffer: indexData.buffer }
+          : { data: valuesOf(indexData.data) }),
       });
-      bytes = uploadBytes(indexData.data, kind);
+      if ('data' in indexData && indexData.data !== undefined) {
+        bytes = uploadBytes(indexData.data, kind);
+      }
       break;
     }
   }
@@ -217,6 +233,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
   private aborted = false;
   private committed = false;
   private readonly overlay = new Map<string, PreparedGraphicsItem>();
+  private readonly touchedCommitted = new Set<string>();
 
   constructor(
     private readonly store: PreparedGraphicsStoreImpl,
@@ -256,6 +273,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
           ),
         );
       }
+      this.touchedCommitted.add(key);
       return ok(committed.reference as RenderFeaturePreparedRef<Kind>);
     }
     const existing = this.overlay.get(key);
@@ -293,7 +311,12 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
   }
 
   committedItems(): readonly PreparedGraphicsItem[] {
-    return Object.freeze([...(this.committedSlot?.items.values() ?? [])]);
+    return Object.freeze(
+      [...this.touchedCommitted].flatMap((key) => {
+        const item = this.committedSlot?.items.get(key);
+        return item === undefined ? [] : [item];
+      }),
+    );
   }
 
   overlayItems(): readonly PreparedGraphicsItem[] {
@@ -305,7 +328,8 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
     return (
       item?.featureIdentity === this.featureIdentity &&
       item.generation === this.generation &&
-      (this.committedSlot?.items.get(itemKey(item.kind, item.name)) === item ||
+      ((this.touchedCommitted.has(itemKey(item.kind, item.name)) &&
+        this.committedSlot?.items.get(itemKey(item.kind, item.name)) === item) ||
         this.overlay.get(itemKey(item.kind, item.name)) === item)
     );
   }
@@ -317,7 +341,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
       readonly format: string;
     }[],
   ): RenderFeaturePreparedGraphicsState {
-    const items = [...(this.committedSlot?.items.values() ?? []), ...this.overlay.values()];
+    const items = [...this.committedItems(), ...this.overlay.values()];
     return {
       capabilityAvailable,
       generation: this.generation,
@@ -344,7 +368,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
     }
     this.committed = true;
     return ok(
-      this.store.commit(this.featureIdentity, this.generation, this.committedSlot, this.overlay),
+      this.store.commit(this.featureIdentity, this.generation, this.committedItems(), this.overlay),
     );
   }
 
@@ -391,10 +415,11 @@ class PreparedGraphicsStoreImpl implements PreparedGraphicsStore {
   commit(
     featureIdentity: string,
     generation: number,
-    committedSlot: Slot | undefined,
+    activeCommitted: readonly PreparedGraphicsItem[],
     overlay: ReadonlyMap<string, PreparedGraphicsItem>,
   ): PreparedGraphicsStoreSnapshot {
-    const items = new Map(committedSlot?.items ?? []);
+    const items = new Map<string, PreparedGraphicsItem>();
+    for (const item of activeCommitted) items.set(itemKey(item.kind, item.name), item);
     for (const [key, item] of overlay) items.set(key, item);
     const slot: Slot = { generation, items };
     this.slots.set(featureIdentity, slot);

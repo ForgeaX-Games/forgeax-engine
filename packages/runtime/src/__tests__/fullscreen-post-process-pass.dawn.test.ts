@@ -35,8 +35,8 @@ const WIDTH = 256;
 const HEIGHT = 256;
 // CLEAR_COLOR removed: feat-20260608-create-app-param-surface-trim deleted
 // `clearColor` from RendererOptions; scene clear color now lives on the Camera
-// entity (clearR/G/B/A). This dawn test never spawns a Camera, so it relies on
-// ZERO_CAMERA_CLEAR_FALLBACK = [0,0,0,1] from render-system-record.
+// entity. This FXAA comparison pins an opaque background explicitly so the
+// post-process comparison remains independent of the M1 transparent default.
 
 const TEXTURE_USAGE_COPY_SRC = 0x01;
 const TEXTURE_USAGE_RENDER_ATTACHMENT = 0x10;
@@ -106,6 +106,7 @@ function spawnCubeScene(world: World, antialias: number): void {
         near: 0.1,
         far: 100,
         antialias,
+        clearColor: [0, 0, 0, 1],
       } as Record<string, unknown> as never,
     },
   );

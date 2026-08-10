@@ -14,7 +14,7 @@
 //   - packages/vite-plugin-pack/src/__tests__/per-meta-concurrent.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/scene-asset-fixture.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/serve-imported-bytes.test.ts
-//   - packages/vite-plugin-pack/test/plugin-dev.test.ts
+//   - packages/vite-plugin-pack/src/__tests__/plugin-dev.test.ts
 //
 // Paradigm: each block-scoped describe.skip('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.

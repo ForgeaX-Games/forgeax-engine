@@ -89,7 +89,7 @@ const mockCanvas = {
 };
 
 // --- build the camera-orbit World via the shared SSOT builder ---
-const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { Camera } = await import('@forgeax/engine-render');
 const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
@@ -150,7 +150,7 @@ async function capture(device) {
 // --- drive shared camera orbit and capture early/late views ---
 const CAPTURE_EARLY = Math.max(1, Math.floor(SMOKE_MIN_FRAMES * 0.05));
 const CAPTURE_LATE = Math.max(CAPTURE_EARLY + 1, Math.floor(SMOKE_MIN_FRAMES * 0.65));
-const cameraState = createQueryState({ with: [Camera, Transform, OrbitCamera, Entity] });
+const cameraQuery = world.query({ read: [Transform, OrbitCamera], with: [Camera] }).unwrap();
 let framesObserved = 0;
 let earlyFrame;
 let lateFrame;
@@ -166,14 +166,11 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i === CAPTURE_EARLY) {
     earlyFrame = await capture(sharedDevice);
     earlyRadius = cameraRadius(world);
-    queryRun(cameraState, world, (bundle) => {
-      const handle = bundle.Entity.self[0];
-      if (handle === undefined) return;
-      const transform = world.get(handle, Transform);
-      if (transform.ok) earlyCameraPos = Array.from(transform.value.pos);
-      const orbit = world.get(handle, OrbitCamera);
-      if (orbit.ok) earlyRoll = orbit.value.roll;
-    });
+    for (const row of cameraQuery) {
+      earlyCameraPos = Array.from(row.get(Transform).pos);
+      earlyRoll = row.get(OrbitCamera).roll;
+      break;
+    }
   }
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   stepCameraOrbit(world, FIXED_DT, {
@@ -184,14 +181,11 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   propagateTransforms(world);
 }
 const finalRadius = cameraRadius(world);
-queryRun(cameraState, world, (bundle) => {
-  const handle = bundle.Entity.self[0];
-  if (handle === undefined) return;
-  const transform = world.get(handle, Transform);
-  if (transform.ok) finalCameraPos = Array.from(transform.value.pos);
-  const orbit = world.get(handle, OrbitCamera);
-  if (orbit.ok) finalRoll = orbit.value.roll;
-});
+for (const row of cameraQuery) {
+  finalCameraPos = Array.from(row.get(Transform).pos);
+  finalRoll = row.get(OrbitCamera).roll;
+  break;
+}
 const device = sharedDevice;
 if (!device) {
   console.error('[smoke] FAIL - no shared device captured for readback');

@@ -62,7 +62,9 @@ export function ensureWasm({
 
   // Non-fatal: install must never fail because a release is unavailable.
   log(
-    `[${pkgLabel}] WASM not fetched (offline, no published release, or source changed).\n` +
+    `[${pkgLabel}] WASM not fetched (fetch-wasm exhausted Node fetch and available OS-native fallbacks, ` +
+      `or the release/content key is unavailable).\n` +
+      `      See the fetch-wasm output above for the transport diagnosis.\n` +
       `      This is fine for a bare install. To provision it:\n` +
       `        ${buildHint}`,
   );

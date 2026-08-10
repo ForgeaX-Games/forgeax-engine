@@ -21,15 +21,9 @@
 //
 // Anchors: requirements §integration-points (engine-runtime pickTile);
 // plan-tasks m0-t8; plan-strategy §D-5 file-by-file ECS API adaptation
-// (createQueryState + queryRun pattern from render-system-extract.ts).
+// (World-owned Query pattern from render-system-extract.ts).
 
-import {
-  createQueryState,
-  Entity,
-  type EntityHandle,
-  queryRun,
-  type World,
-} from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { err, ok, type Result } from '@forgeax/engine-types';
@@ -108,32 +102,26 @@ export function pickTile(
   if (cellX < 0 || cellY < 0 || cellX >= cols || cellY >= rows) return ok(null);
 
   // Collect every TileLayer ChildOf-ing the supplied Tilemap entity, with
-  // its layerOrder + tile array snapshot. The createQueryState + queryRun
-  // walk follows main's M1 ECS API (tweak-20260611 + tweak-20260612).
+  // its layerOrder + tile array snapshot through one row iterator.
   type LayerInfo = {
     readonly entity: EntityHandle;
     readonly tiles: ArrayLike<number>;
     readonly layerOrder: number;
   };
   const layers: LayerInfo[] = [];
-  const layerQuery = createQueryState({ with: [TileLayer, ChildOf, Entity] });
-  queryRun(layerQuery, world, (bundle) => {
-    const childOfBundle = bundle.ChildOf;
-    const layerBundle = bundle.TileLayer;
-    const entitySelf = bundle.Entity.self as unknown as Uint32Array;
-    for (let i = 0; i < entitySelf.length; i++) {
-      const layerEntity = (entitySelf[i] ?? 0) as EntityHandle;
-      const parent = (childOfBundle.parent[i] ?? 0) as EntityHandle;
-      if ((parent as unknown as number) !== (tilemapEntity as unknown as number)) continue;
-      const layerData = world.get(layerEntity, TileLayer);
-      if (!layerData.ok) continue;
-      layers.push({
-        entity: layerEntity,
-        tiles: layerData.value.tiles as ArrayLike<number>,
-        layerOrder: layerBundle.layerOrder[i] ?? 0,
-      });
-    }
-  });
+  const layerQuery = world.query({ read: [TileLayer, ChildOf] }).unwrap();
+  for (const row of layerQuery) {
+    const layerEntity = row.entity;
+    const parent = row.get(ChildOf).parent;
+    if ((parent as unknown as number) !== (tilemapEntity as unknown as number)) continue;
+    const layerData = world.get(layerEntity, TileLayer);
+    if (!layerData.ok) continue;
+    layers.push({
+      entity: layerEntity,
+      tiles: layerData.value.tiles as ArrayLike<number>,
+      layerOrder: row.get(TileLayer).layerOrder,
+    });
+  }
 
   layers.sort((a, b) => b.layerOrder - a.layerOrder);
 

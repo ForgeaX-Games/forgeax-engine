@@ -12,6 +12,10 @@ description: >-
 
 > **RHI 是引擎与 GPU 之间的纯接口腰线，大多数 AI 用户不直接碰它**——可见性走 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md)，pass / 后处理走 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md)。本 skill 面向**贡献者 / 进阶**：理解后端如何被抽象、能力如何门控、多实现如何共存。`@forgeax/engine-rhi` 是 spec-aligned 纯接口（无运行时值）；浏览器侧 `rhi-webgpu` 薄 shim 包 WebGPU，非浏览器侧 `rhi-wgpu` 是 TS 薄壳套 `wgpu-wasm`（唯一 wasm 制品 SSOT，~1.17 MB gzip，wgpu 29 + naga 29 + naga_oil Composer）。`createRenderer(canvas)` 经 `navigator.gpu` 在两者间自动选。第 3 个后端 `rhi-null`（headless no-op，`feat-20260623-dummy-null-rhi-headless-backend`）不进自动选——通过 Channel 1 escape hatch 手动注入 `createRenderer(canvas, { rhi: rhiNull })`，供 `test:unit` 做命令流结构断言。
 
+## Color-lighting parity handoff
+
+For backend or native readback failures, start with the [color-lighting parity status index](../../apps/parity/color-lighting/status-index.md), then inspect the [parity README](../../apps/parity/color-lighting/README.md) and the named `CaseReport` evidence. Preserve backend identity, native format, frame, size, and raw hash; capability loss is incomplete evidence, not a fallback pass.
+
 ## 心智模型
 
 RHI 的四条铁律塑造它的形态（AGENTS.md §RHI form rules 是 SSOT）：

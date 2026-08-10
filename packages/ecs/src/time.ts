@@ -29,6 +29,8 @@ export interface TimePolicy {
 
 export interface WorldOptions {
   readonly time?: TimePolicy;
+  /** SAB-backed dense numeric columns for a SharedKernel-capable Engine Realm. */
+  readonly storage?: 'local' | 'shared';
 }
 
 /** World-owned variable-rate clock resource key. */

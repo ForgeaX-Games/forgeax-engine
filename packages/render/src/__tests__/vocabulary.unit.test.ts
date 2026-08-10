@@ -13,5 +13,7 @@ describe('render vocabulary', () => {
     expect(render.SortKey).toBeDefined();
     expect(render.Instances).toBeDefined();
     expect(render.PostProcessParams).toBeDefined();
-  });
+    expect(render.TONEMAP_REINHARD).toBeDefined();
+    expect(render.tonemapToU32).toBeDefined();
+  }, 15_000);
 });

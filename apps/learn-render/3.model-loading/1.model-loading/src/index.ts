@@ -5,8 +5,8 @@
 // vite-plugin-pack pipeline; the demo body stays at the 4-step idiom
 // (charter P4 / requirements AC-17 / plan section 9.1):
 //
-//   (1) createApp({ canvas, ... }, { importTransport: createDevImportTransport() })
-//   (2) assets.configurePackIndex('/pack-index.json')
+//   (1) createApp({ canvas, ... }, { importTransport: createDevImportTransport(runtimeBinding) })
+//   (2) assets.configureRuntimeBinding(runtimeBinding) + configurePackIndex('/pack-index.json')
 //   (3) const scene = await assets.loadByGuid<SceneAsset>(SPONZA_SCENE_GUID);
 //       assets.instantiate<SceneAsset>(scene.value, world)
 //   (4) app.start()
@@ -35,12 +35,16 @@ import { Skylight } from '@forgeax/engine-render';
 import { PointLight } from '@forgeax/engine-render';
 
 import type { EquirectAsset, SceneAsset } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 const SPONZA_SCENE_GUID = '019e4fe2-523b-7506-99e5-ccd39795ecda';
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-3-1-model-loading',
+);
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (canvas === null) {
@@ -65,7 +69,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {},
     // Host-explicit dev transport (OOS-1): a DDC miss for an unimported Sponza
     // texture triggers an on-demand POST /__import import against the dev server.
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportBootstrapError(appRes.error);
@@ -86,6 +90,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const assets = renderer.assets;
 
   // Step (2): configurePackIndex.
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Step (3): loadByGuid<SceneAsset> + instantiate.

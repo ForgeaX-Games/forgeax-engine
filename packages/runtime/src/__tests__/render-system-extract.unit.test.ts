@@ -23,7 +23,7 @@
 //
 // The 4 sub-assertions below RED before w10 lands the 3 _routeError fires
 // + SpriteInstancesSnapshot population in `render-system-extract.ts`. They
-// GO GREEN once w10 wires the validation into the queryRun callback at the
+// GO GREEN once w10 wires the validation into the QueryRow loop at the
 // same layer as the existing 'instance-transforms-stride-mismatch' fail-fast
 // (see packages/runtime/src/__tests__/render-system-mega.test.ts §w14 for
 // the structural sibling).
@@ -35,6 +35,7 @@
 //   - plan-strategy §3.2 sequence (extract: snap + validate + skip)
 //   - research §Q-R-2.5 (extract-stage SpriteInstances sniff + validate)
 
+import { readFile } from 'node:fs/promises';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
 import { SpriteInstances } from '@forgeax/engine-render/authoring';
@@ -335,5 +336,18 @@ describe('render-system-extract material color boundary', () => {
       ?.material;
     expect(Array.from(runtime?.baseColor ?? [])).toEqual([0.5, 0.25, 0.75]);
     expect(runtime?.paramSnapshot?.baseColor).toEqual([0.5, 0.25, 0.75, 0.4]);
+  });
+});
+
+describe('render-system-extract spot direction owner', () => {
+  it('normalizes one spot snapshot in extract and keeps one spot query', async () => {
+    const source = await readFile(
+      new URL('../../../render/src/render-system-extract.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(source.match(/\.query\(\{\s*read: \[SpotLight\]/g)?.length).toBe(1);
+    expect(source).toContain('const dirN = vec3.create(');
+    expect(source).toContain('direction: dirN');
   });
 });

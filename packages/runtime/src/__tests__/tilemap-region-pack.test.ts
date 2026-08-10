@@ -16,7 +16,7 @@
 // Anchors: plan-tasks m0-t9; plan-strategy §D-1 per-cell entity TRS;
 // plan-strategy §M0 (1x1 unit-cell baseline only).
 
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import {
   encodeSortScope,
@@ -25,6 +25,8 @@ import {
   tilemapChunkExtractSystem,
 } from '@forgeax/engine-render/authoring';
 import {
+  Layer,
+  MeshFilter,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
 } from '@forgeax/engine-render/internal';
@@ -86,11 +88,6 @@ function readDerivedTransforms(world: World): Array<{
   quatZ: number;
   quatW: number;
 }> {
-  type GraphArch = {
-    key: string;
-    columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
-  };
-  const graph = (world as unknown as { _getGraph(): { archetypes: GraphArch[] } })._getGraph();
   const out: Array<{
     posX: number;
     posY: number;
@@ -99,27 +96,17 @@ function readDerivedTransforms(world: World): Array<{
     quatZ: number;
     quatW: number;
   }> = [];
-  for (const arch of world.inspect().archetypes) {
-    if (!arch.componentNames.includes('Transform')) continue;
-    if (!arch.componentNames.includes('MeshFilter')) continue;
-    if (!arch.componentNames.includes('Layer')) continue;
-    const derived = graph.archetypes.find((a) => a.key === arch.key);
-    if (!derived) continue;
-    const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as Uint32Array | undefined;
-    if (!entityCol) continue;
-    for (let i = 0; i < entityCol.length; i++) {
-      const e = entityCol[i];
-      if (e === undefined || e === 0) continue;
-      const t = world.get(e as never, Transform).unwrap();
-      out.push({
-        posX: t.pos[0] ?? 0,
-        posY: t.pos[1] ?? 0,
-        scaleX: t.scale[0] ?? 1,
-        scaleY: t.scale[1] ?? 1,
-        quatZ: t.quat[2] ?? 0,
-        quatW: t.quat[3] ?? 1,
-      });
-    }
+  const query = world.query({ read: [Transform], with: [MeshFilter, Layer] }).unwrap();
+  for (const row of query) {
+    const t = row.get(Transform);
+    out.push({
+      posX: t.pos[0] ?? 0,
+      posY: t.pos[1] ?? 0,
+      scaleX: t.scale[0] ?? 1,
+      scaleY: t.scale[1] ?? 1,
+      quatZ: t.quat[2] ?? 0,
+      quatW: t.quat[3] ?? 1,
+    });
   }
   return out;
 }

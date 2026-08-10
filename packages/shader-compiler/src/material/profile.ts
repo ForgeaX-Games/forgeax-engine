@@ -9,26 +9,7 @@ export const MATERIAL_WGSL_PROFILE = {
   nagaVersion: '29.0.3',
 } as const;
 
-export type MaterialWgslProfileFeature =
-  | 'bool-define'
-  | 'int-define'
-  | 'uint-define'
-  | 'undefined-define'
-  | 'conditional'
-  | 'alias-import'
-  | 'selective-import'
-  | 'nested-import'
-  | 'virtual-module'
-  | 'override-module'
-  | 'span-diagnostic';
-
-export interface MaterialWgslProfileCapability {
-  readonly feature: MaterialWgslProfileFeature;
-  readonly supported: boolean;
-  readonly evidence: string;
-}
-
-export const MATERIAL_WGSL_PROFILE_CAPABILITIES: readonly MaterialWgslProfileCapability[] = [
+export const MATERIAL_WGSL_PROFILE_CAPABILITIES = [
   { feature: 'bool-define', supported: true, evidence: 'naga_oil 0.22 boolean defines' },
   { feature: 'int-define', supported: true, evidence: 'typed material definition projection' },
   { feature: 'uint-define', supported: true, evidence: 'typed material definition projection' },
@@ -40,7 +21,20 @@ export const MATERIAL_WGSL_PROFILE_CAPABILITIES: readonly MaterialWgslProfileCap
   { feature: 'virtual-module', supported: true, evidence: 'provider-owned virtual source' },
   { feature: 'override-module', supported: true, evidence: 'profile-scoped override source' },
   { feature: 'span-diagnostic', supported: true, evidence: 'source line, column, and context' },
-];
+] as const satisfies readonly {
+  readonly feature: string;
+  readonly supported: boolean;
+  readonly evidence: string;
+}[];
+
+export type MaterialWgslProfileFeature =
+  (typeof MATERIAL_WGSL_PROFILE_CAPABILITIES)[number]['feature'];
+
+export interface MaterialWgslProfileCapability {
+  readonly feature: MaterialWgslProfileFeature;
+  readonly supported: boolean;
+  readonly evidence: string;
+}
 
 export function characterizeMaterialWgslProfile(): readonly MaterialWgslProfileCapability[] {
   return MATERIAL_WGSL_PROFILE_CAPABILITIES;

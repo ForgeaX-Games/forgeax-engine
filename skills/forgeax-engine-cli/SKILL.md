@@ -2,14 +2,14 @@
 name: forgeax-engine-cli
 description: >-
   forgeax-engine 远程求值：对运行中引擎活实例执行 eval(script) + kubectl 式 plugin bin。
-  Use when eval'ing code against a running engine, discovering entities via
-  queryRun, capturing frames, querying the opt-in CPU profiler, or calling CLI bin tools on
+  Use when eval'ing code against a running engine, discovering entities through
+  World.query, capturing frames, querying the opt-in CPU profiler, or calling CLI bin tools on
   live/offline data.
 ---
 
 # forgeax-engine-cli
 
-> **唯一能力 = `eval` 活引擎**。`@forgeax/engine-remote` 提供单一入口：把一段 JS 代码发给运行中的引擎实例求值并取回结果。AI 用户不需记 Registry 路由表或预制命令名册——会写 `queryRun` 就能发现 handle、读状态、改值、抓帧。对齐 Bevy BRP / Unreal Remote Control 的"对活实例求值"心智，不暗示 console/inspector（带 UI/devtools）语义。
+> **唯一能力 = `eval` 活引擎**。`@forgeax/engine-remote` 把一段 JS 发给运行中的引擎实例求值并取回结果。用 `world.query` 发现 handle，再直接读写活根。
 
 ## 心智模型
 
@@ -17,13 +17,13 @@ description: >-
 
 | 活根 | 类型 | 用途 |
 |:--|:--|:--|
-| `world` | `World`（来自 `@forgeax/engine-ecs`） | ECS 读写：spawn / despawn / set / queryRun |
+| `world` | `World`（来自 `@forgeax/engine-ecs`） | ECS 读写：spawn / despawn / set / query |
 | `renderer` | `Renderer` | 渲染器控制：创建/销毁 RT、读 backbuffer |
 | `assets` | `AssetRegistry` | 资产查询：loadByGuid / resolveName / rename |
 | `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI 帧抓取：`captureFrames(frames, label?)` / Dawn-Node `inspectAt(tapePath, drawIdx, fields?)`。**仅当 createApp 运行在 `FORGEAX_ENGINE_RHI_DEBUG=1` 时注入**，否则 `undefined`（用前先 guard）。world / renderer / assets 三根恒在场。 |
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture through `startCapture({ frameLimit, eventLimit })`; injected only when the host opts in. |
 
-脚本内通过 `_import(specifier)` 按需引入引擎包（如 `const ecs = await _import('@forgeax/engine-ecs')`），拿到 `createQueryState` / `queryRun` / `Entity` 等。`_import` 是 eval 作用域注入的 import 函数——脚本内**无**裸 `import` 关键字。
+脚本内通过 `_import(specifier)` 按需引入组件 token。`_import` 是 eval 作用域注入的 import 函数；脚本内没有裸 `import` 关键字。
 
 > [!NOTE]
 > **协议层另有一个内建方法 `introspect`**（与 `eval` 并列）：返回 OpenRPC L2 子集文档，列出可用方法（`eval` / `introspect`）+ eval 作用域活根。AI 用户连上后可先 `introspect` 自描述，无需读源码即知能 eval 什么。错误码映射 JSON-RPC -32001..-32006。
@@ -37,7 +37,7 @@ description: >-
 ```mermaid
 flowchart TD
     A[AI 用户 / CLI / 进程内] -->|eval| E[eval 核心<br/>host realm new Function]
-    E -.->|_import| ECS["@forgeax/engine-ecs<br/>queryRun / Entity"]
+    E -.->|_import| ECS["component tokens"]
     E --> R["eval 作用域活根<br/>world · renderer · assets · debugAdapter"]
     R --> W[运行中 World / Renderer]
 ```
@@ -66,67 +66,39 @@ flowchart TD
 
 ## handle 发现配方
 
-eval 内发现 entity handle 的唯一方法是写 `queryRun` 查询——零新 ECS API。**必须用真实 callback 形态**（`queryRun(state, world, (bundle) => { ... })` ——返回 `void`，结果在 `bundle` 参数内拿到）：
+空 descriptor 访问所有启用实体；`row.entity` 是完整 packed handle。
 
 ```js
-// eval 脚本内
-const ecs = await _import('@forgeax/engine-ecs');
-const state = ecs.createQueryState({ with: [ecs.Entity] });
-
-let handles;
-ecs.queryRun(state, world, (bundle) => {
-  // bundle.Entity.self 是 Uint32Array，包含所有匹配 entity 的 handle
-  handles = Array.from(bundle.Entity.self);
-});
-
-// handles 现在是一个 number[]，每个都是 entity handle
+const query = world.query({});
+if (!query.ok) throw query.error;
+return Array.from(query.value, (row) => row.entity);
 ```
 
-**带组件的精确查询**：
+带组件数据时从所属包导入 token，并声明 `read` / `write` / `optional` / filter 角色：
 
 ```js
-const ecs = await _import('@forgeax/engine-ecs');
-const scene = await _import('@forgeax/engine-scene');
-const render = await _import('@forgeax/engine-render');
-const { createQueryState, queryRun, Entity } = ecs;
-const { Transform } = scene;
-const { MeshRenderer } = render;
-
-const state = createQueryState({ with: [MeshRenderer, Transform, Entity] });
-let result = [];
-queryRun(state, world, (bundle) => {
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
-    const pos = bundle.Transform.pos;
-    result.push({
-      entity: bundle.Entity.self[i],
-      position: [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]],
-    });
-  }
-});
+const { MeshRenderer } = await _import('@forgeax/engine-render');
+const { Transform } = await _import('@forgeax/engine-scene');
+const query = world.query({ read: [Transform], with: [MeshRenderer] });
+if (!query.ok) throw query.error;
+return Array.from(query.value, (row) => ({
+  entity: row.entity,
+  position: Array.from(row.get(Transform).pos),
+}));
 ```
-
-> [!NOTE]
-> `Entity` 是 id=0 的 essential 组件，每个 archetype 必带——`bundle.Entity.self` 永远是 `Uint32Array`。引擎自身用此形态做反射，外部 eval 脚本亦然。
 
 ## 读写配方
 
 ### 读组件值
 
 ```js
-const ecs = await _import('@forgeax/engine-ecs');
-const scene = await _import('@forgeax/engine-scene');
-const state = ecs.createQueryState({ with: [scene.Transform, ecs.Entity] });
-
-ecs.queryRun(state, world, (bundle) => {
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
-    const h = bundle.Entity.self[i];
-    const pos = bundle.Transform.pos;
-    const x = pos[i * 3];
-    const y = pos[i * 3 + 1];
-    const z = pos[i * 3 + 2];
-    // 使用 h / x / y / z
-  }
-});
+const { Transform } = await _import('@forgeax/engine-scene');
+const query = world.query({ read: [Transform] });
+if (!query.ok) throw query.error;
+return Array.from(query.value, (row) => ({
+  entity: row.entity,
+  position: Array.from(row.get(Transform).pos),
+}));
 ```
 
 `Transform.pos` is the flat `array<f32, 3>` column; row `i` starts at
@@ -245,9 +217,9 @@ node scripts/dev-live.mjs @forgeax/remote-demo
 node skills/forgeax-engine-cli/scripts/remote-live.mjs --health
 # → {"ok":true,"pageConnected":true}，exit 0
 
-# 读：从活的浏览器 world 发现 handle（真 queryRun callback 形态）
+# 读：从活的浏览器 world 发现 handle
 node skills/forgeax-engine-cli/scripts/remote-live.mjs \
-  "let r; const {createQueryState,queryRun,Entity}=await _import('@forgeax/engine-ecs'); const st=createQueryState({with:[Entity]}); queryRun(st,world,b=>{r=Array.from(b.Entity.self)}); r"
+  "const q=world.query({}); if(!q.ok) throw q.error; return Array.from(q.value,row=>row.entity)"
 
 # 写：直接改活实体，屏幕立刻动（无 rebuild/refresh）
 node skills/forgeax-engine-cli/scripts/remote-live.mjs \
@@ -350,7 +322,7 @@ forgeax-engine-remote-ecs entities --port 5731
 ## 踩坑
 
 - **eval 内不能用裸 `import`**：脚本作用域不认 `import` 关键字——用注入的 `_import(specifier)` 函数做动态 ESM 引入。`const ecs = await _import('@forgeax/engine-ecs')`。
-- **`queryRun` 返回 `void`，结果在回调的 `bundle` 里**：`queryRun(state, world, callback)` 是 **batch-callback 形态**——参数顺序是 `(state, world, callback)`，不是链式 `.Entity.self`。把结果变量声明在回调外、回调内赋值。
+- **`world.query` 返回 `Result`**：先处理失败，再迭代 `result.value`；不要忽略 descriptor 冲突或 span capability 错误。
 - **`app.remote` 为 `undefined`（尤其浏览器里）**：`app.remote` 是 **Node WS server** 句柄。浏览器起不了监听 socket，`createApp` 尝试 `startServer` 会在 `ws` 浏览器 shim 上抛错并被静默吞掉 → 浏览器 dev 里 `app.remote` 恒为 `undefined`。想在**运行中的浏览器引擎**里 eval，用下面的 **remote-live** 环回中继（不是 `app.remote`）。dawn-node / headless 无 GUI 时才用 WS server：设环境变量 `FORGEAX_ENGINE_REMOTE_SERVE=1` opt-in（源码 SSOT：`packages/app/src/internal/remote-serve-flag.ts`）。
 - **plugin bin 找不到**：确认 `@forgeax/engine-{ecs,pack,font,gltf,state}` 已安装（`pnpm install`），bin 会自动出现在 `node_modules/.bin/`。
 
@@ -410,10 +382,9 @@ command. First inspect `components.schemas.Visibility`, then evaluate the
 same live path used by the app:
 
 ```ts
-const ecs = await _import('@forgeax/engine-ecs');
 const render = await _import('@forgeax/engine-render');
-const query = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
-ecs.queryRun(query, world, bundle => console.log(bundle.Visibility.state));
+const query = world.query({ read: [render.Visibility] }).unwrap();
+for (const row of query) console.log(row.get(render.Visibility).state);
 console.log(render.resolveVisibility(world).effective(entity));
 console.log(renderer.visibilityStats);
 ```

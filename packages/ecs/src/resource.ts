@@ -10,13 +10,19 @@ import { ResourceNotFoundError } from './errors';
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Internal resource storage. */
+export interface ResourceEntry {
+  value: unknown;
+  added: number;
+  changed: number;
+}
+
 export interface ResourceStore {
-  readonly data: Map<string, unknown>;
+  readonly entries: Map<string, ResourceEntry>;
 }
 
 /** Create a fresh resource store. */
 export function createResourceStore(): ResourceStore {
-  return { data: new Map() };
+  return { entries: new Map() };
 }
 
 /**
@@ -32,8 +38,14 @@ export function createResourceStore(): ResourceStore {
  * insertResource(store, 'health', 95);
  * ```
  */
-export function insertResource<T>(store: ResourceStore, key: string, value: T): void {
-  store.data.set(key, value);
+export function insertResource<T>(store: ResourceStore, key: string, value: T, epoch = 0): void {
+  const current = store.entries.get(key);
+  if (current === undefined) {
+    store.entries.set(key, { value, added: epoch, changed: epoch });
+  } else {
+    current.value = value;
+    current.changed = epoch;
+  }
 }
 
 /**
@@ -51,10 +63,11 @@ export function insertResource<T>(store: ResourceStore, key: string, value: T): 
  * ```
  */
 export function getResource<T>(store: ResourceStore, key: string): T {
-  if (!store.data.has(key)) {
+  const entry = store.entries.get(key);
+  if (entry === undefined) {
     throw new ResourceNotFoundError(key);
   }
-  return store.data.get(key) as T;
+  return entry.value as T;
 }
 
 /**
@@ -72,7 +85,7 @@ export function getResource<T>(store: ResourceStore, key: string): T {
  * ```
  */
 export function hasResource(store: ResourceStore, key: string): boolean {
-  return store.data.has(key);
+  return store.entries.has(key);
 }
 
 /**
@@ -88,6 +101,6 @@ export function hasResource(store: ResourceStore, key: string): boolean {
  * // hasResource(store, 'health') === false; idempotent on missing keys
  * ```
  */
-export function removeResource(store: ResourceStore, key: string): void {
-  store.data.delete(key);
+export function removeResource(store: ResourceStore, key: string): boolean {
+  return store.entries.delete(key);
 }

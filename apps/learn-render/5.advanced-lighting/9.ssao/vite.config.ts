@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
@@ -12,6 +13,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-5-9-ssao');
 
 export default withRhiDebug({
   here,
@@ -21,6 +23,7 @@ export default withRhiDebug({
   engineEntries: { hdrpSsao: true },
   extraPlugins: [
     pluginPack({
+      runtimeBinding,
       refresh: reloadAssetHost(),
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects')],
       importers: [imageImporter, gltfImporter],

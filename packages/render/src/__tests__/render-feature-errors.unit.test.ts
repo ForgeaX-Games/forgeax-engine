@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ObservationUnavailableError } from '../errors/render';
 import type { RenderFeatureErrorCode, RenderFeatureErrorDescriptor } from '../features/types';
 
 const renderFeatureErrorCodes: readonly RenderFeatureErrorCode[] = [
@@ -34,5 +35,13 @@ describe('render feature error vocabulary', () => {
   it('keeps the four feature codes closed and machine-readable', () => {
     expect(renderFeatureErrorCodes).toHaveLength(7);
     expect(describeError).toBeTypeOf('function');
+  });
+
+  it('keeps observation recovery structured and producer-owned', () => {
+    const error = new ObservationUnavailableError('stale', 'draw a fresh current frame');
+    expect(error.code).toBe('observation-unavailable');
+    expect(error.expected).toContain('rgba16float');
+    expect(error.hint).toContain('fresh');
+    expect(error.detail).toEqual({ reason: 'stale', recovery: 'draw-current-frame' });
   });
 });

@@ -77,6 +77,7 @@ function readJson(path) {
 // dedicated CI step (plan-strategy K-11; doc above for full rationale).
 // gate intentionally omitted: smoke tests are already executed by dedicated
 // steps in primary-pnpm; re-running them here adds ~25s of duplicate work.
+export const METRIC_KINDS = Object.freeze(['bundle-size', 'fps', 'bench', 'gate', 'spike-report']);
 const KIND_ORDER = ['bundle-size', 'bench', 'spike-report'];
 
 function statusFromBundle(value, threshold) {
@@ -301,6 +302,67 @@ export function dispatchBench(pkgName, pkgRoot, decl, opts = {}) {
       unit: 'ns/op',
       ...(spawnDetails ? { spawnDetails } : {}),
     },
+  };
+}
+
+export function dispatchCaseReport(_pkgName, pkgRoot, decl, opts = {}) {
+  const reportPath = decl.reportPath ?? 'report/color-lighting-parity.json';
+  const root = opts.root ?? process.cwd();
+  const path = resolve(pkgRoot, reportPath);
+  if (!existsSync(path)) {
+    return {
+      kind: 'case-report',
+      status: 'unavailable',
+      value: null,
+      threshold: null,
+      details: {
+        code: 'case-report-missing',
+        reportPath,
+        message: 'required CaseReport is missing',
+      },
+    };
+  }
+  let report;
+  try {
+    report = readJson(path);
+  } catch (error) {
+    return {
+      kind: 'case-report',
+      status: 'unavailable',
+      value: null,
+      threshold: null,
+      details: {
+        code: 'case-report-invalid',
+        reportPath,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+  const passing =
+    report?.required === true &&
+    report?.verdict === 'passed' &&
+    report?.status === 'complete' &&
+    report?.attachmentEvidence?.executionStatus !== 'notExecuted' &&
+    report?.attachmentEvidence?.missingPipelineIds?.length === 0;
+  if (!passing) {
+    return {
+      kind: 'case-report',
+      status: 'unavailable',
+      value: null,
+      threshold: null,
+      details: {
+        code: 'case-report-not-passing',
+        reportPath,
+        message: 'required CaseReport is failed, partial, or not executed',
+      },
+    };
+  }
+  return {
+    kind: 'case-report',
+    status: 'ok',
+    value: 1,
+    threshold: 1,
+    details: { reportPath, root },
   };
 }
 

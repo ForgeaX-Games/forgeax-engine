@@ -2,6 +2,7 @@ import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import type { Handle } from '@forgeax/engine-runtime';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
+import { Transform } from '@forgeax/engine-scene';
 import type { HudHandle, ViewMode } from '../hud';
 import type { GameplayAudio } from '../gameplay-audio';
 import type { GameplayChangeDetectionHandle } from '../change-detection';
@@ -30,6 +31,17 @@ import { installChargeShotSystem } from './charge-shot';
 import { installProjectileSimulationSystem } from './projectile-simulation';
 import { installTargetFeedbackSystem } from './target-feedback';
 import { installCameraFollowSystem } from './camera-follow';
+import type { TargetRelayHandle } from '../target-relay';
+import {
+  deriveCounterattackPressure,
+  PLAYER_MAX_HEALTH,
+  type CounterattackHandle,
+} from '../counterattack';
+import type { HealthPickupHandle } from '../health-pickup';
+import type { RepairCacheHandle } from '../repair-cache';
+import type { EnergyCoreExtractionHandle } from '../energy-core-extraction';
+import type { RewardChoiceHandle } from '../reward-choice';
+import type { BarrierRouteHandle } from '../barrier-route';
 
 export type GameplaySystemsContext = {
   readonly world: World;
@@ -49,6 +61,15 @@ export type GameplaySystemsContext = {
   readonly videoTexturePanel: VideoTexturePanel | undefined;
   readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
   readonly targetProfile: TargetProfileLoop | undefined;
+  readonly targetRelay: TargetRelayHandle;
+  readonly requestVictory: () => void;
+  readonly requestDefeat: () => void;
+  readonly counterattack: CounterattackHandle | undefined;
+  readonly healthPickup: HealthPickupHandle | undefined;
+  readonly repairCache: RepairCacheHandle | undefined;
+  readonly extraction: EnergyCoreExtractionHandle | undefined;
+  readonly rewardChoice: RewardChoiceHandle | undefined;
+  readonly barrierRoute: BarrierRouteHandle | undefined;
   readonly readScore: () => number;
   readonly toggleProfile: () => TargetProfileSnapshot;
   readonly onAssetLabResult?: (result: AssetLabActionResult) => void;
@@ -138,6 +159,7 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     projectileMaterial: ctx.projectileMaterial,
     handleQuad: ctx.handleQuad,
     projectileEntities: ctx.projectileEntities,
+    rewardChoice: ctx.rewardChoice,
     onSpawn: () => ctx.recordCommand('spawned'),
     onDespawn: () => ctx.recordCommand('despawned'),
   });
@@ -146,7 +168,23 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     targetQuery: ctx.targetQuery,
     projectileEntities: ctx.projectileEntities,
     targetProfile: ctx.targetProfile,
-    onProfileHit: () => ctx.hud.setTargetProfileActive(ctx.targetProfile?.active === 'profile', ctx.targetProfile?.precisionHits ?? 0),
+    targetRelay: ctx.targetRelay,
+    onTargetImpact: (entity, impactScale) => {
+      if (ctx.repairCache?.recordImpact(entity, impactScale) !== 'open') return;
+      const position = ctx.repairCache.snapshot().position;
+      ctx.hud.setAssetLabStatus('Nested repair cache open · collect the revealed pickup', 'active');
+      ctx.spawnPopup('REPAIR CACHE OPEN', position[0], position[1] + 1.2, position[2]);
+    },
+    onProfileHit: () => {
+      if (ctx.targetProfile?.precisionHits === 1) ctx.targetRelay.begin();
+      ctx.hud.setTargetProfileActive(ctx.targetProfile?.active === 'profile', ctx.targetProfile?.precisionHits ?? 0);
+      ctx.hud.setTargetRelay(ctx.targetRelay.snapshot());
+    },
+    onRelayHit: () => {
+      const relay = ctx.targetRelay.snapshot();
+      ctx.hud.setTargetRelay(relay);
+      if (relay.status === 'complete' && ctx.extraction !== undefined) ctx.hud.setExtraction(ctx.extraction.snapshot());
+    },
     spriteAtlasLoop: ctx.spriteAtlasLoop,
     onAtlasHit: () => ctx.onAssetLabResult?.({ text: 'PNG atlas projectile active · animated hit confirmed · 4 frames', state: 'active' }),
     worldScoreText: ctx.worldScoreText,
@@ -170,6 +208,107 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     materialsForCurrentMesh: ctx.materialsForCurrentMesh,
     chromaticAberration: ctx.chromaticAberration,
     hitStreak: ctx.hitStreak,
+  });
+  ctx.barrierRoute?.installSystem({
+    physics: ctx.physics,
+    projectileEntities: ctx.projectileEntities,
+    isUnlocked: () => ctx.targetRelay.snapshot().status === 'complete',
+    onImpact: (result, position) => {
+      const text = result === 'open'
+        ? 'BARRIER OPEN'
+        : result === 'ordinary'
+          ? 'BARRIER NEEDS CHARGE'
+          : 'BARRIER ALREADY OPEN';
+      ctx.spawnPopup(text, position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show(text, [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+      ctx.vfxHitLoop.trigger();
+      ctx.chromaticAberration.setIntensity(result === 'open' ? 0.12 : 0.04);
+    },
+  });
+  ctx.rewardChoice?.installSystem({
+    physics: ctx.physics,
+    isAvailable: () => ctx.extraction?.snapshot().active === true,
+    onProgress: ctx.hud.setRewardChoice,
+    onChange: (snapshot, event, position) => {
+      if (event === 'selected' && snapshot.state === 'shield-ready') ctx.counterattack?.arm();
+      ctx.hud.setRewardChoice(snapshot);
+      const text = event === 'selected'
+        ? snapshot.state === 'shield-ready' ? 'SHIELD READY' : 'OVERCHARGE READY'
+        : event === 'shield-consumed'
+          ? 'SHIELD BLOCK'
+          : event === 'overcharge-consumed'
+            ? 'OVERCHARGE FIRED'
+            : snapshot.available ? 'REWARD LOCKED' : 'REWARDS NEED 3 CORES';
+      ctx.spawnPopup(text, position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show(text, [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+      if (event !== 'refused') ctx.vfxHitLoop.trigger();
+    },
+  });
+  ctx.counterattack?.installSystem({
+    physics: ctx.physics,
+    rewardChoice: ctx.rewardChoice,
+    requestDefeat: ctx.requestDefeat,
+    onHit: (attacker, remainingHealth, shielded) => {
+      ctx.hud.setHealth(remainingHealth, PLAYER_MAX_HEALTH);
+      const playerTransform = ctx.world.get(ctx.root, Transform);
+      if (playerTransform.ok) {
+        const x = playerTransform.value.pos[0] ?? 0;
+        const y = playerTransform.value.pos[1] ?? 0;
+        const z = playerTransform.value.pos[2] ?? 0;
+        const text = shielded ? 'SHIELD BLOCK' : '-1 HEART';
+        ctx.spawnPopup(text, x, y + 0.8, z);
+        ctx.worldScoreText?.show(text, [x, y + 1.7, z]);
+      }
+      ctx.gameplayAudio?.triggerHit();
+      ctx.vfxHitLoop.trigger();
+      ctx.triggerFlash(attacker);
+      ctx.chromaticAberration.setIntensity(0.08);
+    },
+  });
+  ctx.healthPickup?.installSystem({
+    physics: ctx.physics,
+    onCollect: (health, max, position) => {
+      ctx.hud.setHealth(health, max);
+      ctx.spawnPopup('+1 HEART', position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show('+1 HEART', [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+      ctx.vfxHitLoop.trigger();
+    },
+  });
+  ctx.extraction?.installSystem({
+    physics: ctx.physics,
+    isUnlocked: () => ctx.targetRelay.snapshot().status === 'complete',
+    canExtract: () => ctx.rewardChoice !== undefined && ctx.rewardChoice.snapshot().state !== 'none',
+    requestVictory: ctx.requestVictory,
+    onProgress: ctx.hud.setExtraction,
+    onCollect: (progress, position) => {
+      const tier = deriveCounterattackPressure(progress.collected).tier;
+      const text = `CORE ${progress.collected}/${progress.total} · THREAT ${tier}/3`;
+      ctx.spawnPopup(text, position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show(text, [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+      ctx.vfxHitLoop.trigger();
+    },
+    onRefuse: (progress, position) => {
+      ctx.spawnPopup(`NEED ${progress.total - progress.collected} CORES`, position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show(`NEED ${progress.total - progress.collected} CORES`, [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+    },
+    onRewardRequired: (position) => {
+      ctx.spawnPopup('CHOOSE A REWARD', position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show('CHOOSE A REWARD', [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+    },
+    onActivate: (progress, position) => {
+      const tier = deriveCounterattackPressure(progress.collected).tier;
+      const text = `EXTRACTION READY · THREAT ${tier}/3`;
+      ctx.spawnPopup(text, position[0], position[1] + 0.8, position[2]);
+      ctx.worldScoreText?.show(text, [position[0], position[1] + 1.7, position[2]]);
+      ctx.gameplayAudio?.triggerHit();
+      ctx.vfxHitLoop.trigger();
+    },
   });
   installCameraFollowSystem({
     world: ctx.world,

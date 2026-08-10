@@ -1,6 +1,6 @@
 # @forgeax/engine-audio-webaudio
 
-> **Web Audio API backend for @forgeax/engine-audio.** Browser implementation of the `AudioBackend` interface -- owns `AudioContext` lifecycle, fixed two-bus GainNode topology, per-source node graph, and ECS tick systems for edge-detection-driven playback + listener position sync.
+> **Host-owned Web Audio implementation for @forgeax/engine-audio.** Owns `AudioContext`, decode cache, bus topology, and source nodes. ECS tick and listener intent production remain in the realm-neutral audio package.
 
 ## Evidence and recovery
 
@@ -14,7 +14,7 @@ Audio import produces the source declaration, cook receipt, and Pack v2 clip art
 
 ```ts
 import { createApp } from '@forgeax/engine-app';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin } from '@forgeax/engine-audio';
 
 // audioPlugin() auto-creates WebAudioBackend and registers the AudioEngine Resource
 const app = await createApp(canvas, { plugins: [audioPlugin()] });
@@ -23,7 +23,8 @@ const app = await createApp(canvas, { plugins: [audioPlugin()] });
 ### Assemble form (host-managed)
 
 ```ts
-import { createWebAudioBackend, audioPlugin, AUDIO_ENGINE_RESOURCE_KEY } from '@forgeax/engine-audio-webaudio';
+import { AUDIO_ENGINE_RESOURCE_KEY, audioPlugin } from '@forgeax/engine-audio';
+import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
 
 // Host pre-injects the backend resource, then passes audioPlugin() to wire the tick system.
 world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, createWebAudioBackend());
@@ -53,47 +54,11 @@ const clip = world.allocSharedRef('AudioClipAsset', loaded.value);
 
 Do not fetch a pack-index row or call `loadAudioClipByGuid` at app level. That function remains the decoder implementation used by the injected loader; its decode failure is surfaced by `loadByGuid` as `AssetError('asset-parse-failed')` with the original recovery hint.
 
-## Tick system registration
+## Host consumer
 
-Both tick systems (audioTickSystem + audioListenerSync) are registered by `audioPlugin()` during `createApp`. When wiring the ECS World schedule manually (no app layer), register them directly. Note the seam difference: `audioTickSystem` has no frame-order constraint, but listener sync reads `Transform.world` (written by `propagateTransforms`), so it MUST run `after: [PROPAGATE_TRANSFORMS_SYSTEM]` or it reads a stale (one-frame-late) pose.
+`createHostAudioConsumer()` consumes the closed `AudioIntent` union from `@forgeax/engine-audio`. It decodes bytes once per `sourceKey`, caches the `AudioBuffer`, fences stale play completions by entity epoch, and reports structured decode failure through its `AudioState`. `dispose()` clears the cache and closes the underlying engine exactly once.
 
-```ts
-import { audioTickSystem, syncListenerFromWorldMatrix } from '@forgeax/engine-audio-webaudio';
-import { PROPAGATE_TRANSFORMS_SYSTEM, Transform } from '@forgeax/engine-scene';
-import { AudioListener } from '@forgeax/engine-audio';
-import { Update, createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
-
-world.addSystem(Update, {
-  name: 'audio-tick',
-  fn: () => {
-    const backend = world.getResource('AudioEngine');
-    if (backend) audioTickSystem(world, backend);
-  },
-});
-
-// Listener sync: resolve the first AudioListener entity's Transform.world and
-// write it to the backend's Web Audio listener. backend.listener is a lazy
-// getter (builds the AudioContext on first access) -- touch it only when an
-// AudioListener entity exists so a headless host never forces context creation.
-world.addSystem(Update, {
-  name: 'audio-listener-sync',
-  after: [PROPAGATE_TRANSFORMS_SYSTEM],
-  fn: () => {
-    const backend = world.getResource('AudioEngine');
-    if (!backend) return;
-    const query = createQueryState({ with: [AudioListener, Entity] });
-    queryRun(query, world, (bundle) => {
-      for (let i = 0; i < bundle.Entity.self.length; i++) {
-        const tf = world.get(bundle.Entity.self[i], Transform);
-        if (!tf.ok) continue;
-        const listener = backend.listener;
-        if (listener) syncListenerFromWorldMatrix(listener, tf.value.world);
-        break; // first AudioListener only (E-3)
-      }
-    });
-  },
-});
-```
+`createWebAudioBackend()` is the main-thread adapter over the same consumer. Worker tiers use the intent backend in the Engine Worker and deliver the batch to a Host consumer after each accepted frame credit. No `AudioContext`, `AudioBuffer`, or Web Audio node crosses a realm boundary.
 
 ## Architecture
 
@@ -119,7 +84,7 @@ source -> per-source GainNode (volume) -> [PannerNode?] -> bus GainNode -> maste
 
 - **PannerNode**: created when `AudioSource.spatialBlend > 0`.
 - **panningModel**: defaults to `'equalpower'` (CPU-friendly; `'HRTF'` is a future extension per OOS-7).
-- **Listener sync**: the audio-listener-sync system reads the first `AudioListener` entity's `Transform.world` (16-float column-major mat4, written by propagateTransforms) and syncs position/orientation to `AudioContext.listener` AudioParams. Auto-registered in canvas form (ECS addSystem, after propagateTransforms); assemble form hosts register it manually.
+- **Listener sync**: the realm-neutral audio plugin reads the first `AudioListener` entity after transform propagation and sends nine pose scalars to the Host backend.
 
 ### Entity despawn cleanup (plan-strategy S-7)
 

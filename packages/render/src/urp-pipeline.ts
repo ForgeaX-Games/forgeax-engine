@@ -95,8 +95,9 @@ export const URP_PIPELINE_ID = 'forgeax::urp';
  * for a guided walk-through.
  */
 export const urpPipeline: RenderPipeline = {
-  getRenderFeatureTargets: ({ camera, colorAttachmentFormat, backendKind }) => {
+  getRenderFeatureTargets: ({ camera, colorAttachmentFormat, backendKind, storageBuffer }) => {
     const sampleCount: 1 | 4 = camera.antialias === 'msaa' && backendKind !== 'wgpu-webgl2' ? 4 : 1;
+    const linearLdrActive = camera.tonemap === 'none' && storageBuffer;
     const colorResource =
       camera.tonemap !== 'none'
         ? 'sceneColor'
@@ -104,8 +105,11 @@ export const urpPipeline: RenderPipeline = {
           ? 'ldrColor'
           : camera.antialias === 'msaa' && backendKind !== 'wgpu-webgl2'
             ? 'msaaColor'
-            : 'swapchain';
-    const colorFormat = camera.tonemap === 'none' ? colorAttachmentFormat : 'rgba16float';
+            : linearLdrActive
+              ? 'ldrColor'
+              : 'swapchain';
+    const colorFormat =
+      camera.tonemap !== 'none' || linearLdrActive ? 'rgba16float' : colorAttachmentFormat;
     return [
       createRenderFeatureTarget({
         kind: 'scene-color',
@@ -194,19 +198,26 @@ export const urpPipeline: RenderPipeline = {
     });
 
     const fxaaActive = data.camera.antialias === 'fxaa';
+    const linearLdrActive = data.camera.tonemap === 'none' && runtime.device.caps.storageBuffer;
     const msaaSupported = runtime.device.caps.backendKind !== 'wgpu-webgl2';
     // FXAA samples a graph-owned LDR target and writes the surface. Native
     // WebGPU renders through an sRGB view of the storage-format target;
     // WebGL2 has no view-format reinterpretation, so its target format is
     // already the configured sRGB surface format.
-    if (fxaaActive) {
+    if (fxaaActive || linearLdrActive) {
       const supportsViewFormats = runtime.device.caps.storageBuffer;
+      const linearLdrTarget = linearLdrActive;
       graph.addColorTarget('ldrColor', {
-        format: supportsViewFormats ? swapChainStorageFormat : swapChainViewFormat,
+        format: linearLdrTarget
+          ? 'rgba16float'
+          : supportsViewFormats
+            ? swapChainStorageFormat
+            : swapChainViewFormat,
         size: 'swapchain',
         sample: 1,
         usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
-        ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
+        domain: 'linear-ldr',
+        ...(supportsViewFormats && !linearLdrTarget ? { viewFormats: [swapChainViewFormat] } : {}),
       });
     }
 
@@ -217,7 +228,8 @@ export const urpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_SRC,
+      domain: 'linear-hdr',
     });
     // Keep the scene-color dependency key separate from the physical HDR
     // target. The main pass must read physical `hdrColor` to order after the
@@ -241,6 +253,7 @@ export const urpPipeline: RenderPipeline = {
       size: 'swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-hdr',
     });
 
     // Half-res bloom chain.
@@ -249,18 +262,21 @@ export const urpPipeline: RenderPipeline = {
       size: 'half-swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-hdr',
     });
     graph.addColorTarget('bloomBlurH', {
       format: 'rgba16float',
       size: 'half-swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-hdr',
     });
     graph.addColorTarget('bloomBlurV', {
       format: 'rgba16float',
       size: 'half-swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-hdr',
     });
 
     // MSAA targets (count=4). The WebGL2 fallback reports its concrete
@@ -273,6 +289,7 @@ export const urpPipeline: RenderPipeline = {
         size: 'swapchain',
         sample: 4,
         usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
+        domain: 'linear-hdr',
       });
     }
     graph.addColorTarget('hdrDepth', {
@@ -306,14 +323,17 @@ export const urpPipeline: RenderPipeline = {
     // (resolve requires identical formats). Hard-coded rgba8unorm broke the
     // resolve on bgra8unorm backends (Metal/D3D/Vulkan via Channel 2). Derive
     // both the storage format and the srgb view format from the swap-chain SSOT.
+    // Linear-LDR scenes are the exception: their resolve target is the graph's
+    // rgba16float ldrColor, so the MSAA attachment must use that same format.
     if (msaaSupported) {
       const supportsViewFormats = runtime.device.caps.storageBuffer;
       graph.addColorTarget('msaaColor', {
-        format: swapChainStorageFormat,
+        format: linearLdrActive ? 'rgba16float' : swapChainStorageFormat,
         size: 'swapchain',
         sample: 4,
         usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
-        ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
+        domain: 'linear-ldr',
+        ...(supportsViewFormats && !linearLdrActive ? { viewFormats: [swapChainViewFormat] } : {}),
       });
       graph.addColorTarget('msaaDepth', {
         format: 'depth24plus-stencil8',
@@ -382,19 +402,28 @@ export const urpPipeline: RenderPipeline = {
     //    dependency (main reads hdrColor).
     addSkyboxPass(graph, 'skybox', { color: 'hdrColor' });
 
-    // 3. Main: scene draw list into the colour + depth target. FXAA without
-    // tonemap is the only LDR scene route; all other scenes keep the HDR path.
+    // 3. Main: scene draw list into the colour + depth target. Native LDR
+    // scenes stay linear until the final output pass; HDR scenes use the
+    // rgba16float path for blend + tonemap.
     const sceneColor =
       data.camera.tonemap !== 'none'
         ? 'sceneColor'
-        : fxaaActive
-          ? 'ldrColor'
-          : data.camera.antialias === 'msaa' && msaaSupported
-            ? 'msaaColor'
+        : data.camera.antialias === 'msaa' && msaaSupported
+          ? 'msaaColor'
+          : fxaaActive || linearLdrActive
+            ? 'ldrColor'
             : 'swapchain';
+    const sceneResolve =
+      data.camera.tonemap === 'none' &&
+      data.camera.antialias === 'msaa' &&
+      msaaSupported &&
+      linearLdrActive
+        ? 'ldrColor'
+        : undefined;
     addScenePass(graph, 'main', {
       color: sceneColor,
       depth: 'depth',
+      ...(sceneResolve !== undefined ? { resolve: sceneResolve } : {}),
       // feat-20260625 M2 / w9 (D-2): read spotShadowDepth so the spot caster
       // pass orders before the forward pass that samples it (binding 8).
       reads: [
@@ -422,6 +451,13 @@ export const urpPipeline: RenderPipeline = {
         hdrComposited: 'hdrComposited',
         hdrColorWhenBloomOff: 'sceneColor',
         color: ldrOutput,
+      });
+    } else if (linearLdrActive && !fxaaActive) {
+      addTonemapPass(graph, 'output', {
+        hdrComposited: 'ldrColor',
+        hdrColorWhenBloomOff: 'ldrColor',
+        color: 'swapchain',
+        outputOnly: true,
       });
     }
 

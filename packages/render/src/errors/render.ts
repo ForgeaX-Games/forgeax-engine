@@ -828,6 +828,42 @@ export class RenderFeatureDrawRecordingFailedError extends Error {
   }
 }
 
+// ── ObservationUnavailableError ───────────────────────────────────────────
+
+export type ObservationUnavailableReason =
+  | 'no-frame'
+  | 'resource'
+  | 'copy-src'
+  | 'stale'
+  | 'identity'
+  | 'format'
+  | 'readback-failed';
+
+export interface ObservationUnavailableDetail {
+  readonly reason: ObservationUnavailableReason;
+  readonly recovery: 'draw-current-frame' | 'enable-copy-src' | 'retry-readback';
+}
+
+/** A producer-owned current-frame observation could not be made available. */
+export class ObservationUnavailableError extends Error {
+  readonly code = 'observation-unavailable' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: ObservationUnavailableDetail;
+
+  constructor(reason: ObservationUnavailableReason, hint: string) {
+    let recovery: ObservationUnavailableDetail['recovery'];
+    if (reason === 'copy-src') recovery = 'enable-copy-src';
+    else if (reason === 'resource' || reason === 'readback-failed') recovery = 'retry-readback';
+    else recovery = 'draw-current-frame';
+    super(`current-frame observation unavailable: ${reason}`);
+    this.name = 'ObservationUnavailableError';
+    this.expected = 'a fresh producer-owned rgba16float current-frame observation';
+    this.hint = hint;
+    this.detail = { reason, recovery };
+  }
+}
+
 // -- RenderErrorCode / RenderError closed unions --------------------------------
 
 /**
@@ -835,6 +871,7 @@ export class RenderFeatureDrawRecordingFailedError extends Error {
  * `switch (err.code)` without default; TS guards completeness.
  */
 export type RenderErrorCode =
+  | 'observation-unavailable'
   | 'shadow-invalid-config'
   | 'equirect-projection-failed'
   | 'hdrp-caps-insufficient'
@@ -857,6 +894,7 @@ export type RenderErrorCode =
  * `RenderErrorCode` discriminant on `.code`.
  */
 export type RenderError =
+  | ObservationUnavailableError
   | ShadowInvalidConfigError
   | EquirectProjectionFailedError
   | HdrpCapsInsufficientError

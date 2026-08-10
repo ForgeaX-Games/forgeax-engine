@@ -35,6 +35,7 @@ import type {
   RhiCallEventDestroyBuffer,
   RhiCallEventDestroyTexture,
   RhiCallEventDispatchWorkgroups,
+  RhiCallEventDispatchWorkgroupsIndirect,
   RhiCallEventDraw,
   RhiCallEventDrawIndexed,
   RhiCallEventEndComputePass,
@@ -55,14 +56,14 @@ import type {
   Tape,
 } from './types';
 
-export const TAPE_FORMAT_VERSION = 4 as const;
+export const TAPE_FORMAT_VERSION = 5 as const;
 
 /**
  * Set of tape format versions accepted by this runtime's deserializer.
  * v2/v3 tapes are accepted via backward-compat; destroy events are naturally
  * absent in older data. serialize always writes `formatVersion = TAPE_FORMAT_VERSION` (4).
  */
-export const SUPPORTED_TAPE_VERSIONS = new Set<number>([2, 3, 4]);
+export const SUPPORTED_TAPE_VERSIONS = new Set<number>([2, 3, 4, 5]);
 
 // ============================================================================
 // Local Result factories (mirrors recorder.ts pattern)
@@ -465,6 +466,12 @@ function findDanglingHandleId(event: RhiCallEvent, declared: Set<HandleId>): Han
       if (!declared.has(e.passHandleId)) return e.passHandleId;
       return null;
     }
+    case 'dispatchWorkgroupsIndirect': {
+      const e = event as RhiCallEventDispatchWorkgroupsIndirect;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      if (!declared.has(e.indirectBufferHandleId)) return e.indirectBufferHandleId;
+      return null;
+    }
     case 'endComputePass': {
       const e = event as RhiCallEventEndComputePass;
       if (!declared.has(e.passHandleId)) return e.passHandleId;
@@ -607,6 +614,7 @@ export const DRAW_KINDS: ReadonlySet<RhiCallEvent['kind']> = new Set<RhiCallEven
   'drawIndirect',
   'drawIndexedIndirect',
   'dispatchWorkgroups',
+  'dispatchWorkgroupsIndirect',
 ]);
 
 export interface PassOffset {

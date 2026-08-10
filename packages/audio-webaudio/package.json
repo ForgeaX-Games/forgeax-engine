@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Web Audio API browser backend for forgeax-engine — AudioContext lifecycle, bus topology, tick systems, clip loader.",
+  "description": "Host-owned ForgeaX Web Audio consumer: decode cache, entity epochs, AudioContext, buses, source nodes, and cleanup.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -44,7 +44,7 @@
     "metrics": {
       "bundle-size": {
         "enabled": false,
-        "reason": "MVP Web Audio backend (tick systems + AudioContext lifecycle); bundle-size lock deferred to a future feat once all systems and clip loader stabilise"
+        "reason": "Host Web Audio consumer is covered by package tests; no standalone player bundle is emitted"
       },
       "fps": {
         "enabled": false,

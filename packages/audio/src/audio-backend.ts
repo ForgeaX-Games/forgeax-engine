@@ -7,6 +7,8 @@
 // - requirements S-7 (entity despawn cleanup: stop + disconnect)
 // - charter P4 (consistent abstraction: structurally parallel to InputBackend)
 
+import type { AudioClipAsset, AudioError } from '@forgeax/engine-types';
+
 export type BusName = 'sfx' | 'music';
 
 export const AUDIO_ENGINE_RESOURCE_KEY = 'AudioEngine' as const;
@@ -19,17 +21,31 @@ export interface AudioPlayOptions {
   readonly bus: BusName;
 }
 
+export interface AudioListenerPose {
+  readonly positionX: number;
+  readonly positionY: number;
+  readonly positionZ: number;
+  readonly forwardX: number;
+  readonly forwardY: number;
+  readonly forwardZ: number;
+  readonly upX: number;
+  readonly upY: number;
+  readonly upZ: number;
+}
+
 export interface AudioState {
   readonly contextState: 'running' | 'suspended' | 'closed';
   readonly activeSourceCount: number;
+  readonly lastError: AudioError | null;
 }
 
 export interface AudioBackend {
-  play(entityId: number, clipBuffer: AudioBuffer, opts: AudioPlayOptions): void;
+  play(entityId: number, clip: AudioClipAsset, opts: AudioPlayOptions): void;
   stop(entityId: number): void;
   setVolume(entityId: number, volume: number): void;
   setBusVolume(busName: BusName, volume: number): void;
   setBusMute(busName: BusName, muted: boolean): void;
+  setListenerPose(pose: AudioListenerPose): void;
   getState(): AudioState;
   getActiveSourceCount(): number;
   destroy(): void;

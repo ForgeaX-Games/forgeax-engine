@@ -45,8 +45,8 @@
 //   - packages/runtime/src/systems/__tests__/transparent-sort-config-get.test.ts
 //   - packages/runtime/src/systems/__tests__/transparent-sort-config-set.test.ts
 //   - packages/runtime/src/systems/__tests__/transparent-sort.test.ts
-//   - packages/runtime/test/render-system-multi-material.test.ts
-//   - packages/runtime/test/render-system-record-submesh.test.ts
+//   - packages/runtime/src/__tests__/render-system-multi-material.test.ts
+//   - packages/runtime/src/__tests__/render-system-record-submesh.test.ts
 //
 // Paradigm: each block-scope wraps a source file. ancestorTitles[0] is the
 // source-preserved inner describe (NOT the source filename for these 3 files
@@ -62,10 +62,7 @@ import type { AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import {
-  createQueryState,
   ENTITY_NULL_RAW,
-  Entity,
-  queryRun,
   Severity,
   SpriteAnimationInvalidError,
   Time,
@@ -445,8 +442,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect('clearA' in Camera.schema).toBe(false);
     });
 
-    it('Camera defaults clearColor to opaque black [0,0,0,1]', () => {
-      expect(Array.from(Camera.defaults?.clearColor as Float32Array)).toEqual([0, 0, 0, 1]);
+    it('Camera defaults clearColor to transparent black [0,0,0,0]', () => {
+      expect(Array.from(Camera.defaults?.clearColor as Float32Array)).toEqual([0, 0, 0, 0]);
     });
   });
 
@@ -455,7 +452,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const fields = Camera.fields as Record<string, { type: string; default?: unknown }>;
       expect(fields.clearColor).toBeDefined();
       expect(fields.clearColor?.type).toBe('array<f32, 4>');
-      expect(Array.from(fields.clearColor?.default as Float32Array)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(fields.clearColor?.default as Float32Array)).toEqual([0, 0, 0, 0]);
     });
 
     it('clear color is one inline array column (not four per-axis scalar keys)', () => {
@@ -1806,10 +1803,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   } as Partial<Navigator> as Navigator;
 
   function buildManifestDataUrl(): string {
-    const materialShaderStub = (identifier: string) => ({
+    const materialShaderStub = (identifier: string, composedWgsl = '/* stub */') => ({
       identifier,
       sourcePath: `${identifier}.wgsl`,
-      composedWgsl: '/* stub */',
+      composedWgsl,
       paramSchema: '[]',
       variants: [],
     });
@@ -1824,19 +1821,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           glsl: '',
           bindings: '',
         },
-        // shadow_caster marker: composed WGSL declares @location(0) position
-        // WITHOUT @location(1) normal (createRenderer.ts shadow_caster detection).
-        // Needed so the shadow-caster pipeline builds and the shadow pass draws.
-        {
-          hash: 'shadowc0',
-          wgsl: '/* shadow caster stub */ struct VsIn { @location(0) position: vec3<f32> };',
-          glsl: '',
-          bindings: '',
-        },
       ],
       materialShaders: [
         materialShaderStub('forgeax::default-standard-pbr'),
         materialShaderStub('forgeax::default-unlit'),
+        materialShaderStub(
+          'forgeax::default-shadow-caster',
+          '/* reserved shadow caster */ struct VsIn { @location(0) position: vec3<f32> };',
+        ),
       ],
     };
     return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
@@ -3516,7 +3508,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           // The current swap-chain texture (fakeColorTex) returns the
           // pre-stamped `swapChainView` sentinel so the test can distinguish
           // it from HDR-view sentinels stamped by `createTexture`.
-          if (texture === fakeColorTex) {
+          if (
+            texture === fakeColorTex ||
+            (typeof texture === 'object' &&
+              texture !== null &&
+              'width' in texture &&
+              'height' in texture)
+          ) {
             return { ok: true, value: swapChainView };
           }
           if (texture === hdrColorTexHandle) {
@@ -3652,7 +3650,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('feat-20260519-tonemap-reinhard-mvp T-M3.1: record-stage tonemap routing', () => {
-    it('row 1: tonemap=none camera writes geometry into swap-chain srgb view + emits NO tonemap pass (AC-03(c) / AC-11)', async () => {
+    it('row 1: tonemap=none camera writes linear LDR graph output + emits NO tonemap pass (AC-03(c) / AC-11)', async () => {
       const log: DeviceLog = { events: [] };
       const internals = makeRecorderInternals(log);
       const ps = makePipelineState(internals as never, false);
@@ -3700,9 +3698,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       );
 
       // M1 / w7: the render-graph allocates ALL color targets (including HDR)
-      // at buildGraph compile time, not lazily per-frame. The HDR texture
-      // exists in the pool but recordFrame's tonemap='none' path selects the
-      // swap-chain view (not the HDR view), so the tonemap pass is skipped.
+      // at buildGraph compile time, not lazily per-frame. Native tonemap='none'
+      // uses the graph-owned linear-LDR target and its output hand-off, not the
+      // HDR view; the tonemap shader pass is skipped.
       // The assertion below verifies the pass routing, not the allocation gate.
       // (Row 2 covers the actual HDR texture allocation labels.)
 
@@ -3710,7 +3708,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // pass after it.
       const beginPasses = log.events.filter((e) => e.type === 'beginRenderPass');
       expect(beginPasses).toHaveLength(1);
-      expect(beginPasses[0]?.view).toBe(
+      expect(beginPasses[0]?.view).toBeDefined();
+      expect(beginPasses[0]?.view).not.toBe(
         (internals as { _fakes: { swapChainView: unknown } })._fakes.swapChainView,
       );
 
@@ -4043,40 +4042,38 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     for (const [raw, clip] of resolver.clips) {
       if (!handles.has(raw)) handles.set(raw, world.allocSharedRef('AnimationClip', clip));
     }
-    const state = createQueryState({ with: [AnimationPlayer, Entity] });
+    const query = world.query({ with: [AnimationPlayer] }).unwrap();
     const allocated = new Set(handles.values());
-    queryRun(state, world, (bundle) => {
-      for (const raw of bundle.Entity.self) {
-        const entity = raw as EntityHandle;
-        const player = world.get(entity, AnimationPlayer);
-        if (!player.ok) continue;
-        const clips = Array.from(player.value.clips, (handle) => {
-          const mapped = handles.get(handle);
-          return mapped ?? (allocated.has(handle) ? handle : 0);
-        });
-        world.set(entity, AnimationPlayer, { clips });
-        const skin = world.get(entity, Skin);
-        if (!skin.ok) continue;
-        const targets: EntityHandle[] = [];
-        for (const raw of skin.value.joints) {
-          if (raw === ENTITY_NULL_RAW) continue;
-          const target = raw as EntityHandle;
-          const name = world.get(target, Name);
-          if (!name.ok) continue;
-          if (!world.get(target, ChildOf).ok) {
-            world.addComponent(target, { component: ChildOf, data: { parent: entity } });
-          }
-          if (!world.get(target, AnimationTargetId).ok) {
-            world.addComponent(target, {
-              component: AnimationTargetId,
-              data: { value: deriveAnimationTargetId([name.value.value]) },
-            });
-          }
-          targets.push(target);
+    const players = Array.from(query, (row) => row.entity);
+    for (const entity of players) {
+      const player = world.get(entity, AnimationPlayer);
+      if (!player.ok) continue;
+      const clips = Array.from(player.value.clips, (handle) => {
+        const mapped = handles.get(handle);
+        return mapped ?? (allocated.has(handle) ? handle : 0);
+      });
+      world.set(entity, AnimationPlayer, { clips });
+      const skin = world.get(entity, Skin);
+      if (!skin.ok) continue;
+      const targets: EntityHandle[] = [];
+      for (const raw of skin.value.joints) {
+        if (raw === ENTITY_NULL_RAW) continue;
+        const target = raw as EntityHandle;
+        const name = world.get(target, Name);
+        if (!name.ok) continue;
+        if (!world.get(target, ChildOf).ok) {
+          world.addComponent(target, { component: ChildOf, data: { parent: entity } });
         }
-        bindAnimationTargets(world, entity, targets);
+        if (!world.get(target, AnimationTargetId).ok) {
+          world.addComponent(target, {
+            component: AnimationTargetId,
+            data: { value: deriveAnimationTargetId([name.value.value]) },
+          });
+        }
+        targets.push(target);
       }
-    });
+      bindAnimationTargets(world, entity, targets);
+    }
     canonicalAdvanceAnimationPlayer(world, dt);
   }
 
@@ -5978,24 +5975,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       });
 
-      const state = createQueryState({ with: [SkyboxBackground, Entity] });
+      const query = world.query({ read: [SkyboxBackground] }).unwrap();
       let snapshot: SkyboxSnapshotShape | undefined;
       let skyboxCount = 0;
 
-      queryRun(state, world, (bundle) => {
-        const s = bundle.SkyboxBackground;
-        for (let i = 0; i < bundle.Entity.self.length; i++) {
-          const equirectRaw = s.equirect?.get(i);
-          const modeRaw = s.mode?.[i] ?? 0;
-          skyboxCount += 1;
-          if (snapshot === undefined && equirectRaw !== undefined) {
-            snapshot = {
-              equirectHandle: Math.round(equirectRaw),
-              mode: modeRaw,
-            };
-          }
+      for (const row of query) {
+        const s = row.get(SkyboxBackground);
+        const equirectRaw = s.equirect;
+        const modeRaw = s.mode;
+        skyboxCount += 1;
+        if (snapshot === undefined && equirectRaw !== undefined) {
+          snapshot = {
+            equirectHandle: Math.round(equirectRaw),
+            mode: modeRaw,
+          };
         }
-      });
+      }
 
       expect(snapshot).toBeDefined();
       expect(snapshot?.equirectHandle).toBe(42);
@@ -6005,13 +6000,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('zero SkyboxBackground entities -> snapshot undefined, count=0', () => {
       const world = new World();
-      const state = createQueryState({ with: [SkyboxBackground, Entity] });
+      const query = world.query({ with: [SkyboxBackground] }).unwrap();
       let snapshot: SkyboxSnapshotShape | undefined;
       const skyboxCount = 0;
 
-      queryRun(state, world, () => {
-        // No entities hit -- the query callback never fires.
-      });
+      for (const _row of query) throw new Error('unexpected SkyboxBackground');
 
       expect(snapshot).toBeUndefined();
       expect(skyboxCount).toBe(0);
@@ -6034,23 +6027,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       });
 
-      const state = createQueryState({ with: [SkyboxBackground, Entity] });
+      const query = world.query({ read: [SkyboxBackground] }).unwrap();
       let snapshot: SkyboxSnapshotShape | undefined;
       let skyboxCount = 0;
 
-      queryRun(state, world, (bundle) => {
-        const s = bundle.SkyboxBackground;
-        for (let i = 0; i < bundle.Entity.self.length; i++) {
-          const equirectRaw = s.equirect?.get(i);
-          skyboxCount += 1;
-          if (snapshot === undefined && equirectRaw !== undefined) {
-            snapshot = {
-              equirectHandle: Math.round(equirectRaw),
-              mode: 0,
-            };
-          }
+      for (const row of query) {
+        const equirectRaw = row.get(SkyboxBackground).equirect;
+        skyboxCount += 1;
+        if (snapshot === undefined && equirectRaw !== undefined) {
+          snapshot = {
+            equirectHandle: Math.round(equirectRaw),
+            mode: 0,
+          };
         }
-      });
+      }
 
       expect(snapshot).toBeDefined();
       // First entity spawned (handle 10) wins
@@ -7630,10 +7620,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   } as Partial<Navigator> as Navigator;
 
   function buildManifestDataUrl(): string {
-    const materialShaderStub = (identifier: string) => ({
+    const materialShaderStub = (identifier: string, composedWgsl = '/* stub */') => ({
       identifier,
       sourcePath: `${identifier}.wgsl`,
-      composedWgsl: '/* stub */',
+      composedWgsl,
       paramSchema: '[]',
       variants: [],
     });
@@ -8167,7 +8157,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   async function importEcs(): Promise<{
     World: new () => { spawn: (...componentDatas: unknown[]) => unknown };
-    queryRun: unknown;
+    Query: unknown;
     addSystem: unknown;
     Schedule: unknown;
   }> {
@@ -9289,23 +9279,22 @@ type ExtractFramesWithPipeline = (
         bindings: '',
       },
     ];
+    const materialShaders = [
+      materialShaderStub('forgeax::default-standard-pbr'),
+      materialShaderStub('forgeax::default-unlit'),
+    ];
     if (withShadowCaster) {
-      // Vertex-only depth marker => createRenderer registers
-      // forgeax::default-shadow-caster so recordShadowPass runs.
-      entries.push({
-        hash: 'shadowcaster0',
-        wgsl: '/* shadow caster stub - @location(0) position vertex-only */',
-        glsl: '',
-        bindings: '',
-      });
+      materialShaders.push(
+        materialShaderStub(
+          'forgeax::default-shadow-caster',
+          '/* reserved shadow caster - @location(0) position vertex-only */',
+        ),
+      );
     }
     const manifest = {
       schemaVersion: '1.0.0',
       entries,
-      materialShaders: [
-        materialShaderStub('forgeax::default-standard-pbr'),
-        materialShaderStub('forgeax::default-unlit'),
-      ],
+      materialShaders,
     };
     return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
   }

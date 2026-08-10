@@ -14,13 +14,7 @@
 // - requirements AC-11: duplicate add fail-fast via ECS default exclusive=false
 // - research F-2: 'enum' is already a ScalarFieldType
 
-import {
-  createQueryState,
-  defineComponent,
-  type EntityHandle,
-  queryRun,
-  type World,
-} from '@forgeax/engine-ecs';
+import { defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { StateToken, StateTokenVariant } from './define-state';
 import { getRegisteredTokens } from './define-state';
 
@@ -148,17 +142,12 @@ export function registerScopedComponents(): void {
 export function countScopedEntitiesByVariant(world: World, token: StateToken): number[] {
   const counts = new Array<number>(token.variants.length).fill(0);
   const scoped = getOrCreateScopedComponent(token);
-  const state = createQueryState({ with: [scoped] });
-  queryRun(state, world, (bundle) => {
-    const raw = bundle as unknown as Record<string, Record<string, unknown>>;
-    const rows = raw[scoped.name];
-    if (!rows) return;
-    const values = rows.value as Uint32Array;
-    for (let i = 0; i < values.length; i++) {
-      const idx = values[i] as number;
-      if (idx >= 0 && idx < counts.length) counts[idx] = (counts[idx] ?? 0) + 1;
-    }
-  });
+  const query = world.query({ read: [scoped] }).unwrap();
+  for (const row of query) {
+    const idx = row.get(scoped).value;
+    if (typeof idx !== 'number') continue;
+    if (idx >= 0 && idx < counts.length) counts[idx] = (counts[idx] ?? 0) + 1;
+  }
   return counts;
 }
 

@@ -17,6 +17,7 @@ import { executeScript } from './execute';
 import {
   buildIntrospectDoc,
   type ComponentIntrospectionDescriptor,
+  isExecutionRoot,
   isProfilerRoot,
 } from './introspect';
 
@@ -50,6 +51,8 @@ export type StartServerOptions = {
   readonly introspection?: readonly ComponentIntrospectionDescriptor[];
   /** Explicit CPU profiler capability; omitted unless the host opts in. */
   readonly profiler?: unknown;
+  /** Structural report provider; remote never imports the App owner. */
+  readonly execution?: unknown;
   /**
    * Live DebugRhiAdapter for eval-scope injection (plan-strategy D-4).
    * When present, eval scripts can call debugAdapter.captureFrames(frames, label?)
@@ -124,6 +127,7 @@ async function handleEnvelope(
     debugAdapter: unknown | undefined;
     introspection: readonly ComponentIntrospectionDescriptor[];
     profiler: unknown | undefined;
+    execution: unknown | undefined;
     host: string;
     port: number;
   },
@@ -151,6 +155,7 @@ async function handleEnvelope(
         assets: ctx.assets,
         ...(ctx.debugAdapter !== undefined ? { debugAdapter: ctx.debugAdapter } : {}),
         ...(ctx.profiler !== undefined ? { profiler: ctx.profiler } : {}),
+        ...(ctx.execution !== undefined ? { execution: ctx.execution } : {}),
         ...(ctx.introspection.length > 0 ? { introspection: ctx.introspection } : {}),
       }),
     );
@@ -166,6 +171,7 @@ async function handleEnvelope(
         assets: ctx.assets,
         debugAdapter: ctx.debugAdapter,
         profiler: ctx.profiler,
+        execution: ctx.execution,
       });
       if (result.ok) {
         response = respondOk(id, result.value);
@@ -205,6 +211,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
     const debugAdapter = opts.debugAdapter;
     const introspection = opts.introspection ?? [];
     const profiler = isProfilerRoot(opts.profiler) ? opts.profiler : undefined;
+    const execution = isExecutionRoot(opts.execution) ? opts.execution : undefined;
     let settled = false;
     let boundPort = opts.port;
 
@@ -239,6 +246,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
           debugAdapter,
           introspection,
           profiler,
+          execution,
           host,
           port: boundPort,
         })

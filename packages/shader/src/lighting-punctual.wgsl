@@ -6,7 +6,7 @@
 // Point + spot light evaluators extracted from pbr.wgsl
 // (feat-20260519-light-casters-point-spot-pbr M4 / w22 byte-equivalent
 // extraction). Both light types share a punctual BRDF body (GGX specular +
-// Lambertian diffuse + KHR_lights_punctual quartic range attenuation); the
+// Lambertian diffuse + Three r184 squared finite-range attenuation); the
 // only difference is that SpotLight multiplies a cone-falloff factor
 // `smoothstep(cosOuter, cosInner, dot(l, -lightDir))` on top.
 //
@@ -15,8 +15,8 @@
 // "evalPunctual(cosInner=1, cosOuter=-1, ...)" magic-value collapse pattern
 // since `smoothstep(-1, 1, x)` is the Hermite cubic 0..1 (not a constant 1).
 //
-// Range attenuation (KHR_lights_punctual quartic):
-//   atten = max(min(1 - (d^2 * invR^2)^2, 1), 0) / max(d^2, 1e-4)
+// Range attenuation (Three r184 squared finite-range authority):
+//   atten = clamp(1 - (d^2 * invR^2)^2, 0, 1)^2 / max(d^2, 1e-4)
 // `max(d^2, 1e-4)` math safety net keeps the divisor finite when the
 // fragment is at the light position (zero-distance NaN guard, layer 2 of
 // the two-layer fail-fast strategy alongside the host-side bounds gate).
@@ -75,8 +75,8 @@ fn evalPunctualBody(
   let specular = d_ggx(nDotH, alphaSq) * v_smith(nDotV, nDotL, alphaSq) * f;
   let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
   let diffuse = kd * baseColor / 3.14159265;
-  let factor = 1.0 - (dSquared * invRangeSquared) * (dSquared * invRangeSquared);
-  let attenuation = max(min(factor, 1.0), 0.0) / dSquared;
+  let factor = max(min(1.0 - (dSquared * invRangeSquared) * (dSquared * invRangeSquared), 1.0), 0.0);
+  let attenuation = factor * factor / dSquared;
   return (diffuse + specular) * colorTimesIntensity * nDotL * attenuation;
 }
 

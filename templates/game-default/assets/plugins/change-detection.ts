@@ -1,4 +1,4 @@
-import { Entity, Update, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { Update, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { HudHandle } from './hud';
 import { scoringTargetEntities, type ScoringTargetQuery } from './scoring-target';
 
@@ -46,16 +46,16 @@ export function installGameplayChangeDetection(args: {
 
   world.addSystem(Update, {
     name: 'game-score-added-targets',
-    queries: [{ with: [TargetHitState, Entity], added: [TargetHitState] }],
+    queries: [{ added: [TargetHitState] }],
     fn: (_world, queryResults) => {
-      for (const bundle of queryResults[0] ?? []) witness.addedTargets += bundle.Entity.self.length;
+      for (const _row of queryResults[0]) witness.addedTargets += 1;
     },
   }).unwrap();
   world.addSystem(Update, {
     name: 'game-score-changed-targets',
-    queries: [{ with: [TargetHitState, Entity], changed: [TargetHitState] }],
+    queries: [{ changed: [TargetHitState] }],
     fn: (_world, queryResults) => {
-      for (const bundle of queryResults[0] ?? []) witness.changedTargets += bundle.Entity.self.length;
+      for (const _row of queryResults[0]) witness.changedTargets += 1;
     },
   }).unwrap();
   world.addSystem(Update, {
@@ -72,7 +72,7 @@ export function installGameplayChangeDetection(args: {
       }
     },
   }).unwrap();
-  for (const entity of scoringTargetEntities(world, targetQuery)) {
+  for (const entity of scoringTargetEntities(targetQuery)) {
     world.addComponent(entity, { component: TargetHitState, data: { hits: 0 } }).unwrap();
   }
 
@@ -87,7 +87,7 @@ export function installGameplayChangeDetection(args: {
       return world.getResource<ScoreResource>(GAME_DEFAULT_SCORE_RESOURCE).value;
     },
     reset() {
-      for (const entity of scoringTargetEntities(world, targetQuery)) world.set(entity, TargetHitState, { hits: 0 }).unwrap();
+      for (const entity of scoringTargetEntities(targetQuery)) world.set(entity, TargetHitState, { hits: 0 }).unwrap();
       world.insertResource(GAME_DEFAULT_SCORE_RESOURCE, { value: 0 });
       witness.score = 0;
       hud.setScore(0);

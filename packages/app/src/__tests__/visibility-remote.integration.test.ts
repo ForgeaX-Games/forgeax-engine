@@ -41,7 +41,7 @@ function makeRendererStub(): Renderer {
 }
 
 describe('createApp to remote visibility discovery', () => {
-  it('introspects then evals queryRun, recovers an invalid write, and reads stats', async () => {
+  it('introspects then evaluates a Query, recovers an invalid write, and reads stats', async () => {
     const previous = process.env.FORGEAX_ENGINE_REMOTE_SERVE;
     process.env.FORGEAX_ENGINE_REMOTE_SERVE = '1';
     const result = await createApp({ renderer: makeRendererStub(), world: new World() });
@@ -66,17 +66,16 @@ describe('createApp to remote visibility discovery', () => {
       if (!connection.ok) return;
       try {
         const value = await connection.value.eval(`(async () => {
-          const ecs = await _import('@forgeax/engine-ecs');
           const render = await _import('@forgeax/engine-render');
           const entity = world.spawn({
             component: render.Visibility,
             data: { state: render.VisibilityStateValue.hidden },
           }).unwrap();
-          const query = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
+          const query = world.query({ read: [render.Visibility] }).unwrap();
           let current;
-          ecs.queryRun(query, world, (bundle) => {
-            current = render.visibilityStateFromU32(bundle.Visibility.state[0] ?? 0);
-          });
+          for (const row of query) {
+            current = render.visibilityStateFromU32(row.get(render.Visibility).state);
+          }
           const effective = render.resolveVisibility(world).effective(entity);
           const invalid = world.set(entity, render.Visibility, { state: 99 });
           const recovered = world.set(entity, render.Visibility, {

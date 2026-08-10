@@ -8,7 +8,7 @@ describe('App profiler phase catalog ownership', () => {
   it('matches the profiler receiver set by definition and has five unique phases', () => {
     const profiler = createProfiler();
     expect(profiler.registerPhaseCatalog('app', APP_PHASE_CATALOG).ok).toBe(true);
-    expect(APP_PHASE_CATALOG).toHaveLength(5);
+    expect(APP_PHASE_CATALOG).toHaveLength(9);
     expect(new Set(APP_PHASE_CATALOG).size).toBe(APP_PHASE_CATALOG.length);
     expect(new Set(APP_PHASE_CATALOG)).toEqual(new Set(profiler.phaseCatalog.app));
   });

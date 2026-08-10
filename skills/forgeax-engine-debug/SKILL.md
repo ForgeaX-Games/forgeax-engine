@@ -482,7 +482,7 @@ pnpm --filter @forgeax/engine-fbx test -- parity-snapshot
 
 ## FBX parity snapshot diff 红
 
-**信号**：`pnpm --filter @forgeax/engine-fbx test` 中 `parity-snapshot.test.ts` 失败。快照 JSON（`test/__snapshots__/cube-snapshot.json` + `humanoid-snapshot.json`）与当前 bridge.c 输出不一致。
+**信号**：`pnpm --filter @forgeax/engine-fbx test` 中 `parity-snapshot.test.ts` 失败。快照 JSON（`__tests__/__snapshots__/cube-snapshot.json` + `humanoid-snapshot.json`）与当前 bridge.c 输出不一致。
 
 **根因**：`bridge.c` 语义漂移 —— 轴转换、材质判别、节点过滤、动画提取四类路径的任一一处改动改变了 POD JSON 输出。快照是 M1 人工签署冻结的基线。
 

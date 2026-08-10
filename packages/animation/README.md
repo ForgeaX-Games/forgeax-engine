@@ -97,9 +97,12 @@ world transforms.
 
 Development diagnostics are structured objects with `code`, `hint`, and
 `detail`. They skip only the malformed channel or target and let valid sibling
-players continue. They are emitted as deduplicated `console.warn` objects;
-there is no public callback, queue, resource, or diagnostics bus. Production
-builds silently skip malformed entries without emitting these diagnostics.
+players continue. `console.warn` aggregates repeated channel failures by player,
+target, and reason. `subscribeAnimationDiagnostics(listener)` separately emits
+each unique player/clip/channel/target/reason fact so editor diagnostics can
+group and locate failures without parsing console text. The subscription is a
+read-only observation seam, not a queue or ECS resource. Production builds
+silently skip malformed entries without emitting these diagnostics.
 
 ## Error recovery
 

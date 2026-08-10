@@ -21,6 +21,7 @@ import {
   jobEnvironment,
   localGitHubFilePaths,
   localGitHubRuntime,
+  localizeDarwinXvfb,
   localizeRunnerProvisioning,
   localShardReportPaths,
   localSharedProvenancePaths,
@@ -99,6 +100,33 @@ test('local PR CI projection covers every required context and maps matrix legs 
     localizeRunnerProvisioning(typecheckWithPathSetup),
     'export PATH="$PWD/node_modules/typescript/bin:$PWD/node_modules/.bin:$PATH"\npnpm run typecheck',
   );
+  const headedBrowser = 'xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 pnpm test:browser';
+  assert.equal(
+    localizeDarwinXvfb(headedBrowser, 'darwin'),
+    'env CI=1 FORGEAX_BROWSER_HEADLESS=1 pnpm test:browser',
+  );
+  assert.equal(localizeDarwinXvfb(headedBrowser, 'linux'), headedBrowser);
+  assert.equal(localizeDarwinXvfb('echo xvfb-run -a', 'darwin'), 'echo xvfb-run -a');
+  const workflowXvfbCommands = extractRunSteps(workflow)
+    .map((step) => step.command)
+    .filter((command) => command.includes('xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0'));
+  assert.equal(workflowXvfbCommands.length, 2);
+  assert.equal(
+    workflowXvfbCommands.reduce(
+      (count, command) =>
+        count + (command.match(/xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0/g) ?? []).length,
+      0,
+    ),
+    3,
+  );
+  assert.ok(
+    workflowXvfbCommands.every((command) => {
+      const localized = localizeDarwinXvfb(command, 'darwin');
+      return (
+        !localized.includes('xvfb-run') && localized.includes('CI=1 FORGEAX_BROWSER_HEADLESS=1')
+      );
+    }),
+  );
   assert.equal(
     isLocalDependencyAssertion(
       `test '${githubExpression('needs.core-build.result')}' = success\ntest '${githubExpression('needs.app-shard-0.result')}' = success`,
@@ -163,6 +191,18 @@ test('local PR CI projection covers every required context and maps matrix legs 
   assert.deepEqual(localGitHubFilePaths(sharedInputs, '/tmp/forgeax-ci'), {
     GITHUB_OUTPUT: '/tmp/forgeax-ci/step-output.txt',
   });
+  const nodeOutput = [
+    'fs.appendFileSync(process.env.GITHUB_OUTPUT, `payload=',
+    '$',
+    '{payload}',
+    '\\n`)',
+  ].join('');
+  assert.equal(needsGitHubOutput(nodeOutput), true);
+  assert.deepEqual(localGitHubFilePaths(nodeOutput, '/tmp/forgeax-ci'), {
+    GITHUB_OUTPUT: '/tmp/forgeax-ci/step-output.txt',
+  });
+  assert.equal(needsStepSummary('process.env.GITHUB_STEP_SUMMARY'), true);
+  assert.equal(needsGitHubEnvironment('process.env.GITHUB_ENV'), true);
   assert.deepEqual(localGitHubRuntime({}), {
     GITHUB_RUN_ATTEMPT: '1',
     GITHUB_RUN_ID: 'local',
@@ -410,4 +450,70 @@ test('local PR CI projection retains each step shell and plans GitHub-compatible
   assert.deepEqual(localGitHubFilePaths(steps[1].command, '/tmp/forgeax-ci'), {
     GITHUB_STEP_SUMMARY: '/tmp/forgeax-ci/step-summary.md',
   });
+});
+
+test('M4-T1: workflow evidence wiring preserves execution and payload boundaries', () => {
+  const job = (name, next) =>
+    workflow.slice(workflow.indexOf(`  ${name}:`), workflow.indexOf(`\n  ${next}:`));
+  const core = job('core-build', 'shared-app-inputs');
+  const shared = job('shared-app-inputs', 'shared-evidence-probe');
+  const shard0 = job('app-shard-0', 'app-shard-1');
+  const shard1 = job('app-shard-1', 'app-shard-2');
+  const shard2 = job('app-shard-2', 'build-artifacts');
+  const buildArtifacts = job('build-artifacts', 'cache-warm');
+  const bevy = job('bevy-smoke-fleet', 'bevy-smoke-fleet-required-context');
+
+  assert.match(
+    workflow,
+    /concurrency:[\s\S]*group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event_name == 'pull_request' && github\.ref \|\| github\.run_id \}\}[\s\S]*cancel-in-progress: true/,
+  );
+  for (const block of [core, shared, shard0, shard1, shard2, buildArtifacts]) {
+    assert.match(
+      block,
+      /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "standard"\]'\) \}\}/,
+    );
+  }
+  assert.deepEqual(jobDependencies(workflow, 'build-artifacts'), [
+    'core-build',
+    'shared-app-inputs',
+    'app-shard-0',
+    'app-shard-1',
+    'app-shard-2',
+  ]);
+  assert.deepEqual(jobDependencies(workflow, 'cache-warm'), [
+    'app-shard-0',
+    'app-shard-1',
+    'app-shard-2',
+  ]);
+
+  assert.match(
+    core,
+    /name: core-build-a\$\{\{ github\.run_attempt \}\}[\s\S]*path: ci-artifacts\/core/,
+  );
+  assert.match(
+    shared,
+    /name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*path: \|\n\s+shared-app-inputs\/assets\n\s+shared-app-inputs\/shaders\n\s+shared-app-inputs\/manifest\.json/,
+  );
+  for (const [index, block] of [shard0, shard1, shard2].entries()) {
+    assert.match(
+      block,
+      new RegExp(`name: app-dist-${index}-a\\$\\{\\{ github\\.run_attempt \\}\\}`),
+    );
+    assert.match(block, /path: shard-transfer/);
+    assert.match(block, /producerRunAttempt: attempt/);
+    assert.doesNotMatch(block, /producerRunAttempt:\s*Number\('\$\{\{/);
+  }
+
+  assert.match(bevy, /matrix:\n\s+group: \[0, 1, 2\]/);
+  assert.match(
+    bevy,
+    /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
+  );
+  assert.match(bevy, /timeout-minutes: 30/);
+  assert.match(bevy, /SMOKE_MIN_FRAMES: 100/);
+  assert.match(bevy, /SMOKE_DURATION_MS: 1667/);
+  assert.match(
+    bevy,
+    /pnpm bevy:smokes -- --group \$\{\{ matrix\.group \}\} --groups 3 --concurrency auto/,
+  );
 });

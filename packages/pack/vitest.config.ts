@@ -9,8 +9,8 @@ export default defineProject({
 			tsconfig: "./tsconfig.json",
 		},
 		include: [
-			"test/**/*.test.ts",
-			"test/**/*.test-d.ts",
+			"__tests__/**/*.test.ts",
+			"__tests__/**/*.test-d.ts",
 			"src/**/__tests__/**/*.test.ts",
 			"src/**/__tests__/**/*.test-d.ts",
 		],

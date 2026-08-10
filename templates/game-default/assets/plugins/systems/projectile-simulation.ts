@@ -1,4 +1,4 @@
-import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import { Collider, ColliderShapeValue, CollidingEntities, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { Layer, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
@@ -11,6 +11,33 @@ import type { SpriteAtlasLoop } from '../sprite-atlas-loop';
 import { GameState } from '../gameplay-state';
 import { ChargeShot, GameplayInput, PlayerMotion, Projectile, type ProjectileVisual } from '../components/gameplay';
 import { GAME_DEFAULT_GAMEPLAY_CONFIG, type GameplayConfig } from '../resources/gameplay';
+import type { RewardChoiceHandle } from '../reward-choice';
+
+export const OVERCHARGE_IMPACT_MULTIPLIER = 2;
+
+export type ProjectileSpawnDecision = {
+  readonly spawned: boolean;
+  readonly impactScale: number;
+  readonly consumeOvercharge: boolean;
+};
+
+export function resolveProjectileSpawn(input: {
+  readonly normalFire: boolean;
+  readonly chargedFire: boolean;
+  readonly cooldown: number;
+  readonly chargePower: number;
+  readonly overchargeReady: boolean;
+}): ProjectileSpawnDecision {
+  const spawned = (input.normalFire || input.chargedFire) && input.cooldown <= 0;
+  if (!spawned) return { spawned: false, impactScale: 1, consumeOvercharge: false };
+  if (!input.chargedFire) return { spawned: true, impactScale: 1, consumeOvercharge: false };
+  const consumeOvercharge = input.overchargeReady;
+  return {
+    spawned: true,
+    impactScale: Math.max(1, input.chargePower) * (consumeOvercharge ? OVERCHARGE_IMPACT_MULTIPLIER : 1),
+    consumeOvercharge,
+  };
+}
 
 export type ProjectileSimulationSystemContext = {
   readonly world: World;
@@ -24,6 +51,7 @@ export type ProjectileSimulationSystemContext = {
   readonly projectileMaterial: Handle<'MaterialAsset', 'shared'>;
   readonly handleQuad: Handle<'MeshAsset', 'shared'>;
   readonly projectileEntities: () => readonly EntityHandle[];
+  readonly rewardChoice: RewardChoiceHandle | undefined;
   readonly onSpawn: () => void;
   readonly onDespawn: () => void;
 };
@@ -54,9 +82,15 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
       const playerY = ctx.getMode() === 'fps' ? freeY : jumpY;
       const chargedFire = charge.value.release !== 0;
       const normalFire = charge.value.active === 0 && (snap.action('shoot').isPressed() || gameplayInput.value.wantShoot !== 0);
-      const fire = (normalFire || chargedFire) && shootCd <= 0;
+      const spawnDecision = resolveProjectileSpawn({
+        normalFire,
+        chargedFire,
+        cooldown: shootCd,
+        chargePower: charge.value.power,
+        overchargeReady: ctx.rewardChoice?.snapshot().state === 'overcharge-ready',
+      });
       ctx.world.set(ctx.root, GameplayInput, { wantShoot: 0 });
-      if (fire) {
+      if (spawnDecision.spawned) {
         shootCd = config.projectile.shootCooldown;
         let dirX = faceX;
         let dirY = 0;
@@ -76,7 +110,7 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
         const bx = px + dirX * 0.6;
         const byy = by + dirY * 0.6;
         const bz = pz + dirZ * 0.6;
-        const impactScale = chargedFire ? Math.max(1, charge.value.power) : 1;
+        const impactScale = spawnDecision.impactScale;
         const shotScale = 1 + (impactScale - 1) * 0.6;
         const bulletQuat = quat.fromUnitVectors(quat.create(), [0, 1, 0], [dirX, dirY, dirZ]);
         const visual = ctx.getProjectileVisual();
@@ -105,9 +139,11 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
           { component: Layer, data: { value: useSprite ? 100 : 0 } },
           { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } },
           { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: config.projectile.radius, halfHeight: config.projectile.halfHeight, friction: 0, restitution: 0.6 } },
+          { component: CollidingEntities, data: { entities: [] } },
           { component: Projectile, data: { age: 0, velocityX: dirX * config.projectile.speed, velocityY: dirY * config.projectile.speed, velocityZ: dirZ * config.projectile.speed, impactScale } },
           ...spriteAnimationComponents,
         );
+        if (spawnDecision.consumeOvercharge) ctx.rewardChoice?.consumeOvercharge();
         if (atlasActive) ctx.spriteAtlasLoop?.track(entity);
         if (chargedFire) ctx.world.set(ctx.root, ChargeShot, { release: 0 });
         ctx.onSpawn();

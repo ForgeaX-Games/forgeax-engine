@@ -19,6 +19,11 @@
 //   - buildGraph declares a single 'cluster-forward' pass
 //   - execute stub (M5/M6 will fill with real binner + light upload + draw)
 //
+// Direct-light parity boundary: HDRP consumes the normalized light snapshot
+// projected by render-system-extract and the shared LightSlot packer. This
+// pipeline does not own ECS queries, intensity multipliers, or direction
+// normalization; cluster-forward preserves the snapshot's values.
+//
 // feat-20260612 M2 / w11 adds:
 //   - D-2/D-6: g-buffer (3 color RT + depth) + lighting + forward passes
 //   - D-5: install-time caps check (maxColorAttachments < 4 → throw)
@@ -46,7 +51,10 @@ import { err, ok, type Result, RhiError, type TextureView } from '@forgeax/engin
 import { attachDebugOverlayPass } from './debug-draw-glue';
 import { HdrpDeferredCapsInsufficientError } from './errors/render';
 import { createRenderFeatureTarget } from './features/targets';
-import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from './gpu-texture-usage';
+import {
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+} from './gpu-texture-usage';
 import { getOrCreateHdrpBuffers } from './hdrp-buffers';
 import { DEFERRED_COLOR_FORMATS } from './pipeline-spec';
 import { recordMainPass } from './record';
@@ -263,7 +271,8 @@ export const hdrpPipeline: RenderPipeline = {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
-      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_SRC,
+      domain: 'linear-hdr',
     });
     // Keep the phase dependency key separate from the physical HDR target.
     // Lighting/forward and producer-owned features all resolve to the same
@@ -305,18 +314,21 @@ export const hdrpPipeline: RenderPipeline = {
       size: 'swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-hdr',
     });
     graph.addColorTarget('gbuf1', {
       format: 'rgba8unorm',
       size: 'swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-ldr',
     });
     graph.addColorTarget('gbuf2', {
       format: 'rgba16float',
       size: 'swapchain',
       sample: 1,
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
+      domain: 'linear-hdr',
     });
 
     // feat-20260612-hdrp-ssao M4 / w19: SSAO half-resolution transient targets

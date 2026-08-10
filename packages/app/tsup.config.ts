@@ -3,7 +3,11 @@ import { baseTsupConfig } from '../../tsup.base';
 
 export default defineConfig({
   ...baseTsupConfig,
-  entry: ['src/index.ts'],
+  entry: {
+    index: 'src/index.ts',
+    'engine-worker-runtime': 'src/execution/engine-worker-runtime.ts',
+    'kernel-worker-runtime': 'src/execution/kernel-worker-runtime.ts',
+  },
   external: [
     // Keep the renderer package boundary intact. The app shell must not inline
     // runtime -> rhi-wgpu -> engine-wgpu-wasm, because the wasm owner resolves

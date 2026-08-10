@@ -54,7 +54,8 @@ type CapturedMethods =
   // pushDebugGroup/popDebugGroup/insertDebugMarker (covered above).
   | 'end' // render pass: kind='endRenderPass'; compute pass: kind='endComputePass'
   // RhiComputePassEncoder methods (1 unique, others shared above)
-  | 'dispatchWorkgroups';
+  | 'dispatchWorkgroups'
+  | 'dispatchWorkgroupsIndirect';
 
 // ---- DeferredMethods: RHI method names in DEFERRED_COMMANDS (AC-06) ----
 

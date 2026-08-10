@@ -10,23 +10,6 @@
 // - AGENTS.md Error model: structured errors with .expected / .hint / .detail,
 //   never throw for runtime paths; exhaustive switch without default
 
-/**
- * Closed {@link StateErrorCode} union -- 4 members, order-locked.
- * Exhaustive `switch (err.code)` needs no default fallback.
- *
- * | code | trigger |
- * |:--|:--|
- * | `'state-already-defined'` | `defineState()` called with a name already registered |
- * | `'state-not-registered'` | `setNextState()` / `getState()` called before `registerStatesPlugin()` |
- * | `'invalid-variant'` | `setNextState()` called with a variant string not in the token's variants tuple |
- * | `'state-default-required'` | `defineState()` called with empty variants array |
- */
-export type StateErrorCode =
-  | 'state-already-defined'
-  | 'state-not-registered'
-  | 'invalid-variant'
-  | 'state-default-required';
-
 /** {@link state-already-defined} payload: carries the conflicting name and optional first-definition site. */
 export interface StateAlreadyDefinedDetail {
   readonly code: 'state-already-defined';
@@ -54,16 +37,32 @@ export interface StateDefaultRequiredDetail {
   readonly name: string;
 }
 
+interface StateErrorDetailByCode {
+  'state-already-defined': StateAlreadyDefinedDetail;
+  'state-not-registered': StateNotRegisteredDetail;
+  'invalid-variant': InvalidVariantDetail;
+  'state-default-required': StateDefaultRequiredDetail;
+}
+
+/**
+ * Closed {@link StateErrorCode} union -- 4 members, order-locked.
+ * Exhaustive `switch (err.code)` needs no default fallback.
+ *
+ * | code | trigger |
+ * |:--|:--|
+ * | `'state-already-defined'` | `defineState()` called with a name already registered |
+ * | `'state-not-registered'` | `setNextState()` / `getState()` called before `registerStatesPlugin()` |
+ * | `'invalid-variant'` | `setNextState()` called with a variant string not in the token's variants tuple |
+ * | `'state-default-required'` | `defineState()` called with empty variants array |
+ */
+export type StateErrorCode = keyof StateErrorDetailByCode;
+
 /**
  * Discriminated detail union for {@link StateError}, narrowed per
  * `StateError.code`. AI users obtain the concrete shape via
  * `switch (err.code)` without a fallback `as` cast.
  */
-export type StateErrorDetail =
-  | StateAlreadyDefinedDetail
-  | StateNotRegisteredDetail
-  | InvalidVariantDetail
-  | StateDefaultRequiredDetail;
+export type StateErrorDetail = StateErrorDetailByCode[StateErrorCode];
 
 /**
  * Structured state-machine error -- four-field surface
@@ -71,20 +70,24 @@ export type StateErrorDetail =
  *
  * AI users consume the structured triple by fields, not by parsing `.message`.
  */
-export interface StateError {
-  readonly code: StateErrorCode;
+type StateErrorVariant<C extends StateErrorCode> = {
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: StateErrorDetail;
-}
+  readonly detail: StateErrorDetailByCode[C];
+};
 
-function makeError(
-  code: StateErrorCode,
+export type StateError = {
+  [C in StateErrorCode]: StateErrorVariant<C>;
+}[StateErrorCode];
+
+function makeError<C extends StateErrorCode>(
+  code: C,
   expected: string,
   hint: string,
-  detail: StateErrorDetail,
-): StateError {
-  return {
+  detail: StateErrorDetailByCode[C],
+): StateErrorVariant<C> {
+  const error = {
     code,
     expected,
     hint,
@@ -92,15 +95,16 @@ function makeError(
     get message(): string {
       return `[${code}] ${hint}`;
     },
-  } as StateError;
+  };
+  return error;
 }
 
 /** Convenience throw wrapper for programmer errors (defineState constructor phase). */
-export function throwStateError(
-  code: StateErrorCode,
+export function throwStateError<C extends StateErrorCode>(
+  code: C,
   expected: string,
   hint: string,
-  detail: StateErrorDetail,
+  detail: StateErrorDetailByCode[C],
 ): never {
   throw makeError(code, expected, hint, detail);
 }

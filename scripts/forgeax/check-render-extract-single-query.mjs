@@ -4,11 +4,9 @@
 // plan-strategy section 4 R-A6 / requirements AC-06 main signal).
 //
 // ts-morph AST traversal of `packages/render/src/render-system-extract.ts`
-// asserting that the file contains at most ONE call expression whose
-// `with` array references the `MeshRenderer` token. The auxiliary
-// `cameraQuery` (`with: [Transform, Camera]`) and `lightQuery`
-// (`with: [DirectionalLight]`) are intentionally not material-coupled and
-// must not affect the count.
+// asserting that the file contains exactly ONE call expression whose query
+// descriptor references the `MeshRenderer` token. Auxiliary camera and light
+// queries are intentionally not material-coupled and must not affect the count.
 //
 // Why ts-morph + reverse-grep belt-and-suspenders (research F-B1 +
 // plan-strategy R-A6): the file pre-w9 carries 4 archetype query
@@ -20,12 +18,12 @@
 // signal. The accompanying reverse-grep gate (5-f32 column reads,
 // fallback query identifiers) is the secondary signal that catches
 // reverse-coupling regressions if someone reintroduces the fallback
-// pattern outside of `createQueryState` literal arrays.
+// pattern outside of World query descriptor literals.
 //
 // Failure modes (exit code 1):
-//   - More than one createQueryState / world.query expression with
-//     `MeshRenderer` in its `with` array (the alpha 4-query split is
-//     still present);
+//   - Anything other than one world.query expression whose descriptor
+//     references `MeshRenderer` (zero means extraction escaped the query
+//     boundary; multiple means the alpha split regrew);
 //   - Lingering 5-f32 column-read literal (`m.baseColorR[`,
 //     `m.baseColorG[`, `m.baseColorB[`, `m.metallic[`, `m.roughness[`)
 //     anywhere in the file (reverse-coupling fail-safe);
@@ -57,14 +55,14 @@ if (args.includes('--help') || args.includes('-h')) {
       '  node scripts/forgeax/check-render-extract-single-query.mjs',
       '',
       'Asserts that packages/render/src/render-system-extract.ts contains',
-      'AT MOST ONE createQueryState / world.query call referencing the',
-      'MeshRenderer token in its `with` array. Pairs with',
+      'EXACTLY ONE world.query call whose descriptor references the',
+      'MeshRenderer token. Pairs with',
       'check-render-record-no-material-asset-get.mjs (record-side',
       'reverse-grep) for AC-06 + AC-07 belt-and-suspenders coverage.',
       '',
       'Exit codes:',
-      '  0  one (or zero) MeshRenderer-bearing query in extract',
-      '  1  multiple MeshRenderer-bearing queries OR 5-f32 column',
+      '  0  exactly one MeshRenderer-bearing query in extract',
+      '  1  zero or multiple MeshRenderer-bearing queries OR 5-f32 column',
       '     reads OR fallback query identifiers regrew',
     ].join('\n')}\n`,
   );
@@ -76,14 +74,22 @@ const failures = [];
 const project = new Project({ skipAddingFilesFromTsConfig: true });
 const sf = project.addSourceFileAtPath(TARGET);
 
-// AST pass: count createQueryState / *.query calls whose first argument is an
-// object literal carrying a `with` array with a MeshRenderer identifier.
+// AST pass: count *.query calls whose first argument is an object literal
+// carrying MeshRenderer in any component-bearing descriptor property.
 const meshRendererQueryHits = [];
+const componentDescriptorProperties = new Set([
+  'read',
+  'write',
+  'optional',
+  'with',
+  'without',
+  'added',
+  'changed',
+]);
 sf.forEachDescendant((node) => {
   if (node.getKind() !== SyntaxKind.CallExpression) return;
   const expr = node.getExpression().getText();
-  const isQueryCtor =
-    expr === 'createQueryState' || /\.query$/.test(expr) || /\.query$/.test(expr.split('(')[0]);
+  const isQueryCtor = /\.query$/.test(expr) || /\.query$/.test(expr.split('(')[0]);
   if (!isQueryCtor) return;
   const args = node.getArguments();
   const first = args[0];
@@ -93,7 +99,7 @@ sf.forEachDescendant((node) => {
   for (const p of props) {
     if (p.getKind() !== SyntaxKind.PropertyAssignment) continue;
     const name = p.getName();
-    if (name !== 'with') continue;
+    if (!componentDescriptorProperties.has(name)) continue;
     const init = p.getInitializer();
     if (!init || init.getKind() !== SyntaxKind.ArrayLiteralExpression) continue;
     const text = init.getText();
@@ -106,10 +112,10 @@ sf.forEachDescendant((node) => {
   }
 });
 
-if (meshRendererQueryHits.length > 1) {
+if (meshRendererQueryHits.length !== 1) {
   failures.push({
-    code: 'AC-06-MULTI-QUERY',
-    msg: `extract still has ${meshRendererQueryHits.length} createQueryState / *.query calls with MeshRenderer in their \`with\` array (expected at most 1).`,
+    code: 'AC-06-QUERY-COUNT',
+    msg: `extract has ${meshRendererQueryHits.length} *.query calls whose descriptor references MeshRenderer (expected exactly 1).`,
     sites: meshRendererQueryHits.map((h) => `  line ${h.line}: ${h.snippet}`),
   });
 }
@@ -162,7 +168,7 @@ if (failures.length > 0) {
     for (const s of f.sites) process.stderr.write(`${s}\n`);
   }
   process.stderr.write(
-    '\n[hint] Converge render-system-extract.ts to ONE createQueryState / world.query expression with `MeshRenderer` in its `with` array (the merged-MeshRenderer materialQuery). Delete fallback queries (renderableQueryNoMaterial / renderableQueryNoTransform), the legacy renderableQueryFull non-instanced split, and the instanced full archetype direct column-read 5-f32 path. D-Q7 case A is now archetype-natural-absence (no fire); case B is `material === 0` -> defaultMaterialSnapshot; case C is `assets.get(handle).err` -> RhiError(asset-not-registered) + skip.\n',
+    '\n[hint] Keep exactly ONE world.query expression with `MeshRenderer` in its descriptor. Delete fallback queries, the legacy non-instanced split, direct graph traversal, and the direct column-read 5-f32 path.\n',
   );
   process.exit(1);
 }

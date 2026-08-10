@@ -6,10 +6,8 @@
 // and cannot be removed), so an entity's own handle is read through the exact
 // same query / read path as Transform / MeshRenderer columns:
 //
-//   const state = createQueryState({ with: [Transform, Entity] });
-//   queryRun(state, world, (bundle) => {
-//     for (let i = 0; i < bundle.Entity.self.length; i++) bundle.Entity.self[i];
-//   });
+//   const query = world.query({ read: [Transform] }).unwrap();
+//   for (const row of query) row.entity;
 //   world.get(e, Entity).unwrap().self === e
 //
 // This retires the "entity is an archetype side-array + three-step rebuild"
@@ -40,7 +38,7 @@ import { defineComponent } from './component';
  *
  *   - Value-space `Entity` (this const) is the id=0 component token. It is
  *     looked up by name (`'Entity'`) at component-registration time and used
- *     as a value (`world.spawn`, `createQueryState({ with: [..., Entity] })`).
+ *     as a value (`world.spawn`, `world.get(entity, Entity)`).
  *   - Type-space `EntityHandle` (the branded number, exported from `../entity`)
  *     is the row-identifier handle type. It is used in `: EntityHandle`
  *     annotations.
@@ -53,13 +51,10 @@ import { defineComponent } from './component';
  * runtime stability; only the type-space alias was renamed.
  *
  * @example Read an entity's own handle through a query:
- *   import { Entity, createQueryState, queryRun } from '@forgeax/engine-ecs';
- *   const state = createQueryState({ with: [Transform, Entity] });
- *   queryRun(state, world, (bundle) => {
- *     for (let i = 0; i < bundle.Entity.self.length; i++) {
- *       const handle = bundle.Entity.self[i]; // full packed u32
- *     }
- *   });
+ *   const query = world.query({ read: [Transform] }).unwrap();
+ *   for (const row of query) {
+ *     const handle = row.entity;
+ *   }
  *
  * @example Use `world.get` as a general liveness probe:
  *   const r = world.get(e, Entity);

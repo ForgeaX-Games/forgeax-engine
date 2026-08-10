@@ -4,7 +4,7 @@
 // light extract is a distinct hot path (q7) -- it multiplies each color lane by
 // intensity while reading direction, so its per-row work differs from the
 // propagate/getField path. This bench models the render-system-extract light
-// loop over the queryRun bundle, NOT the TRS path, and does not reuse its
+// loop over QuerySpan columns, NOT the TRS path, and does not reuse its
 // baseline.
 //
 // In-process ratio gate, NOT absolute wallclock (memory
@@ -33,8 +33,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
-import { Entity } from '../entity';
-import { createQueryState, queryRun } from '../query';
 import { World } from '../world';
 
 const N = 10_000;
@@ -94,12 +92,12 @@ const snapColor = new Float32Array(N * 3);
 
 /** Extract-shaped loop over per-axis scalar columns. */
 function traverseBaseline(world: World): number {
-  const state = createQueryState({ with: [BaselineLight7, Entity] });
+  const query = world.query({ read: [BaselineLight7] }).unwrap();
   let sum = 0;
   for (let rep = 0; rep < INNER_REPEATS; rep++) {
-    queryRun(state, world, (bundle) => {
-      const b = bundle.W6_BaselineLight7;
-      const n = bundle.Entity.self.length;
+    for (const span of query.spans().unwrap()) {
+      const b = span.get(BaselineLight7);
+      const n = span.length;
       for (let i = 0; i < n; i++) {
         const intensity = b.intensity[i] as number;
         snapDir[i * 3] = b.directionX[i] as number;
@@ -110,21 +108,21 @@ function traverseBaseline(world: World): number {
         snapColor[i * 3 + 2] = (b.colorB[i] as number) * intensity;
         sum += (snapDir[i * 3] as number) + (snapColor[i * 3] as number);
       }
-    });
+    }
   }
   return sum;
 }
 
 /** Extract-shaped loop over flat stride-N array columns (D-6 hot-path form). */
 function traverseCandidate(world: World): number {
-  const state = createQueryState({ with: [CandidateLightVec, Entity] });
+  const query = world.query({ read: [CandidateLightVec] }).unwrap();
   let sum = 0;
   for (let rep = 0; rep < INNER_REPEATS; rep++) {
-    queryRun(state, world, (bundle) => {
-      const c = bundle.W6_CandidateLightVec;
+    for (const span of query.spans().unwrap()) {
+      const c = span.get(CandidateLightVec);
       const direction = c.direction;
       const color = c.color;
-      const n = bundle.Entity.self.length;
+      const n = span.length;
       for (let i = 0; i < n; i++) {
         const intensity = c.intensity[i] as number;
         snapDir[i * 3] = direction[i * 3] as number;
@@ -135,7 +133,7 @@ function traverseCandidate(world: World): number {
         snapColor[i * 3 + 2] = (color[i * 3 + 2] as number) * intensity;
         sum += (snapDir[i * 3] as number) + (snapColor[i * 3] as number);
       }
-    });
+    }
   }
   return sum;
 }
@@ -187,5 +185,67 @@ describe('w6 -- light-extract flat-column A/B perf ratio (AC-10)', () => {
     );
 
     expect(ratio).toBeLessThanOrEqual(RATIO_GATE);
+  });
+});
+
+describe('M5 -- wide table versus sparse tag-flip trend', () => {
+  const widths = [1, 4, 8, 16] as const;
+  const TableFlipTag = defineComponent('M5WideTableFlipTag', {});
+  const SparseFlipTag = defineComponent('M5WideSparseFlipTag', {}, { storage: 'sparse' });
+
+  function makeWideComponent(width: number) {
+    const schema: Record<string, 'f32'> = {};
+    for (let index = 0; index < width; index++) schema[`f${index}`] = 'f32';
+    return defineComponent(`M1WideFlip${width}`, schema);
+  }
+
+  function bytesIn(table: {
+    storage: Map<number, { fields: Map<string, { buffer: ArrayBufferLike }> }>;
+  }): number {
+    let bytes = 0;
+    for (const { fields } of table.storage.values()) {
+      for (const column of fields.values()) bytes += column.buffer.byteLength;
+    }
+    return bytes;
+  }
+
+  it('keeps sparse copied bytes flat at zero while table migration grows with arity', () => {
+    const tableCopiedBytes: number[] = [];
+    const sparseCopiedBytes: number[] = [];
+    for (const width of widths) {
+      const wide = makeWideComponent(width);
+      const tableWorld = new World();
+      const tableEntity = tableWorld.spawn({ component: wide, data: {} as never }).unwrap();
+      const tableBefore = tableWorld._getGraph().tables[0];
+      if (tableBefore === undefined) throw new Error('source table missing');
+      tableCopiedBytes.push(bytesIn(tableBefore));
+      tableWorld.addComponent(tableEntity, { component: TableFlipTag, data: {} }).unwrap();
+
+      const sparseWorld = new World();
+      const sparseEntity = sparseWorld.spawn({ component: wide, data: {} as never }).unwrap();
+      const sparseBefore = sparseWorld._getGraph().tables[0];
+      if (sparseBefore === undefined) throw new Error('source table missing');
+      sparseWorld.addComponent(sparseEntity, { component: SparseFlipTag, data: {} }).unwrap();
+      const sparseAfter = sparseWorld._getGraph().tables[0];
+      sparseCopiedBytes.push(sparseAfter === sparseBefore ? 0 : bytesIn(sparseBefore));
+    }
+
+    // biome-ignore lint/suspicious/noConsole: the trend is the characterization output
+    console.info(
+      `[m5 tag-flip] widths=${widths.join(',')} tableCopiedBytes=${tableCopiedBytes.join(',')} sparseCopiedBytes=${sparseCopiedBytes.join(',')}`,
+    );
+    const [first, second, third, fourth] = tableCopiedBytes;
+    if (
+      first === undefined ||
+      second === undefined ||
+      third === undefined ||
+      fourth === undefined
+    ) {
+      throw new Error('wide-tag trend did not produce four samples');
+    }
+    expect(first).toBeLessThan(second);
+    expect(second).toBeLessThan(third);
+    expect(third).toBeLessThan(fourth);
+    expect(sparseCopiedBytes).toEqual([0, 0, 0, 0]);
   });
 });

@@ -17,7 +17,7 @@
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { execSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { err, ok, type Result } from '@forgeax/engine-types';
@@ -61,39 +61,41 @@ import { World } from '../world';
   const CALL_PATTERN = `[.](${NAME}|${NAME}Checked)[(]`;
   const FIELD_PATTERN = `${NAME}:`;
 
-  function grepHits(pattern: string): string[] {
-    const r = spawnSync(
-      'grep',
-      [
-        '-rn',
-        '--include=*.ts',
-        '--include=*.mjs',
-        '--exclude-dir=dist',
-        '--exclude-dir=node_modules',
-        '-E',
-        pattern,
-        ...SCAN_DIRS,
-      ],
-      { cwd: repoRoot, encoding: 'utf8', timeout: 30_000 },
-    );
-    if (r.status === 2 || r.error) {
-      throw new Error(`grep failed for pattern ${pattern}: ${r.stderr || r.error}`);
+  function sourceHits(pattern: string): string[] {
+    const expression = new RegExp(pattern);
+    const hits: string[] = [];
+    const visit = (relativeDir: string): void => {
+      for (const entry of readdirSync(resolve(repoRoot, relativeDir), { withFileTypes: true })) {
+        const relativePath = `${relativeDir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (entry.name !== 'dist' && entry.name !== 'node_modules') visit(relativePath);
+          continue;
+        }
+        if (!entry.isFile() || (!entry.name.endsWith('.ts') && !entry.name.endsWith('.mjs'))) {
+          continue;
+        }
+        for (const [index, line] of readFileSync(resolve(repoRoot, relativePath), 'utf8')
+          .split('\n')
+          .entries()) {
+          if (expression.test(line)) hits.push(`${relativePath}:${index + 1}:${line.trim()}`);
+        }
+      }
+    };
+    for (const directory of SCAN_DIRS) {
+      visit(directory);
     }
-    return (r.stdout ?? '')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+    return hits;
   }
 
   describe('ac16-register-component-grep-gate.test.ts', () => {
     describe('AC-16 - register-component call surface is zero repo-wide (w20)', () => {
       it('layer 1: zero method-call sites for the deleted register* methods', () => {
-        const hits = grepHits(CALL_PATTERN);
+        const hits = sourceHits(CALL_PATTERN);
         expect(hits, `unexpected register-component call sites:\n${hits.join('\n')}`).toEqual([]);
       });
 
       it('layer 2: zero mock interface field declarations for the deleted method', () => {
-        const hits = grepHits(FIELD_PATTERN);
+        const hits = sourceHits(FIELD_PATTERN);
         expect(
           hits,
           `unexpected register-component field declarations:\n${hits.join('\n')}`,
@@ -568,10 +570,6 @@ import { World } from '../world';
           // (charter F1: upstream lands must not trigger this feat's fence).
           'shared-ref-stale',
           'unique-ref-stale',
-          // solo bevy-examples round 20260713-194533 — queryCombinations
-          // Entity-required fail-fast. Minor evolution +1 per AGENTS.md
-          // §Error model evolution contract.
-          'query-combinations-entity-required',
           // feat-20260713-mount-override-component-add-and-shared-ref-round
           // M2 / w9 — P3 shared-field value gate. `shared-field-invalid-value`
           // fails fast when a `shared<T>` / `array<shared<T>>` field is bound to
@@ -583,18 +581,32 @@ import { World } from '../world';
           // error code. Minor evolution +1 per AGENTS.md §Error model evolution
           // contract.
           'system-set-not-registered',
+          'change-epoch-exhausted',
+          'query-descriptor-conflict',
+          'query-data-requires-fields',
+          'query-span-unavailable',
+          'query-iteration-invalidated',
+          'query-iteration-active',
+          'sparse-storage-requires-tag',
           // feat-20260803-entity-visibility M1 — closed enum writes fail
           // before storage mutation. Minor evolution +1 per the same contract.
           'component-field-invalid-value',
+          'shared-kernel-ineligible',
+          'shared-kernel-failed',
+          'world-poisoned',
         ]);
 
         const added: string[] = [];
         const deleted: string[] = [];
+        const INTENTIONAL_DELETES = new Set<string>([
+          'query-descriptor-with-optional-conflict',
+          'query-combinations-entity-required',
+        ]);
         for (const c of currentSet) {
           if (!headSet.has(c) && !INTENTIONAL_ADDS.has(c)) added.push(c);
         }
         for (const h of headSet) {
-          if (!currentSet.has(h)) deleted.push(h);
+          if (!currentSet.has(h) && !INTENTIONAL_DELETES.has(h)) deleted.push(h);
         }
 
         if (added.length > 0 || deleted.length > 0) {
@@ -663,6 +675,7 @@ import { World } from '../world';
           switch (code) {
             case 'entity-index-overflow':
             case 'schema-unsupported-field':
+            case 'sparse-storage-requires-tag':
             case 'stale-entity':
             case 'component-already-present':
             case 'component-not-present':
@@ -688,7 +701,6 @@ import { World } from '../world';
             case 'relationship-mirror-component-not-registered':
             case 'relationship-mirror-field-type-mismatch':
             case 'relationship-detach-mismatch':
-            case 'query-descriptor-with-optional-conflict':
             case 'component-not-defined':
             case 'remove-essential-component':
             case 'scene-override-type-mismatch':
@@ -705,9 +717,6 @@ import { World } from '../world';
             case 'sprite-instances-count-mismatch':
             case 'sprite-instances-requires-sprite-shader':
             case 'sprite-instances-mutually-exclusive-with-instances':
-            // solo bevy-examples round 20260713-194533 — queryCombinations
-            // Entity-required fail-fast case, keeps this switch exhaustive.
-            case 'query-combinations-entity-required':
             // feat-20260713-mount-override-component-add-and-shared-ref-round
             // M2 / w9 — shared-field value gate code. Required to keep this
             // exhaustive switch over EcsErrorCode visually closed.
@@ -722,6 +731,15 @@ import { World } from '../world';
             case 'time-config-invalid':
             case 'schedule-scope-mismatch':
             case 'resource-protected':
+            case 'change-epoch-exhausted':
+            case 'query-descriptor-conflict':
+            case 'query-data-requires-fields':
+            case 'query-span-unavailable':
+            case 'query-iteration-invalidated':
+            case 'query-iteration-active':
+            case 'shared-kernel-ineligible':
+            case 'shared-kernel-failed':
+            case 'world-poisoned':
               return code;
             default:
               return assertNever(code);

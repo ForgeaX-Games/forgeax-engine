@@ -12,6 +12,43 @@ functions. The `/encode` subpath (`@forgeax/engine-codec/encode`) exports
 build-time encode (zstd + Basis). Runtime code must never import from `/encode` --
 this is enforced by `check-image-pipeline-isolation.mjs` path d (AC-09).
 
+## WASM provisioning
+
+> [!IMPORTANT]
+> `pkg/` is an Emscripten build artifact and is **not committed to git**. It
+> contains the runtime transcoder and build-time encoder bundles, so a fresh
+> checkout must hydrate it before using Basis KTX2 paths.
+
+| Path | Command | Use |
+|:--|:--|:--|
+| Pre-built release | `pnpm -F @forgeax/engine-codec fetch-wasm` | Fast setup without Emscripten |
+| Local build | `pnpm -F @forgeax/engine-codec build:wasm` | Rebuild with the Emscripten toolchain |
+| Opt out | `FORGEAX_SKIP_CODEC_WASM_FETCH=1 pnpm install` | Toolchain owners provisioning separately |
+
+<details>
+<summary>Release selection, fallback, and recovery</summary>
+
+The pre-built bundle is published under the `wasm-artifacts` GitHub Release tag
+as `basis-wasm-pkg-{sha8}.tar.gz`. The content key is the first eight characters
+of `SHA256(fetch-basis.mjs + build-wasm.mjs)`, shared by the consumer and the CI
+publisher. The tarball contains the whole `pkg/` tree:
+
+- `basis_transcoder.mjs` + `basis_transcoder.wasm` for runtime transcode;
+- `encode/basis_encoder.mjs` + `encode/basis_encoder.wasm` for build-time encode.
+
+The shared downloader tries Node `fetch` first, then authenticated `gh` and
+platform-native `curl` (`curl.exe` on Windows) when the Node TLS/network
+handshake fails. All paths remain pinned to the current repository, the
+`wasm-artifacts` tag, and the exact content-keyed asset. Authentication uses
+`GITHUB_TOKEN`/`GH_TOKEN` or `gh auth login`.
+
+`postinstall` uses the same fetch path on a best-effort basis: an unavailable
+release does not fail a bare install, while a later build or typecheck reports
+that `pkg/` still needs provisioning. Use `build:wasm` when no matching release
+exists; it runs `fetch-basis.mjs` and `build-wasm.mjs` and requires `emcc`.
+
+</details>
+
 ## API
 
 ### Runtime-safe decode (main entry)

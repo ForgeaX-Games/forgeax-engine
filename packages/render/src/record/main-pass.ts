@@ -80,7 +80,15 @@ export function recordMainPass(
   const sampleCount = msaaActive ? 4 : 1;
   const passKind = options?.passKind ?? 'forward';
   const colorViews = options?.colorViews ?? [geometryColorView];
-  const colorFormats = options?.colorFormats ?? ['rgba16float' as GPUTextureFormat];
+  const graphColorFormat =
+    !c.tonemapActive && runtime.device.caps.storageBuffer
+      ? frameState.perFrameGraph?.getColorTargetDescriptor('ldrColor')?.format
+      : undefined;
+  const colorFormats = options?.colorFormats ?? [
+    (c.tonemapActive
+      ? 'rgba16float'
+      : (graphColorFormat ?? pipelineState.colorAttachmentFormat)) as GPUTextureFormat,
+  ];
   const targetDepthView = options?.depthView ?? geometryDepthView;
   const clearColor = options?.clearColor ?? clear;
   // feat-20260623-world-space-video-asset M4 / w17 (D-2 / AC-09): high-perf

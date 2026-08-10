@@ -1,6 +1,6 @@
 import { AudioListener } from '@forgeax/engine-audio';
 import type { BootstrapContext } from '@forgeax/engine-app';
-import { Entity, createQueryState, queryRun, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { ANTIALIAS_FXAA, BLOOM_ENABLED, Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import { quat } from '@forgeax/engine-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -91,7 +91,7 @@ export async function createCameraController(args: CameraControllerArgs): Promis
     { component: AudioListener, data: {} },
   ).unwrap();
 
-  const bodyPartQuery = createQueryState({ with: [PlayerBodyPart, Transform, Entity] });
+  const bodyPartQuery = world.query({ read: [PlayerBodyPart], with: [Transform] }).unwrap();
   if (loaded) {
     for (const node of loaded.nodes) {
       const name = (node.components.Name as { value?: string } | undefined)?.value;
@@ -110,18 +110,13 @@ export async function createCameraController(args: CameraControllerArgs): Promis
     }
   }
   const setPlayerVisible = (visible: boolean): void => {
-    queryRun(bodyPartQuery, world, (bundle) => {
-      for (let index = 0; index < bundle.Entity.self.length; index += 1) {
-        const entity = bundle.Entity.self[index] as EntityHandle | undefined;
-        if (entity === undefined) continue;
-        const part = world.get(entity, PlayerBodyPart);
-        if (!part.ok) continue;
-        const scale: [number, number, number] = visible
-          ? [part.value.baseScaleX, part.value.baseScaleY, part.value.baseScaleZ]
-          : [0, 0, 0];
-        world.set(entity, Transform, { scale });
-      }
-    });
+    for (const row of bodyPartQuery) {
+      const part = row.get(PlayerBodyPart);
+      const scale: [number, number, number] = visible
+        ? [part.baseScaleX, part.baseScaleY, part.baseScaleZ]
+        : [0, 0, 0];
+      world.set(row.entity, Transform, { scale });
+    }
   };
 
   const [hudLoad, settingsLoad] = await Promise.all([

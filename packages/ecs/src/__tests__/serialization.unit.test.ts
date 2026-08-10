@@ -62,7 +62,6 @@ import {
   type ShapeOf,
   type TypedArrayFor,
 } from '../component';
-import { Entity } from '../entity';
 import { ENTITY_NULL_RAW, type EntityHandle } from '../entity-handle';
 import {
   ArrayPopEmptyError,
@@ -849,7 +848,7 @@ import { handleNumeric } from './utils/handle-numeric';
         expect(arch.key).toBeDefined();
         expect(arch.componentNames.length).toBeGreaterThanOrEqual(1);
         expect(arch.entityCount).toBe(1);
-        expect(arch.capacity).toBeGreaterThan(0);
+        expect(info.tables[arch.tableId]?.capacity).toBeGreaterThan(0);
       }
     });
 
@@ -1091,9 +1090,9 @@ import { handleNumeric } from './utils/handle-numeric';
 
       const before = w.get(e, Children);
       if (!before.ok) throw new Error('expected ok pre-migrate');
-      // expectType (AC-02 anchor b, w13: queryRun callback path -- Children
+      // expectType (AC-02 anchor b, w13: QueryRow path -- Children
       // .entities snapshot type-equals TypedArrayFor<'u32'> (Uint32Array)
-      // when the bundle field is destructured inside a queryRun closure).
+      // when the field crosses a query-loop boundary).
       const snap0: Uint32Array = before.value.entities;
       const capacity0 = w.capacity(e, Children, 'entities').unwrap();
       const bytes0: number[] = [];
@@ -1479,9 +1478,13 @@ import { handleNumeric } from './utils/handle-numeric';
       world as unknown as {
         _getGraph(): {
           archetypes: Array<{
-            columns: Map<number, Map<string, { view: { [k: number]: number } }>>;
+            tableId: number;
+            rows: Uint32Array;
             size: number;
             components: Component[];
+          }>;
+          tables: Array<{
+            storage: Map<number, { fields: Map<string, { view: { [k: number]: number } }> }>;
           }>;
         };
       }
@@ -1489,14 +1492,17 @@ import { handleNumeric } from './utils/handle-numeric';
     const slotIndex = entityRaw & 0xffffff; // lower 24 bits -- index slot
     for (const arch of graph.archetypes) {
       if (!arch) continue;
-      for (let row = 0; row < arch.size; row++) {
+      const table = graph.tables[arch.tableId];
+      if (table === undefined) continue;
+      for (let archetypeRow = 0; archetypeRow < arch.size; archetypeRow++) {
+        const row = arch.rows[archetypeRow] ?? 0;
         // Entity identity read from id=0 self column (not a separate entities array)
-        const selfVal = arch.columns.get(0)?.get('self')?.view[row];
+        const selfVal = table.storage.get(0)?.fields.get('self')?.view[row];
         const idx = typeof selfVal === 'number' ? selfVal & 0xffffff : 0;
         if (idx === slotIndex) {
           for (let i = 0; i < arch.components.length; i++) {
             if (arch.components[i] === component) {
-              for (const [, fieldCols] of arch.columns) {
+              for (const { fields: fieldCols } of table.storage.values()) {
                 const col = fieldCols.get(fieldName);
                 if (col !== undefined && fieldCols.has(fieldName)) {
                   return col.view[row] as number;
@@ -1869,13 +1875,13 @@ import { handleNumeric } from './utils/handle-numeric';
       expectTypeOf(dummy).toEqualTypeOf<Uint32Array>();
     });
 
-    // Application point (b) -- inside queryRun callback (same world.get path,
+    // Application point (b) -- inside a QueryRow loop (same world.get path,
     // different host scope; type derivation must not regress when `entities`
     // crosses a function boundary).
-    it('application point (b) -- inside queryRun callback', () => {
+    it('application point (b) -- inside a QueryRow loop', () => {
       type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
       type FooShape = ShapeOf<Foo['schema']>;
-      // expectType: queryRun callback sees the same Uint32Array shape as system fn.
+      // expectType: QueryRow access sees the same Uint32Array shape as system fn.
       expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
     });
 
@@ -2934,14 +2940,9 @@ import { handleNumeric } from './utils/handle-numeric';
 
       world.addSystem(Update, {
         name: 'reader',
-        queries: [{ with: [Pos, Entity] }],
+        queries: [{ read: [Pos] }],
         fn: (_world, queryResults, _commands) => {
-          // queryResults is an array of callback-based query runners
-          for (const result of queryResults) {
-            for (const bundle of result) {
-              receivedBundleCount += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) receivedBundleCount += [...query].length;
         },
       });
 

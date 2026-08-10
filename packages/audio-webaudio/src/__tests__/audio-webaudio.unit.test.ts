@@ -21,21 +21,21 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { AUDIO_ENGINE_RESOURCE_KEY, type AudioBackend, AudioSource } from '@forgeax/engine-audio';
-import type { Component } from '@forgeax/engine-ecs';
-import { Entity, encodeEntity } from '@forgeax/engine-ecs';
+import {
+  AUDIO_ENGINE_RESOURCE_KEY,
+  type AudioBackend,
+  audioTickSystem,
+  createClipResolver,
+  detectEdge,
+  detectRemovedEntities,
+} from '@forgeax/engine-audio';
+import { encodeEntity } from '@forgeax/engine-ecs';
 import { ImporterRegistry } from '@forgeax/engine-import';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { ImportContext, ImportSubAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { audioImporter, sourceKeyForAudioOutput } from '../audio-importer.js';
 import { syncListenerFromWorldMatrix } from '../audio-listener-sync-system';
-import {
-  audioTickSystem,
-  createClipResolver,
-  detectEdge,
-  detectRemovedEntities,
-} from '../audio-tick-system';
 import { decodeAudioClipBytes } from '../clip-loader';
 import { WebAudioEngine } from '../web-audio-engine';
 
@@ -82,6 +82,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         setVolume: vi.fn(),
         setBusVolume: vi.fn(),
         setBusMute: vi.fn(),
+        setListenerPose: vi.fn(),
         getState: vi.fn(),
         getActiveSourceCount: vi.fn(),
         destroy: vi.fn(),
@@ -462,25 +463,21 @@ import { WebAudioEngine } from '../web-audio-engine';
 
 {
   // --- from clip-resolver.test.ts ---
-  function makeMockAudioBuffer(): AudioBuffer {
-    return { length: 1024, sampleRate: 44100, numberOfChannels: 1 } as unknown as AudioBuffer;
-  }
-
   describe('createClipResolver clip handle resolution (AC-01)', () => {
     // feat-20260614 M8 (D-15): audio clips resolve through world.sharedRefs
     // (user-tier SharedRefStore); the AssetRegistry no longer holds handles.
     it('returns the AudioBuffer when the clip handle resolves in sharedRefs', () => {
-      const buffer = makeMockAudioBuffer();
+      const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
       const mockWorld = {
         sharedRefs: {
-          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+          resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
         },
       };
 
       // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
       const resolve = createClipResolver(mockWorld as any);
       const result = resolve(42);
-      expect(result).toBe(buffer);
+      expect(result).toBe(clip);
       expect(mockWorld.sharedRefs.resolve).toHaveBeenCalledWith(42);
     });
 
@@ -626,7 +623,7 @@ import { WebAudioEngine } from '../web-audio-engine';
               dispatchEvent: vi.fn(),
             }) as unknown as PannerNode,
         ),
-        decodeAudioData: vi.fn(),
+        decodeAudioData: vi.fn().mockResolvedValue(makeMockAudioBuffer()),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
         dispatchEvent: vi.fn(),
@@ -655,7 +652,7 @@ import { WebAudioEngine } from '../web-audio-engine';
     }
 
     it('calls backend.play when a false->true edge is detected and buffer resolves', () => {
-      const buffer = makeMockAudioBuffer();
+      const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
 
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
@@ -665,7 +662,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       const entity = encodeEntity(0, 0);
 
       const mockRegistry = {
-        get: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        get: vi.fn().mockReturnValue({ ok: true, value: clip }),
       };
       const mockWorld = buildMockWorld(
         entity,
@@ -691,12 +688,12 @@ import { WebAudioEngine } from '../web-audio-engine';
     });
 
     it('plays an initially-true source once on its first observation', () => {
-      const buffer = makeMockAudioBuffer();
+      const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
       const entity = encodeEntity(0, 0);
       const mockRegistry = {
-        get: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        get: vi.fn().mockReturnValue({ ok: true, value: clip }),
       };
       const mockWorld = buildMockWorld(
         entity,
@@ -714,7 +711,7 @@ import { WebAudioEngine } from '../web-audio-engine';
     });
 
     it('retries an initially-true source after its clip becomes ready', () => {
-      const buffer = makeMockAudioBuffer();
+      const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
       const entity = encodeEntity(0, 0);
@@ -724,7 +721,7 @@ import { WebAudioEngine } from '../web-audio-engine';
           .fn()
           .mockImplementation(() =>
             clipReady
-              ? { ok: true, value: { kind: 'audio', buffer } }
+              ? { ok: true, value: clip }
               : { ok: false, error: { code: 'asset-not-found' } },
           ),
       };
@@ -747,7 +744,7 @@ import { WebAudioEngine } from '../web-audio-engine';
     });
 
     it('passes the === registered AudioBuffer as second argument to backend.play', () => {
-      const buffer = makeMockAudioBuffer();
+      const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
 
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
@@ -757,7 +754,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       const entity = encodeEntity(0, 0);
 
       const mockRegistry = {
-        get: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        get: vi.fn().mockReturnValue({ ok: true, value: clip }),
       };
       const mockWorld = buildMockWorld(
         entity,
@@ -771,13 +768,13 @@ import { WebAudioEngine } from '../web-audio-engine';
       storedPlaying = true;
       audioTickSystem(mockWorld, engine);
 
-      expect(playSpy).toHaveBeenCalledWith(expect.anything(), buffer, expect.anything());
+      expect(playSpy).toHaveBeenCalledWith(expect.anything(), clip, expect.anything());
 
       engine.destroy();
     });
 
     it('passes opts.bus === "sfx" as AudioSource default bus', () => {
-      const buffer = makeMockAudioBuffer();
+      const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
 
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
@@ -787,7 +784,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       const entity = encodeEntity(0, 0);
 
       const mockRegistry = {
-        get: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        get: vi.fn().mockReturnValue({ ok: true, value: clip }),
       };
       const mockWorld = buildMockWorld(
         entity,
@@ -815,44 +812,27 @@ import { WebAudioEngine } from '../web-audio-engine';
     clipHandle: number,
     mockRegistry: { get: ReturnType<typeof vi.fn> },
   ) {
-    // audioTickSystem resolves the AudioSource column id from the global
-    // token (`AudioSource.id`) — the per-World id map is gone (M3). Build the
-    // archetype's componentIds from that same id so the
-    // `componentIds.includes(saId)` walk matches dynamically. The row's packed
-    // Entity handle is read from the essential id=0 `Entity` column (feat-20260602
-    // M2), so the mock archetype carries a `self` column over the same id.
-    const audioSourceId = (AudioSource as unknown as Component).id;
-    const entityId = (Entity as unknown as Component).id;
-    const selfColumn = new Map([['self', { view: new Uint32Array([entity]) }]]);
+    const audioSourceRow = () => ({
+      playing: playingGetter(),
+      clip: clipHandle,
+      loop: false,
+      volume: 1,
+      spatialBlend: 0,
+      bus: 'sfx',
+    });
     return {
       // feat-20260614 M8 (D-15): clip resolution goes through world.sharedRefs;
       // delegate to the same mock return value the registry mock produced.
       sharedRefs: { resolve: mockRegistry.get },
 
-      get(_entity: number, _component: Component) {
+      query() {
         return {
           ok: true,
           value: {
-            playing: playingGetter(),
-            clip: clipHandle,
-            loop: false,
-            volume: 1,
-            spatialBlend: 0,
-            bus: 'sfx',
-          },
-        };
-      },
-
-      _getGraph() {
-        return {
-          archetypes: [
-            undefined,
-            {
-              size: 1,
-              components: [entityId, audioSourceId].map((id) => ({ id })),
-              columns: new Map([[entityId, selfColumn]]),
+            *[Symbol.iterator]() {
+              yield { entity, get: audioSourceRow };
             },
-          ],
+          },
         };
       },
     };
@@ -2041,34 +2021,24 @@ import { WebAudioEngine } from '../web-audio-engine';
     clipHandle: number,
     mockResolver: { resolve: ReturnType<typeof vi.fn> },
   ) {
-    const audioSourceId = (AudioSource as unknown as Component).id;
-    const entityId = (Entity as unknown as Component).id;
-    const selfColumn = new Map([['self', { view: new Uint32Array([entity]) }]]);
+    const audioSourceRow = () => ({
+      playing: playingGetter(),
+      clip: clipHandle,
+      loop: false,
+      volume: 1,
+      spatialBlend: 0,
+      bus: 'sfx',
+    });
     return {
       sharedRefs: mockResolver,
-      get(_entity: number, _component: Component) {
+      query() {
         return {
           ok: true,
           value: {
-            playing: playingGetter(),
-            clip: clipHandle,
-            loop: false,
-            volume: 1,
-            spatialBlend: 0,
-            bus: 'sfx',
-          },
-        };
-      },
-      _getGraph() {
-        return {
-          archetypes: [
-            undefined,
-            {
-              size: 1,
-              components: [entityId, audioSourceId].map((id) => ({ id })),
-              columns: new Map([[entityId, selfColumn]]),
+            *[Symbol.iterator]() {
+              yield { entity, get: audioSourceRow };
             },
-          ],
+          },
         };
       },
     };
@@ -2177,7 +2147,7 @@ import { WebAudioEngine } from '../web-audio-engine';
             dispatchEvent: vi.fn(),
           }) as unknown as PannerNode,
       ),
-      decodeAudioData: vi.fn(),
+      decodeAudioData: vi.fn().mockResolvedValue(makeTickTestBuffer()),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
@@ -2227,17 +2197,22 @@ import { WebAudioEngine } from '../web-audio-engine';
       vi.unstubAllGlobals();
     });
 
+    async function flushAudioDecode(): Promise<void> {
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
     // -------------------------------------------------------------------
     // w7: AC-09 tick state instance-scoped
     // -------------------------------------------------------------------
     describe('AC-09: tick state instance-scoped (w7)', () => {
-      it('two WebAudioEngine instances have independent edge detection', () => {
-        const buffer = makeTickTestBuffer();
+      it('two WebAudioEngine instances have independent edge detection', async () => {
+        const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
         const clipHandle = 42;
         const entityId = encodeEntity(0, 0);
 
         const mockResolver = {
-          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+          resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
         };
 
         // Engine A: build tick history
@@ -2270,6 +2245,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         // Phase 2: A tick, playing=true -> false->true edge -> play
         playingA = true;
         audioTickSystem(worldA, engineA);
+        await flushAudioDecode();
         expect(engineA.getActiveSourceCount()).toBe(1);
 
         // Phase 3: B FIRST tick, entity playing=true.
@@ -2277,6 +2253,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         // play-start edge even though engineA has already observed this id.
         playingB = true;
         audioTickSystem(worldB, engineB);
+        await flushAudioDecode();
 
         expect(engineB.getActiveSourceCount()).toBe(1);
         engineA.destroy();
@@ -2284,7 +2261,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       });
 
       it('module top-level does not expose tickStates/prevFrameEntities', async () => {
-        const tickModule = await import('../audio-tick-system');
+        const tickModule = await import('@forgeax/engine-audio');
         expect('tickStates' in tickModule).toBe(false);
         expect('prevFrameEntities' in tickModule).toBe(false);
         expect(typeof tickModule.audioTickSystem).toBe('function');
@@ -2295,13 +2272,13 @@ import { WebAudioEngine } from '../web-audio-engine';
     // w8: AC-10 destroy then new backend starts clean
     // -------------------------------------------------------------------
     describe('AC-10: destroy then new backend starts clean (w8)', () => {
-      it('after WebAudioEngine.destroy(), a new engine starts with clean tick state', () => {
-        const buffer = makeTickTestBuffer();
+      it('after WebAudioEngine.destroy(), a new engine starts with clean tick state', async () => {
+        const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
         const clipHandle = 42;
         const entityId = encodeEntity(0, 0);
 
         const mockResolver = {
-          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+          resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
         };
 
         // Engine A: build tick history then destroy
@@ -2317,6 +2294,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
         // Tick A-1: first observation, playing=true -> initial play-start edge
         audioTickSystem(worldA, engineA);
+        await flushAudioDecode();
         expect(engineA.getActiveSourceCount()).toBe(1);
 
         // Destroy engine A; its instance-scoped tick state must not affect B.
@@ -2335,6 +2313,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
         // B FIRST tick, entity playing=true -> initial play-start edge.
         audioTickSystem(worldB, engineB);
+        await flushAudioDecode();
 
         expect(engineB.getActiveSourceCount()).toBe(1);
         engineB.destroy();
@@ -2345,14 +2324,14 @@ import { WebAudioEngine } from '../web-audio-engine';
     // w9: AC-11 concurrent backends isolated
     // -------------------------------------------------------------------
     describe('AC-11: concurrent backends isolated (w9)', () => {
-      it("cleanupDespawnedEntities on engine B does not corrupt engine A's tick state", () => {
-        const buffer = makeTickTestBuffer();
+      it("cleanupDespawnedEntities on engine B does not corrupt engine A's tick state", async () => {
+        const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
         const clipHandle = 42;
         const entityA = encodeEntity(0, 0);
         const entityB = encodeEntity(1, 0);
 
         const mockResolver = {
-          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+          resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
         };
 
         // Engine A tracks entityA
@@ -2378,6 +2357,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         // removed=[entityA] -> calls engineB.stop(entityA) (no-op on B)
         // AND deletes tickStates[entityA] from the shared module singleton!
         audioTickSystem(worldB, engineB);
+        await flushAudioDecode();
 
         // Tick A-2: entityA playing=true
         // Instance-scoped (desired): engineA.tickStates still has entityA
@@ -2387,6 +2367,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         //   -> NO edge -> play NOT called.
         playingA = true;
         audioTickSystem(worldA, engineA);
+        await flushAudioDecode();
 
         // DESIRED: engineA detects the false->true edge and plays.
         // Currently FAILS because B's cleanup corrupted A's shared tick state.

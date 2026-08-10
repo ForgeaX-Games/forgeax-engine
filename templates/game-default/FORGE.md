@@ -3,14 +3,22 @@
 This is ForgeaX's canonical first game: a small target-range mission that teaches scene assets,
 ECS behavior, physics, picking, rendering, UiAssets, spatial audio, and a host-defined asset plugin
 through one coherent loop. Real projectile hits must earn Score 50 before the collapsed Asset Lab
-unlocks `Target profile`; applying the profile turns the RedBox into a moving precision target, and
-one real projectile hit on that target finishes the third mission step. The same panel names five optional
+unlocks `Target profile`; applying the profile turns the RedBox into a moving precision target. One
+real projectile hit there opens an authored BlueBall -> RedBox -> YellowPillar relay. Only a real hit
+on the named active target advances it, and the RedBox interval visibly uses the existing GUID-backed
+FBX companion before the authored presentation returns. Finishing the relay keeps Play active: visit
+the beacon too early to see its refusal, collect the three visible authored EnergyCores through real
+`WASD` physics contact, then return to the activated beacon for Victory. The same panel names five optional
 asset outcomes—JPEG target, WebM panel, PNG projectile, TTF score text, and the imported FBX companion—without making the player
 memorize a hotkey wall; their legacy keys (`P`, `L`, `M`, `N`, `Y`) remain available for keyboard play.
 Every variation changes the existing target-range world and the `R` key visibly restores the authored
 RedBox baseline. The default HUD also teaches two gameplay decisions: `F`/click fires immediately,
 while holding `C` starts the authored charge VFX and releasing it fires a larger, higher-impact shot;
 consecutive real hits inside the visible Combo window raise the multiplier, and waiting lets it expire.
+The authored BouncyBall now counterattacks through the same arena: dodge it with `WASD`, watch real
+physics contact remove one of three HUD hearts, shoot it through the ordinary target-health path to
+disable it, or lose all hearts and use `R` to replay from typed Defeat. After taking damage, reach the
+authored green pickup to restore exactly one heart; touching it at full health leaves it available.
 
 ## Run, inspect, change
 
@@ -104,9 +112,85 @@ target-health, world-text, popup, VFX, and spatial-audio owners, so the second h
 more without adding a second score or damage authority. Its `Update` system owns expiry and the HUD
 shows `ready`, `active`, and `expired`; `R` resets the same component through the normal lifecycle.
 
+The arena's risk loop is owned by `assets/plugins/counterattack.ts`. `PlayerHealth` exists only on the
+real KCC player, while `BouncyBallHazard` stores patrol/chase state only on the authored `BouncyBall`
+target and `DamageHazard` is the shared contact cooldown for every damaging body. The BouncyBall keeps its existing scene, scoring, `TargetHealth`, and `Disabled`
+identity; its kinematic sensor is attached to the host's single `PhysicsWorld`. The player carries
+`CollidingEntities`, and only that Rapier-written contact set can admit damage. Distance selects a
+movement direction but never decides a hit. Each admitted attacker contact removes exactly one heart
+and arms that attacker's 1.2-second cooldown; contact during the window is harmless.
+
+`assets/plugins/barrier-route.ts` composes that same risk owner into an authored route. Scene local IDs
+33 and 34 are the visible emitter and energy barrier guarding `EnergyCoreAlpha`. The barrier stays
+dormant until the existing target relay reaches `complete`, then arms without adding another unlock
+ledger. Real projectile contacts with the emitter read the existing `Projectile.impactScale`: ordinary
+fire visibly refuses, while a charged value greater than one clears `BarrierRoute.active` exactly once. That one fact projects
+both the barrier's mesh and its damaging Rapier body, so opening and reset cannot drift presentation
+from contact. Reckless player contact is admitted only by the shared `DamageHazard` path; projectiles
+and other entities cannot mutate health. Opening does not write score, health, rewards, extraction, or
+Victory, and the existing EnergyCore owner still requires a later real player contact.
+
+Extraction pressure is not another component or progress ledger. `createGameplaySession` gives the
+counterattack owner a read of the existing extraction snapshot, and `deriveCounterattackPressure`
+clamps `ExtractionObjective.collected` directly to tier `0..3`. The exported
+`COUNTERATTACK_PRESSURE_TABLE` beside that function is the sole documented numeric table: its patrol
+speed, chase speed, and pursuit radius all rise strictly per core, while its final chase speed stays at
+or below 1.5 times the tier-0 authored baseline. The counterattack system alone applies those values to
+the BouncyBall Transform and mode. Read-only snapshots expose the live row, while HUD text and the
+existing world-text/audio/VFX collection feedback announce the same derived tier. Disabled still
+suppresses movement and damage immediately; outside Reset, only choosing the existing Shield reward
+explicitly arms the authored BouncyBall again.
+
+At zero hearts the owner requests `Defeat` through the existing `GameState`. The authored HUD UiAsset
+shows empty hearts and replay guidance, while the same Play run condition freezes hazard, health,
+projectile, relay, target-health, and related mutation. Ordinary shots still call the established
+`TargetHealth.damage → TargetDisabling.disable` route, so enough real hits neutralize the BouncyBall;
+Disabled's query exclusion stops its chase and the explicit guard rejects any residual contact.
+`R` enters the sole Reset transaction and restores player health, attacker state/pose, target health,
+Disabled, projectiles, relay, feedback, and the three-heart HUD before returning to Play.
+
+The recovery side of that loop is owned by `assets/plugins/health-pickup.ts`. `HealthPickup` identifies
+the one `HealthPickup` entity authored in `assets/scene.pack.json`; runtime assembly adds a kinematic
+sphere sensor to that same identity. Only the player's Rapier-written `CollidingEntities` set can admit
+a recovery, and only in `Play` while `PlayerHealth.current < max`. An admitted contact writes exactly
+`+1` to the existing `PlayerHealth`, reuses the HUD, pooled `+1 HEART` world text, spatial hit audio,
+and hit VFX, then schedules ECS despawn through the system command buffer. Full-health contact is a
+refusal, not a consume. The sole Reset transaction recreates the authored local identity, pose, mesh,
+material, sensor, and physics body and clears the recovery witnesses.
+
+The extraction objective is owned by `assets/plugins/energy-core-extraction.ts`. The three named
+EnergyCores and one beacon remain persistent authored entities in `assets/scene.pack.json`; runtime adds
+only their ECS mission components and Rapier sensors. `ExtractionObjective` on the beacon is the sole
+progress authority, while the eligible roster is re-derived from live `EnergyCore` entities every frame.
+Only the player's real `CollidingEntities` contacts admit each core once and schedule its deferred
+despawn. Early beacon contact reports the remaining count, exactly 3/3 enlarges and activates the same
+beacon, and a later real contact requests the existing typed Victory. The sole Reset transaction respawns
+the three authored identities with their original poses, mesh/material handles, sensors, and bodies.
+
+Use the focused player proof in either Preview transport:
+
+```sh
+pnpm --filter @forgeax/preview smoke:counterattack
+pnpm --filter @forgeax/preview smoke:counterattack-production
+pnpm --filter @forgeax/preview smoke:charged-barrier
+pnpm --filter @forgeax/preview smoke:charged-barrier-production
+pnpm --filter @forgeax/preview smoke:mission-progression
+pnpm --filter @forgeax/preview smoke:mission-progression-production
+```
+
+Both runs use only keyboard/mouse input and the read-only `game-default.snapshot`. They prove a
+full-health refusal, one-heart damage, cooldown suppression, real pickup recovery, one deferred
+despawn, three-hit Defeat, frozen Play witnesses, R replay, real projectile neutralization, and a
+final held-R reset with clean browser diagnostics. The mission progression smoke additionally proves
+two complete relay/extraction/Victory cycles, early beacon refusal, exactly three core despawns, active
+beacon admission, terminal freeze, and exact core respawn. A health change without
+`CollidingEntities`, a repeated hit inside cooldown, mutation after a terminal state, a duplicate
+pickup consume, or a Disabled BouncyBall attack is a failure.
+
 The gameplay state is deliberately ECS-shaped. `GameplayInput`, `PlayerMotion`, `FreeCameraMotion`,
 `CameraRig`, `Projectile`, `HitFlash`, `ProjectilePolicy`, `ResetPose`, and `TargetPresentation` are
-the named component contracts; `gameDefaultGameplayConfig`, `gameDefaultSettings`, and
+the shared component contracts; `PlayerHealth`, `DamageHazard`, `BouncyBallHazard`, and `BarrierRoute` are the focused risk-route
+contracts. `gameDefaultGameplayConfig`, `gameDefaultSettings`, and
 `gameDefaultCommandCounters` are named World resources. Health, disabling, change-detection, and state
 witnesses use the same resource boundary. The system files under `assets/plugins/systems/` consume and
 write those contracts. A query result array is only a frame-local traversal view, never a second owner
@@ -127,14 +211,16 @@ late-installed particle RenderFeature's shader prewarm, Pack GUID continuity, re
 buckets, and `R` reset cleanup across recovery in the production host.
 
 Target health is the template's dense ECS example: `assets/plugins/target-health.ts` attaches one
-`GameDefaultTargetHealth` component to each authored target, runs its writable `current/max/Entity`
-columns through `queryRunContiguous`, applies hit damage with `world.set`, and restores all rows on `R`.
+`GameDefaultTargetHealth` component to each authored target, runs its writable `current/max`
+columns through `Query.spans()`, applies hit damage with `world.set`, and restores all rows on `R`.
 The render-evidence snapshot proves the contiguous capability and row-shape invariant; the canonical
 32-row health grid remains in `apps/bevy/contiguous-query`.
 
 The target roster is ECS-owned as well. `assets/plugins/scoring-target.ts` keeps one active query and
 one explicit `Disabled` query, exposing only derived entity traversals to systems that need the full
-reset set. No bootstrap-local target array survives a disable/re-enable transition.
+reset set. Its authored `relayStep` metadata orders BlueBall, RedBox, and YellowPillar;
+`assets/plugins/target-relay.ts` stores only progress in a World resource and re-derives the active
+entity from that query. No bootstrap-local target array survives a disable/re-enable transition.
 
 Structural lifecycle is paired with that health owner in `assets/plugins/target-disabling.ts`: when a target
 reaches zero health, the template adds the ECS `Disabled` marker. Ordinary target queries then omit
@@ -206,9 +292,15 @@ and inspection callers therefore cannot bypass the player-facing mission. `asset
 while `main.ts` registers the runtime loader and loads the profile through `AssetRegistry`. The
 profile applies a visible target tint, doubles the existing score value, and supplies the RedBox's
 precision rotation speed through the existing `GameDefaultRotatable` ECS component;
-`game-default.toggle-target-profile` and `R` provide the reversible action/reset path. The
-`smoke:mission-progression` dev/production pair proves real hits → unlock → profile → precision hit → WebM/TTF/atlas/FBX
-consequences → reset. This is the
+`game-default.toggle-target-profile` and `R` provide the reversible action/reset path. The precision
+hit opens the three-target relay; inactive hits keep the normal score/health/feedback consequences
+but cannot advance relay progress. The accepted YellowPillar hit requests typed `GameState.Victory`;
+the existing HUD UiAsset shows `Victory`, final score, and `R` replay guidance while Play-owned
+movement, projectile, target, score, relay, charge, streak, and recovery mutation is frozen. `R`
+still enters the one `Reset` transaction, restores Mission 1/3 and all gameplay/content/UI state,
+then returns to `Play`. The `smoke:mission-progression` dev/production pair proves real hits -> unlock
+-> profile -> precision hit -> wrong-target rejection -> BlueBall/RedBox/YellowPillar -> Victory
+freeze -> reset -> a second real Victory -> a second reset. This is the
 complete custom source → sidecar/GUID → pluginPack importer → Pack v2 → loader → gameplay chain,
 adapted from `apps/hello/custom-importer` without importing its unrelated reel-machine scene.
 
@@ -365,7 +457,7 @@ pnpm test:browser
 pnpm game-default:audit -- --output /tmp/game-default-capability-audit.json
 ```
 
-During Play, press `R` to reset the player, mission progress, target profile, dynamic props, bullets, score, camera, view mode, input
+During Play, press `R` to reset the player, mission and relay progress, target profile, active FBX variation, dynamic props, bullets, score, camera, view mode, input
 intent, and the player-owned hit AudioSource to the authored starting state. Shoot a target to see
 the same hit event drive score, flash, popup, physics, and a spatial `sfx` bus one-shot.
 

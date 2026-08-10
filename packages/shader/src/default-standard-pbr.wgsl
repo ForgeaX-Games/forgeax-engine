@@ -280,16 +280,24 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   var out : VsOut;
   out.clip = view.worldViewProj * world;
   out.worldPos = world.xyz;
-  // Normal: extract upper-left 3x3 from instance_local mat4 and left-multiply
-  // the entity-level normalMatrix. normalize() absorbs uniform scale.
-  // non-uniform scale is OOS-2 (D-3: uniform-scale-only per-instance normal transform).
-  // WGSL: mat4x4 -> mat3x3 by taking columns 0,1,2 as vec3 (column-major).
-  let instMat3 = mat3x3<f32>(
-    instanceLocal[0].xyz,
-    instanceLocal[1].xyz,
-    instanceLocal[2].xyz,
+  // Normal: derive the inverse-transpose from the world matrix columns. This
+  // keeps non-uniform entity scale correct while avoiding the Mesh.normalMatrix
+  // storage field whose mat3x3 layout is not consumed consistently by the GPU
+  // path. The per-instance local transform remains uniform-scale-only, as it
+  // was before this owner fix.
+  let a = entityWorld[0].xyz;
+  let b = entityWorld[1].xyz;
+  let c = entityWorld[2].xyz;
+  let cof0 = cross(b, c);
+  let cof1 = cross(c, a);
+  let cof2 = cross(a, b);
+  let det = dot(a, cof0);
+  let entityNormal = select(
+    in.normal,
+    (cof0 * in.normal.x + cof1 * in.normal.y + cof2 * in.normal.z) / det,
+    abs(det) >= 1e-6,
   );
-  out.worldNormal = normalize(instMat3 * (meshes[0].normalMatrix * in.normal));
+  out.worldNormal = normalize(entityNormal);
   // Tangent transformed by the combined entity*instance chain as a direction
   // (w=0); .w handedness preserved for bitangent reconstruction in fragment.
   let worldTangentXyz = normalize((entityWorld * instanceLocal * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
@@ -335,8 +343,26 @@ fn transformedMaterialUv(coordinates : MaterialTextureCoordinates, in : VsOut) -
   return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + coordinates.transform.xy;
 }
 
+fn materialAlpha(baseSample : vec4<f32>) -> f32 {
+  return material.baseColor.a * baseSample.a;
+}
+
+// linearColorDomain: transparent source and destination values are blended
+// before any display encoding. The fixed-function material blend state uses
+// this same equation for the render target's declared linear domain.
+fn blendLinearTransparent(
+  source : vec3<f32>,
+  destination : vec3<f32>,
+  alpha : f32,
+) -> vec3<f32> {
+  return source * alpha + destination * (1.0 - alpha);
+}
+
+// linearHdrColorDomain: fs_main writes linear HDR when its target is HDR.
+// toneStageInput: the value remains linear until the fullscreen tone stage.
+
 fn alphaTest(alpha : f32) {
-  if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
+  if (material.alphaCutoff > 0.0 && alpha <= material.alphaCutoff) {
     discard;
   }
 }
@@ -346,6 +372,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let baseUv = transformedMaterialUv(material.baseColorCoordinates, in);
   let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorCoordinates.metadata.zw);
   alphaTest(material.baseColor.a * baseSample.a);
+  let alpha = materialAlpha(baseSample);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
   // Metallic-roughness texture sampling with per-field channel selectors
@@ -558,7 +585,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let emissiveUv = transformedMaterialUv(material.emissiveCoordinates, in);
   let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, emissiveUv, material.emissiveCoordinates.metadata.zw).rgb;
   color = color + material.emissive * material.emissiveIntensity * emissiveSample;
-  return vec4<f32>(color, material.baseColor.a * baseSample.a);
+  return vec4<f32>(color, alpha);
 }
 
 // ── G-buffer output struct (feat-20260612-hdrp-deferred-shading M2 / w12) ──
@@ -592,6 +619,7 @@ fn fs_gbuffer(in : VsOut) -> GBufferOutput {
   let baseUv = transformedMaterialUv(material.baseColorCoordinates, in);
   let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorCoordinates.metadata.zw);
   alphaTest(material.baseColor.a * baseSample.a);
+  let alpha = materialAlpha(baseSample);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
   let mrUv = transformedMaterialUv(material.metallicRoughnessCoordinates, in);

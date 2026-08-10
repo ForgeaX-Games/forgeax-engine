@@ -14,15 +14,7 @@
 //   - AC-26 (same prefab mounted multiple times: mappings disjoint, overrides
 //     do not leak across mount instances)
 
-import {
-  createQueryState,
-  defineComponent,
-  Entity,
-  err,
-  ok,
-  queryRun,
-  World,
-} from '@forgeax/engine-ecs';
+import { defineComponent, err, ok, World } from '@forgeax/engine-ecs';
 import { SceneInstance } from '@forgeax/engine-render/internal';
 import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
@@ -95,10 +87,8 @@ describe('AC-23 double-nested A -> B -> C', () => {
     if (!r.ok) return;
 
     let count = 0;
-    const state = createQueryState({ with: [SceneInstance, Entity] });
-    queryRun(state, world, (bundle) => {
-      count += bundle.Entity.self.length;
-    });
+    const query = world.query({ with: [SceneInstance] }).unwrap();
+    for (const _row of query) count += 1;
     expect(count).toBeGreaterThanOrEqual(3);
   });
 });

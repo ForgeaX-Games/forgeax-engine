@@ -7,22 +7,22 @@ function setParent(world: World, child: EntityHandle, parent: EntityHandle): voi
   const graph = (
     world as unknown as {
       _getGraph(): {
-        archetypes: ReadonlyArray<
+        tables: ReadonlyArray<
           | {
               size: number;
-              columns: Map<number, Map<string, { view: Uint32Array }>>;
+              storage: Map<number, { fields: Map<string, { view: Uint32Array }> }>;
             }
           | undefined
         >;
       };
     }
   )._getGraph();
-  for (const archetype of graph.archetypes) {
-    if (archetype === undefined) continue;
-    const entities = archetype.columns.get(Entity.id)?.get('self')?.view;
-    const parents = archetype.columns.get(ChildOf.id)?.get('parent')?.view;
+  for (const table of graph.tables) {
+    if (table === undefined) continue;
+    const entities = table.storage.get(Entity.id)?.fields.get('self')?.view;
+    const parents = table.storage.get(ChildOf.id)?.fields.get('parent')?.view;
     if (entities === undefined || parents === undefined) continue;
-    for (let row = 0; row < archetype.size; row++) {
+    for (let row = 0; row < table.size; row++) {
       if (entities[row] === child) parents[row] = parent;
     }
   }

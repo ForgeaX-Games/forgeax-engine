@@ -22,8 +22,8 @@
 // (outer faces render but point away from the camera and rasterize zero area,
 // producing a clear-color-only view), proving the culling semantics.
 //
-// Textures are loaded through the GUID asset pipeline:
-//   configurePackIndex('/pack-index.json') + loadByGuid<TextureAsset>.
+// Textures are loaded through the scoped GUID asset pipeline:
+//   configureRuntimeBinding(runtimeBinding) + loadByGuid<TextureAsset>.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -40,16 +40,17 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 // 2. example glue
 
-const PACK_INDEX_URL = '/pack-index.json';
-
 // Marble GUID from forgeax-engine-assets/learn-opengl/textures/marble.jpg.meta.json
 const MARBLE_GUID_STR = '019e3969-1d46-7933-b14d-4faee5635ad6';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-4-face-culling',
+);
 
 // Camera inside the cube (origin). The cube spans [-0.5, 0.5]^3;
 // position (0,0,0) places the camera exactly at the center, looking
@@ -74,7 +75,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.4 face-culling] createApp failed:', appRes.error);
@@ -90,8 +91,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
-  // Wire the pack-index URL for GUID-based texture loading.
-  assets.configurePackIndex(PACK_INDEX_URL);
+  // Wire the scoped dev catalog for GUID-based texture loading.
+  assets.configureRuntimeBinding(runtimeBinding);
 
   // Parse marble GUID.
   const marbleGuidRes = AssetGuid.parse(MARBLE_GUID_STR);

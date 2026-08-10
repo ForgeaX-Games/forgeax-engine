@@ -6,26 +6,27 @@ import { TargetHealth } from './target-health';
 import { Rotatable } from './rotating-target';
 import type { TargetProfileLoop } from './target-profile-loop';
 import { targetProfilePoints } from './target-profile-loop';
+import type { TargetRelayHandle } from './target-relay';
 
 export type TargetStatusContext = {
   readonly world: World;
   readonly hud: HudHandle;
   readonly primaryTarget: () => EntityHandle | undefined;
   readonly targetProfile: TargetProfileLoop | undefined;
+  readonly targetRelay: TargetRelayHandle;
 };
 
 /** Project the authored primary target into one legible, reset-safe HUD cue. */
 export function installTargetStatusSystem(ctx: TargetStatusContext): void {
-  const target = ctx.primaryTarget();
-  if (target === undefined) return;
-  const label = ctx.world.get(target, Name);
-  const targetName = label.ok && label.value.value.length > 0 ? label.value.value : 'Target';
-  const authoredPoints = scoringPoints(ctx.world, target) ?? 0;
-
   ctx.world.addSystem(Update, {
     name: 'game-target-status',
     queries: [],
     fn: () => {
+      const target = ctx.targetRelay.activeTarget() ?? ctx.primaryTarget();
+      if (target === undefined) return;
+      const label = ctx.world.get(target, Name);
+      const targetName = label.ok && label.value.value.length > 0 ? label.value.value : 'Target';
+      const authoredPoints = scoringPoints(ctx.world, target) ?? 0;
       const health = ctx.world.get(target, TargetHealth);
       const disabled = ctx.world.get(target, Disabled).ok;
       const current = health.ok ? Math.ceil(health.value.current) : 0;

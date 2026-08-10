@@ -1,4 +1,4 @@
-import type { Archetype, EntityHandle, World } from '@forgeax/engine-ecs';
+import type { EntityHandle, Table, World } from '@forgeax/engine-ecs';
 import { Entity } from '@forgeax/engine-ecs';
 import {
   projectHierarchy,
@@ -40,15 +40,17 @@ interface ResolutionState {
 
 interface InternalWorldSurface {
   /** @internal */
-  _getGraph(): { archetypes: ReadonlyArray<Archetype | undefined> };
+  _getGraph(): { tables: ReadonlyArray<Table | undefined> };
 }
 
 function readColumn(
-  archetype: Archetype,
+  table: Table,
   componentId: number,
   fieldName: string,
 ): ArrayLike<number> | undefined {
-  return archetype.columns.get(componentId)?.get(fieldName)?.view as ArrayLike<number> | undefined;
+  return table.storage.get(componentId)?.fields.get(fieldName)?.view as
+    | ArrayLike<number>
+    | undefined;
 }
 
 /**
@@ -62,12 +64,12 @@ export function resolveVisibility(
   const graph = (world as unknown as InternalWorldSurface)._getGraph();
   let intentCount = 0;
   let hasAnyHiddenIntent = false;
-  for (const archetype of graph.archetypes) {
-    if (archetype === undefined) continue;
-    const states = readColumn(archetype, Visibility.id, 'state');
+  for (const table of graph.tables) {
+    if (table === undefined) continue;
+    const states = readColumn(table, Visibility.id, 'state');
     if (states === undefined) continue;
-    intentCount += archetype.size;
-    for (let row = 0; row < archetype.size; row++) {
+    intentCount += table.size;
+    for (let row = 0; row < table.size; row++) {
       if (states[row] === VisibilityStateValue.hidden) {
         hasAnyHiddenIntent = true;
         break;
@@ -80,12 +82,12 @@ export function resolveVisibility(
   const ensureResolver = (): void => {
     if (resolveEntity !== undefined) return;
     const intentByEntity = new Map<EntityHandle, VisibilityState>();
-    for (const archetype of graph.archetypes) {
-      if (archetype === undefined) continue;
-      const entities = readColumn(archetype, Entity.id, 'self');
-      const states = readColumn(archetype, Visibility.id, 'state');
+    for (const table of graph.tables) {
+      if (table === undefined) continue;
+      const entities = readColumn(table, Entity.id, 'self');
+      const states = readColumn(table, Visibility.id, 'state');
       if (entities === undefined || states === undefined) continue;
-      for (let row = 0; row < archetype.size; row++) {
+      for (let row = 0; row < table.size; row++) {
         const intent = visibilityStateFromU32(states[row] ?? 0);
         if (intent !== undefined) {
           intentByEntity.set((entities[row] ?? 0) as EntityHandle, intent);

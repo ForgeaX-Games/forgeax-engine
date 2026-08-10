@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
     AI["AI User / CLI / In-Process"] -->|"eval(script)"| CORE["eval Core (host realm new Function)"]
-    CORE -.->|"_import"| ECS["@forgeax/engine-ecs<br/>queryRun / Entity"]
+    CORE -.->|"_import"| ECS["@forgeax/engine-ecs<br/>World.query / QueryRow"]
     CORE --> ROOTS["Eval Scope Live Roots<br/>world · renderer · assets · debugAdapter"]
     ROOTS --> W["Running World / Renderer"]
 ```
@@ -32,8 +32,8 @@ sequenceDiagram
     C->>S: { method: "eval", params: { script: "…" } }
     S->>E: new Function(world, renderer, assets, debugAdapter, _import, body)
     E->>E: await _import('@forgeax/engine-ecs')
-    E->>W: queryRun(state, world, callback)
-    W-->>E: bundle (Uint32Array handles)
+    E->>W: world.query(descriptor)
+    W-->>E: Query row iteration
     E-->>S: Promise<unknown>
     S-->>C: { result: { ok: true, value } } or Error
 ```
@@ -57,83 +57,39 @@ is no longer necessary. If a returned value is a Promise it is awaited before be
 
 ### Prerequisites
 
-Four live roots are always present in eval scope. The fifth root is opt-in:
+Three live engine roots are always present in eval scope. Diagnostics are structural optional roots:
 
 | Root | Type | Purpose |
 |:--|:--|:--|
-| `world` | `World` (from `@forgeax/engine-ecs`) | ECS read/write: `spawn`, `despawn`, `set`, `queryRun` |
+| `world` | `World` (from `@forgeax/engine-ecs`) | ECS read/write: `spawn`, `despawn`, `set`, `query` |
 | `renderer` | `Renderer` | Renderer control: create/destroy render targets, read backbuffer |
 | `assets` | `AssetRegistry` | Asset queries: `loadByGuid`, `resolveName`, `rename` |
 | `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrames(frames, label?)`, `inspectAt(tapePath, drawIdx, fields?)`. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). Browser capture uses the separate `window.__forgeax.captureFrame(frames)` surface. |
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture: `startCapture({ frameLimit, eventLimit })`. **Only defined when the host passes `profiler` to `createApp` or `startServer`.** |
+| `execution` | `{ report(): unknown; rebuild(): Promise<unknown> } \| undefined` | App-owned execution report and explicit poisoned-World rebuild. Remote imports no App or ECS execution type. |
 
-A fifth injection — `_import(specifier)` — enables dynamic ESM imports inside eval scope. **Plain `import` keyword is NOT available**; scripts use `await _import('@forgeax/engine-ecs')` to pull in engine packages.
+The `_import(specifier)` injection enables dynamic ESM imports inside eval scope. **Plain `import` keyword is NOT available**; scripts use `await _import('@forgeax/engine-ecs')` to pull in engine packages.
 
 > [!NOTE]
-> `debugAdapter` and `profiler` are conditional capabilities. Guard each root before use. The other three roots (`world` / `renderer` / `assets`) are always present.
+> `debugAdapter`, `profiler`, and `execution` are conditional capabilities. Guard each before use. `world`, `renderer`, and `assets` are always present.
 
-### Handle Discovery
+### Handle and component discovery
 
-The only way to discover entity handles inside eval is through `queryRun` — zero new ECS API. **Use the real callback form**: `queryRun(state, world, (bundle) => { ... })` returns `void`; results arrive inside the `bundle` parameter.
-
-```js
-// Step 1: import ECS package inside eval
-const ecs = await _import('@forgeax/engine-ecs');
-
-// Step 2: create a query for all entities (Entity is the id=0 essential component)
-const state = ecs.createQueryState({ with: [ecs.Entity] });
-
-// Step 3: run the query — results land in the bundle callback
-let handles;
-ecs.queryRun(state, world, (bundle) => {
-  // bundle.Entity.self is Uint32Array of all matching entity handles
-  handles = Array.from(bundle.Entity.self);
-});
-// handles is now number[]
-```
-
-**With component data — read position of all MeshRenderers:**
+The World-owned row iterator is available directly in eval scope. An empty descriptor visits every enabled entity; component tokens grant typed data access.
 
 ```js
-const ecs = await _import('@forgeax/engine-ecs');
-const scene = await _import('@forgeax/engine-scene');
-const render = await _import('@forgeax/engine-render');
-const { createQueryState, queryRun, Entity } = ecs;
-const { Transform } = scene;
-const { MeshRenderer } = render;
+const handlesQuery = world.query({});
+if (!handlesQuery.ok) throw handlesQuery.error;
+const handles = Array.from(handlesQuery.value, (row) => row.entity);
 
-const state = createQueryState({ with: [MeshRenderer, Transform, Entity] });
-let results = [];
-queryRun(state, world, (bundle) => {
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
-    const pos = bundle.Transform.pos;
-    results.push({
-      entity: bundle.Entity.self[i],
-      x: pos[i * 3],
-      y: pos[i * 3 + 1],
-      z: pos[i * 3 + 2],
-    });
-  }
-});
-```
-
-### Read Component Values
-
-```js
-const ecs = await _import('@forgeax/engine-ecs');
-const scene = await _import('@forgeax/engine-scene');
-const state = ecs.createQueryState({ with: [scene.Transform, ecs.Entity] });
-
-ecs.queryRun(state, world, (bundle) => {
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
-    const h = bundle.Entity.self[i];
-    const pos = bundle.Transform.pos;
-    const px = pos[i * 3];
-    const py = pos[i * 3 + 1];
-    const pz = pos[i * 3 + 2];
-    // Use h, px, py, pz
-  }
-});
+const { MeshRenderer } = await _import('@forgeax/engine-render');
+const { Transform } = await _import('@forgeax/engine-scene');
+const visibleQuery = world.query({ read: [Transform], with: [MeshRenderer] });
+if (!visibleQuery.ok) throw visibleQuery.error;
+const results = Array.from(visibleQuery.value, (row) => ({
+  entity: row.entity,
+  position: Array.from(row.get(Transform).pos),
+}));
 ```
 
 `Transform.pos` is the flat `array<f32, 3>` column, so row `i` starts at

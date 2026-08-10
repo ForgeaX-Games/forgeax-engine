@@ -19,11 +19,8 @@
 // noise_speed=20.0, trauma_per_press=0.4
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -68,12 +65,9 @@ export const CameraShakeState = defineComponent('CameraShakeState', {
 });
 
 function firstCamera(world: World): EntityHandle | null {
-  const state = createQueryState({ with: [Camera, Transform, CameraShakeState, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Camera, Transform, CameraShakeState] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 /** Build the 2D screen-shake scene: background + player + obstacles + camera. */

@@ -28,8 +28,7 @@
 //       stale/previous value (proves after-propagate frame order is
 //       effective and the system does not suffer 1-frame lag).
 
-import { AudioListener as AudioListenerComponent } from '@forgeax/engine-audio';
-import { audioPlugin, type WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { AudioListener as AudioListenerComponent, audioPlugin } from '@forgeax/engine-audio';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../create-app';
@@ -206,8 +205,10 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       });
+      let context: AudioContext | undefined;
       const mockCtor = vi.fn(function AudioContextMock(this: Record<string, unknown>) {
-        Object.assign(this, makeMockAudioContextForListenerSync());
+        context = makeMockAudioContextForListenerSync();
+        Object.assign(this, context);
       });
       // biome-ignore lint/suspicious/noExplicitAny: vitest mock for AudioContext constructor -- must use function (not arrow) so new AudioContext() is constructable
       globalThis.AudioContext = mockCtor as any;
@@ -236,8 +237,8 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
 
         app.start();
 
-        const listener = (app.audio as WebAudioEngine).listener;
-        if (!listener) throw new Error('expected WebAudioEngine.listener');
+        const listener = context?.listener;
+        if (!listener) throw new Error('expected host AudioContext.listener');
         expect(listener.positionX.value).toBe(5);
         expect(listener.positionY.value).toBe(0);
         expect(listener.positionZ.value).toBe(0);
@@ -284,11 +285,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
         // finds nothing, and silently no-ops.  No throw, no crash.
         expect(() => app.start()).not.toThrow();
 
-        const listener = (app.audio as WebAudioEngine).listener;
-        if (!listener) throw new Error('expected WebAudioEngine.listener');
-        expect(listener.positionX.value).toBe(0);
-        expect(listener.positionY.value).toBe(0);
-        expect(listener.positionZ.value).toBe(0);
+        expect(mockCtor).not.toHaveBeenCalled();
 
         app.stop();
       } finally {
@@ -307,8 +304,10 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       });
+      let context: AudioContext | undefined;
       const mockCtor = vi.fn(function AudioContextMock(this: Record<string, unknown>) {
-        Object.assign(this, makeMockAudioContextForListenerSync());
+        context = makeMockAudioContextForListenerSync();
+        Object.assign(this, context);
       });
       // biome-ignore lint/suspicious/noExplicitAny: vitest mock for AudioContext constructor -- must use function (not arrow) so new AudioContext() is constructable
       globalThis.AudioContext = mockCtor as any;
@@ -340,8 +339,8 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
         // Frame 1: propagateTransforms computes world with posX=0,
         // listener-sync reads it → positionX === 0.
         app.start();
-        const listener = (app.audio as WebAudioEngine).listener;
-        if (!listener) throw new Error('expected WebAudioEngine.listener');
+        const listener = context?.listener;
+        if (!listener) throw new Error('expected host AudioContext.listener');
         expect(listener.positionX.value).toBe(0);
 
         // Modify local position: simulate a frame callback that moves the

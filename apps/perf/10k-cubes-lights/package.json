@@ -12,7 +12,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 5207",
     "smoke": "node scripts/smoke-dawn.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
-    "test": "vitest run src/workload.test.ts"
+    "test": "vitest run src/__tests__/workload.test.ts"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/perf-10k-cubes-lights smoke",

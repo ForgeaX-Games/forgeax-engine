@@ -642,6 +642,258 @@
         "mode": 0
        }
       }
+     },
+     {
+      "localId": 26,
+      "components": {
+       "Name": {
+        "value": "HealthPickup"
+       },
+       "Transform": {
+        "pos": [
+         2.5,
+         0.55,
+         0
+        ],
+        "scale": [
+         0.45,
+         0.45,
+         0.45
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         18
+        ]
+       }
+      }
+     },
+     {
+      "localId": 27,
+      "components": {
+       "Name": {
+        "value": "EnergyCoreAlpha"
+       },
+       "Transform": {
+        "pos": [
+         -2.5,
+         0.55,
+         -2.5
+        ],
+        "scale": [
+         0.42,
+         0.42,
+         0.42
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         6
+        ]
+       }
+      }
+     },
+     {
+      "localId": 28,
+      "components": {
+       "Name": {
+        "value": "EnergyCoreBeta"
+       },
+       "Transform": {
+        "pos": [
+         4,
+         0.55,
+         1.5
+        ],
+        "scale": [
+         0.42,
+         0.42,
+         0.42
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         7
+        ]
+       }
+      }
+     },
+     {
+      "localId": 29,
+      "components": {
+       "Name": {
+        "value": "EnergyCoreGamma"
+       },
+       "Transform": {
+        "pos": [
+         -5,
+         0.55,
+         4
+        ],
+        "scale": [
+         0.42,
+         0.42,
+         0.42
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         18
+        ]
+       }
+      }
+     },
+     {
+      "localId": 30,
+      "components": {
+       "Name": {
+        "value": "ExtractionBeacon"
+       },
+       "Transform": {
+        "pos": [
+         0,
+         0.35,
+         -4.5
+        ],
+        "scale": [
+         0.7,
+         0.25,
+         0.7
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         16
+        ]
+       }
+      }
+     },
+     {
+      "localId": 31,
+      "components": {
+       "Name": {
+        "value": "ShieldPedestal"
+       },
+       "Transform": {
+        "pos": [
+         -1.5,
+         0.3,
+         -2.8
+        ],
+        "scale": [
+         0.72,
+         0.24,
+         0.72
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         7
+        ]
+       }
+      }
+     },
+     {
+      "localId": 32,
+      "components": {
+       "Name": {
+        "value": "OverchargePedestal"
+       },
+       "Transform": {
+        "pos": [
+         1.5,
+         0.3,
+         -2.8
+        ],
+        "scale": [
+         0.72,
+         0.24,
+         0.72
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 4
+       },
+       "MeshRenderer": {
+        "materials": [
+         11
+        ]
+       }
+      }
+     },
+     {
+      "localId": 33,
+      "components": {
+       "Name": {
+        "value": "BarrierEmitter"
+       },
+       "Transform": {
+        "pos": [
+         -4.2,
+         0.7,
+         -1.5
+        ],
+        "scale": [
+         0.6,
+         1.4,
+         0.6
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 0
+       },
+       "MeshRenderer": {
+        "materials": [
+         12
+        ]
+       }
+      }
+     },
+     {
+      "localId": 34,
+      "components": {
+       "Name": {
+        "value": "EnergyBarrier"
+       },
+       "Transform": {
+        "pos": [
+         -2.5,
+         0.9,
+         -1.5
+        ],
+        "scale": [
+         3.4,
+         1.8,
+         0.16
+        ]
+       },
+       "MeshFilter": {
+        "assetHandle": 0
+       },
+       "MeshRenderer": {
+        "materials": [
+         5
+        ]
+       }
+      }
      }
     ],
     "mounts": [
@@ -649,7 +901,7 @@
       "localId": 23,
       "source": 17,
       "memberFirst": 24,
-      "memberCount": 1,
+      "memberCount": 2,
       "overrides": [
        {
         "localId": 24,
@@ -683,7 +935,8 @@
     "d9f2a000-0001-5000-8000-000000000001",
     "d9f2a000-0002-5000-8000-000000000002",
     "d9f2a000-0003-5000-8000-000000000003",
-    "0f20e111-5b2f-5a77-9a02-2f5d1e9c7a11"
+    "0f20e111-5b2f-5a77-9a02-2f5d1e9c7a11",
+    "019f7000-0000-7000-8000-000000000025"
    ],
    "artifacts": {}
   },
@@ -719,12 +972,44 @@
         ]
        }
       }
+     },
+     {
+      "localId": 1,
+      "components": {
+       "Name": {
+        "value": "NestedRepairPickup"
+       },
+       "Transform": {
+        "pos": [
+         0,
+         0.8,
+         -1.2
+        ],
+        "scale": [
+         0.38,
+         0.38,
+         0.38
+        ]
+       },
+       "ChildOf": {
+        "parent": 0
+       },
+       "MeshFilter": {
+        "assetHandle": 0
+       },
+       "MeshRenderer": {
+        "materials": [
+         2
+        ]
+       }
+      }
      }
     ]
    },
    "refs": [
     "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
-    "d9f2a000-0002-5000-8000-000000000002"
+    "d9f2a000-0002-5000-8000-000000000002",
+    "019f7000-0000-7000-8000-000000000025"
    ],
    "artifacts": {}
   },
@@ -1153,6 +1438,55 @@
      ],
      "metallic": 0,
      "roughness": 0.35
+    }
+   },
+   "refs": [],
+   "artifacts": {}
+  },
+  {
+   "guid": "019f7000-0000-7000-8000-000000000025",
+   "kind": "material",
+   "payload": {
+    "passes": [
+     {
+      "name": "Forward",
+      "program": {
+       "module": "forgeax::default-standard-pbr"
+      },
+      "renderState": {
+       "tags": {
+        "LightMode": "Forward"
+       },
+       "queue": 2000
+      }
+     },
+     {
+      "name": "ShadowCaster",
+      "program": {
+       "module": "forgeax::default-shadow-caster"
+      },
+      "renderState": {
+       "tags": {
+        "LightMode": "ShadowCaster"
+       }
+      }
+     }
+    ],
+    "values": {
+     "baseColor": [
+      0.18,
+      1,
+      0.48,
+      1
+     ],
+     "emissive": [
+      0.08,
+      1,
+      0.35
+     ],
+     "emissiveIntensity": 2.2,
+     "metallic": 0.05,
+     "roughness": 0.32
     }
    },
    "refs": [],

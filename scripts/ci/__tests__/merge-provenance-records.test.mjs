@@ -15,12 +15,19 @@ function record(producer, classes, attempt = 1) {
     schemaVersion: 1,
     producer,
     runId: 'run-1',
-    runAttempt: attempt,
+    producerRunAttempt: attempt,
     artifacts: classes.map((className, index) => ({
       class: className,
       artifactName: `${className}-${producer}-a${attempt}`,
       artifactId: `${producer}-${attempt}-${index}`,
-      uploadedAt: '2026-07-16T19:55:00Z',
+      producerRunAttempt: attempt,
+      inputFingerprint: `sha256:${producer}-${className}-${attempt}`,
+      upload: {
+        startedAt: '2026-07-16T19:54:58Z',
+        completedAt: '2026-07-16T19:55:00Z',
+        elapsedSeconds: 2,
+        transferAttempt: 1,
+      },
     })),
     ...(producer === 'shared-app-inputs'
       ? {
@@ -59,12 +66,12 @@ function fixture(values) {
   const root = mkdtempSync(join(tmpdir(), 'provenance-'));
   for (const [index, value] of values.entries())
     writeFileSync(
-      join(root, `provenance-${value.producer}-${index}-a${value.runAttempt}.json`),
+      join(root, `provenance-${value.producer}-${index}-a${value.producerRunAttempt}.json`),
       JSON.stringify(value),
     );
   return root;
 }
-function run(dir, contractPath = contract) {
+function run(dir, contractPath = contract, aggregateAttempt = 2) {
   const out = join(dir, 'merged.json');
   const githubOutput = join(dir, 'github-output');
   try {
@@ -75,7 +82,7 @@ function run(dir, contractPath = contract) {
         '--records-dir',
         dir,
         '--aggregate-attempt',
-        '2',
+        String(aggregateAttempt),
         '--out',
         out,
         '--github-output',
@@ -163,10 +170,58 @@ test('repair: a failed-job retry selects only the retried producer newest immuta
     assert.equal(merged.producerAttempts['app-shard-1'], 2);
     assert.equal(merged.producerAttempts['core-build'], 1);
     const selected = merged.artifacts.find((artifact) => artifact.class === 'app-dist-1');
-    assert.equal(selected.producerAttempt, 2);
+    assert.equal(selected.producerRunAttempt, 2);
     assert.equal(selected.artifactId, 'app-shard-1-2-0');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M2-T1: rejects cross-run, aggregate mismatch, foreign attempt, and missing fingerprint', () => {
+  const scenarios = [
+    {
+      mutate(values) {
+        values.find((value) => value.producer === 'app-shard-2').runId = 'run-2';
+      },
+      aggregateAttempt: 2,
+      code: 'ci-provenance-cross-run',
+    },
+    {
+      mutate(values) {
+        values.push(record('app-shard-1', ['app-dist-1'], 2));
+      },
+      aggregateAttempt: 1,
+      code: 'ci-provenance-aggregate-attempt-mismatch',
+    },
+    {
+      mutate(values) {
+        values.find((value) => value.producer === 'app-shard-1').artifacts[0].producerRunAttempt =
+          9;
+      },
+      aggregateAttempt: 2,
+      code: 'ci-provenance-foreign-producer-attempt',
+    },
+    {
+      mutate(values) {
+        delete values.find((value) => value.producer === 'core-build').artifacts[0]
+          .inputFingerprint;
+      },
+      aggregateAttempt: 2,
+      code: 'ci-provenance-fingerprint-missing',
+    },
+  ];
+
+  for (const { mutate, aggregateAttempt, code } of scenarios) {
+    const values = records();
+    mutate(values);
+    const dir = fixture(values);
+    try {
+      const result = run(dir, contract, aggregateAttempt);
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).code, code);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 

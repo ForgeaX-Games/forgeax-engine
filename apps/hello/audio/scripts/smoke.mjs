@@ -134,10 +134,7 @@ const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 
 const audioPkg = await import('@forgeax/engine-audio');
-const { AUDIO_ENGINE_RESOURCE_KEY } = audioPkg;
-
-const audioWebAudioPkg = await import('@forgeax/engine-audio-webaudio');
-const { audioPlugin } = audioWebAudioPkg;
+const { AUDIO_ENGINE_RESOURCE_KEY, audioPlugin } = audioPkg;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');

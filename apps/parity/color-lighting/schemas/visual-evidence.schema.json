@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/color-lighting/visual-evidence.schema.json",
+  "title": "Color lighting parity visual evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["caseId", "width", "height", "background", "framing", "artifacts"],
+  "properties": {
+    "caseId": { "type": "string", "minLength": 1 },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "background": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number", "minimum": 0, "maximum": 1 },
+        { "type": "number", "minimum": 0, "maximum": 1 },
+        { "type": "number", "minimum": 0, "maximum": 1 },
+        { "type": "number", "minimum": 0, "maximum": 1 }
+      ],
+      "items": false
+    },
+    "framing": { "type": "string", "minLength": 1 },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "caseId", "width", "height", "background", "frameId", "rawHash", "observed", "verdict", "confidence"],
+      "properties": {
+        "kind": { "enum": ["forgeax-final", "three-primary-final", "diff-roi"] },
+        "url": { "type": "string", "minLength": 1 },
+        "caseId": { "type": "string", "minLength": 1 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "background": {
+          "type": "array",
+          "prefixItems": [
+            { "type": "number", "minimum": 0, "maximum": 1 },
+            { "type": "number", "minimum": 0, "maximum": 1 },
+            { "type": "number", "minimum": 0, "maximum": 1 },
+            { "type": "number", "minimum": 0, "maximum": 1 }
+          ],
+          "items": false
+        },
+        "frameId": { "type": "integer", "minimum": 0 },
+        "rawHash": { "type": "string", "pattern": "^[0-9a-f]{8,}$" },
+        "observed": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["pass", "fail", "unknown"] },
+        "confidence": { "enum": ["high", "medium", "low"] }
+      }
+    }
+  }
+}

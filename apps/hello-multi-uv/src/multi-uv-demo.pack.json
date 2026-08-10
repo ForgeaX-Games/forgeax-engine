@@ -24,6 +24,10 @@
             "type": "color"
           },
           {
+            "name": "baseColorUvTransform",
+            "type": "vec4"
+          },
+          {
             "name": "baseColorTexture",
             "type": "texture"
           },

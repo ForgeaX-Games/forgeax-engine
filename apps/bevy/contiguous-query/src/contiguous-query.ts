@@ -1,12 +1,9 @@
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
-  Entity,
   Time,
   Update,
   World,
-  createQueryState,
   defineComponent,
-  queryRunContiguous,
 } from '@forgeax/engine-ecs';
 import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
@@ -15,10 +12,6 @@ import { Transform } from '@forgeax/engine-scene';
 const HEALTH_COUNT = 32;
 const Health = defineComponent('ContiguousQueryHealth', { value: 'f32' });
 const HealthDecay = defineComponent('ContiguousQueryHealthDecay', { factor: 'f32' });
-const healthQuery = createQueryState<
-  readonly [typeof Health, typeof HealthDecay, typeof Entity],
-  readonly []
->({ with: [Health, HealthDecay, Entity] });
 
 export interface ContiguousQueryState {
   elapsed: number;
@@ -68,19 +61,21 @@ export function buildContiguousQueryWorld(world: World): ContiguousQueryState {
     fn: (world) => {
       state.elapsed += world.getResource(Time).delta;
       state.rows = 0;
-      state.contiguousSupported = queryRunContiguous(healthQuery, world, (bundle) => {
+      const query = world.query({ read: [HealthDecay], write: [Health] }).unwrap();
+      const spans = query.spans();
+      state.contiguousSupported = spans.ok;
+      if (spans.ok) for (const span of spans.value) {
         state.contiguousCalls += 1;
-        state.rows = bundle.Entity.self.length;
+        state.rows += span.length;
+        const health = span.mut(Health).value;
+        const decay = span.get(HealthDecay).factor;
         state.lengthsEqual = state.lengthsEqual &&
-          bundle.ContiguousQueryHealth.value.length === bundle.ContiguousQueryHealthDecay.factor.length &&
-          bundle.ContiguousQueryHealth.value.length === bundle.Entity.self.length;
-        for (let index = 0; index < bundle.Entity.self.length; index++) {
-          const health = bundle.ContiguousQueryHealth.value[index] ?? 0;
-          const decay = bundle.ContiguousQueryHealthDecay.factor[index] ?? 0;
-          bundle.ContiguousQueryHealth.value[index] = health * decay;
-          if (index === 0) state.currentHealth = bundle.ContiguousQueryHealth.value[index] ?? 0;
+          health.length === decay.length && health.length === span.length;
+        for (let index = 0; index < span.length; index++) {
+          health[index] = (health[index] ?? 0) * (decay[index] ?? 0);
+          if (index === 0) state.currentHealth = health[index] ?? 0;
         }
-      });
+      }
       state.decayPasses += 1;
     },
   }).unwrap();

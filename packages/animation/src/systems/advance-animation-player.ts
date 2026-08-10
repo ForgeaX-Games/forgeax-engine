@@ -10,9 +10,9 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //
 // Variable N-slot (feat-20260713 M1 / w5): the fixed 4-slot cap is retired. The
 // four parallel columns (clips / times / weights / speeds) are variable
-// `array<T>` columns, so they surface in query bundles as read-only
-// `ManagedColumnReader` slot-id accessors — the flat-SoA row window used by the
-// retired fixed schema no longer applies. Each entity's columns are read back as
+// `array<T>` columns, so row queries expose them through each entity's resolved
+// component value; the flat-SoA row window used by the retired fixed schema no
+// longer applies. Each entity's columns are read back as
 // resolved TypedArrays via `world.get(entity, AnimationPlayer)` and the advanced
 // `times` column is written back via `world.set` (D-7: weights are never written
 // back; clamping is read-time only). The blend math (translation linear / scale
@@ -44,20 +44,13 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //
 // Decision anchors:
 //   - requirements IS-2 / AC-03 / AC-04 / AC-05 (best-effort N-way blend)
-//   - plan-strategy D-1 (TRS accumulators + nlerp), D-3 (queryRun, no
+//   - plan-strategy D-1 (TRS accumulators + nlerp), D-3 (public Query, no
 //     _getGraph), D-7 (clamp without write-back), D-9 (negative speed
 //     natural reverse)
 //   - charter P4 (single Transform write per joint per tick)
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
-import {
-  createQueryState,
-  defineSystem,
-  defineSystemSet,
-  ENTITY_NULL_RAW,
-  Entity,
-  queryRun,
-} from '@forgeax/engine-ecs';
+import { defineSystem, defineSystemSet, ENTITY_NULL_RAW } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
 import {
@@ -84,29 +77,19 @@ export { _resetAnimationWarnsForTests };
  * Advance all AnimationPlayer components by dt, blend the N active clips per
  * entity, and write one Transform per joint per tick. Returns void.
  *
- * Iteration walks every archetype carrying `[AnimationPlayer, Entity]` via
- * `queryRun` (D-3). The variable SoA columns are read-only `ManagedColumnReader`
- * accessors in the bundle, so the entity handles are collected first, then each
+ * Iteration walks every matching row through the injected Query (D-3). Variable
+ * SoA columns are read through the row facade, so entity handles are collected first, then each
  * entity's columns are resolved to TypedArrays via `world.get` and the advanced
  * `times` written back via `world.set` (mutating the query bundle mid-walk would
  * be a compile error against the reader shape).
  */
 export function advanceAnimationPlayer(world: World, dt: number): void {
-  const state = createQueryState({ with: [AnimationPlayer, Entity] });
+  const query = world.query({ with: [AnimationPlayer] }).unwrap();
 
   // Collect entity handles inside the walk (the Entity.self view is transient),
   // then resolve + mutate each player outside it.
-  const entities: number[] = [];
-  queryRun(state, world, (bundle) => {
-    const entitySelf = bundle.Entity.self;
-    const rowCount = entitySelf.length;
-    for (let row = 0; row < rowCount; row++) {
-      // entitySelf carries the packed u32 handle (encodeEntity(index, gen)).
-      // Index 0 + gen 0 encodes to handle 0 — a valid entity, NOT a sentinel
-      // (ENTITY_NULL_RAW = 0xffffffff). Treat every column read as authoritative.
-      entities.push(entitySelf[row] ?? 0);
-    }
-  });
+  const entities: EntityHandle[] = [];
+  for (const row of query) entities.push(row.entity);
 
   for (const entityRaw of entities) {
     advanceOnePlayer(world, entityRaw, dt);

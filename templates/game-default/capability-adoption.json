@@ -1003,7 +1003,7 @@
         "apps/bevy/contiguous-query/scripts/smoke-dawn.mjs",
         "apps/bevy/contiguous-query/scripts/smoke-browser.mjs"
       ],
-      "reason": "The canonical app remains the focused 32-row dense-column proof. game-default composes queryRunContiguous with a resettable TargetHealth component on the authored physics targets: hit damage uses the normal World mutation boundary, per-frame regeneration mutates writable current/max/Entity slices, and render evidence proves the row shape without copying a second health gallery.",
+      "reason": "The canonical app remains the focused 32-row dense-column proof. game-default composes Query.spans with a resettable TargetHealth component on the authored physics targets: hit damage uses the normal World mutation boundary, per-frame regeneration mutates writable current/max slices, and render evidence proves the row shape without copying a second health gallery.",
       "betterConsumer": "templates/game-default"
     },
     {
@@ -1188,7 +1188,7 @@
         "templates/game-default/main.ts",
         "templates/game-default/assets/plugins/free-camera.ts",
         "templates/game-default/assets/plugins/hud.ts",
-        "templates/game-default/tests/free-camera.test.ts",
+        "templates/game-default/__tests__/free-camera.test.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",
         "apps/bevy/free-camera/src/free-camera.ts",
@@ -1280,7 +1280,7 @@
         "apps/bevy/iter-combinations/scripts/smoke-dawn.mjs",
         ".forgeax-harness/solo/game-default/experiments/20260730-100142-classify-iter-combinations-candidate/REPORT.md"
       ],
-      "reason": "The canonical app is a focused queryCombinations N-body gravity gallery: its Dawn proof shows real pairwise motion and ring-to-star clumping, but it has no gameplay input, reset/re-entry owner, asset lifecycle, recovery path, or browser gate. game-default already has a distinct bullet-to-target query and one reset owner; adding a second N-body simulation or artificial target attraction would create a gallery rather than a new public game behavior. Keep the pairwise-query contract in its canonical consumer until genuine gameplay composition needs it.",
+      "reason": "The canonical app is a focused Query.combinations N-body gravity gallery: its Dawn proof shows real pairwise motion and ring-to-star clumping, but it has no gameplay input, reset/re-entry owner, asset lifecycle, recovery path, or browser gate. game-default already has a distinct bullet-to-target query and one reset owner; adding a second N-body simulation or artificial target attraction would create a gallery rather than a new public game behavior. Keep the pairwise-query contract in its canonical consumer until genuine gameplay composition needs it.",
       "betterConsumer": "apps/bevy/iter-combinations"
     },
     {
@@ -3235,7 +3235,7 @@
         "templates/game-default/assets/hit-vfx-effect.pack.json",
         "templates/game-default/assets/charge-vfx-effect.pack.json",
         "templates/game-default/assets/plugins/vfx-hit-loop.ts",
-        "templates/game-default/tests/vfx-effect-assets.test.ts",
+        "templates/game-default/__tests__/vfx-effect-assets.test.ts",
         "templates/game-default/main.ts",
         "templates/game-default/AGENTS.md",
         "templates/game-default/FORGE.md",

@@ -21,7 +21,7 @@
 //                                   rate*dt > 1) — the footgun this round folds.
 //   - target's circular path      -> stepTarget (pure function of world + elapsed time)
 //   - DecayRate resource          -> DECAY_RATE constant (game tuning belongs in the app)
-//   - Query<&mut Transform, With<FollowingSphere>> -> tag components + queryRun
+//   - Query<&mut Transform, With<FollowingSphere>> -> tag filter + QueryRow mutation
 //   - Res<Time>                   -> world.getResource(Time).delta (auto by createApp)
 //
 // Like 3d-rotation / translation this is a MOTION demo: stepTarget + stepFollower are
@@ -30,11 +30,8 @@
 // frozen render).
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
@@ -145,13 +142,9 @@ export function buildSmoothFollowWorld(world: World): void {
 }
 
 function firstHandleWith(world: World, comp: typeof TargetSphere | typeof FollowingSphere): EntityHandle | null {
-  const state = createQueryState({ with: [Transform, comp, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    if (selfCol.length > 0) handle = (selfCol[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Transform, comp] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 /**

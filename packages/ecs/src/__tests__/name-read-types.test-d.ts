@@ -6,7 +6,7 @@ import { Update } from '../schedule-token';
 // field at three application points:
 //
 //   (a) inside `world.addSystem(Update, { fn })` callback;
-//   (b) inside a `queryRun` callback (Query.run iteration);
+//   (b) inside a QueryRow loop;
 //   (c) at top-level after a direct import.
 //
 // All three sites pass through the same `FieldValueType<'string'> = string`
@@ -42,7 +42,7 @@ describe('w7 --- (a) inside world.addSystem fn callback (AC-02)', () => {
   });
 });
 
-describe('w7 --- (b) inside queryRun callback (AC-02)', () => {
+describe('w7 --- (b) inside a QueryRow loop (AC-02)', () => {
   it('world.get(e, TestName).unwrap().value infers as string from a query callback', () => {
     const w = new World();
     const e = w.spawn({ component: TestName, data: { value: 'Boss' } }).unwrap();

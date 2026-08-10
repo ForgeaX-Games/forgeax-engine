@@ -24,7 +24,7 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import type { MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -35,6 +35,9 @@ const PARALLAX_SHADER_ID = 'learn_render::5_5_parallax' as const;
 // 2. example glue
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-5-parallax-mapping',
+);
 
 // Texture GUIDs (forgeax-engine-assets/learn-opengl/textures/*.meta.json).
 // Each set is diffuse + normal + displacement(height). depth/disp maps are
@@ -83,7 +86,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.5 parallax-mapping] createApp failed:', appRes.error);
@@ -99,6 +102,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Load both texture sets up front so set-switching is a values swap

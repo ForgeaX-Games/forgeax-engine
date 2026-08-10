@@ -53,7 +53,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 // Time resource + auto input attach.
 import { createApp, inputPlugin } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import {
   INPUT_BACKEND_KEY,
   type InputBackend,
@@ -69,7 +69,7 @@ import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container.pack.json';
 import {
@@ -96,6 +96,9 @@ const CONTAINER_TEXTURE_GUID = '019e3969-1d46-773e-988c-a10e305ff2a4';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const CUBE_MATERIAL_GUID = '019e2cc7-3a01-7c22-8f70-501bd9e74206';
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-7-camera',
+);
 
 // LO 7.3 cubePositions[] array (verbatim translation; the LO source
 // uses `glm::vec3(...)` literals, here they map onto the per-entity
@@ -206,6 +209,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const assets = renderer.assets;
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   const containerGuidRes = AssetGuid.parse(CONTAINER_TEXTURE_GUID);
@@ -358,7 +362,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.addSystem(Update, {
     name: 'learn-render-camera-first-person',
     after: ['input-frame-start-scan'],
-    queries: [{ with: [Transform, Camera, Entity] }],
+    queries: [{ write: [Transform], with: [Camera] }],
     fn: (world, queryResults) => {
       const snap = renderer.input.snapshot(world);
       if (snap === undefined) return;
@@ -409,22 +413,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         held,
       );
 
-      for (const bundles of queryResults[0]) {
-        const count = bundles.Entity.self.length;
-        for (let i = 0; i < count; i++) {
+      for (const row of queryResults[0]) {
+          const transform = row.mut(Transform);
           // Flat stride-N array columns (feat-20260709 M2): row i lanes at
           // pos[i*3+a] / quat[i*4+a].
-          const px = (bundles.Transform.pos[i * 3] ?? 0) + disp.x;
-          const py = (bundles.Transform.pos[i * 3 + 1] ?? 0) + disp.y;
-          const pz = (bundles.Transform.pos[i * 3 + 2] ?? 0) + disp.z;
-          bundles.Transform.pos[i * 3] = px;
-          bundles.Transform.pos[i * 3 + 1] = py;
-          bundles.Transform.pos[i * 3 + 2] = pz;
-          bundles.Transform.quat[i * 4] = qTmp[0] ?? 0;
-          bundles.Transform.quat[i * 4 + 1] = qTmp[1] ?? 0;
-          bundles.Transform.quat[i * 4 + 2] = qTmp[2] ?? 0;
-          bundles.Transform.quat[i * 4 + 3] = qTmp[3] ?? 1;
-        }
+          transform.pos.set([
+            (transform.pos[0] ?? 0) + disp.x,
+            (transform.pos[1] ?? 0) + disp.y,
+            (transform.pos[2] ?? 0) + disp.z,
+          ]);
+          transform.quat.set([qTmp[0] ?? 0, qTmp[1] ?? 0, qTmp[2] ?? 0, qTmp[3] ?? 1]);
       }
       lastDirX = fwdX;
       lastDirY = fwdY;
@@ -438,18 +436,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.addSystem(Update, {
     name: 'learn-render-camera-scroll-fov',
     after: ['input-frame-start-scan'],
-    queries: [{ with: [Camera, Entity] }],
+    queries: [{ write: [Camera] }],
     fn: (world, queryResults) => {
       const snap = renderer.input.snapshot(world);
       if (snap === undefined) return;
       scrollAcc.apply(snap.mouse.wheelDelta);
       const fovRad = scrollAcc.fovRad;
-      for (const bundles of queryResults[0]) {
-        const count = bundles.Entity.self.length;
-        for (let i = 0; i < count; i++) {
-          bundles.Camera.fov[i] = fovRad;
-        }
-      }
+      for (const row of queryResults[0]) row.mut(Camera).fov = fovRad;
     },
   });
 
@@ -486,7 +479,10 @@ async function createAppForCamera(
   // feat-20260608 / M3 / AC-11: hoist a single `bundler` const so the grep
   // gate "exactly 1 forgeaxBundlerAdapter call per demo file" holds across
   // the ternary below.
-  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
+  const bundler = {
+    ...forgeaxBundlerAdapter(),
+    importTransport: createDevImportTransport(runtimeBinding),
+  };
   if (overrideBackend === undefined) {
     return createApp(target, {}, bundler);
   }

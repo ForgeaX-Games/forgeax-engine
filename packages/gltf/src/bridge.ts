@@ -41,6 +41,7 @@ import type {
   GltfMaterialIr,
   GltfMeshIr,
   GltfNodeIr,
+  GltfPunctualLightIr,
   GltfTextureInfoIr,
 } from './parse-gltf.js';
 
@@ -379,6 +380,33 @@ interface MutableSceneEntity {
   localIdx: number;
 }
 
+function lightDirection(currentWorld: Mat4): readonly [number, number, number] {
+  const direction = mat4.getForward(vec3.create(), currentWorld);
+  return [direction[0] ?? 0, direction[1] ?? 0, direction[2] ?? -1];
+}
+
+function lightComponent(
+  light: GltfPunctualLightIr,
+  direction: readonly [number, number, number],
+): Record<string, unknown> {
+  const range = light.range ?? Number.POSITIVE_INFINITY;
+  if (light.type === 'directional') {
+    return { direction, color: light.color, intensity: light.intensity };
+  }
+  if (light.type === 'point') {
+    return { color: light.color, intensity: light.intensity, range };
+  }
+  return {
+    direction,
+    color: light.color,
+    intensity: light.intensity,
+    range,
+    innerConeDeg: ((light.spot?.innerConeAngle ?? 0) * 180) / Math.PI,
+    outerConeDeg: ((light.spot?.outerConeAngle ?? Math.PI / 4) * 180) / Math.PI,
+    castShadow: false,
+  };
+}
+
 /**
  * Convert a local TRS (translation, rotation quat, scale) into a Mat4.
  * Uses @forgeax/engine-math out-param style. `out` is mutated in place.
@@ -432,6 +460,7 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
   const sceneIr = doc.scenes[doc.defaultSceneIndex];
   const resultNodes: MutableSceneEntity[] = [];
   if (sceneIr === undefined) return { kind: 'scene', entities: [] };
+  const importedLights = doc.lights ?? doc.extensions?.KHR_lights_punctual?.lights ?? [];
   const animationTargetIds = new Map<number, string>();
   for (const clip of doc.animationClips) {
     for (const channel of clip.channels) {
@@ -514,6 +543,20 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
     const components: Record<string, Record<string, unknown>> = {
       Transform: pushLocalTransform(ir.transform),
     };
+
+    const importedLight = importedLights[ir.lightIndex ?? -1];
+    if (importedLight !== undefined) {
+      const componentName =
+        importedLight.type === 'directional'
+          ? 'DirectionalLight'
+          : importedLight.type === 'point'
+            ? 'PointLight'
+            : 'SpotLight';
+      components[componentName] = lightComponent(
+        importedLight,
+        lightDirection(currentWorld),
+      ) as Record<string, unknown>;
+    }
 
     if (ir.name !== undefined && ir.name !== '') {
       components.Name = { value: ir.name };
@@ -638,7 +681,17 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
     localId: n.localId,
     components: n.components,
   }));
-  return { kind: 'scene', entities: frozen };
+  const lightFacts = importedLights.map((light) => ({
+    kind: light.type,
+    intensity: light.intensity,
+    ...(light.range === undefined ? {} : { range: light.range }),
+    ...(light.spot === undefined ? {} : { spot: light.spot }),
+  }));
+  return {
+    kind: 'scene',
+    entities: frozen,
+    ...(lightFacts.length === 0 ? {} : { lights: lightFacts }),
+  } as SceneAsset;
 }
 
 /** Internal helper: mark GltfNodeIr usable so future surface evolutions stay typed. */
@@ -778,6 +831,10 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
 
   const module = ctx?.skinned === true ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr';
 
+  const isMask = mat.alphaMode === 'MASK';
+  const alphaCutoff = isMask ? (mat.alphaCutoff ?? 0.5) : undefined;
+  if (alphaCutoff !== undefined) values.alphaCutoff = alphaCutoff;
+
   // glTF BLEND uses straight alpha and does not write depth.
   const isBlend = mat.alphaMode === 'BLEND';
   const straightAlphaBlend = {
@@ -804,8 +861,8 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
     program: { module },
     renderState: {
       tags: { LightMode: 'Forward' },
-      queue: (isBlend ? 3000 : 2000) as RenderQueue,
-      ...(isBlend || mat.doubleSided === true
+      queue: (isBlend ? 3000 : isMask ? 2450 : 2000) as RenderQueue,
+      ...(isBlend || isMask || mat.doubleSided === true
         ? {
             ...(isBlend ? { blend: straightAlphaBlend, depthWriteEnabled: false } : {}),
             ...(mat.doubleSided === true ? { cullMode: 'none' as const } : {}),

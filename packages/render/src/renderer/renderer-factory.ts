@@ -140,6 +140,7 @@ import {
 import { buildPipelineForMaterialShader } from '../pipeline-builder';
 import {
   buildBindGroupLayoutDescriptor,
+  buildLinearLdrMaterialSpecTable,
   buildSpecConstTable,
   cacheKeyOf,
   colorFormatsForPassKind,
@@ -217,6 +218,15 @@ const PREPARED_INSTANCE_VERTEX_ATTRS: VertexAttributeMap = {
   uv1: new Float32Array(0),
 };
 
+const PREPARED_MATERIAL_INSTANCE_VERTEX_ATTRS: VertexAttributeMap = {
+  position: new Float32Array(0),
+  normal: new Float32Array(0),
+  uv: new Float32Array(0),
+  tangent: new Float32Array(0),
+  skinIndex: new Uint16Array(0),
+  skinWeight: new Float32Array(0),
+};
+
 const POSITION_SIZE_COLOR_INSTANCE_VERTEX_BUFFERS = [
   {
     arrayStride: 9 * 4,
@@ -225,6 +235,49 @@ const POSITION_SIZE_COLOR_INSTANCE_VERTEX_BUFFERS = [
       { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
       { shaderLocation: 1, offset: 3 * 4, format: 'float32x2' as const },
       { shaderLocation: 2, offset: 5 * 4, format: 'float32x4' as const },
+    ],
+  },
+] as unknown as readonly GPUVertexBufferLayout[];
+
+const BILLBOARD_MATERIAL_INSTANCE_VERTEX_BUFFERS = [
+  {
+    arrayStride: 23 * 4,
+    stepMode: 'instance' as const,
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
+      { shaderLocation: 1, offset: 3 * 4, format: 'float32x2' as const },
+      { shaderLocation: 2, offset: 5 * 4, format: 'float32x2' as const },
+      { shaderLocation: 3, offset: 7 * 4, format: 'float32x4' as const },
+      { shaderLocation: 4, offset: 11 * 4, format: 'float32x4' as const },
+      { shaderLocation: 5, offset: 15 * 4, format: 'float32x4' as const },
+      { shaderLocation: 6, offset: 19 * 4, format: 'float32x4' as const },
+    ],
+  },
+] as unknown as readonly GPUVertexBufferLayout[];
+
+const MESH_GEOMETRY_MATERIAL_INSTANCE_VERTEX_BUFFERS = [
+  {
+    arrayStride: 12 * 4,
+    stepMode: 'vertex' as const,
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
+      { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
+      { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
+      { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
+    ],
+  },
+  {
+    arrayStride: 28 * 4,
+    stepMode: 'instance' as const,
+    attributes: [
+      { shaderLocation: 4, offset: 0, format: 'float32x3' as const },
+      { shaderLocation: 5, offset: 3 * 4, format: 'float32x3' as const },
+      { shaderLocation: 6, offset: 6 * 4, format: 'float32x3' as const },
+      { shaderLocation: 7, offset: 9 * 4, format: 'float32x3' as const },
+      { shaderLocation: 8, offset: 12 * 4, format: 'float32x4' as const },
+      { shaderLocation: 9, offset: 16 * 4, format: 'float32x4' as const },
+      { shaderLocation: 10, offset: 20 * 4, format: 'float32x4' as const },
+      { shaderLocation: 11, offset: 24 * 4, format: 'float32x4' as const },
     ],
   },
 ] as unknown as readonly GPUVertexBufferLayout[];
@@ -532,14 +585,22 @@ void legacyLoadBackendPack;
  */
 export type LayoutKind = 'pbr' | 'pbr-skin' | 'hdrp-pbr' | 'sprite-urp';
 
-export type MaterialShaderBindingContract = 'group-0' | 'render-material';
+export type MaterialShaderBindingContract = 'group-0' | 'view-only' | 'render-material';
 export type MaterialShaderVertexInputContract = 'none' | 'render-material';
 
 export function resolveMaterialShaderBindingContract(
   source: string,
 ): MaterialShaderBindingContract {
   const withoutComments = source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/.*$/gmu, '');
-  return /@group\s*\(/u.test(withoutComments) ? 'render-material' : 'group-0';
+  const groups = [...withoutComments.matchAll(/@group\s*\(\s*(\d+)\s*\)/gu)].map((match) =>
+    Number(match[1]),
+  );
+  if (groups.length === 0) return 'group-0';
+  const declaresView =
+    /@group\s*\(\s*0\s*\)\s*@binding\s*\(\s*0\s*\)\s*var\s*<\s*uniform\s*>\s*view(?:X_naga_oil_mod_[A-Z0-9]+)?\b/u.test(
+      withoutComments,
+    );
+  return declaresView && groups.every((group) => group === 0) ? 'view-only' : 'render-material';
 }
 
 export function resolveMaterialShaderVertexInputContract(
@@ -1372,6 +1433,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     materialBgl: BindGroupLayout;
     pipelineLayout: PipelineLayout;
   } | null = null;
+  let viewOnlyMaterialPipelineLayout: PipelineLayout | null = null;
+  const preparedMaterialPipelineLayoutCache = new Map<string, PipelineLayout>();
   // feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): per-shader material
   // BGL + pipeline layout cache. A custom material shader declaring >3
   // user-region textures (e.g. parallax `heightTexture`) needs a material BGL
@@ -1405,6 +1468,40 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     }
     group0MaterialLayout = { materialBgl: bglRes.value, pipelineLayout: plRes.value };
     return group0MaterialLayout;
+  };
+  const getOrBuildViewOnlyMaterialPipelineLayout = (): PipelineLayout | null => {
+    if (viewOnlyMaterialPipelineLayout !== null) return viewOnlyMaterialPipelineLayout;
+    if (pipelineState === null) return null;
+    const plRes = internals.device.createPipelineLayout({
+      label: 'material-view-only-pipeline-layout',
+      bindGroupLayouts: [pipelineState.viewBindGroupLayout],
+    });
+    if (!plRes.ok) {
+      internals.errorRegistry.fire(plRes.error);
+      return null;
+    }
+    viewOnlyMaterialPipelineLayout = plRes.value;
+    return viewOnlyMaterialPipelineLayout;
+  };
+  const getOrBuildPreparedMaterialPipelineLayout = (
+    materialShaderId: string,
+  ): PipelineLayout | null => {
+    const cached = preparedMaterialPipelineLayoutCache.get(materialShaderId);
+    if (cached !== undefined) return cached;
+    if (pipelineState === null) return null;
+    const materialBgl =
+      getOrBuildPerShaderMaterialLayout(materialShaderId)?.materialBgl ??
+      pipelineState.materialBindGroupLayout;
+    const result = internals.device.createPipelineLayout({
+      label: `prepared-material-pl-${materialShaderId}`,
+      bindGroupLayouts: [pipelineState.viewBindGroupLayout, materialBgl],
+    });
+    if (!result.ok) {
+      internals.errorRegistry.fire(result.error);
+      return null;
+    }
+    preparedMaterialPipelineLayoutCache.set(materialShaderId, result.value);
+    return result.value;
   };
   // Returns the per-shader { materialBgl, pipelineLayout } for a custom shader
   // whose user-region texture count exceeds the built-in 4, or null when the
@@ -1604,6 +1701,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
               : 'render-material';
           })();
     const group0Layout = bindingContract === 'group-0' ? getOrBuildGroup0MaterialLayout() : null;
+    const viewOnlyLayout =
+      bindingContract === 'view-only' ? getOrBuildViewOnlyMaterialPipelineLayout() : null;
+    const preparedMaterialLayout =
+      bindingContract === 'render-material' &&
+      materialShaderId !== undefined &&
+      (vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance ||
+        vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance)
+        ? getOrBuildPreparedMaterialPipelineLayout(materialShaderId)
+        : null;
     const vertexInputContract =
       materialShaderId === undefined
         ? 'render-material'
@@ -1616,9 +1722,13 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const pipelineLayout =
       group0Layout !== null
         ? group0Layout.pipelineLayout
-        : perShaderLayout !== null
-          ? perShaderLayout.pipelineLayout
-          : selectPipelineLayoutForVariant(pipelineState, variantSet, layoutKind);
+        : viewOnlyLayout !== null
+          ? viewOnlyLayout
+          : preparedMaterialLayout !== null
+            ? preparedMaterialLayout
+            : perShaderLayout !== null
+              ? perShaderLayout.pipelineLayout
+              : selectPipelineLayoutForVariant(pipelineState, variantSet, layoutKind);
     if (pipelineLayout === null) return null;
     // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w16 (D-4):
     // pbr-skin -> deriveVertexBufferLayout (single SSOT for skin/non-skin
@@ -1654,40 +1764,44 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         ? []
         : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.positionSizeColorInstance
           ? POSITION_SIZE_COLOR_INSTANCE_VERTEX_BUFFERS
-          : layoutKind === 'pbr-skin'
-            ? (deriveVertexBufferLayout(
-                meshAttributes ??
-                  ({
-                    position: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                    normal: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                    uv: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                    tangent: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                    skinIndex: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                    skinWeight: PBR_SKIN_SENTINEL_ATTR_BUFFER,
-                  } satisfies VertexAttributeMap),
-                resolvedUvSetCount !== undefined
-                  ? { shaderUvSetCount: resolvedUvSetCount }
-                  : undefined,
-              ) as unknown as readonly GPUVertexBufferLayout[])
-            : meshAttributes !== undefined ||
-                (resolvedUvSetCount !== undefined && resolvedUvSetCount > 1)
-              ? (deriveVertexBufferLayout(
-                  meshAttributes ?? DEFAULT_VERTEX_ATTRS,
-                  resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
-                    ? { shaderUvSetCount: resolvedUvSetCount }
-                    : undefined,
-                ) as unknown as readonly GPUVertexBufferLayout[])
-              : ([
-                  {
-                    arrayStride: 12 * 4,
-                    attributes: [
-                      { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
-                      { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
-                      { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
-                      { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
-                    ],
-                  },
-                ] as unknown as readonly GPUVertexBufferLayout[]);
+          : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance
+            ? BILLBOARD_MATERIAL_INSTANCE_VERTEX_BUFFERS
+            : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance
+              ? MESH_GEOMETRY_MATERIAL_INSTANCE_VERTEX_BUFFERS
+              : layoutKind === 'pbr-skin'
+                ? (deriveVertexBufferLayout(
+                    meshAttributes ??
+                      ({
+                        position: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                        normal: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                        uv: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                        tangent: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                        skinIndex: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                        skinWeight: PBR_SKIN_SENTINEL_ATTR_BUFFER,
+                      } satisfies VertexAttributeMap),
+                    resolvedUvSetCount !== undefined
+                      ? { shaderUvSetCount: resolvedUvSetCount }
+                      : undefined,
+                  ) as unknown as readonly GPUVertexBufferLayout[])
+                : meshAttributes !== undefined ||
+                    (resolvedUvSetCount !== undefined && resolvedUvSetCount > 1)
+                  ? (deriveVertexBufferLayout(
+                      meshAttributes ?? DEFAULT_VERTEX_ATTRS,
+                      resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
+                        ? { shaderUvSetCount: resolvedUvSetCount }
+                        : undefined,
+                    ) as unknown as readonly GPUVertexBufferLayout[])
+                  : ([
+                      {
+                        arrayStride: 12 * 4,
+                        attributes: [
+                          { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
+                          { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
+                          { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
+                          { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
+                        ],
+                      },
+                    ] as unknown as readonly GPUVertexBufferLayout[]);
     return {
       device: internals.device,
       shaderModuleFactory: getShaderModuleAdapter(),
@@ -1942,7 +2056,10 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           meshAttributes ??
           (vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.positionSizeColorInstance
             ? PREPARED_INSTANCE_VERTEX_ATTRS
-            : DEFAULT_VERTEX_ATTRS),
+            : vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance ||
+                vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance
+              ? PREPARED_MATERIAL_INSTANCE_VERTEX_ATTRS
+              : DEFAULT_VERTEX_ATTRS),
         // Thread the shader-declared count whenever it is greater than one.
         // Built-in PBR reserves all eight supported UV inputs; single-UV meshes
         // remain byte-stable because missing sets are clamp-to-last aliases.
@@ -2236,6 +2353,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const renderSystem: RenderSystem = createRenderSystem({
     canvas: internals.canvas,
     featureHost: internals.featureHost,
+    shaderModuleFactory: getShaderModuleAdapter(),
     profiler: internals.options?.profiler,
     // feat-20260622-s5 M3 / w17: device + context read live off `internals` via
     // getters so the recover() rebuild (which swaps internals.device /
@@ -2330,6 +2448,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     store: gpuStore,
     input: RENDERER_INPUT_FACADE,
     ready,
+    observeCurrentFrame(options) {
+      return renderSystem.observeCurrentFrame(options);
+    },
     get frustumStats() {
       return renderSystem.frustumStats;
     },
@@ -2578,11 +2699,11 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
      *
      * feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21
      * 6-step cascade (plan-strategy D-2 ordering):
-     *   1. `gpuStore.destroyAll()`           -- texture / cubemap / mesh maps
-     *   2. `renderSystem.disposeFrameState()` -- graph.drain() + instanceBuffers
-     *   3. `featureHost.dispose()`           -- feature resources + lifecycle
-     *   4. `clearIblCacheForDevice(device)`  -- per-device IBL pipeline cache
-     *   5. `context.unconfigure()`           -- canvas-context teardown
+     *   1. `context.unconfigure()`           -- release the current surface image
+     *   2. `gpuStore.destroyAll()`           -- texture / cubemap / mesh maps
+     *   3. `renderSystem.disposeFrameState()` -- graph.drain() + instanceBuffers
+     *   4. `featureHost.dispose()`           -- feature resources + lifecycle
+     *   5. `clearIblCacheForDevice(device)`  -- per-device IBL pipeline cache
      *   6. `lostRegistry.clear() / errorRegistry.clear()`
      *
      * Each step runs inside its own try/catch (D-3 method A): a sub-step
@@ -2608,14 +2729,23 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      // Step 1: release every Buffer / Texture handle owned by the runtime
+      // Release the current swap-chain image before destroying any resource
+      // wrappers that may share its underlying device allocation. The wgpu
+      // WebGL2 surface owns an explicit SurfaceTexture; leaving this until
+      // after the resource sweep lets wasm drop it against a dead Surface.
+      try {
+        internals.context.unconfigure();
+      } catch (cause) {
+        internals.errorRegistry.fire(wrapDisposeError(cause, 'context.unconfigure'));
+      }
+      // Step 2: release every Buffer / Texture handle owned by the runtime
       // GPU residency layer (feat-20260601-gpu-resource-store-extraction).
       try {
         gpuStore.destroyAll();
       } catch (cause) {
         internals.errorRegistry.fire(wrapDisposeError(cause, 'gpuStore.destroyAll'));
       }
-      // Step 2: drain the per-frame render-graph pool + the per-entity
+      // Step 3: drain the per-frame render-graph pool + the per-entity
       // instanceBuffers GPU storage cache. Both walks live on the
       // RenderSystem closure (frameState is closure-private).
       try {
@@ -2623,7 +2753,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       } catch (cause) {
         internals.errorRegistry.fire(wrapDisposeError(cause, 'renderSystem.disposeFrameState'));
       }
-      // Step 3: release feature-owned resources and invoke feature disposal
+      // Step 4: release feature-owned resources and invoke feature disposal
       // hooks after render-graph state has been drained. The host is already
       // idempotent, and its structured cleanup detail is preserved by the
       // error registry when a feature cleanup fails.
@@ -2635,7 +2765,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       } catch (cause) {
         internals.errorRegistry.fire(wrapDisposeError(cause, 'featureHost.dispose'));
       }
-      // Step 4: drop the per-device IBL pipeline cache entry. The GPU
+      // Step 5: drop the per-device IBL pipeline cache entry. The GPU
       // pipeline / texture handles inside the entry are released
       // implicitly when the device tears down (spec contract); clearing
       // the WeakMap entry lets GC reclaim the JS-side cache record.
@@ -2643,13 +2773,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         clearIblCacheForDevice(internals.device);
       } catch (cause) {
         internals.errorRegistry.fire(wrapDisposeError(cause, 'clearIblCacheForDevice'));
-      }
-      // Step 5: tear down the canvas context. Idempotent per spec: a second
-      // unconfigure() on an already-unconfigured context is a no-op.
-      try {
-        internals.context.unconfigure();
-      } catch (cause) {
-        internals.errorRegistry.fire(wrapDisposeError(cause, 'context.unconfigure'));
       }
       // Step 6: detach the listener registries so any post-dispose error
       // event (race with the spec layer) does not fan out to user-supplied
@@ -2767,7 +2890,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // stable references; only `internals.device` changed).
       materialShaderPipelineCache.clear();
       perShaderMaterialLayoutCache.clear();
+      preparedMaterialPipelineLayoutCache.clear();
       group0MaterialLayout = null;
+      viewOnlyMaterialPipelineLayout = null;
       gpuStore.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: MipmapBlitDevice descriptors are typed `any`; RhiDevice satisfies the shape
         internals.device as any,
@@ -4251,40 +4376,35 @@ async function prepareMaterialShaders(
     }
   }
 
-  // ── Step 1c: register forgeax::default-shadow-caster from manifest entries ──
+  // ── Step 1c: register forgeax::default-shadow-caster from its manifest identity ──
   // feat-20260609-pipeline-driven-pass-selector-shadowcaster-via-mat M3 / T-007:
-  // shadow_caster.wgsl is a vertex-only depth pass (29 lines). It enters the
-  // manifest as a general entry (no .material.json sidecar) — not via the
-  // materialShaders[] path. Detect it with the same marker as the legacy triage
-  // (@location(0) position without @location(1) normal) and register it as the
-  // 6th built-in material shader.
+  // The reserved material-shader identifier is the SSOT. Content heuristics are
+  // invalid here: a game-authored vertex-only shader can legitimately expose
+  // position without normal (billboards and procedural VFX commonly do), and
+  // must never be mistaken for the engine shadow caster merely because it is
+  // encountered first in the flat manifest.
   const shadowCasterIdentifier = 'forgeax::default-shadow-caster';
   if (!registry.findMaterialArtifact(shadowCasterIdentifier).ok) {
-    for (const entry of registry.entries()) {
-      if (
-        entry.wgsl.includes('@location(0) position') &&
-        !entry.wgsl.includes('@location(1) normal')
-      ) {
-        // shadow_caster.wgsl is vertex-only (29 lines) with no bindings;
-        // empty paramSchema. M3 / w12-w13 (D-2 / D-12): derive([]) returns
-        // bglEntries=[], graceful empty-schema path; the separate
-        // bind-layout sidecar field is gone — paramSchema is the SSOT.
-        registry.installMaterialArtifact(shadowCasterIdentifier, {
-          source: entry.wgsl,
-          paramSchema: [],
-        });
-        const shaderGuid = ENGINE_SHADER_GUIDS.get(shadowCasterIdentifier);
-        if (shaderGuid !== undefined) {
-          const shaderAsset = {
-            kind: 'shader' as const,
-            name: shadowCasterIdentifier,
-            source: entry.wgsl,
-            paramSchema: [] as readonly import('@forgeax/engine-types').ParamSchemaEntry[],
-          };
-          // feat-20260614 M8 (D-17): catalogue by GUID; no handle minted.
-          assets.catalog(shaderGuid, shaderAsset);
-        }
-        break;
+    const manifestEntry = Array.from(registry.materialShaderManifestEntries()).find(
+      (candidate) => candidate.identifier === shadowCasterIdentifier,
+    );
+    if (manifestEntry !== undefined) {
+      // shadow_caster has no authored material parameters. M3 / w12-w13
+      // (D-2 / D-12): derive([]) is the graceful empty-schema path.
+      registry.installMaterialArtifact(shadowCasterIdentifier, {
+        source: manifestEntry.composedWgsl,
+        paramSchema: [],
+      });
+      const shaderGuid = ENGINE_SHADER_GUIDS.get(shadowCasterIdentifier);
+      if (shaderGuid !== undefined) {
+        const shaderAsset = {
+          kind: 'shader' as const,
+          name: shadowCasterIdentifier,
+          source: manifestEntry.composedWgsl,
+          paramSchema: [] as readonly import('@forgeax/engine-types').ParamSchemaEntry[],
+        };
+        // feat-20260614 M8 (D-17): catalogue by GUID; no handle minted.
+        assets.catalog(shaderGuid, shaderAsset);
       }
     }
   }
@@ -4501,10 +4621,9 @@ async function buildReadyWebGPU(
     // the shared adapter cache, which is unwarmed for shadow_caster on
     // frame 1. We eagerly compile + seed the adapter cache so the lazy
     // build hit on `module-forgeax::default-shadow-caster` returns OK
-    // without a 1-frame warmup. Identified by the same heuristic Step 1c
-    // uses (vertex-only marker: `@location(0) position` without
-    // `@location(1) normal`).
-    let shadowCasterEntry: ManifestEntry | undefined;
+    // without a 1-frame warmup. Resolve it by its reserved manifest identity;
+    // game shaders are free to use any vertex-input subset.
+    let shadowCasterEntry = findEngineManifestEntry('forgeax::default-shadow-caster');
     for (const entry of manifestEntries) {
       if (entry.wgsl.includes('TonemapParams')) {
         tonemapEntry ??= entry;
@@ -4586,18 +4705,6 @@ async function buildReadyWebGPU(
       // the bloom struct-name markers above.
       if (entry.wgsl.includes('fs_ssao_calc')) {
         ssaoEntry ??= entry;
-        continue;
-      }
-      // feat-20260609 R3-fixup: shadow_caster.wgsl marker — vertex-only
-      // depth pass, identified by `@location(0) position` without
-      // `@location(1) normal` (matches Step 1c heuristic in
-      // prepareMaterialShaders). Caught before the unlit fallback so the
-      // module gets eagerly baked and seeded into the adapter cache.
-      if (
-        entry.wgsl.includes('@location(0) position') &&
-        !entry.wgsl.includes('@location(1) normal')
-      ) {
-        shadowCasterEntry ??= entry;
         continue;
       }
       unlitEntry ??= entry;
@@ -4799,6 +4906,19 @@ async function buildReadyWebGPU(
       seedShaderModule(`module-forgeax::default-standard-pbr#${pbrVariant.definesKey}`, pbrModule);
     }
 
+    // M2-07-c: Materials.standard with an explicit renderState reaches the
+    // lazy material pipeline path, whose module label includes the requested
+    // variant set. Reuse the boot-compiled PBR module only for manifest
+    // variants with byte-identical composed WGSL; HDRP and WebGL2 variants
+    // keep their own module identities and are never aliased here.
+    for (const materialEntry of registry.materialShaderManifestEntries()) {
+      for (const variant of materialEntry.variants) {
+        if (variant.composedWgsl === pbrEntry.wgsl) {
+          seedShaderModule(`module-${materialEntry.identifier}#${variant.definesKey}`, pbrModule);
+        }
+      }
+    }
+
     const unlitShaderResult = await runShimStep(
       () =>
         asyncCreateShaderModule
@@ -4813,6 +4933,10 @@ async function buildReadyWebGPU(
     // Seed the shared lazy adapter with the eagerly compiled module so
     // prepared color-only PSOs build synchronously on their first frame.
     seedShaderModule('unlit', unlitModule);
+    // Material render-state variants use the canonical material id as their
+    // module-cache label. Seed that alias too so a first-frame stencil,
+    // blend, or cull variant does not skip its draw while the adapter warms.
+    seedShaderModule('module-forgeax::default-unlit', unlitModule);
 
     // feat-20260609 R3-fixup: eagerly compile shadow_caster module + seed
     // the lazy MaterialShader pipeline cache adapter so the first frame's
@@ -6211,6 +6335,11 @@ async function buildReadyWebGPU(
   // directly so the alpha-blend pass writes the raw, non-srgb view of the
   // swap-chain texture; see pipeline-spec.ts SPRITE_ATTACHMENTS jsdoc).
   const runtimeSpecConstTable = buildSpecConstTable(swapChainFormats.view);
+  const runtimeLinearLdrMaterialSpecTable = buildLinearLdrMaterialSpecTable(swapChainFormats.view);
+  const runtimeMaterialPrewarmTable = [
+    ...runtimeSpecConstTable,
+    ...runtimeLinearLdrMaterialSpecTable,
+  ];
 
   // Boot-time pre-warm: build SPEC_CONST entries whose shader modules are
   // compiled. Entries referencing a missing module are silently skipped
@@ -6222,7 +6351,7 @@ async function buildReadyWebGPU(
     spriteModule !== null ||
     spriteLitModule !== null
   ) {
-    for (const spec of runtimeSpecConstTable) {
+    for (const spec of runtimeMaterialPrewarmTable) {
       const modules = shaderModuleMap.get(spec.shader.id);
       if (modules === undefined) {
         // Module not compiled (empty-manifest for this shader): skip.
@@ -6254,6 +6383,18 @@ async function buildReadyWebGPU(
     // explicit instead of collapsing into one map (charter P3).
     for (const spec of runtimeSpecConstTable) {
       if (spec.shader.variantSet === undefined) continue;
+      if (shaderModuleMap.get(spec.shader.id) === undefined) continue;
+      const key = cacheKeyOf(spec);
+      const built = pipelineCache.get(key);
+      if (built !== undefined) {
+        seedMaterialShaderPipelineCache(key, built as RenderPipeline);
+      }
+    }
+
+    // The linear-LDR geometry target is intentionally separate from the
+    // swap-chain view target. Seed every material entry, including no-variant
+    // unlit, because tonemap=none reaches this cache directly on frame one.
+    for (const spec of runtimeLinearLdrMaterialSpecTable) {
       if (shaderModuleMap.get(spec.shader.id) === undefined) continue;
       const key = cacheKeyOf(spec);
       const built = pipelineCache.get(key);

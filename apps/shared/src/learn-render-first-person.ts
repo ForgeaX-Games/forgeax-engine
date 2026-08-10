@@ -15,18 +15,13 @@ import { Time, Update } from '@forgeax/engine-ecs';
 // LO->engine bridge `engineYaw = -(yaw + pi/2)` makes identity quaternion
 // match the LO initial pose and aligns mouse-dx with camera-right.
 
-import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { App, BundlerOptions, CanvasAppError } from '@forgeax/engine-app';
 import { createApp, inputPlugin } from '@forgeax/engine-app';
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { Camera, SpotLight } from '@forgeax/engine-render';
-import {
-  createDevImportTransport,
-  createRenderer,
-  EngineEnvironmentError,
-} from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 // -------------------------------------------------------------------
@@ -187,8 +182,8 @@ export function addFirstPersonSystem(
     world.addSystem(Update, {
       name: opts.name,
       after: ['input-frame-start-scan'],
-      queries: [{ with: [Transform, Camera, Entity] }, { with: [Transform, SpotLight, Entity] }],
-      fn: (world, queryResults) => {
+      queries: [{ write: [Transform], with: [Camera] }, { write: [Transform, SpotLight] }],
+      fn: (world, queries) => {
         const snapshot = renderer.input.snapshot(world);
         if (snapshot === undefined) return;
         const time = world.getResource(Time);
@@ -198,32 +193,18 @@ export function addFirstPersonSystem(
         let camPosX = 0;
         let camPosY = 0;
         let camPosZ = 3;
-        for (const bundles of queryResults[0]) {
-          for (let i = 0; i < bundles.Entity.self.length; i++) {
-            // Flat stride-N array columns (feat-20260709 M2): row i lanes at
-            // pos[i*3+a] / quat[i*4+a].
-            camPosX = (bundles.Transform.pos[i * 3] ?? 0) + displacement.x;
-            camPosY = (bundles.Transform.pos[i * 3 + 1] ?? 0) + displacement.y;
-            camPosZ = (bundles.Transform.pos[i * 3 + 2] ?? 0) + displacement.z;
-            bundles.Transform.pos[i * 3] = camPosX;
-            bundles.Transform.pos[i * 3 + 1] = camPosY;
-            bundles.Transform.pos[i * 3 + 2] = camPosZ;
-            bundles.Transform.quat[i * 4] = qTmp[0] ?? 0;
-            bundles.Transform.quat[i * 4 + 1] = qTmp[1] ?? 0;
-            bundles.Transform.quat[i * 4 + 2] = qTmp[2] ?? 0;
-            bundles.Transform.quat[i * 4 + 3] = qTmp[3] ?? 1;
-          }
+        for (const row of queries[0]) {
+          const transform = row.mut(Transform);
+          camPosX = (transform.pos[0] ?? 0) + displacement.x;
+          camPosY = (transform.pos[1] ?? 0) + displacement.y;
+          camPosZ = (transform.pos[2] ?? 0) + displacement.z;
+          transform.pos.set([camPosX, camPosY, camPosZ]);
+          transform.quat.set([qTmp[0] ?? 0, qTmp[1] ?? 0, qTmp[2] ?? 0, qTmp[3] ?? 1]);
         }
 
-        for (const bundles of queryResults[1]) {
-          for (let i = 0; i < bundles.Entity.self.length; i++) {
-            bundles.Transform.pos[i * 3] = camPosX;
-            bundles.Transform.pos[i * 3 + 1] = camPosY;
-            bundles.Transform.pos[i * 3 + 2] = camPosZ;
-            bundles.SpotLight.direction[i * 3] = forward.x;
-            bundles.SpotLight.direction[i * 3 + 1] = forward.y;
-            bundles.SpotLight.direction[i * 3 + 2] = forward.z;
-          }
+        for (const row of queries[1]) {
+          row.mut(Transform).pos.set([camPosX, camPosY, camPosZ]);
+          row.mut(SpotLight).direction.set([forward.x, forward.y, forward.z]);
         }
       },
     });
@@ -231,26 +212,22 @@ export function addFirstPersonSystem(
     world.addSystem(Update, {
       name: opts.name,
       after: ['input-frame-start-scan'],
-      queries: [{ with: [Transform, Camera, Entity] }],
-      fn: (world, queryResults) => {
+      queries: [{ write: [Transform], with: [Camera] }],
+      fn: (world, queries) => {
         const snapshot = renderer.input.snapshot(world);
         if (snapshot === undefined) return;
         const time = world.getResource(Time);
         const dt = time.delta;
         const { displacement } = tick(dt, snapshot);
 
-        for (const bundles of queryResults[0]) {
-          for (let i = 0; i < bundles.Entity.self.length; i++) {
-            bundles.Transform.pos[i * 3] = (bundles.Transform.pos[i * 3] ?? 0) + displacement.x;
-            bundles.Transform.pos[i * 3 + 1] =
-              (bundles.Transform.pos[i * 3 + 1] ?? 0) + displacement.y;
-            bundles.Transform.pos[i * 3 + 2] =
-              (bundles.Transform.pos[i * 3 + 2] ?? 0) + displacement.z;
-            bundles.Transform.quat[i * 4] = qTmp[0] ?? 0;
-            bundles.Transform.quat[i * 4 + 1] = qTmp[1] ?? 0;
-            bundles.Transform.quat[i * 4 + 2] = qTmp[2] ?? 0;
-            bundles.Transform.quat[i * 4 + 3] = qTmp[3] ?? 1;
-          }
+        for (const row of queries[0]) {
+          const transform = row.mut(Transform);
+          transform.pos.set([
+            (transform.pos[0] ?? 0) + displacement.x,
+            (transform.pos[1] ?? 0) + displacement.y,
+            (transform.pos[2] ?? 0) + displacement.z,
+          ]);
+          transform.quat.set([qTmp[0] ?? 0, qTmp[1] ?? 0, qTmp[2] ?? 0, qTmp[3] ?? 1]);
         }
       },
     });
@@ -264,17 +241,7 @@ export function addFirstPersonSystem(
 export async function createFirstPersonControls(
   target: HTMLCanvasElement,
   overrideBackend: InputBackend,
-  // feat-20260608-create-app-param-surface-trim / M3 / D-7: helper signature
-  // accepts a BundlerOptions third-arg defaulting to the virtual-module
-  // adapter PRE-MERGED with the dev import transport. Callers (LO 2.x
-  // lighting + 6.pbr IBL demos) thus pass nothing or just adapter() and
-  // still get `createDevImportTransport()` wired -- needed because every
-  // override-backend demo path resolves raw-source textures through POST
-  // /__import on a DDC miss; absent transport => `asset-not-imported`.
-  bundler: BundlerOptions = {
-    ...forgeaxBundlerAdapter(),
-    importTransport: createDevImportTransport(),
-  },
+  bundler: BundlerOptions,
 ): Promise<{ ok: true; value: App } | { ok: false; error: CanvasAppError }> {
   try {
     const renderer = await createRenderer(target, {}, bundler);

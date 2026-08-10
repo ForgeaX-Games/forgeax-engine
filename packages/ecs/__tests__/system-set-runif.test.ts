@@ -21,7 +21,7 @@ describe('system-set-runif.test.ts', () => {
   // ──────────────────────────────────────────────────────────────────────────
 
   describe('AC-05 — set-level runIf basic behavior', () => {
-    it('set runIf false: all systems in set are skipped (fn not called, queryRun not executed)', () => {
+    it('set runIf false: all systems in set are skipped before query iteration', () => {
       const world = new World();
       const log: string[] = [];
       let conditionValue = false;

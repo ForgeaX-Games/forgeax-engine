@@ -56,7 +56,7 @@ for (const root of SCAN_ROOTS) {
 
 const failures = [];
 
-// feat-20260609 M4 merged the original test/errors.test.ts (which used
+// feat-20260609 M4 merged the original src/__tests__/errors.test.ts (which used
 // `(err.detail as { ... }).X` switch casts as a typedoc-style fixture for the
 // 9-member exhaustive map) into packages/pack/src/__tests__/pack.unit.test.ts.
 // The merged file already has @ts-nocheck on line 1; AC-07 narrowing intent

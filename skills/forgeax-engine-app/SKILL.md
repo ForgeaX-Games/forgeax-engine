@@ -4,7 +4,8 @@ description: >-
   ForgeaX application bootstrap and browser frame loop. Use when creating an App,
   selecting a World time policy, handling Result failures, migrating former frame
   callbacks to Update systems, wiring input and plugins, or attaching the opt-in
-  Profiler capability.
+  Profiler capability. Use also when selecting main-serial, engine-worker, or shared
+  execution and diagnosing capability, performance, poison, or rebuild reports.
 ---
 
 # forgeax-engine-app
@@ -37,6 +38,31 @@ app.start().unwrap();
 ```
 
 The canvas form creates its World, renderer, default plugins, browser input backend, and frame loop. `app.start()` only arms the browser loop after the factory Result is successful.
+
+## Worker execution
+
+```ts
+const result = await createApp(canvas, {
+  execution: {
+    tier: 'auto',
+    bootstrap: new URL('./game-bootstrap.mjs', import.meta.url),
+  },
+}, forgeaxBundlerAdapter());
+if (!result.ok) throw result.error;
+
+const app = result.value;
+app.start().unwrap();
+const report = app.execution.report();
+```
+
+| Need | Action |
+|:--|:--|
+| Maximum compatibility | Request `auto`; inspect `actualTier` and `selectionReason` |
+| Guaranteed Engine Worker | Request `engine-worker`; handle an unavailable-capability `AppError` |
+| Shared numeric Kernels | Request `shared`; serve COOP/COEP and verify SAB/Atomics facts in the report |
+| Partial Kernel write | Stop using the old World; call `app.execution.rebuild()` and use the new identity |
+
+World, Renderer, and WebGPU stay together in the Engine Worker. The Host owns DOM input, one-credit rAF pacing, Web Audio, and diagnostic projection. Shared Kernel Workers receive only bound numeric spans. Use [`packages/app/schema/execution-report.schema.json`](../../packages/app/schema/execution-report.schema.json) as the report authority and [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md) for Kernel eligibility.
 
 ## Optional CPU profiling
 
@@ -96,22 +122,23 @@ const renderer = await createRenderer(canvas, { features: [feature] });
 
 ### Prepared graphics and recovery
 
-For a producer that needs prepared graphics, keep the public imports split by
-owner: `RenderFeature` and prepared declarations come from
-`@forgeax/engine-render`, `createRenderer` comes from
-`@forgeax/engine-runtime`, and producer data such as `ParticleRenderBatch`
-comes from `@forgeax/engine-vfx`.
+For a producer that needs prepared graphics or compute, keep the public imports
+split by owner: `RenderFeature` and prepared declarations come from
+`@forgeax/engine-render`; `createRenderer` comes from
+`@forgeax/engine-runtime`; the producer owns its extracted frame data.
 
 ```ts
 import { ok } from '@forgeax/engine-types';
 import type { RenderFeature } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
-import type { ParticleRenderBatch } from '@forgeax/engine-vfx';
+interface PreparedFrame {
+  readonly visibleCount: number;
+}
 
-const batch: ParticleRenderBatch = { batches: [] };
+const frame: PreparedFrame = { visibleCount: 0 };
 const feature = {
   identity: 'package.prepared-feature',
-  extract: () => ok(batch),
+  extract: () => ok(frame),
   prepare: (_data, context) => {
     const pipeline = context.graphics.preparePipeline('package.pipeline', {
       shader: 'package.shader',
@@ -123,14 +150,13 @@ const feature = {
     return ok(undefined);
   },
   contribute: () => ok(undefined),
-} satisfies RenderFeature<ParticleRenderBatch>;
+} satisfies RenderFeature<PreparedFrame>;
 
 const renderer = await createRenderer(canvas, { features: [feature] });
 ```
 
-This prepares an opaque host reference only. It does not add a visible
-particle draw path, simulation, VFX production branch, manifest, RPC/CLI
-surface, or private import; those are explicit Wave 2 out-of-scope items.
+This prepares an opaque host reference only. The producer still owns its
+compute, drawing, asset, and lifecycle policy; App remains a transparent host.
 
 Use `renderer.renderFeatureDiagnostics()` as the first recovery signal. The
 snapshot has `identity`, `order`, `status`, and `latestError`. Branch on the
@@ -146,8 +172,8 @@ For terminology and the public context boundary, use
 [`@forgeax/engine-render`](../../packages/render/README.md) and its
 [`prepared graphics declaration`](../../packages/render/src/features/prepared-graphics.ts).
 For the runtime host contract, use
-[`packages/runtime/README.md`](../../packages/runtime/README.md). For producer
-batch data, use [`packages/vfx/README.md`](../../packages/vfx/README.md).
+[`packages/runtime/README.md`](../../packages/runtime/README.md). For code-first
+GPU particles, use [`packages/vfx-render/README.md`](../../packages/vfx-render/README.md).
 
 ## Frame-loop contract
 

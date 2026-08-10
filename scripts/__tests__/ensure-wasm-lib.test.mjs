@@ -99,5 +99,6 @@ describe('ensureWasm (shared lib)', () => {
     expect(log).toHaveBeenLastCalledWith(
       expect.stringContaining('pnpm -F @forgeax/engine-fbx fetch-wasm'),
     );
+    expect(log).toHaveBeenLastCalledWith(expect.stringContaining('OS-native fallbacks'));
   });
 });

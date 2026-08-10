@@ -14,8 +14,10 @@ describe('Boss Lightning Dawn pixel probe contract', () => {
     expect(source).toContain('billboard');
     expect(source).toContain('mesh');
     expect(source).toContain('TARGET_FRAMES = 300');
-    expect(source).toContain('bucketCount');
-    expect(source).toContain('drawCount');
+    expect(source).toContain('queuedIntents');
+    expect(source).toContain('runtimeDiagnostics');
+    expect(source).toContain('billboardEnergy');
+    expect(source).toContain('meshEnergy');
     expect(source).toContain('strikeOnly');
     expect(source).toContain('readiness');
     expect(source).toContain('readinessFrameLimit');

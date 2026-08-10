@@ -12,7 +12,9 @@ export type {
   AnimationDiagnostic,
   AnimationDiagnosticCode,
   AnimationDiagnosticDetail,
+  AnimationDiagnosticListener,
 } from './animation-diagnostic';
+export { subscribeAnimationDiagnostics } from './animation-diagnostic';
 export { AnimationPlayer } from './animation-player';
 /** Stable target identity, explicit ownership, and atomic batch binding. */
 export {

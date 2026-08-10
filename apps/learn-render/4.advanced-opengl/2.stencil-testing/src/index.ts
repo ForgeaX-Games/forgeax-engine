@@ -44,7 +44,7 @@ import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, RenderQueue, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -55,6 +55,9 @@ import './outline-solid.wgsl';
 const OUTLINE_SHADER_ID = 'learn_render::outline_solid';
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-2-stencil-testing',
+);
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json
 const METAL_GUID_STR = '019e3969-1d47-760f-982e-7bad1ffd969c';
@@ -102,7 +105,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.2 stencil-testing] createApp failed:', appRes.error);
@@ -119,6 +122,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const assets = renderer.assets;
 
   // Wire the pack-index URL for GUID-based texture loading.
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Parse texture GUIDs.

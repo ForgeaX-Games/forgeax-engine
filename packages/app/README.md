@@ -29,6 +29,49 @@ app.start().unwrap();
 
 The canvas form creates a World, renderer, default plugins, browser input backend, and rAF loop. Handle the `Result` before calling `start`.
 
+## Execution tiers
+
+`execution` moves the complete World, Renderer, and GPU owner into one Engine Worker. The Host keeps DOM input, frame credit, Web Audio, and inspection. `shared` adds a lazy persistent Kernel Worker pool over shared ECS numeric columns; it does not split the live World or render graph across realms.
+
+```ts
+const result = await createApp(canvas, {
+  execution: {
+    tier: 'auto',
+    bootstrap: new URL('./game-bootstrap.mjs', import.meta.url),
+  },
+}, forgeaxBundlerAdapter());
+if (!result.ok) throw result.error;
+
+const app = result.value;
+app.start().unwrap();
+const report = app.execution.report();
+console.log(report.requestedTier, report.actualTier, report.selectionReason);
+
+if (report.world.health === 'poisoned') {
+  const rebuilt = await app.execution.rebuild();
+  if (!rebuilt.ok) throw rebuilt.error;
+}
+```
+
+```mermaid
+flowchart LR
+    H["Host: DOM input, frame credit, Web Audio"] --> E["Engine Worker: World, Renderer, WebGPU"]
+    E --> K["Kernel Workers: eligible QuerySpan shards"]
+    K --> E
+    E --> H
+```
+
+| Requested tier | Runtime shape | Selection rule |
+|:--|:--|:--|
+| `main-serial` | Host-owned World and Renderer | Always available |
+| `engine-worker` | Co-located Engine Worker | Requires Worker, OffscreenCanvas, and Worker WebGPU |
+| `shared` | Engine Worker plus SAB Kernel pool | Also requires isolation headers, SharedArrayBuffer, and Atomics wait |
+| `auto` | Best available proven tier | Reports the actual tier and reason; never disguises fallback |
+
+An explicit unavailable tier returns a structured `AppError`; only `auto` falls back. Serve `shared` with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` or `credentialless`, then verify the Worker-realm facts in `app.execution.report()`. Every SharedKernel module is imported and export-checked in every lane before the Engine Worker reports ready, so an invalid module fails before the first shared write. A partial Kernel write poisons the World, stops update/draw, and requires explicit rebuild to obtain a new World identity.
+
+The machine-readable report contract is [`schema/execution-report.schema.json`](./schema/execution-report.schema.json). Shared Kernel eligibility and storage rules are owned by [`@forgeax/engine-ecs`](../ecs). The production reference and benchmark commands are in [`hello/multithreaded-execution`](../../apps/hello/multithreaded-execution).
+
 ## Renderer feature passthrough
 
 `CreateAppOptions.features` is the transparent app seam for producer-owned
@@ -38,13 +81,13 @@ therefore remains the owner of its feature and lifecycle:
 
 ```ts
 import { createApp } from '@forgeax/engine-app';
-import { createParticleRuntimeHost } from '@forgeax/engine-vfx-render';
+import { createVfxRuntimeHost } from '@forgeax/engine-vfx-render';
 
 declare const canvas: HTMLCanvasElement;
-declare const camera: import('@forgeax/engine-vfx-render').ParticleRenderFeatureOptions['camera'];
+declare const camera: import('@forgeax/engine-vfx-render').ParticleRenderCameraSource;
 declare const bundler: import('@forgeax/engine-app').BundlerOptions;
 
-const vfxHost = createParticleRuntimeHost({ camera });
+const vfxHost = createVfxRuntimeHost({ camera });
 const result = await createApp(canvas, { features: [vfxHost.feature] }, bundler);
 if (!result.ok) {
   console.error(result.error.code, result.error.hint);
@@ -56,7 +99,7 @@ result.value.start().unwrap();
 The app does not attach a VFX World or registry. Call
 `vfxHost.attachWorld({ world, assets })` before the first update and
 `vfxHost.detachWorld({ world })` during teardown. Inspect structured Result
-errors by `code`, `expected`, `actual`, and `hint`; do not treat a successful App
+errors by `code`, `expected`, `hint`, and `detail`; do not treat a successful App
 construction as proof that a particle asset is ready or visible.
 
 ## Frame-loop responsibility
@@ -219,6 +262,9 @@ owns its renderer, World, input backend, and explicit plugin source list.
 | `createApp({ renderer, world, plugins?, ... })` | `Promise<Result<App, AssembleAppError>>` | Assembles host-owned renderer and World without replacing their policy. |
 | `CreateAppOptions.time` | `TimePolicy` | Policy used only for the newly created canvas-form World. |
 | `CreateAppOptions.features` | `readonly RenderFeature<unknown>[]` | Existing renderer feature seam, forwarded by reference and order. |
+| `CreateAppOptions.execution` | `ExecutionOptions` | Selects `auto`, `main-serial`, `engine-worker`, or `shared` and names the bootstrap module. |
+| `App.execution.report()` | `ExecutionReport` | Returns the schema-valid requested/actual tier, capabilities, health, performance, audio, and fault projection. |
+| `App.execution.rebuild()` | `Promise<Result<ExecutionReport, AppError>>` | Rebuilds only a poisoned Worker World with a new identity. |
 | `App.start()` | `Result<void, AppError>` | Arms the rAF loop. |
 | `App.stop()` / `pause()` / `resume()` | `Result<void, AppError>` | Controls the rAF lifecycle. |
 | `App.onError(callback)` | `() => void` | Subscribes to structured World and renderer failures. |

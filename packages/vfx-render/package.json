@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Downstream production renderer for CPU particle observations.",
+  "description": "Downstream persistent GPU simulation and indirect renderer for cooked code-first particle effects.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -23,17 +23,13 @@
   "dependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*"
   },
-  "devDependencies": {
-    "@forgeax/engine-plugin": "workspace:*",
-    "@forgeax/engine-render-graph": "workspace:*",
-    "@forgeax/engine-rhi": "workspace:*",
-    "@forgeax/engine-rhi-null": "workspace:*"
-  },
+  "devDependencies": {},
   "forgeax": {
     "metrics": {
       "bundle-size": {
@@ -47,7 +43,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "particle draw scaling is covered by integration tests"
+        "reason": "no adapter-qualified frame benchmark is frozen yet; structural scaling remains an integration gate"
       },
       "gate": {
         "enabled": true,

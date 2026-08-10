@@ -129,6 +129,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 }
 
 {
+  describe('direct-light physical semantic inputs', () => {
+    it('keeps the three public light kinds on the shared intensity and range surface', () => {
+      expect(DirectionalLight.schema.intensity).toBe('f32');
+      expect(PointLight.schema.intensity).toBe('f32');
+      expect(SpotLight.schema.intensity).toBe('f32');
+      expect(PointLight.schema.range).toBe('f32');
+      expect(SpotLight.schema.range).toBe('f32');
+      expect('physicalIntensity' in PointLight.schema).toBe(false);
+      expect('physicalIntensity' in SpotLight.schema).toBe(false);
+    });
+
+    it('uses meters for finite point and spot ranges without a hidden zero-range multiplier', () => {
+      const world = new World();
+      const point = world.spawn({ component: PointLight, data: { range: 2 } }).unwrap();
+      const spot = world
+        .spawn({ component: SpotLight, data: { direction: [0, -1, 0], range: 2 } })
+        .unwrap();
+
+      expect(world.get(point, PointLight).unwrap().range).toBe(2);
+      expect(world.get(spot, SpotLight).unwrap().range).toBe(2);
+      expect(computeInvRangeSquared(0)).toBe(1e8);
+      expect(computeInvRangeSquared(Number.POSITIVE_INFINITY)).toBe(0);
+    });
+  });
+}
+
+{
   // ─── feat-20260709 M2 / w5: direction fail-fast validate rejection ───
   // AC-03 (+ AC-02 per research-decisions D-R1): direction has NO layer-2
   // default, so an omitted direction lands the array layer-3 all-zero [0,0,0].

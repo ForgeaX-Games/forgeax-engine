@@ -1,16 +1,9 @@
-// pick-errors.test-d.ts — AC-205 closed-union exhaustiveness guard for the
-// picking error surface (feat-20260705 M2 / w26).
+// pick-errors.test-d.ts — PickError code-owner and closed-union declaration guard.
 //
-// AC-205 requires a test-d regression guard proving the picking error unions
-// stay closed and exhaustively switchable WITHOUT a `default` arm. F13 confirmed
-// there are ZERO source-code `switch` consumers of PickErrorCode at the app level
-// (M2 consumption is only the `pick` function), so this guard supplies the
-// double evidence AC-205 prescribes:
-//   (b) an external consumer CAN `import type { PickErrorCode } from
-//       '@forgeax/engine-picking'` and write an exhaustive switch (no default).
-//   (c) an assertNever-terminated switch enumerates every member; adding a
-//       member later without extending the switch breaks `pnpm test:unit`
-//       (the typecheck pass picks up any *.test-d.ts).
+// The guard proves the package barrel keeps the public PickErrorCode projection
+// equal to the PickError.code owner, rejects an invalid literal, and remains
+// exhaustively switchable without a `default` arm. Adding a member later without
+// extending the switch breaks the declaration typecheck.
 //
 // Both closed unions the picking barrel exports are covered:
 //   - PickErrorCode  — single member ('camera-component-missing'), thrown by pick().
@@ -20,14 +13,14 @@
 // capability across the package boundary — this file is the compile-time proof.
 
 // (b) external-consumer import path: the type resolves from the package barrel.
-import type { PickErrorCode, PickTileError } from '@forgeax/engine-picking';
+import type { PickError, PickErrorCode, PickTileError } from '@forgeax/engine-picking';
 import { expectTypeOf, test } from 'vitest';
 
 function assertNever(_x: never): never {
   throw new Error('exhaustive');
 }
 
-// (c) PickErrorCode exhaustive switch, no default — assertNever traps a future
+// PickErrorCode exhaustive switch, no default — assertNever traps a future
 // member that is added without extending this switch.
 function describePickErrorCode(code: PickErrorCode): string {
   switch (code) {
@@ -50,8 +43,17 @@ function describePickTileError(err: PickTileError): string {
   }
 }
 
-test('PickErrorCode is the closed single-member union', () => {
+test('PickErrorCode derives the exact closed surface from PickError', () => {
+  expectTypeOf<PickErrorCode>().toEqualTypeOf<PickError['code']>();
   expectTypeOf<PickErrorCode>().toEqualTypeOf<'camera-component-missing'>();
+
+  const acceptPickErrorCode = (code: PickErrorCode): void => {
+    void code;
+  };
+  acceptPickErrorCode('camera-component-missing');
+  // @ts-expect-error invalid codes must not be accepted.
+  acceptPickErrorCode('not-a-pick-error');
+
   // Compile-time exhaustiveness (run-time noop).
   void describePickErrorCode;
 });

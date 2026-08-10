@@ -16,17 +16,7 @@
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import type { Archetype } from '../archetype';
-import { appendEntity, createArchetype, growArchetype, removeEntity } from '../archetype';
-import {
-  createArchetypeGraph,
-  getAddEdge,
-  getOrCreateArchetype,
-  getRemoveEdge,
-} from '../archetype-graph';
 import { BufferPool, SIZE_CLASSES } from '../buffer-pool';
-import { createColumn, growColumn, HAS_TRANSFER, isHotSchema } from '../column';
 import type { ComponentSchema, ScalarFieldType } from '../component';
 import {
   defineComponent,
@@ -39,8 +29,35 @@ import {
 } from '../component';
 import { Entity } from '../entity';
 import type { EntityHandle } from '../entity-handle';
-import { createQueryState, type QueryDescriptor, type QueryState, queryRun } from '../query';
+import type { Archetype } from '../storage/archetype';
+import {
+  createArchetypeGraph,
+  getAddEdge,
+  getOrCreateArchetype,
+  getRemoveEdge,
+} from '../storage/archetype-graph';
+import { createColumn, growColumn, HAS_TRANSFER, isHotSchema } from '../storage/column';
+import {
+  appendTableRow,
+  createTable as createArchetype,
+  growTable as growArchetype,
+  removeTableRow as removeEntity,
+  type Table,
+} from '../storage/table';
 import { World } from '../world';
+
+function tableColumns(table: Table) {
+  return new Map(
+    [...table.storage].map(([componentId, componentStorage]) => [
+      componentId,
+      componentStorage.fields,
+    ]),
+  );
+}
+
+function appendEntity(table: Table, entity: number): number {
+  return appendTableRow(table, entity as EntityHandle);
+}
 
 {
   // ─── from archetype-storage.test.ts ───
@@ -67,9 +84,9 @@ import { World } from '../world';
       it('creates columns for each component field', () => {
         const Pos = defineComponent('Pos', { x: { type: 'f32' }, y: { type: 'f32' } });
         const arch = createArchetype([Pos], testArchId++);
-        expect(arch.columns.has(Pos.id)).toBe(true);
+        expect(tableColumns(arch).has(Pos.id)).toBe(true);
         // biome-ignore lint/style/noNonNullAssertion: test setup guarantees Pos.id exists in columns
-        const compCols = arch.columns.get(Pos.id)!;
+        const compCols = tableColumns(arch).get(Pos.id)!;
         expect(compCols.has('x')).toBe(true);
         expect(compCols.has('y')).toBe(true);
       });
@@ -77,7 +94,7 @@ import { World } from '../world';
       it('tag component creates archetype with no data columns', () => {
         const Tag = defineComponent('ArchetypeStorageTag', {});
         const arch = createArchetype([Tag], testArchId++);
-        const compCols = arch.columns.get(Tag.id);
+        const compCols = tableColumns(arch).get(Tag.id);
         expect(compCols === undefined || compCols.size === 0).toBe(true);
       });
     });
@@ -90,7 +107,7 @@ import { World } from '../world';
         expect(row).toBe(0);
         expect(arch.size).toBe(1);
         // Entity index stored in id=0 self column (not a separate entities array)
-        const selfVal = arch.columns.get(Entity.id)?.get('self')?.view[0];
+        const selfVal = tableColumns(arch).get(Entity.id)?.get('self')?.view[0];
         expect(selfVal).toBe(42);
       });
 
@@ -103,7 +120,7 @@ import { World } from '../world';
         appendEntity(arch, 30);
 
         // biome-ignore lint/style/noNonNullAssertion: test setup guarantees C.id exists in columns
-        const cols = arch.columns.get(C.id)!;
+        const cols = tableColumns(arch).get(C.id)!;
         // biome-ignore lint/style/noNonNullAssertion: test setup guarantees 'v' field exists
         const vCol = cols.get('v')!;
         vCol.view[0] = 100;
@@ -114,7 +131,7 @@ import { World } from '../world';
         expect(arch.size).toBe(2);
 
         // Entity identity now read from id=0 self column
-        const selfCol = arch.columns.get(Entity.id)?.get('self');
+        const selfCol = tableColumns(arch).get(Entity.id)?.get('self');
         expect(selfCol).toBeDefined();
         // biome-ignore lint/style/noNonNullAssertion: guarded by expect
         expect(selfCol!.view[0]! & 0xffffff).toBe(30);
@@ -136,7 +153,7 @@ import { World } from '../world';
         const swapped = removeEntity(arch, 1);
         expect(arch.size).toBe(1);
         // Entity identity from self column
-        const selfVal = arch.columns.get(Entity.id)?.get('self')?.view[0];
+        const selfVal = tableColumns(arch).get(Entity.id)?.get('self')?.view[0];
         expect(selfVal).toBe(10);
         expect(swapped).toBeNull();
       });
@@ -151,7 +168,7 @@ import { World } from '../world';
         for (let i = 0; i < initialCap; i++) {
           appendEntity(arch, i);
           // biome-ignore lint/style/noNonNullAssertion: test setup guarantees C.id exists in columns
-          const cols = arch.columns.get(C.id)!;
+          const cols = tableColumns(arch).get(C.id)!;
           // biome-ignore lint/style/noNonNullAssertion: field 'x' guaranteed to exist
           cols.get('x')!.view[i] = i * 1.5;
         }
@@ -160,7 +177,7 @@ import { World } from '../world';
         expect(arch.capacity).toBe(initialCap * 2);
 
         // biome-ignore lint/style/noNonNullAssertion: test setup guarantees C.id exists in columns
-        const cols = arch.columns.get(C.id)!;
+        const cols = tableColumns(arch).get(C.id)!;
         for (let i = 0; i < initialCap; i++) {
           expect(cols.get('x')?.view[i]).toBeCloseTo(i * 1.5);
         }
@@ -241,6 +258,39 @@ import { World } from '../world';
 
         getOrCreateArchetype(graph, [X.id], [X]);
         expect(graph.generation).toBe(gen0 + 1);
+      });
+    });
+
+    describe('M1 storage characterization', () => {
+      it('keeps row, capacity, version, and migration owners explicit', () => {
+        const graph = createArchetypeGraph();
+        const Position = defineComponent('M1StoragePosition', { x: 'f32', y: 'f32' });
+        const Tag = defineComponent('M1StorageTag', {});
+        const source = getOrCreateArchetype(graph, [Position.id], [Position]);
+        const target = getAddEdge(graph, source, Tag.id, Tag);
+        const back = getRemoveEdge(graph, target, Tag.id);
+        const sourceTable = graph.tables[source.tableId];
+        if (sourceTable === undefined) throw new Error('source table missing');
+
+        expect(back).toBe(source);
+        expect(sourceTable.storage.has(Entity.id)).toBe(true);
+        expect(sourceTable.storage.has(Position.id)).toBe(true);
+        for (const { fields } of sourceTable.storage.values()) {
+          for (const column of fields.values()) {
+            expect(column.capacity).toBe(sourceTable.capacity);
+            expect(column.arity).toBe(1);
+          }
+        }
+
+        const initialVersion = sourceTable.version;
+        appendEntity(sourceTable, 7 as EntityHandle);
+        expect(sourceTable.size).toBe(1);
+        growArchetype(sourceTable, sourceTable.capacity * 2);
+        expect(sourceTable.version).toBe(initialVersion + 1);
+        expect(sourceTable.size).toBe(1);
+        for (const { fields } of sourceTable.storage.values()) {
+          for (const column of fields.values()) expect(column.capacity).toBe(sourceTable.capacity);
+        }
       });
     });
   });
@@ -604,6 +654,19 @@ import { World } from '../world';
     });
 
     describe('growColumn', () => {
+      it('grows an ArrayBuffer column when SharedArrayBuffer is unavailable', () => {
+        const col = createColumn('f32', 4);
+        col.view[0] = 7;
+        vi.stubGlobal('SharedArrayBuffer', undefined);
+        try {
+          const grown = growColumn(col, 8);
+          expect(grown.view[0]).toBe(7);
+          expect(grown.capacity).toBe(8);
+        } finally {
+          vi.unstubAllGlobals();
+        }
+      });
+
       it('grows column to new capacity with data intact', () => {
         const col = createColumn('f32', 4);
         col.view[0] = 1.5;
@@ -660,7 +723,7 @@ import { World } from '../world';
     describe('growColumn transfer() / fallback equivalence', () => {
       function fallbackGrow(
         col: {
-          buffer: ArrayBuffer;
+          buffer: ArrayBufferLike;
           fieldType: ScalarFieldType;
           capacity: number;
           view: { BYTES_PER_ELEMENT: number };
@@ -899,14 +962,17 @@ import { World } from '../world';
     return defineComponent(`${prefix}_${dummyCounter}`, { x: 'f32', y: 'f32' });
   }
 
-  function archetypeOf(world: World, e: EntityHandle): Archetype {
-    const graph = (world as unknown as { graph: { archetypes: Archetype[] } }).graph;
+  function archetypeOf(world: World, e: EntityHandle): Table {
+    const graph = (world as unknown as { graph: { archetypes: Archetype[]; tables: Table[] } })
+      .graph;
     const records = (world as unknown as { records: { archetypeId: number }[] }).records;
     const indexSlot = (e as unknown as number) & 0xffffff;
     const archId = records[indexSlot]?.archetypeId ?? -1;
     const arch = graph.archetypes[archId];
     if (!arch) throw new Error('archetype not found for entity');
-    return arch;
+    const table = graph.tables[arch.tableId];
+    if (!table) throw new Error('table not found for entity');
+    return table;
   }
 
   describe('entity-column.test.ts', () => {
@@ -947,16 +1013,16 @@ import { World } from '../world';
         const Position = defineSpawnComponent('AC02_Pos');
         const e = world.spawn({ component: Position, data: { x: 1, y: 2 } }).unwrap();
         const arch = archetypeOf(world, e);
-        expect(arch.columns.has(Entity.id)).toBe(true);
-        expect(arch.columns.get(Entity.id)?.has('self')).toBe(true);
+        expect(arch.storage.has(Entity.id)).toBe(true);
+        expect(arch.storage.get(Entity.id)?.fields.has('self')).toBe(true);
       });
 
       it('includes the Entity column in a bare (zero-component) spawn archetype', () => {
         const world = new World();
         const e = world.spawn().unwrap();
         const arch = archetypeOf(world, e);
-        expect(arch.columns.has(Entity.id)).toBe(true);
-        expect(arch.columns.get(Entity.id)?.has('self')).toBe(true);
+        expect(arch.storage.has(Entity.id)).toBe(true);
+        expect(arch.storage.get(Entity.id)?.fields.has('self')).toBe(true);
       });
 
       it('includes the Entity column after addComponent migration', () => {
@@ -966,8 +1032,8 @@ import { World } from '../world';
         const e = world.spawn({ component: A, data: { x: 0, y: 0 } }).unwrap();
         world.addComponent(e, { component: B, data: { x: 0, y: 0 } }).unwrap();
         const arch = archetypeOf(world, e);
-        expect(arch.columns.has(Entity.id)).toBe(true);
-        expect(arch.columns.get(Entity.id)?.has('self')).toBe(true);
+        expect(arch.storage.has(Entity.id)).toBe(true);
+        expect(arch.storage.get(Entity.id)?.fields.has('self')).toBe(true);
       });
     });
 
@@ -1025,7 +1091,7 @@ import { World } from '../world';
           }
         }
         const arch = archetypeOf(world, e);
-        expect(arch.columns.has(Entity.id)).toBe(true);
+        expect(arch.storage.has(Entity.id)).toBe(true);
         expect(world.get(e, Entity).unwrap().self).toBe(e);
       });
     });
@@ -1387,1169 +1453,6 @@ import { World } from '../world';
 
 {
   // ─── from query-preregister.test.ts ───
-  describe('query-preregister.test.ts', () => {
-    describe('Query — define before spawn (Bug 1)', () => {
-      it('query still matches entities spawned with a freshly defined component', () => {
-        const world = new World();
-        const A = defineComponent('PreReg_A', { x: { type: 'f32' } });
-        const B = defineComponent('PreReg_B', { y: { type: 'f32' } });
-
-        world.spawn({ component: A, data: { x: 1 } }, { component: B, data: { y: 2 } });
-
-        const state = createQueryState({ with: [A, B, Entity] });
-        let total = 0;
-        queryRun(state, world, (bundle) => {
-          total += bundle.Entity.self.length;
-        });
-        expect(total).toBe(1);
-      });
-
-      it('an unrelated defined component does not affect query matching', () => {
-        const world = new World();
-        const A = defineComponent('PreRegUnrel_A', { x: 'f32' });
-        const B = defineComponent('PreRegUnrel_B', { y: 'f32' });
-        defineComponent('PreRegUnrel_C', { z: 'f32' });
-
-        world.spawn({ component: A, data: { x: 1 } }, { component: B, data: { y: 2 } });
-
-        const state = createQueryState({ with: [A, B, Entity] });
-        let total = 0;
-        queryRun(state, world, (bundle) => {
-          total += bundle.Entity.self.length;
-        });
-        expect(total).toBe(1);
-      });
-
-      it('query state reused across multiple queryRun invocations matches entities spawned after first run', () => {
-        const world = new World();
-        const A = defineComponent('PreRegReuse_A', { x: { type: 'f32' } });
-        const B = defineComponent('PreRegReuse_B', { y: { type: 'f32' } });
-
-        const state = createQueryState({ with: [A, B, Entity] });
-
-        let total = 0;
-        queryRun(state, world, (bundle) => {
-          total += bundle.Entity.self.length;
-        });
-        expect(total).toBe(0);
-
-        world.spawn({ component: A, data: { x: 1 } }, { component: B, data: { y: 2 } });
-
-        total = 0;
-        queryRun(state, world, (bundle) => {
-          total += bundle.Entity.self.length;
-        });
-        expect(total).toBe(1);
-      });
-
-      it('defining all query components then spawning still works', () => {
-        const world = new World();
-        const A = defineComponent('PreRegAll_A', { x: { type: 'f32' } });
-        const B = defineComponent('PreRegAll_B', { y: { type: 'f32' } });
-        const C = defineComponent('PreRegAll_C', { z: { type: 'f32' } });
-
-        world.spawn(
-          { component: A, data: { x: 1 } },
-          { component: B, data: { y: 2 } },
-          { component: C, data: { z: 3 } },
-        );
-
-        const state = createQueryState({ with: [A, B, Entity] });
-        let total = 0;
-        queryRun(state, world, (bundle) => {
-          total += bundle.Entity.self.length;
-        });
-        expect(total).toBe(1);
-      });
-    });
-  });
-}
-
-{
-  // ─── from query.test.ts ───
-  function collectBundles(
-    state: QueryState,
-    world: World,
-  ): Array<{ entityCount: number; [k: string]: unknown }> {
-    const bundles: Array<{ entityCount: number; [k: string]: unknown }> = [];
-    // The `entityCount` field is synthesized at this test helper boundary —
-    // ColumnBundle no longer carries it (tweak-20260612-ecs-concept-compression
-    // dropped the duplicate; row count is `bundle.Entity.self.length` for any
-    // query with `Entity` in `with`). Many of the legacy assertions below
-    // express row count without explicitly requesting Entity, so we recover it
-    // from the matched archetype index via `_getGraph()` after queryRun fires.
-    const graph = (
-      world as unknown as { _getGraph(): { archetypes: Array<{ size: number } | undefined> } }
-    )._getGraph();
-    // First pass: warm matchedArchetypes via the underlying queryRun, then
-    // second pass: emit one entry per non-empty matched archetype with its
-    // size sourced from the graph (queryRun skips arch.size===0, so we mirror
-    // that order here).
-    // biome-ignore lint/suspicious/noExplicitAny: test helper, generic erasure intentional
-    (queryRun as any)(state, world, () => {});
-    const matched = state.matchedArchetypes ?? [];
-    let i = 0;
-    // biome-ignore lint/suspicious/noExplicitAny: test helper, generic erasure intentional
-    (queryRun as any)(state, world, (bundle: any) => {
-      // Step `i` past any archetypes queryRun skipped (arch.size === 0).
-      while (i < matched.length) {
-        const archId = matched[i];
-        if (archId !== undefined && (graph.archetypes[archId]?.size ?? 0) > 0) break;
-        i++;
-      }
-      const archId = matched[i++];
-      const size = archId !== undefined ? (graph.archetypes[archId]?.size ?? 0) : 0;
-      bundles.push({ entityCount: size, ...bundle });
-    });
-    return bundles;
-  }
-
-  describe('query.test.ts', () => {
-    describe('Query — With matching', () => {
-      it('returns archetypes containing all With components', () => {
-        const world = new World();
-        const Pos = defineComponent('QWPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Vel = defineComponent('QWVel', { vx: { type: 'f32' }, vy: { type: 'f32' } });
-        const Hp = defineComponent('QWHp', { hp: { type: 'i32' } });
-
-        world.spawn(
-          { component: Pos, data: { x: 1, y: 2 } },
-          { component: Vel, data: { vx: 3, vy: 4 } },
-        );
-
-        world.spawn({ component: Pos, data: { x: 5, y: 6 } });
-
-        world.spawn(
-          { component: Pos, data: { x: 7, y: 8 } },
-          { component: Vel, data: { vx: 9, vy: 10 } },
-          { component: Hp, data: { hp: 100 } },
-        );
-
-        const desc: QueryDescriptor = { with: [Pos, Vel] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(2);
-
-        const totalCount = bundles.reduce((sum, b) => sum + b.entityCount, 0);
-        expect(totalCount).toBe(2);
-      });
-
-      it('single-component With matches all archetypes containing it', () => {
-        const world = new World();
-        const Pos = defineComponent('QW1Pos', { x: { type: 'f32' } });
-        const Vel = defineComponent('QW1Vel', { v: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1 } });
-        world.spawn({ component: Pos, data: { x: 2 } }, { component: Vel, data: { v: 3 } });
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(2);
-        const totalCount = bundles.reduce((sum, b) => sum + b.entityCount, 0);
-        expect(totalCount).toBe(2);
-      });
-    });
-
-    describe('Query — Without exclusion', () => {
-      it('excludes archetypes containing Without components', () => {
-        const world = new World();
-        const Pos = defineComponent('QWOPos', { x: { type: 'f32' } });
-        const Static = defineComponent('QWOStatic', {});
-
-        world.spawn({ component: Pos, data: { x: 1 } });
-
-        world.spawn({ component: Pos, data: { x: 2 } }, { component: Static, data: {} });
-
-        const desc: QueryDescriptor = { with: [Pos], without: [Static] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(1);
-      });
-    });
-
-    describe('Query — With + Without combination', () => {
-      it('correctly combines With inclusion and Without exclusion', () => {
-        const world = new World();
-        const Pos = defineComponent('QCPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Vel = defineComponent('QCVel', { vx: { type: 'f32' } });
-        const Frozen = defineComponent('QCFrozen', {});
-
-        world.spawn({ component: Pos, data: { x: 1, y: 2 } }, { component: Vel, data: { vx: 3 } });
-
-        world.spawn(
-          { component: Pos, data: { x: 4, y: 5 } },
-          { component: Vel, data: { vx: 6 } },
-          { component: Frozen, data: {} },
-        );
-
-        world.spawn({ component: Pos, data: { x: 7, y: 8 } });
-
-        const desc: QueryDescriptor = { with: [Pos, Vel], without: [Frozen] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(1);
-      });
-    });
-
-    describe('Query — hot-table TypedArray view (AC-09)', () => {
-      it('returns column bundle with TypedArray subarray views sharing archetype buffer', () => {
-        const world = new World();
-        const Pos = defineComponent('QHotPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1.5, y: 2.5 } });
-        world.spawn({ component: Pos, data: { x: 3.5, y: 4.5 } });
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bundle = bundles[0]!;
-        expect(bundle.entityCount).toBe(2);
-
-        const posFields = bundle.QHotPos as Record<string, Float32Array>;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const x = posFields.x!;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const y = posFields.y!;
-
-        expect(x).toBeInstanceOf(Float32Array);
-        expect(y).toBeInstanceOf(Float32Array);
-        expect(x.length).toBe(2);
-        expect(y.length).toBe(2);
-
-        expect(x[0]).toBeCloseTo(1.5);
-        expect(x[1]).toBeCloseTo(3.5);
-        expect(y[0]).toBeCloseTo(2.5);
-        expect(y[1]).toBeCloseTo(4.5);
-      });
-
-      it('TypedArray view.buffer is the same as the archetype column buffer', () => {
-        const world = new World();
-        const Pos = defineComponent('QBufPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1, y: 2 } });
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-
-        let capturedX: Float32Array | null = null;
-        queryRun(state, world, (bundle) => {
-          // biome-ignore lint/style/noNonNullAssertion: Record key known present in test
-          capturedX = (bundle.QBufPos as Record<string, Float32Array>).x!;
-        });
-        expect(capturedX).not.toBeNull();
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        expect(capturedX!).toBeInstanceOf(Float32Array);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        capturedX![0] = 99;
-
-        world.spawn({ component: Pos, data: { x: 0, y: 0 } });
-        let verified = false;
-        queryRun(state, world, (bundle) => {
-          // biome-ignore lint/style/noNonNullAssertion: Record key known present in test
-          const x = (bundle.QBufPos as Record<string, Float32Array>).x!;
-          if (x[0] === 99) {
-            verified = true;
-          }
-        });
-        expect(verified).toBe(true);
-      });
-
-      it('multi-component hot-table returns bundle per With component', () => {
-        const world = new World();
-        const Pos = defineComponent('QMCPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Vel = defineComponent('QMCVel', { vx: { type: 'f32' }, vy: { type: 'f32' } });
-
-        world.spawn(
-          { component: Pos, data: { x: 1, y: 2 } },
-          { component: Vel, data: { vx: 3, vy: 4 } },
-        );
-
-        const desc: QueryDescriptor = { with: [Pos, Vel] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bundle = bundles[0]!;
-        expect(bundle.entityCount).toBe(1);
-
-        const posFields = bundle.QMCPos as Record<string, Float32Array>;
-        const velFields = bundle.QMCVel as Record<string, Float32Array>;
-        expect(posFields.x).toBeInstanceOf(Float32Array);
-        expect(posFields.y).toBeInstanceOf(Float32Array);
-        expect(velFields.vx).toBeInstanceOf(Float32Array);
-        expect(velFields.vy).toBeInstanceOf(Float32Array);
-
-        expect(posFields.x?.[0]).toBeCloseTo(1);
-        expect(posFields.y?.[0]).toBeCloseTo(2);
-        expect(velFields.vx?.[0]).toBeCloseTo(3);
-        expect(velFields.vy?.[0]).toBeCloseTo(4);
-      });
-    });
-
-    describe('Query — inline array<T,N> bundle stride (bug-20260612)', () => {
-      // Regression for tweak-20260611 / render-system-extract.ts:1258 finding:
-      // buildColumnBundle previously called col.view.subarray(0, arch.size),
-      // which for an inline array<T,N> column (arity=N) truncated the view to
-      // the first arch.size elements (= column 0 of each row only). With the
-      // arity-aware fix, row i lives at view.subarray(i*N, (i+1)*N).
-      it('exposes the full stride-N flat slice for an array<f32, 4> column', () => {
-        const world = new World();
-        const SRO = defineComponent('QInlineSRO', {
-          region: { type: 'array<f32, 4>' },
-        });
-
-        // Three rows with distinct 4-tuples so a stride bug aliases.
-        world.spawn({ component: SRO, data: { region: new Float32Array([0.0, 0.1, 0.2, 0.3]) } });
-        world.spawn({ component: SRO, data: { region: new Float32Array([1.0, 1.1, 1.2, 1.3]) } });
-        world.spawn({ component: SRO, data: { region: new Float32Array([2.0, 2.1, 2.2, 2.3]) } });
-
-        const desc: QueryDescriptor = { with: [SRO] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bundle = bundles[0]!;
-        expect(bundle.entityCount).toBe(3);
-
-        const fields = bundle.QInlineSRO as Record<string, Float32Array>;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const region = fields.region!;
-        expect(region).toBeInstanceOf(Float32Array);
-        // size * arity = 3 * 4 = 12, NOT 3 (the pre-fix truncation length).
-        expect(region.length).toBe(12);
-
-        // Row i at [i*4, i*4+4).
-        for (let row = 0; row < 3; row++) {
-          for (let lane = 0; lane < 4; lane++) {
-            // biome-ignore lint/style/noNonNullAssertion: bounds verified above
-            expect(region[row * 4 + lane]!).toBeCloseTo(row + lane * 0.1);
-          }
-        }
-      });
-
-      it('same row layout when read through queryRun callback (alias check)', () => {
-        const world = new World();
-        const SRO = defineComponent('QInlineSRO2', {
-          region: { type: 'array<f32, 4>' },
-        });
-
-        world.spawn({ component: SRO, data: { region: new Float32Array([10, 20, 30, 40]) } });
-        world.spawn({ component: SRO, data: { region: new Float32Array([50, 60, 70, 80]) } });
-
-        const state = createQueryState({ with: [SRO, Entity] });
-
-        let captured: Float32Array | null = null;
-        let entityCount = 0;
-        queryRun(state, world, (bundle) => {
-          entityCount = bundle.Entity.self.length;
-          // biome-ignore lint/style/noNonNullAssertion: Record key known present in test
-          captured = (bundle.QInlineSRO2 as Record<string, Float32Array>).region!;
-        });
-
-        expect(entityCount).toBe(2);
-        expect(captured).not.toBeNull();
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const region = captured!;
-        expect(region.length).toBe(8);
-        expect(Array.from(region)).toEqual([10, 20, 30, 40, 50, 60, 70, 80]);
-      });
-
-      it('mixed scalar + inline array bundle keeps both stride conventions', () => {
-        const world = new World();
-        const Pos = defineComponent('QMixPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const SRO = defineComponent('QMixSRO', {
-          region: { type: 'array<f32, 4>' },
-        });
-
-        world.spawn(
-          { component: Pos, data: { x: 1, y: 2 } },
-          { component: SRO, data: { region: new Float32Array([0.5, 0.5, 0.25, 0.25]) } },
-        );
-        world.spawn(
-          { component: Pos, data: { x: 3, y: 4 } },
-          { component: SRO, data: { region: new Float32Array([1, 1, 0.5, 0.5]) } },
-        );
-
-        const desc: QueryDescriptor = { with: [Pos, SRO] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bundle = bundles[0]!;
-        expect(bundle.entityCount).toBe(2);
-
-        const pos = bundle.QMixPos as Record<string, Float32Array>;
-        const sro = bundle.QMixSRO as Record<string, Float32Array>;
-
-        // Scalar columns: arity=1, length=2.
-        expect(pos.x?.length).toBe(2);
-        expect(pos.y?.length).toBe(2);
-        expect(pos.x?.[0]).toBeCloseTo(1);
-        expect(pos.x?.[1]).toBeCloseTo(3);
-
-        // Inline array<f32, 4>: arity=4, length=8.
-        expect(sro.region?.length).toBe(8);
-        expect(sro.region?.[4]).toBeCloseTo(1);
-        expect(sro.region?.[7]).toBeCloseTo(0.5);
-      });
-
-      it('exposes inline array column the same way through `optional`', () => {
-        const world = new World();
-        const Anchor = defineComponent('QInlineAnchor', { x: { type: 'f32' } });
-        const SRO = defineComponent('QInlineOptSRO', {
-          region: { type: 'array<f32, 4>' },
-        });
-
-        world.spawn(
-          { component: Anchor, data: { x: 1 } },
-          { component: SRO, data: { region: new Float32Array([9, 8, 7, 6]) } },
-        );
-
-        const desc: QueryDescriptor = { with: [Anchor], optional: [SRO] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bundle = bundles[0]!;
-        const sro = bundle.QInlineOptSRO as Record<string, Float32Array> | undefined;
-        expect(sro).toBeDefined();
-        // biome-ignore lint/style/noNonNullAssertion: presence asserted above
-        expect(sro!.region?.length).toBe(4);
-        // biome-ignore lint/style/noNonNullAssertion: presence asserted above
-        expect(Array.from(sro!.region ?? [])).toEqual([9, 8, 7, 6]);
-      });
-    });
-
-    describe('Query — tag component (E-11)', () => {
-      it('tag component in With filter matches but bundle has no tag fields', () => {
-        const world = new World();
-        const Pos = defineComponent('QTagPos', { x: { type: 'f32' } });
-        const Player = defineComponent('QTagPlayer', {});
-
-        world.spawn({ component: Pos, data: { x: 1 } }, { component: Player, data: {} });
-
-        world.spawn({ component: Pos, data: { x: 2 } });
-
-        const desc: QueryDescriptor = { with: [Pos, Player] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(1);
-
-        const posFields = bundles[0]?.QTagPos as Record<string, Float32Array>;
-        expect(posFields).toBeDefined();
-        expect(posFields.x).toBeInstanceOf(Float32Array);
-        expect(posFields.x?.[0]).toBeCloseTo(1);
-      });
-
-      it('tag-only query matches archetypes with the tag', () => {
-        const world = new World();
-        const Tag = defineComponent('QTOnly', {});
-        const Pos = defineComponent('QTOPos', { x: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1 } }, { component: Tag, data: {} });
-
-        const desc: QueryDescriptor = { with: [Tag] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(1);
-      });
-    });
-
-    describe('Query — empty query (E-10)', () => {
-      it('query with no matching archetypes returns empty iteration', () => {
-        const world = new World();
-        const A = defineComponent('QEmpA', { v: { type: 'f32' } });
-        const B = defineComponent('QEmpB', { v: { type: 'f32' } });
-
-        world.spawn({ component: A, data: { v: 1 } });
-
-        const desc: QueryDescriptor = { with: [B] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(0);
-      });
-
-      it('query on empty world returns empty iteration', () => {
-        const world = new World();
-        const A = defineComponent('QEmpW', { v: { type: 'f32' } });
-
-        const desc: QueryDescriptor = { with: [A] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(0);
-      });
-    });
-
-    describe('Query — bitmask matching', () => {
-      it('correctly matches with many components using bitmask', () => {
-        const world = new World();
-        const comps = Array.from({ length: 8 }, (_, i) =>
-          defineComponent(`QBit${i}`, { v: { type: 'f32' } }),
-        );
-
-        world.spawn(...comps.slice(0, 4).map((c) => ({ component: c, data: { v: 0 } })));
-
-        world.spawn(
-          // biome-ignore lint/style/noNonNullAssertion: controlled test context
-          ...[comps[0]!, comps[1]!, comps[4]!, comps[5]!].map((c) => ({
-            component: c,
-            data: { v: 0 },
-          })),
-        );
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const desc1: QueryDescriptor = { with: [comps[0]!, comps[1]!] };
-        const state1 = createQueryState(desc1);
-        const bundles1 = collectBundles(state1, world);
-        expect(bundles1.length).toBe(2);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const desc2: QueryDescriptor = { with: [comps[0]!, comps[2]!] };
-        const state2 = createQueryState(desc2);
-        const bundles2 = collectBundles(state2, world);
-        expect(bundles2.length).toBe(1);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const desc3: QueryDescriptor = { with: [comps[0]!, comps[1]!], without: [comps[4]!] };
-        const state3 = createQueryState(desc3);
-        const bundles3 = collectBundles(state3, world);
-        expect(bundles3.length).toBe(1);
-      });
-    });
-
-    describe('Query — ArchetypeGeneration incremental cache', () => {
-      it('new archetype is picked up after initial query run', () => {
-        const world = new World();
-        const Pos = defineComponent('QGenPos', { x: { type: 'f32' } });
-        const Vel = defineComponent('QGenVel', { v: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1 } });
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-
-        let bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(1);
-
-        world.spawn({ component: Pos, data: { x: 2 } }, { component: Vel, data: { v: 3 } });
-
-        bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(2);
-      });
-
-      it('cache is correctly maintained across multiple archetype additions', () => {
-        const world = new World();
-        const A = defineComponent('QGen2A', { v: { type: 'f32' } });
-        const B = defineComponent('QGen2B', { v: { type: 'f32' } });
-        const C = defineComponent('QGen2C', { v: { type: 'f32' } });
-
-        const desc: QueryDescriptor = { with: [A] };
-        const state = createQueryState(desc);
-
-        let bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(0);
-
-        world.spawn({ component: A, data: { v: 1 } });
-        bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(1);
-
-        world.spawn({ component: A, data: { v: 2 } }, { component: B, data: { v: 3 } });
-        bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(2);
-
-        world.spawn({ component: B, data: { v: 4 } });
-        bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(2);
-
-        world.spawn(
-          { component: A, data: { v: 5 } },
-          { component: B, data: { v: 6 } },
-          { component: C, data: { v: 7 } },
-        );
-        bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(3);
-      });
-    });
-
-    describe('Query — per-archetype version stamp (D-10)', () => {
-      it('query rebuilds column bundle after archetype grows (TypedArray view refreshed)', () => {
-        const world = new World();
-        const Pos = defineComponent('QVerPos', { x: { type: 'f32' } });
-
-        for (let i = 0; i < 64; i++) {
-          world.spawn({ component: Pos, data: { x: i } });
-        }
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-
-        let capturedBundle: Record<string, unknown> = {};
-        queryRun(state, world, (bundle) => {
-          capturedBundle = { ...bundle };
-        });
-        // biome-ignore lint/style/noNonNullAssertion: Record key known present in test
-        const firstX = (capturedBundle.QVerPos as Record<string, Float32Array>).x!;
-        expect(firstX.length).toBe(64);
-
-        world.spawn({ component: Pos, data: { x: 999 } });
-
-        let secondBundle: Record<string, unknown> = {};
-        queryRun(state, world, (bundle) => {
-          secondBundle = { ...bundle };
-        });
-
-        // biome-ignore lint/style/noNonNullAssertion: Record key known present in test
-        const secondX = (secondBundle.QVerPos as Record<string, Float32Array>).x!;
-        expect(secondX.length).toBe(65);
-        expect(secondX[64]).toBeCloseTo(999);
-
-        expect(secondX.buffer).not.toBe(firstX.buffer);
-      });
-
-      it('version stamp only invalidates the grown archetype, not others', () => {
-        const world = new World();
-        const A = defineComponent('QVer2A', { v: { type: 'f32' } });
-        const B = defineComponent('QVer2B', { v: { type: 'f32' } });
-
-        for (let i = 0; i < 64; i++) {
-          world.spawn({ component: A, data: { v: i } });
-        }
-
-        world.spawn({ component: A, data: { v: 100 } }, { component: B, data: { v: 200 } });
-
-        const desc: QueryDescriptor = { with: [A] };
-        const state = createQueryState(desc);
-
-        const firstBundles = collectBundles(state, world);
-        expect(firstBundles.length).toBe(2);
-
-        world.spawn({ component: A, data: { v: 65 } });
-
-        const secondBundles = collectBundles(state, world);
-        expect(secondBundles.length).toBe(2);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bigBundle = secondBundles.find((b) => b.entityCount === 65)!;
-        expect(bigBundle).toBeDefined();
-        // biome-ignore lint/style/noNonNullAssertion: Record key known present in test
-        const bigV = (bigBundle.QVer2A as Record<string, Float32Array>).v!;
-        expect(bigV.length).toBe(65);
-        expect(bigV[64]).toBeCloseTo(65);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const smallBundle = secondBundles.find((b) => b.entityCount === 1)!;
-        expect(smallBundle).toBeDefined();
-      });
-    });
-
-    describe('Query — hot/cold mixed archetype analogue (E-12)', () => {
-      it('archetype with both data components and tag components returns correct bundle', () => {
-        const world = new World();
-        const Pos = defineComponent('QMixPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Vel = defineComponent('QMixVel', { vx: { type: 'f32' } });
-        const Tag = defineComponent('QMixTag', {});
-
-        world.spawn(
-          { component: Pos, data: { x: 1, y: 2 } },
-          { component: Vel, data: { vx: 3 } },
-          { component: Tag, data: {} },
-        );
-
-        const desc: QueryDescriptor = { with: [Pos, Vel, Tag] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(1);
-
-        const posFields = bundles[0]?.QMixPos as Record<string, Float32Array>;
-        const velFields = bundles[0]?.QMixVel as Record<string, Float32Array>;
-        expect(posFields.x).toBeInstanceOf(Float32Array);
-        expect(posFields.y).toBeInstanceOf(Float32Array);
-        expect(velFields.vx).toBeInstanceOf(Float32Array);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const keys = Object.keys(bundles[0]!).filter((k) => k !== 'entityCount');
-        expect(keys.sort()).toEqual(['QMixPos', 'QMixVel']);
-      });
-    });
-
-    describe('Query — value correctness', () => {
-      it('query returns correct values for multiple entities in same archetype', () => {
-        const world = new World();
-        const Pos = defineComponent('QValPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 10, y: 20 } });
-        world.spawn({ component: Pos, data: { x: 30, y: 40 } });
-        world.spawn({ component: Pos, data: { x: 50, y: 60 } });
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const b = bundles[0]!;
-        expect(b.entityCount).toBe(3);
-        const posFields = b.QValPos as Record<string, Float32Array>;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const x = posFields.x!;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const y = posFields.y!;
-
-        expect(x[0]).toBeCloseTo(10);
-        expect(x[1]).toBeCloseTo(30);
-        expect(x[2]).toBeCloseTo(50);
-        expect(y[0]).toBeCloseTo(20);
-        expect(y[1]).toBeCloseTo(40);
-        expect(y[2]).toBeCloseTo(60);
-      });
-
-      it('bool fields in query result are numeric (0/1 in Uint8Array)', () => {
-        const world = new World();
-        const Flags = defineComponent('QBoolF', {
-          active: { type: 'bool' },
-          visible: { type: 'bool' },
-        });
-
-        world.spawn({ component: Flags, data: { active: true, visible: false } });
-
-        const desc: QueryDescriptor = { with: [Flags] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const b = bundles[0]!;
-        const flagsFields = b.QBoolF as Record<string, Uint8Array>;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const active = flagsFields.active!;
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const visible = flagsFields.visible!;
-
-        expect(active).toBeInstanceOf(Uint8Array);
-        expect(visible).toBeInstanceOf(Uint8Array);
-        expect(active[0]).toBe(1);
-        expect(visible[0]).toBe(0);
-      });
-    });
-
-    describe('Query — global component.id', () => {
-      it('createQueryState(descriptor) resolves with-ids from global component.id', () => {
-        const world = new World();
-        const Pos = defineComponent('QPWPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Vel = defineComponent('QPWVel', { vx: { type: 'f32' }, vy: { type: 'f32' } });
-
-        world.spawn(
-          { component: Pos, data: { x: 1, y: 2 } },
-          { component: Vel, data: { vx: 3, vy: 4 } },
-        );
-
-        const desc: QueryDescriptor = { with: [Pos, Vel] };
-        const state = createQueryState(desc);
-
-        expect(state.withIds).toContain(Pos.id);
-        expect(state.withIds).toContain(Vel.id);
-      });
-
-      it('queryRun works end-to-end with global component.id resolution', () => {
-        const world = new World();
-        const Pos = defineComponent('QPWRunPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 10, y: 20 } });
-        world.spawn({ component: Pos, data: { x: 30, y: 40 } });
-
-        const desc: QueryDescriptor = { with: [Pos] };
-        const state = createQueryState(desc);
-
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(2);
-      });
-
-      it('per-World ID query matches correct archetypes across multiple components', () => {
-        const world = new World();
-        const A = defineComponent('QPWA', { v: { type: 'f32' } });
-        const B = defineComponent('QPWB', { w: { type: 'f32' } });
-
-        world.spawn({ component: A, data: { v: 1 } });
-        world.spawn({ component: A, data: { v: 2 } }, { component: B, data: { w: 3 } });
-
-        const desc: QueryDescriptor = { with: [A, B] };
-        const state = createQueryState(desc);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(1);
-        expect(bundles[0]?.entityCount).toBe(1);
-      });
-    });
-
-    describe('Query — nested ColumnBundle (F-01)', () => {
-      it('multi-component query returns nested bundle: bundle.Position.x is Float32Array', () => {
-        const world = new World();
-        const Position = defineComponent('NCBPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Velocity = defineComponent('NCBVel', { vx: { type: 'f32' }, vy: { type: 'f32' } });
-
-        world.spawn(
-          { component: Position, data: { x: 1, y: 2 } },
-          { component: Velocity, data: { vx: 3, vy: 4 } },
-        );
-
-        const desc: QueryDescriptor = { with: [Position, Velocity] };
-        const state = createQueryState(desc);
-
-        let capturedBundle: Record<string, unknown> | null = null;
-        queryRun(state, world, (bundle) => {
-          capturedBundle = { ...bundle };
-        });
-
-        expect(capturedBundle).not.toBeNull();
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const b = capturedBundle!;
-        const posFields = b.NCBPos as Record<string, unknown>;
-        expect(posFields).toBeDefined();
-        expect(posFields.x).toBeInstanceOf(Float32Array);
-        expect(posFields.y).toBeInstanceOf(Float32Array);
-        expect((posFields.x as Float32Array)[0]).toBeCloseTo(1);
-        expect((posFields.y as Float32Array)[0]).toBeCloseTo(2);
-
-        const velFields = b.NCBVel as Record<string, unknown>;
-        expect(velFields).toBeDefined();
-        expect(velFields.vx).toBeInstanceOf(Float32Array);
-        expect(velFields.vy).toBeInstanceOf(Float32Array);
-        expect((velFields.vx as Float32Array)[0]).toBeCloseTo(3);
-        expect((velFields.vy as Float32Array)[0]).toBeCloseTo(4);
-      });
-
-      it('bundle row count is bundle.Entity.self.length (Entity is essential, drives count SSOT)', () => {
-        const world = new World();
-        const Pos = defineComponent('NCBCntPos', { x: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1 } });
-        world.spawn({ component: Pos, data: { x: 2 } });
-
-        const state = createQueryState({ with: [Pos, Entity] });
-
-        let entityCount = -1;
-        queryRun(state, world, (bundle) => {
-          entityCount = bundle.Entity.self.length;
-        });
-
-        expect(entityCount).toBe(2);
-      });
-
-      it('two components with same-named fields are isolated in nested structure', () => {
-        const world = new World();
-        const A = defineComponent('NCBIsoA', { x: { type: 'f32' } });
-        const B = defineComponent('NCBIsoB', { x: { type: 'f32' } });
-
-        world.spawn({ component: A, data: { x: 10 } }, { component: B, data: { x: 20 } });
-
-        const desc: QueryDescriptor = { with: [A, B] };
-        const state = createQueryState(desc);
-
-        let capturedBundle: Record<string, unknown> | null = null;
-        queryRun(state, world, (bundle) => {
-          capturedBundle = { ...bundle };
-        });
-
-        expect(capturedBundle).not.toBeNull();
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const b = capturedBundle!;
-        const aFields = b.NCBIsoA as Record<string, unknown>;
-        const bFields = b.NCBIsoB as Record<string, unknown>;
-        expect(aFields).toBeDefined();
-        expect(bFields).toBeDefined();
-        expect((aFields.x as Float32Array)[0]).toBeCloseTo(10);
-        expect((bFields.x as Float32Array)[0]).toBeCloseTo(20);
-      });
-    });
-
-    describe('Query — optional components (AC-01/02/03)', () => {
-      it('AC-01: optional does not alter matching set vs equivalent with-only query', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Vel = defineComponent('QOptVel', { vx: { type: 'f32' } });
-        const Hp = defineComponent('QOptHp', { hp: { type: 'i32' } });
-
-        world.spawn({ component: Pos, data: { x: 1, y: 2 } }, { component: Vel, data: { vx: 3 } });
-        world.spawn({ component: Pos, data: { x: 4, y: 5 } }, { component: Hp, data: { hp: 50 } });
-        world.spawn(
-          { component: Pos, data: { x: 7, y: 8 } },
-          { component: Vel, data: { vx: 9 } },
-          { component: Hp, data: { hp: 100 } },
-        );
-
-        const withOnlyState = createQueryState({ with: [Pos, Vel] });
-        const withOnlyBundles = collectBundles(withOnlyState, world);
-        const withOnlyArchetypes = withOnlyBundles.length;
-        const withOnlyTotalCount = withOnlyBundles.reduce((sum, b) => sum + b.entityCount, 0);
-
-        const optState = createQueryState({
-          with: [Pos, Vel],
-          optional: [Hp],
-        } as QueryDescriptor);
-        const optBundles = collectBundles(optState, world);
-        const optArchetypes = optBundles.length;
-        const optTotalCount = optBundles.reduce((sum, b) => sum + b.entityCount, 0);
-
-        expect(optArchetypes).toBe(withOnlyArchetypes);
-        expect(optTotalCount).toBe(withOnlyTotalCount);
-      });
-
-      it('AC-02: optional column is present when archetype has the component', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptInPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Hp = defineComponent('QOptInHp', { hp: { type: 'i32' } });
-
-        world.spawn({ component: Pos, data: { x: 1, y: 2 } }, { component: Hp, data: { hp: 100 } });
-
-        const state = createQueryState({ with: [Pos], optional: [Hp] } as QueryDescriptor);
-
-        let capturedBundle: Record<string, unknown> | null = null;
-        // biome-ignore lint/suspicious/noExplicitAny: test helper, generic erasure intentional
-        (queryRun as any)(state, world, (bundle: Record<string, unknown>) => {
-          capturedBundle = { ...bundle };
-        });
-
-        expect(capturedBundle).not.toBeNull();
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const b = capturedBundle!;
-
-        const posFields = b.QOptInPos as Record<string, Float32Array>;
-        expect(posFields).toBeDefined();
-        expect(posFields.x).toBeInstanceOf(Float32Array);
-
-        const hpFields = b.QOptInHp as Record<string, Int32Array>;
-        expect(hpFields).toBeDefined();
-        expect(hpFields.hp).toBeInstanceOf(Int32Array);
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        expect(hpFields.hp![0]).toBe(100);
-      });
-
-      it('AC-02: optional column is absent (undefined) when archetype lacks the component', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptAbsPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-        const Hp = defineComponent('QOptAbsHp', { hp: { type: 'i32' } });
-
-        world.spawn({ component: Pos, data: { x: 1, y: 2 } });
-
-        const state = createQueryState({ with: [Pos], optional: [Hp] } as QueryDescriptor);
-
-        let capturedBundle: Record<string, unknown> | null = null;
-        // biome-ignore lint/suspicious/noExplicitAny: test helper, generic erasure intentional
-        (queryRun as any)(state, world, (bundle: Record<string, unknown>) => {
-          capturedBundle = { ...bundle };
-        });
-
-        expect(capturedBundle).not.toBeNull();
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const b = capturedBundle!;
-
-        const posFields = b.QOptAbsPos as Record<string, Float32Array>;
-        expect(posFields).toBeDefined();
-        expect(posFields.x).toBeInstanceOf(Float32Array);
-
-        expect(b.QOptAbsHp).toBeUndefined();
-        expect(Object.keys(b).includes('QOptAbsHp')).toBe(false);
-      });
-
-      it('AC-02: partial missing — one optional present, another absent in same bundle', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptPartPos', { x: { type: 'f32' } });
-        const A = defineComponent('QOptPartA', { v: { type: 'f32' } });
-        const B = defineComponent('QOptPartB', { w: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1 } }, { component: A, data: { v: 10 } });
-        world.spawn({ component: Pos, data: { x: 2 } }, { component: B, data: { w: 20 } });
-
-        const state = createQueryState({ with: [Pos], optional: [A, B] } as QueryDescriptor);
-
-        const bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(2);
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bWithA = bundles.find((b) => b.QOptPartA !== undefined)!;
-        expect(bWithA).toBeDefined();
-        expect(bWithA.QOptPartA).toBeDefined();
-        expect(bWithA.QOptPartB).toBeUndefined();
-
-        // biome-ignore lint/style/noNonNullAssertion: controlled test context
-        const bWithB = bundles.find((b) => b.QOptPartB !== undefined)!;
-        expect(bWithB).toBeDefined();
-        expect(bWithB.QOptPartB).toBeDefined();
-        expect(bWithB.QOptPartA).toBeUndefined();
-      });
-
-      it('AC-03: optional does NOT filter — archetype without any optional component still matches', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptNoFPos', { x: { type: 'f32' } });
-        const Tag = defineComponent('QOptNoFTag', {});
-
-        world.spawn({ component: Pos, data: { x: 1 } }, { component: Tag, data: {} });
-        world.spawn({ component: Pos, data: { x: 2 } });
-
-        const state = createQueryState({ with: [Pos], optional: [Tag] } as QueryDescriptor);
-        const bundles = collectBundles(state, world);
-
-        expect(bundles.length).toBe(2);
-
-        const totalCount = bundles.reduce((sum, b) => sum + b.entityCount, 0);
-        expect(totalCount).toBe(2);
-      });
-
-      it('AC-03 boundary: empty optional list (optional: []) matches same as with-only', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptEmpPos', { x: { type: 'f32' } });
-        const Vel = defineComponent('QOptEmpVel', { v: { type: 'f32' } });
-
-        world.spawn({ component: Pos, data: { x: 1 } });
-        world.spawn({ component: Pos, data: { x: 2 } }, { component: Vel, data: { v: 3 } });
-
-        const withOnlyState = createQueryState({ with: [Pos] });
-        const withOnlyBundles = collectBundles(withOnlyState, world);
-
-        const emptyOptState = createQueryState({
-          with: [Pos],
-          optional: [],
-        } as QueryDescriptor);
-        const emptyOptBundles = collectBundles(emptyOptState, world);
-
-        expect(emptyOptBundles.length).toBe(withOnlyBundles.length);
-        expect(emptyOptBundles.reduce((s, b) => s + b.entityCount, 0)).toBe(
-          withOnlyBundles.reduce((s, b) => s + b.entityCount, 0),
-        );
-      });
-
-      it('optional tag component (empty schema) handled gracefully', () => {
-        const world = new World();
-        const Pos = defineComponent('QOptTagPos', { x: { type: 'f32' } });
-        const Tag = defineComponent('QOptTagTag', {});
-
-        world.spawn({ component: Pos, data: { x: 1 } }, { component: Tag, data: {} });
-        world.spawn({ component: Pos, data: { x: 2 } });
-
-        const state = createQueryState({ with: [Pos], optional: [Tag] } as QueryDescriptor);
-        const bundles = collectBundles(state, world);
-        expect(bundles.length).toBe(2);
-
-        expect(bundles.every((b) => b.QOptTagPos !== undefined)).toBe(true);
-      });
-    });
-
-    describe('Query — with∩optional conflict (AC-09)', () => {
-      it('same component in with and optional throws structured EcsError at createQueryState', () => {
-        const Camera = defineComponent('QConfCam', { fovY: { type: 'f32' } });
-
-        let caughtCode: string | undefined;
-        let caughtHint: string | undefined;
-
-        try {
-          createQueryState({ with: [Camera], optional: [Camera] } as QueryDescriptor);
-        } catch (err: unknown) {
-          const e = err as { code?: string; hint?: string };
-          caughtCode = e.code;
-          caughtHint = e.hint;
-        }
-
-        expect(caughtCode).toBeDefined();
-        expect(caughtCode).toBe('query-descriptor-with-optional-conflict');
-
-        expect(caughtHint).toBeDefined();
-        expect(typeof caughtHint).toBe('string');
-        expect(caughtHint?.length).toBeGreaterThan(0);
-        expect(caughtHint?.toLowerCase()).toContain('qconfcam');
-      });
-
-      it('multiple conflicts are detected (first conflicting component featured in error)', () => {
-        const A = defineComponent('QConfA', { v: { type: 'f32' } });
-        const B = defineComponent('QConfB', { w: { type: 'f32' } });
-
-        let caughtCode: string | undefined;
-        let caughtHint: string | undefined;
-
-        try {
-          createQueryState({ with: [A, B], optional: [A, B] } as QueryDescriptor);
-        } catch (err: unknown) {
-          const e = err as { code?: string; hint?: string };
-          caughtCode = e.code;
-          caughtHint = e.hint;
-        }
-
-        expect(caughtCode).toBe('query-descriptor-with-optional-conflict');
-        expect(caughtHint).toBeDefined();
-        expect(typeof caughtHint).toBe('string');
-        const hintLower = caughtHint?.toLowerCase() ?? '';
-        expect(hintLower.includes('qconfa') || hintLower.includes('qconfb')).toBe(true);
-      });
-
-      it('no throw when with and optional are disjoint', () => {
-        const Camera = defineComponent('QConfDisCam', { fovY: { type: 'f32' } });
-        const Transform = defineComponent('QConfDisTr', { posX: { type: 'f32' } });
-
-        expect(() => {
-          createQueryState({ with: [Camera], optional: [Transform] } as QueryDescriptor);
-        }).not.toThrow();
-      });
-
-      it('error object .code is accessor-friendly (no string parse needed)', () => {
-        const Comp = defineComponent('QConfAcc', { v: { type: 'f32' } });
-
-        let errObj: unknown = null;
-
-        try {
-          createQueryState({ with: [Comp], optional: [Comp] } as QueryDescriptor);
-        } catch (err: unknown) {
-          errObj = err;
-        }
-
-        expect(errObj).not.toBeNull();
-        expect((errObj as { code: string }).code).toBe('query-descriptor-with-optional-conflict');
-      });
-    });
-  });
-}
-
-{
-  // ─── from foldEssentials.test.ts (feat-20260611-ecs-storage-naming-ssot M-1 / w1) ───
-  //
-  // Verifies the `foldEssentials` helper + `ESSENTIAL_COMPONENT_IDS` SSOT
-  // constant exported from `packages/ecs/src/entity.ts`. The helper
-  // converges the two `archetypeKey` / `createArchetype` essential-id fold
-  // sites onto one named function (research F-9: only 2 sites need converge,
-  // not 3 -- `getOrCreateArchetype` does NOT fold).
-  //
-  // Constraints: ESSENTIAL_COMPONENT_IDS is the SSOT for which component ids
-  // are essential to every archetype. Currently == [Entity.id] (== [0]).
-  // The fold is idempotent (input already containing every essential id is
-  // returned as-is, deduped) and pure (returns a new array, does not mutate
-  // input).
-  //
-  // From plan-strategy D-1: physical location is `entity.ts`
-  // (research F-6 cycle-dependency proof — `component.ts` and `entity.ts`
-  // would create import cycles).
-
   describe('foldEssentials.test.ts', () => {
     describe('ESSENTIAL_COMPONENT_IDS SSOT', () => {
       it('is a frozen readonly array containing Entity.id', async () => {
@@ -2724,7 +1627,7 @@ import { World } from '../world';
         appendEntity(arch, 0x77);
         appendEntity(arch, 0xff);
 
-        const selfCol = arch.columns.get(Entity.id)?.get('self');
+        const selfCol = tableColumns(arch).get(Entity.id)?.get('self');
         expect(selfCol).toBeDefined();
         // Verify self column still has correct value
         // biome-ignore lint/style/noNonNullAssertion: guarded by expect above
@@ -2760,9 +1663,9 @@ import { World } from '../world';
         appendEntity(arch, 0x20);
         appendEntity(arch, 0x30);
 
-        const selfCol = arch.columns.get(Entity.id)?.get('self');
+        const selfCol = tableColumns(arch).get(Entity.id)?.get('self');
         // biome-ignore lint/style/noNonNullAssertion: test setup
-        const vCol = arch.columns.get(C.id)!.get('v')!;
+        const vCol = tableColumns(arch).get(C.id)!.get('v')!;
         vCol.view[0] = 100;
         vCol.view[1] = 200;
         vCol.view[2] = 300;

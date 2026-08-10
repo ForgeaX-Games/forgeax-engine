@@ -138,15 +138,15 @@ export function executionPlan(step) {
 }
 
 export function needsStepSummary(command) {
-  return /\$\{?GITHUB_STEP_SUMMARY\}?\b/.test(command);
+  return /\bGITHUB_STEP_SUMMARY\b/.test(command);
 }
 
 export function needsGitHubOutput(command) {
-  return /\$\{?GITHUB_OUTPUT\}?\b/.test(command);
+  return /\bGITHUB_OUTPUT\b/.test(command);
 }
 
 export function needsGitHubEnvironment(command) {
-  return /\$\{?GITHUB_ENV\}?\b/.test(command);
+  return /\bGITHUB_ENV\b/.test(command);
 }
 
 export function localGitHubFilePaths(command, directory) {
@@ -382,6 +382,19 @@ export function localizeRunnerProvisioning(command) {
     .trim();
 }
 
+/**
+ * The browser job's Xvfb + headed wrapper is an Ubuntu runner contract. Native
+ * macOS Chromium does not consume an X11 DISPLAY, so use its working headless
+ * WebGPU path for the local projection instead.
+ */
+export function localizeDarwinXvfb(command, platform = process.platform) {
+  if (platform !== 'darwin') return command;
+  return command.replace(
+    /^([ \t]*)xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 /gm,
+    '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ',
+  );
+}
+
 export function requiredContexts() {
   const contexts = JSON.parse(readFileSync(REQUIRED, 'utf8'));
   if (!Array.isArray(contexts) || contexts.some((value) => typeof value !== 'string')) {
@@ -528,12 +541,19 @@ function run(step, dryRun, environment, matrix, needsResults, githubEnvironment,
     matrix,
   );
   const isCodemodAssertion = isLocalCodemodIdempotencyAssertion(command);
+  const runnerLocalized = localizeRunnerProvisioning(
+    isCodemodAssertion ? codemodCommandWithoutAssertion(command) : command,
+  );
+  const platformLocalized = localizeDarwinXvfb(runnerLocalized);
   const localStep = {
     ...step,
-    command: localizeRunnerProvisioning(
-      isCodemodAssertion ? codemodCommandWithoutAssertion(command) : command,
-    ),
+    command: platformLocalized,
   };
+  if (platformLocalized !== runnerLocalized) {
+    console.log(
+      '[ci] macOS local adaptation: replaced Linux Xvfb headed browser with Chromium headless',
+    );
+  }
   console.log(`\n[ci:${dryRun ? 'dry-run' : 'run'}] ${command}`);
   if (dryRun) return 0;
   const temporaryFiles =
@@ -639,9 +659,8 @@ export function main(argv = process.argv.slice(2)) {
           continue;
         }
         if (args.list) {
-          console.log(
-            `[ci] (${step.shell ?? 'default'}) ${substituteLocalMatrix(command, plan.matrix)}`,
-          );
+          const listedCommand = localizeDarwinXvfb(substituteLocalMatrix(command, plan.matrix));
+          console.log(`[ci] (${step.shell ?? 'default'}) ${listedCommand}`);
           continue;
         }
         const status = run(

@@ -9,6 +9,9 @@ export default defineProject({
       tsconfig: './tsconfig.json',
     },
     include: ['src/**/__tests__/**/*.test.ts', 'src/**/__tests__/**/*.test-d.ts'],
-    exclude: ['**/dist/**', '**/node_modules/**'],
+    // Real Dawn coverage is owned by the root `dawn` project, which installs
+    // navigator.gpu before collecting `*.dawn.test.ts`. The package-local node
+    // project must not collect those files without that environment.
+    exclude: ['**/dist/**', '**/node_modules/**', '**/*.dawn.test.ts'],
   },
 });

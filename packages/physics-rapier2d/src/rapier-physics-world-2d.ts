@@ -657,22 +657,24 @@ export function createRapier2DPhysicsWorld(rapier: Rapier2DModule): RapierPhysic
 
 // ─── Internal archetype graph surface (mirrors advance-animation-player + 3D) ──
 interface GraphLike {
-  readonly archetypes: ReadonlyArray<ArchetypeLike | undefined>;
+  readonly tables: ReadonlyArray<TableLike | undefined>;
 }
-interface ArchetypeLike {
+interface TableLike {
   readonly components: ReadonlyArray<{ readonly id: number }>;
-  readonly columns: ReadonlyMap<
+  readonly storage: ReadonlyMap<
     number,
-    ReadonlyMap<
-      string,
-      {
-        readonly view:
-          | Uint32Array
-          | Float32Array
-          | ReadonlyArray<Uint32Array>
-          | ReadonlyArray<Float32Array>;
-      }
-    >
+    {
+      readonly fields: ReadonlyMap<
+        string,
+        {
+          readonly view:
+            | Uint32Array
+            | Float32Array
+            | ReadonlyArray<Uint32Array>
+            | ReadonlyArray<Float32Array>;
+        }
+      >;
+    }
   >;
   readonly size: number;
 }
@@ -710,9 +712,10 @@ function readTransformPosZ(w: World, entity: EntityHandle, transform: Component)
  * Read the full packed `Entity` handle for archetype `row` from the essential
  * id=0 `Entity` column (`self` field), present on every archetype.
  */
-function readEntityAt(arch: ArchetypeLike, row: number): EntityHandle {
-  const selfCol = arch.columns.get((EntityComponent as unknown as Component).id)?.get('self')
-    ?.view as Uint32Array | undefined;
+function readEntityAt(table: TableLike, row: number): EntityHandle {
+  const selfCol = table.storage
+    .get((EntityComponent as unknown as Component).id)
+    ?.fields.get('self')?.view as Uint32Array | undefined;
   return (selfCol?.[row] ?? 0) as EntityHandle;
 }
 
@@ -825,7 +828,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
 
     const graph = asInternal(world)._getGraph();
 
-    for (const arch of graph.archetypes) {
+    for (const arch of graph.tables) {
       if (!arch || arch.size === 0) continue;
       // (Collider, Transform) are REQUIRED; RigidBody is OPTIONAL. A
       // Collider-only entity is simulated as an implicit static collider (see
@@ -849,9 +852,9 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       // absent, `rbCols` is undefined → every rb* view below is undefined → the
       // per-row rigidBody is synthesized as a static default (the `static`
       // ensureBody arm ignores mass/damping/gravity anyway).
-      const rbCols = arch.columns.get(RigidBody.id);
-      const cCols = arch.columns.get(Collider.id);
-      const tfCols = arch.columns.get(transformComponent.id);
+      const rbCols = arch.storage.get(RigidBody.id)?.fields;
+      const cCols = arch.storage.get(Collider.id)?.fields;
+      const tfCols = arch.storage.get(transformComponent.id)?.fields;
       if (!cCols || !tfCols) continue;
 
       const rbType = rbCols?.get('type')?.view as Uint32Array | undefined;

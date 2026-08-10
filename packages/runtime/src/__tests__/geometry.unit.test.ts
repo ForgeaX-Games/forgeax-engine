@@ -10,8 +10,8 @@
 //   - packages/runtime/src/__tests__/mesh-ssbo-grow.test.ts
 //   - packages/runtime/src/__tests__/mesh-update-no-leak.test.ts
 //   - packages/runtime/src/__tests__/validate-mesh-topology.test.ts
-//   - packages/runtime/test/instances-with-submeshes.test.ts
-//   - packages/runtime/test/mesh-asset-submeshes-validation.test.ts
+//   - packages/runtime/src/__tests__/instances-with-submeshes.test.ts
+//   - packages/runtime/src/__tests__/mesh-asset-submeshes-validation.test.ts
 //
 // feat-20260704-runtime-tier1-decomposition (w6): the geometry-pure blocks
 // (geometry-tangent / geometry-winding / geometry / vertex-attribute-layout)

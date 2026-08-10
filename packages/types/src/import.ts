@@ -1,5 +1,5 @@
 import type { AssetStageErrorBase } from './asset-errors.js';
-import type { SourceOverrideMap } from './asset-producer.js';
+import type { SourceOverrideErrorCode, SourceOverrideMap } from './asset-producer.js';
 import type { PackIndexEntry } from './catalog.js';
 import type { Asset, AssetCodec, AssetRef, ImageError, TextureAsset } from './index.js';
 
@@ -54,16 +54,13 @@ export type ImportStageContractError = AssetStageErrorBase<'import', 'import-fai
  * | `'source-validation-failed'` | the source was readable but failed an authoring rule; `.detail.diagnostics` contains source-located, machine-readable findings. |
  */
 export type ImportErrorCode =
+  | SourceOverrideErrorCode
   | 'importer-not-registered'
   | 'source-read-failed'
   | 'import-produced-no-assets'
   | 'guid-mismatch'
   | 'import-internal-error'
-  | 'source-validation-failed'
-  | 'unknown-source-key'
-  | 'duplicate-source-key'
-  | 'invalid-source-overrides'
-  | 'invalid-source-override-payload';
+  | 'source-validation-failed';
 
 /** A source range shared by all import diagnostics. */
 export interface ImportSourceRange {

@@ -67,7 +67,7 @@ export type { RenderSystemRuntime } from './render-system';
  * feat-20260604 M3 / w20 (D-7 breaking direct cut, no deprecation/shim/dual-path):
  * SIX urp-specific leakage fields are gone from the public surface
  * (`tonemapActive` / `geometryColorView` / `geometryDepthView` / `skyboxActive` /
- * `splitLdrSprite` / `ldrSpriteUnormView`). They were urp-private
+ * `splitLdrSprite` / `ldrSpritePassView`). They were urp-private
  * post-process gating + RT view selection state that an AI-user-defined custom
  * pipeline must NOT see — pipelines pick their own colour/depth target via
  * `addColorTarget` and route per-frame branches through `RenderPipelineData`
@@ -149,13 +149,11 @@ export interface RenderPipelineContext {
    */
   readonly geometryColorResolveView: TextureView | null;
   /**
-   * Count=4 multisample unorm view the LDR sprite split sub-pass writes when
+   * Count=4 multisample view the LDR sprite split sub-pass writes when
    * `msaaActive && splitLdrSprite`; it resolves to the single-sample
-   * `ldrSpriteUnormView`. This is an unorm view of the SAME count=4 texture
-   * the geometry pass writes through its srgb view (`msaaColorView`) -- one
-   * multisample texture, two views of differing format (the bgra8unorm
-   * storage format admits both srgb and unorm views). `null` when `msaaActive`
-   * is false. (F-1)
+   * `ldrSpritePassView`. The single-sample view is graph-owned on native
+   * linear-LDR frames and uses raw swap-chain storage on the fallback path.
+   * `null` when `msaaActive` is false. (F-1)
    */
   readonly ldrSpriteColorView: TextureView | null;
 }
@@ -234,9 +232,9 @@ export interface RenderPipelineData {
  * - `skyboxActive`: gates the recordSkyboxPass body.
  * - `splitLdrSprite`: gates the LDR sprite split sub-pass within recordMainPass
  *   / recordTonemapPass.
- * - `ldrSpriteUnormView`: the unorm view the sprite split writes (paired with
- *   the bgra8unorm-srgb view the geometry pass uses; F-1 dual-view single
- *   texture pattern).
+ * - `ldrSpritePassView`: the single-sample color view the sprite split writes;
+ *   it is graph-owned on native linear-LDR and raw swap-chain storage on the
+ *   fallback path. The MSAA view remains `ldrSpriteColorView`.
  *
  * Invariant: a public `RenderPipelineContext` cast to this type by
  * `_asInternalCtx` (in render-system-record.ts) MUST originate from
@@ -267,7 +265,7 @@ export interface _StandardForwardSceneView {
   readonly geometryDepthKey: string | null;
   readonly skyboxActive: boolean;
   readonly splitLdrSprite: boolean;
-  readonly ldrSpriteUnormView: TextureView | null;
+  readonly ldrSpritePassView: TextureView | null;
   /** feat-20260609 M2: per-frame dispatch entries for selector-based pass filtering. */
   readonly dispatch: readonly DispatchEntry[];
   /**

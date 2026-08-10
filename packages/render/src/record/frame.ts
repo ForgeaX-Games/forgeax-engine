@@ -458,27 +458,28 @@ export function recordFrame(
     //
     // When the LDR path (tonemapActive=false) has transparent entities in
     // the validated draw list, the render is split into two serial passes
-    // sharing the same swap-chain texture:
-    //   geometry pass    -- sRGB view (bgra8unorm-srgb), loadOp=clear,
-    //                       opaque entities
-    //   transparent pass -- unorm view (bgra8unorm), loadOp=load,
-    //                       transparent / sprite entities
-    // The sprite LDR pipeline targets bgra8unorm (blendable; D-1) so it
-    // cannot share the same render pass with the bgra8unorm-srgb-targeted
-    // geometry pipelines (WebGPU requires attachment view format ==
-    // pipeline target format). bgra8unorm is the storage format of the
-    // swap-chain texture and is always a valid view format (spec: storage
-    // format is implicitly in viewFormats); no viewFormats change needed
-    // (D-4).
+    // sharing one color attachment. The transparent pass format is resolved
+    // by transparentPassColorFormat: native linear-LDR frames use the
+    // graph-owned `ldrColor` attachment (which may be rgba16float), while
+    // the swap-chain fallback uses its raw storage view. The encoder and
+    // sprite PSO must use the same resolved format because WebGPU requires
+    // attachment and pipeline target formats to match.
     const splitLdrSprite = computeSplitLdrSprite(validatedOrdered, tonemapActive);
-    let ldrSpriteUnormView: TextureView | null = null;
+    let ldrSpritePassView: TextureView | null = null;
     if (splitLdrSprite) {
-      const unormViewRes = internals.device.createTextureView(currentTexture, {});
-      if (!unormViewRes.ok) {
-        internals.errorRegistry.fire(unormViewRes.error);
-        return false;
+      const graphLdrView = frameState.perFrameGraph?.getColorTargetView('ldrColor') as
+        | TextureView
+        | undefined;
+      if (graphLdrView !== undefined && internals.device.caps.storageBuffer) {
+        ldrSpritePassView = graphLdrView;
+      } else {
+        const unormViewRes = internals.device.createTextureView(currentTexture, {});
+        if (!unormViewRes.ok) {
+          internals.errorRegistry.fire(unormViewRes.error);
+          return false;
+        }
+        ldrSpritePassView = unormViewRes.value;
       }
-      ldrSpriteUnormView = unormViewRes.value;
     }
 
     // View / mesh uniform uploads are only needed when geometry will be drawn,
@@ -588,7 +589,7 @@ export function recordFrame(
       skyboxActive,
       skybox,
       splitLdrSprite,
-      ldrSpriteUnormView,
+      ldrSpritePassView,
       msaaActive,
       geometryColorResolveView,
       ldrSpriteColorView,

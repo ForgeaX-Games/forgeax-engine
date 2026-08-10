@@ -388,6 +388,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
       'bloom-blur-h',
       'bloom-blur-v',
       'bloom-composite',
+      'output',
       'debug-overlay',
     ]);
 

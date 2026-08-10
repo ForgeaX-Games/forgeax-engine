@@ -54,7 +54,7 @@ const canvas = {
 
 const { createApp } = await import('@forgeax/engine-app');
 const { AUDIO_ENGINE_RESOURCE_KEY } = await import('@forgeax/engine-audio');
-const { audioPlugin } = await import('@forgeax/engine-audio-webaudio');
+const { audioPlugin } = await import('@forgeax/engine-audio');
 const { buildPlaySoundEffectWorld } = await import('../src/play-sound-effect.ts');
 const here = dirname(fileURLToPath(import.meta.url));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');

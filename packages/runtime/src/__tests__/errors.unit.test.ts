@@ -874,6 +874,8 @@ import {
       it('exhaustive switch covers all members without a default branch', () => {
         function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
+            case 'observation-unavailable':
+              return 'observation unavailable';
             case 'shadow-invalid-config':
               return 'shadow invalid config';
             case 'skin-joint-count-exceeded':
@@ -990,6 +992,8 @@ import {
       it('exhaustive switch covers all 3 new members alongside existing members', () => {
         function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
+            case 'observation-unavailable':
+              return 'ok';
             case 'shadow-invalid-config':
               return 'ok';
             case 'skin-joint-count-exceeded':

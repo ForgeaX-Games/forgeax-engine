@@ -34,7 +34,7 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } from '@forgeax/engine-render/internal';
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, RenderQueue, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -45,6 +45,9 @@ import './alpha-test.wgsl';
 const ALPHA_TEST_SHADER_ID = 'learn_render::alpha_test';
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-3-blending',
+);
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json
 const METAL_GUID_STR = '019e3969-1d47-760f-982e-7bad1ffd969c';
@@ -94,7 +97,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.3 blending] createApp failed:', appRes.error);
@@ -122,7 +125,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Wire the pack-index URL for GUID-based texture loading.
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Parse texture GUIDs.

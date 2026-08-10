@@ -1,4 +1,4 @@
-import type { Component, QueryDescriptor } from '@forgeax/engine-ecs';
+import type { Component } from '@forgeax/engine-ecs';
 import { validateProfileComponents } from '@forgeax/engine-ecs';
 import { err, ok, type Result } from '@forgeax/engine-types';
 export interface ReplicationLimits {
@@ -22,14 +22,18 @@ import { NetError } from './errors';
 
 export interface ReplicationProfile {
   readonly name: string;
-  readonly entities: QueryDescriptor;
+  readonly entities: ReplicationEntityFilter;
   readonly components: readonly Component[];
   readonly limits: ReplicationLimits;
   readonly fingerprint: string;
 }
+export interface ReplicationEntityFilter {
+  readonly with: readonly Component[];
+  readonly without?: readonly Component[];
+}
 export interface DefineReplicationOptions {
   readonly name: string;
-  readonly entities: QueryDescriptor;
+  readonly entities: ReplicationEntityFilter;
   readonly components: readonly Component[];
   readonly limits?: Partial<ReplicationLimits>;
 }
@@ -47,14 +51,11 @@ function immutableProfile(
   limits: ReplicationLimits,
   fingerprint: string,
 ): ReplicationProfile {
-  const entities: QueryDescriptor = Object.freeze({
+  const entities: ReplicationEntityFilter = Object.freeze({
     with: Object.freeze([...options.entities.with]),
     ...(options.entities.without === undefined
       ? {}
       : { without: Object.freeze([...options.entities.without]) }),
-    ...(options.entities.optional === undefined
-      ? {}
-      : { optional: Object.freeze([...options.entities.optional]) }),
   });
   return Object.freeze({
     name: options.name,
@@ -98,9 +99,6 @@ export function defineReplication(
       ...(options.entities.without === undefined
         ? {}
         : { without: options.entities.without.map((component) => component.name) }),
-      ...(options.entities.optional === undefined
-        ? {}
-        : { optional: options.entities.optional.map((component) => component.name) }),
     },
     components: options.components.map((component) => ({
       name: component.name,

@@ -15,7 +15,9 @@ const renderReadme = read('../../README.md');
 const runtimeReadme = read('../../../runtime/README.md');
 const appSkill = read('../../../../skills/forgeax-engine-app/SKILL.md');
 
-const topSurface = renderReadme.slice(0, 6000);
+// M4-06 prepends the direct-light contract; keep the existing first-read
+// vocabulary assertion wide enough to cover that approved contract.
+const topSurface = renderReadme.slice(0, 12000);
 
 describe('RenderFeature documentation surface', () => {
   it('keeps the first-read public route and four-term vocabulary indexable', () => {

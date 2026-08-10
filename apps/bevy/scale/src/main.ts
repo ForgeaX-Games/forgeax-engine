@@ -38,4 +38,5 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const started = app.start();
   if (!started.ok) console.error('[bevy-scale] app.start failed:', started.error);
+  else globalThis.__bevyScaleReady = true;
 }

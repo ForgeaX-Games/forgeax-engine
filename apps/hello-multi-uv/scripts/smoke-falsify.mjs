@@ -237,6 +237,7 @@ const materialAsset = {
   passes: [{ name: 'Forward', program: { module: DEMO_MATERIAL_SHADER_PATH }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
   values: {
     baseColor: [0.7, 0.7, 0.7, 1],
+    baseColorUvTransform: [0, 0, 1, 1],
     baseColorTexture: baseColorTextureHandle,
     detailTexture: detailTextureHandle,
   },
@@ -309,6 +310,7 @@ const composedUsesSampledTexture = (name) => {
 };
 if (
   !Array.isArray(manifestParamSchema) ||
+  !manifestParamSchema.some((entry) => entry?.name === 'baseColorUvTransform' && entry?.type === 'vec4') ||
   !manifestParamSchema.some((entry) => entry?.name === 'baseColorTexture' && entry?.type === 'texture2d') ||
   !manifestParamSchema.some((entry) => entry?.name === 'detailTexture' && entry?.type === 'texture2d') ||
   !composedUsesSampledTexture('baseColorTexture') ||
@@ -323,6 +325,7 @@ if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
     source: demoComposedWgsl,
     paramSchema: [
       { name: 'baseColor', type: 'color' },
+      { name: 'baseColorUvTransform', type: 'vec4' },
       { name: 'baseColorTexture', type: 'texture2d' },
       { name: 'detailTexture', type: 'texture2d' },
     ],

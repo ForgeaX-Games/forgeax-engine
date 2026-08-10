@@ -1,6 +1,11 @@
 import { mountUi, type UiAsset, type UiError, type UiInstance } from '@forgeax/engine-ui';
 import type { AssetLabAction, AssetLabActionResult } from './asset-lab-actions';
+import type { GameplayPhase } from './gameplay-state';
 import { GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE } from './resources/gameplay';
+import type { TargetRelaySnapshot } from './target-relay';
+import type { EnergyCoreExtractionSnapshot } from './energy-core-extraction';
+import type { RewardChoiceSnapshot } from './reward-choice';
+import { deriveCounterattackPressure, PLAYER_MAX_HEALTH } from './counterattack';
 
 export type ViewMode = 'topdown' | 'orbit' | 'fps' | 'pan';
 export const HUD_UI_GUID = '019f8354-6386-4386-849d-f2ab4b96229c';
@@ -8,7 +13,12 @@ export const HUD_UI_GUID = '019f8354-6386-4386-849d-f2ab4b96229c';
 export interface HudHandle {
   readonly error?: UiError;
   setScore(n: number): void;
+  setHealth(current: number, max: number): void;
+  setPhase(phase: GameplayPhase): void;
   setTargetProfileActive(active: boolean, precisionHits?: number): void;
+  setTargetRelay(snapshot: TargetRelaySnapshot): void;
+  setExtraction(snapshot: EnergyCoreExtractionSnapshot): void;
+  setRewardChoice(snapshot: RewardChoiceSnapshot): void;
   setTargetStatus(text: string, state: 'ready' | 'damaged' | 'disabled'): void;
   setChargeStatus(text: string, state: 'ready' | 'charging' | 'released', progress?: number): void;
   setComboStatus(text: string, state: 'ready' | 'active' | 'expired'): void;
@@ -17,11 +27,12 @@ export interface HudHandle {
   setMode(mode: ViewMode): void;
   setLockStatus(text: string): void;
   floatScore(text: string, screenX: number, screenY: number): void;
+  resetTransientFeedback(): void;
   dispose(): void;
 }
 
 function failedHud(error: UiError): HudHandle {
-  return { error, setScore() {}, setTargetProfileActive() {}, setTargetStatus() {}, setChargeStatus() {}, setComboStatus() {}, setAssetLabStatus() {}, setAssetLabActionHandler() {}, setMode() {}, setLockStatus() {}, floatScore() {}, dispose() {} };
+  return { error, setScore() {}, setHealth() {}, setPhase() {}, setTargetProfileActive() {}, setTargetRelay() {}, setExtraction() {}, setRewardChoice() {}, setTargetStatus() {}, setChargeStatus() {}, setComboStatus() {}, setAssetLabStatus() {}, setAssetLabActionHandler() {}, setMode() {}, setLockStatus() {}, floatScore() {}, resetTransientFeedback() {}, dispose() {} };
 }
 
 function slot<T extends HTMLElement>(shadow: ShadowRoot, name: string): T | null {
@@ -39,6 +50,7 @@ export function installHud(opts: {
   if (!opts.asset) return failedHud(opts.error ?? { code: 'invalid-asset', expected: 'a loaded HUD UiAsset', hint: 'Load the HUD UI asset before installing it.', detail: { message: 'HUD asset is missing', asset: 'HUD UiAsset' } });
   const root = opts.host ?? document.body;
   let assetLabActionHandler: ((action: AssetLabAction) => AssetLabActionResult) | undefined;
+  let currentPhase: GameplayPhase = 'Play';
   const mounted = mountUi(opts.asset, {
     root,
     layer: 50,
@@ -46,6 +58,7 @@ export function installHud(opts: {
       if (action === 'toggle-mode') opts.onToggle();
       if (action === 'open-settings') opts.onSettings?.();
       if (action === 'target-profile' || action === 'jpeg-texture' || action === 'video-texture' || action === 'sprite-atlas' || action === 'font-source' || action === 'fbx-companion') {
+        if (currentPhase !== 'Play') return;
         const result = assetLabActionHandler?.(action);
         if (result !== undefined) setAssetLabStatus(result.text, result.state);
       }
@@ -58,6 +71,7 @@ export function installHud(opts: {
   const shadow = instance.host.shadowRoot;
   if (!shadow) return { ...failedHud({ code: 'invalid-asset', expected: 'a mounted UI with an open shadow root', hint: 'Check the HUD UI asset markup.', detail: { message: 'Mounted HUD has no shadow root', asset: 'mounted HUD' } }), dispose: instance.dispose };
   const score = slot<HTMLElement>(shadow, 'score');
+  const health = slot<HTMLElement>(shadow, 'health');
   const mission = slot<HTMLElement>(shadow, 'mission');
   const targetStatus = slot<HTMLElement>(shadow, 'target-status');
   const chargeStatus = slot<HTMLElement>(shadow, 'charge');
@@ -70,6 +84,7 @@ export function installHud(opts: {
   const targetProfileButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="target-profile"]');
   const fbxCompanionButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="fbx-companion"]');
   const spriteAtlasButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="sprite-atlas"]');
+  const assetButtons = [...shadow.querySelectorAll<HTMLButtonElement>('.asset-control')];
   const crosshair = slot<HTMLElement>(shadow, 'crosshair');
   const hint = slot<HTMLElement>(shadow, 'hint');
   const lockStatus = slot<HTMLElement>(shadow, 'lock-status');
@@ -78,26 +93,54 @@ export function installHud(opts: {
   let currentScore = 0;
   let targetProfileActive = false;
   let targetProfilePrecisionHits = 0;
+  let targetRelay: TargetRelaySnapshot = {
+    status: 'locked', currentStep: 0, cleared: 0, total: 0, activeTarget: null,
+    activeTargetName: null, acceptedHits: 0, rejectedHits: 0, variationActive: false,
+  };
+  let extraction: Pick<EnergyCoreExtractionSnapshot, 'collected' | 'total' | 'active'> = {
+    collected: 0,
+    total: 3,
+    active: false,
+  };
+  let rewardChoice: Pick<RewardChoiceSnapshot, 'state' | 'available'> = { state: 'none', available: false };
   spriteAtlasButton?.setAttribute('aria-label', 'PNG projectile');
   const applyMission = (): void => {
+    const pressureTier = deriveCounterattackPressure(extraction.collected).tier;
     const profileUnlocked = currentScore >= GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE;
     const precisionComplete = targetProfileActive && targetProfilePrecisionHits > 0;
-    if (mission) mission.textContent = currentScore < GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE
-      ? `Mission 1/3 · Score ${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE} · ${currentScore}/${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE}`
-      : !targetProfileActive
-        ? 'Mission 2/3 · Press P to apply the authored target profile'
-        : !precisionComplete
-          ? 'Mission 3/3 · Hit the rotating precision target'
-          : 'Mission complete · Precision hit confirmed · R to replay';
-    if (mission) mission.dataset.complete = profileUnlocked && precisionComplete ? 'true' : 'false';
+    if (mission) mission.textContent = currentPhase === 'Victory'
+      ? `Victory · Final score ${currentScore} · R to replay`
+      : currentPhase === 'Defeat'
+        ? `Defeat · BouncyBall counterattack · R to replay`
+      : currentPhase === 'Reset'
+        ? 'Replay reset · returning to Play'
+        : currentScore < GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE
+          ? `Mission 1/3 · Score ${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE} · ${currentScore}/${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE}`
+          : !targetProfileActive
+            ? 'Mission 2/3 · Press P to apply the authored target profile'
+            : !precisionComplete
+              ? 'Mission 3/3 · Hit the rotating precision target'
+              : targetRelay.status === 'active'
+                ? `Relay ${targetRelay.currentStep}/${targetRelay.total} · ${targetRelay.activeTargetName ?? 'authored target'} · hit active target`
+                : targetRelay.status === 'complete' && extraction.active && rewardChoice.state === 'none'
+                  ? `Reward choice · Threat ${pressureTier}/3 · enter Shield or Overcharge pedestal`
+                  : targetRelay.status === 'complete' && extraction.active
+                    ? `Extraction ${extraction.collected}/${extraction.total} · Threat ${pressureTier}/3 · reward ${rewardChoice.state} · return`
+                  : targetRelay.status === 'complete'
+                    ? `Extraction ${extraction.collected}/${extraction.total} · Threat ${pressureTier}/3 · collect EnergyCores`
+                    : 'Precision confirmed · relay preparing';
+    if (mission) {
+      mission.dataset.complete = currentPhase === 'Victory' ? 'true' : 'false';
+      mission.dataset.phase = currentPhase;
+    }
     if (targetProfileButton) {
-      targetProfileButton.disabled = !profileUnlocked;
-      targetProfileButton.setAttribute('aria-disabled', String(!profileUnlocked));
+      targetProfileButton.disabled = currentPhase !== 'Play' || !profileUnlocked;
+      targetProfileButton.setAttribute('aria-disabled', String(currentPhase !== 'Play' || !profileUnlocked));
       targetProfileButton.title = profileUnlocked ? 'Apply or restore the authored target profile' : `Score ${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE} to unlock`;
     }
     if (fbxCompanionButton) {
-      fbxCompanionButton.disabled = !precisionComplete;
-      fbxCompanionButton.setAttribute('aria-disabled', String(!precisionComplete));
+      fbxCompanionButton.disabled = currentPhase !== 'Play' || !precisionComplete;
+      fbxCompanionButton.setAttribute('aria-disabled', String(currentPhase !== 'Play' || !precisionComplete));
       fbxCompanionButton.title = precisionComplete ? 'Show the imported humanoid on the scored target' : 'Complete the precision mission first';
     }
   };
@@ -120,9 +163,36 @@ export function installHud(opts: {
     if (score) score.textContent = `Score  ${n}`;
     applyMission();
   };
+  const setHealth = (current: number, max: number): void => {
+    if (!health) return;
+    const safeMax = Math.max(0, Math.floor(max));
+    const safeCurrent = Math.max(0, Math.min(safeMax, Math.floor(current)));
+    health.textContent = `${'♥'.repeat(safeCurrent)}${'♡'.repeat(safeMax - safeCurrent)}`;
+    health.dataset.current = String(safeCurrent);
+    health.dataset.max = String(safeMax);
+    health.dataset.state = safeCurrent === 0 ? 'defeated' : safeCurrent < safeMax ? 'damaged' : 'ready';
+    health.setAttribute('aria-label', `Player health ${safeCurrent} of ${safeMax}`);
+  };
+  const setPhase = (phase: GameplayPhase): void => {
+    currentPhase = phase;
+    for (const assetButton of assetButtons) assetButton.disabled = phase !== 'Play';
+    applyMission();
+  };
   const setTargetProfileActive = (active: boolean, precisionHits = 0): void => {
     targetProfileActive = active;
     targetProfilePrecisionHits = precisionHits;
+    applyMission();
+  };
+  const setTargetRelay = (snapshot: TargetRelaySnapshot): void => {
+    targetRelay = snapshot;
+    applyMission();
+  };
+  const setExtraction = (snapshot: EnergyCoreExtractionSnapshot): void => {
+    extraction = snapshot;
+    applyMission();
+  };
+  const setRewardChoice = (snapshot: RewardChoiceSnapshot): void => {
+    rewardChoice = snapshot;
     applyMission();
   };
   const setTargetStatus = (text: string, state: 'ready' | 'damaged' | 'disabled'): void => {
@@ -168,11 +238,15 @@ export function installHud(opts: {
     popups.append(popup);
     setTimeout(() => popup.remove(), 1000);
   };
+  const resetTransientFeedback = (): void => {
+    popups?.replaceChildren();
+  };
   setScore(0);
+  setHealth(PLAYER_MAX_HEALTH, PLAYER_MAX_HEALTH);
   applyMode(opts.initialMode);
   setChargeStatus('Hold C to charge · release to fire', 'ready', 0);
   setComboStatus('Combo ready · chain hits for a bonus', 'ready');
   setLockStatus('Click canvas to lock pointer');
   setAssetLabStatus(`Score ${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE} to unlock Target profile.`, 'idle');
-  return { setScore, setTargetProfileActive, setTargetStatus, setChargeStatus, setComboStatus, setAssetLabStatus, setAssetLabActionHandler, setMode: applyMode, setLockStatus, floatScore, dispose: instance.dispose };
+  return { setScore, setHealth, setPhase, setTargetProfileActive, setTargetRelay, setExtraction, setRewardChoice, setTargetStatus, setChargeStatus, setComboStatus, setAssetLabStatus, setAssetLabActionHandler, setMode: applyMode, setLockStatus, floatScore, resetTransientFeedback, dispose: instance.dispose };
 }

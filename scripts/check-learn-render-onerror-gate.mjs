@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // feat: bug-20260609-learn-render-onerror-gate-coverage M5
-// Purpose: CI grep gate that verifies every demo under apps/learn-render/*/*/src
+// Purpose: CI grep gate that verifies every demo under apps/learn-render/**/src
 // has (a) __tests__/onerror-gate.browser.test.ts, and (b) index.ts or main.ts
-// containing the __learnRenderErrors bus push literal.
+// containing the __learnRenderErrors bus push literal. Dev asset consumers must
+// also share one scoped runtime binding across source, registry, and Vite host.
 //
 // Governance: AGENTS.md "Demo failures route to engine fixes, not workarounds"
 // — this gate prevents demos from silently drifting out of onerror-gate coverage.
@@ -85,19 +86,22 @@ function findDemoDirs() {
   /** @type {string[]} */
   const demos = [];
   if (!existsSync(learnRenderDir)) return demos;
-  const sections = readdirSync(learnRenderDir, { withFileTypes: true });
-  for (const s of sections) {
-    if (!s.isDirectory() || s.name.startsWith('.')) continue;
-    const sectionDir = join(learnRenderDir, s.name);
-    const demoNames = readdirSync(sectionDir, { withFileTypes: true });
-    for (const d of demoNames) {
-      if (!d.isDirectory() || d.name.startsWith('.')) continue;
-      const srcDir = join(sectionDir, d.name, 'src');
-      if (existsSync(srcDir)) {
-        demos.push(srcDir);
+
+  /** @param {string} dir */
+  function visit(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules')
+        continue;
+      const child = join(dir, entry.name);
+      if (entry.name === 'src') {
+        demos.push(child);
+      } else {
+        visit(child);
       }
     }
   }
+
+  visit(learnRenderDir);
   return demos.sort();
 }
 
@@ -144,6 +148,28 @@ for (const dir of demoDirs) {
   if (!content.includes('__learnRenderErrors')) {
     const entryRelative = entryPath.slice(repoRoot.length + 1);
     violations.push({ dim: 'missing-bus-push', path: entryRelative });
+  }
+
+  if (content.includes('createDevImportTransport')) {
+    const entryRelative = entryPath.slice(repoRoot.length + 1);
+    if (!content.includes('createStandaloneRuntimeAssetBinding')) {
+      violations.push({ dim: 'missing-runtime-binding', path: entryRelative });
+    }
+    if (!content.includes('createDevImportTransport(runtimeBinding)')) {
+      violations.push({ dim: 'unscoped-import-transport', path: entryRelative });
+    }
+    if (!content.includes('configureRuntimeBinding(runtimeBinding)')) {
+      violations.push({ dim: 'unscoped-asset-registry', path: entryRelative });
+    }
+
+    const viteConfig = join(dir, '..', 'vite.config.ts');
+    const viteContent = existsSync(viteConfig) ? readFileSync(viteConfig, 'utf8') : '';
+    if (!/\bruntimeBinding\s*[:,]/.test(viteContent)) {
+      violations.push({
+        dim: 'unscoped-pack-host',
+        path: viteConfig.slice(repoRoot.length + 1),
+      });
+    }
   }
 }
 

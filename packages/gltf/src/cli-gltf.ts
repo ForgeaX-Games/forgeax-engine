@@ -313,7 +313,15 @@ async function runWrite(target: string, ctx: AssetCtx): Promise<number> {
     existingMeta as Parameters<typeof toAssetPack>[1],
     sourceRelative,
   );
-  await writeFile(metaPath, serializeMetaJson(pack.meta), 'utf-8');
+  if (!pack.ok) {
+    return emitError(ctx, {
+      code: pack.error.code,
+      expected: pack.error.expected,
+      hint: pack.error.hint,
+      detail: { source: sourceRelative, sourceIndices: pack.error.sourceIndices },
+    });
+  }
+  await writeFile(metaPath, serializeMetaJson(pack.value.meta), 'utf-8');
   return 0;
 }
 

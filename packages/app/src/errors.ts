@@ -51,6 +51,7 @@
 
 import type { PluginError } from '@forgeax/engine-plugin';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
+import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
 
 /**
  * Closed AppErrorCode union (6 members).
@@ -72,7 +73,13 @@ export type AppErrorCode =
   | 'app-canvas-detached'
   | 'app-paused-while-stop'
   | 'app-system-update-failed'
-  | 'app-pointer-lock-failed';
+  | 'app-pointer-lock-failed'
+  | 'app-execution-tier-unavailable'
+  | 'app-execution-bootstrap-failed'
+  | 'app-execution-deadline-exceeded'
+  | 'app-execution-kernel-failed'
+  | 'app-execution-stale-world'
+  | 'app-execution-rebuild-failed';
 
 /**
  * Detail variant for the `'app-canvas-detached'` arm.
@@ -113,6 +120,42 @@ export interface AppDetailPointerLockFailed {
   readonly cause: unknown;
 }
 
+export interface AppDetailExecutionTierUnavailable {
+  readonly requestedTier: ExecutionTier;
+  readonly missingCapabilities: readonly ExecutionCapabilityName[];
+  readonly sharedEvidencePassed: boolean;
+}
+
+export interface AppDetailExecutionBootstrapFailed {
+  readonly phase: 'import' | 'export' | 'bootstrap';
+  readonly moduleUrl: string;
+  readonly cause: unknown;
+}
+
+export interface AppDetailExecutionDeadlineExceeded {
+  readonly phase: 'startup' | 'handshake' | 'frame';
+  readonly timeoutMs: number;
+}
+
+export interface AppDetailExecutionKernelFailed {
+  readonly kernelName: string;
+  readonly worldIdentity: string;
+  readonly cause: unknown;
+  readonly partialWrite: true;
+  readonly retryable: false;
+}
+
+export interface AppDetailExecutionStaleWorld {
+  readonly expectedIdentity: string;
+  readonly receivedIdentity: string;
+  readonly messageKind: string;
+}
+
+export interface AppDetailExecutionRebuildFailed {
+  readonly worldIdentity: string | null;
+  readonly cause: unknown;
+}
+
 /**
  * Empty-detail shape for the 3 codes that carry no payload
  * (`'app-not-started'`, `'app-already-running'`, `'app-paused-while-stop'`).
@@ -134,7 +177,19 @@ export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-de
     ? AppDetailSystemUpdateFailed
     : C extends 'app-pointer-lock-failed'
       ? AppDetailPointerLockFailed
-      : AppDetailEmpty;
+      : C extends 'app-execution-tier-unavailable'
+        ? AppDetailExecutionTierUnavailable
+        : C extends 'app-execution-bootstrap-failed'
+          ? AppDetailExecutionBootstrapFailed
+          : C extends 'app-execution-deadline-exceeded'
+            ? AppDetailExecutionDeadlineExceeded
+            : C extends 'app-execution-kernel-failed'
+              ? AppDetailExecutionKernelFailed
+              : C extends 'app-execution-stale-world'
+                ? AppDetailExecutionStaleWorld
+                : C extends 'app-execution-rebuild-failed'
+                  ? AppDetailExecutionRebuildFailed
+                  : AppDetailEmpty;
 
 /**
  * Tagged union of `.detail` payloads carried by structured AppError.
@@ -206,6 +261,15 @@ class AppErrorClass extends Error {
     } else if (args.code === 'app-pointer-lock-failed') {
       const d = args.detail as AppDetailPointerLockFailed;
       causeSuffix = `; path: ${d.path}; cause: ${summarizeCause(d.cause)}`;
+    } else if (args.code === 'app-execution-bootstrap-failed') {
+      const d = args.detail as AppDetailExecutionBootstrapFailed;
+      causeSuffix = `; phase: ${d.phase}; cause: ${summarizeCause(d.cause)}`;
+    } else if (args.code === 'app-execution-kernel-failed') {
+      const d = args.detail as AppDetailExecutionKernelFailed;
+      causeSuffix = `; kernel: ${d.kernelName}; cause: ${summarizeCause(d.cause)}`;
+    } else if (args.code === 'app-execution-rebuild-failed') {
+      const d = args.detail as AppDetailExecutionRebuildFailed;
+      causeSuffix = `; cause: ${summarizeCause(d.cause)}`;
     }
     super(`[AppError ${args.code}] expected: ${args.expected}; hint: ${args.hint}${causeSuffix}`);
     this.name = 'AppError';
@@ -247,13 +311,9 @@ type AppErrorVariant<C extends AppErrorCode> = AppErrorClass & {
  * }
  * ```
  */
-export type AppError =
-  | AppErrorVariant<'app-not-started'>
-  | AppErrorVariant<'app-already-running'>
-  | AppErrorVariant<'app-canvas-detached'>
-  | AppErrorVariant<'app-paused-while-stop'>
-  | AppErrorVariant<'app-system-update-failed'>
-  | AppErrorVariant<'app-pointer-lock-failed'>;
+export type AppError = {
+  [C in AppErrorCode]: AppErrorVariant<C>;
+}[AppErrorCode];
 
 interface AppErrorConstructor {
   new <C extends AppErrorCode>(args: {
@@ -299,6 +359,18 @@ export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = {
     'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(Update, name) returns Result.ok during cleanup',
   'app-pointer-lock-failed':
     'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
+  'app-execution-tier-unavailable':
+    'the explicitly requested execution tier has every required observed capability and the shipped shared evidence gate',
+  'app-execution-bootstrap-failed':
+    'the bootstrap URL imports a module whose default export completes as a BootstrapEntry in the selected Engine Realm',
+  'app-execution-deadline-exceeded':
+    'the execution startup, handshake or frame completes within its configured bounded deadline',
+  'app-execution-kernel-failed':
+    'a shared kernel completes every dispatched shard without leaving a possibly partial World write',
+  'app-execution-stale-world':
+    'every execution message targets the currently active World identity before it can write',
+  'app-execution-rebuild-failed':
+    'explicit rebuild disposes the poisoned World and bootstraps a fresh World identity in the surviving Engine Realm',
 };
 
 /**
@@ -322,6 +394,18 @@ export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = {
     'inspect detail.cause for the original thrown value (EcsError / RhiError / host system bug); detail.systemName names the offending system when the call site can supply it',
   'app-pointer-lock-failed':
     'remain in unlocked state; the next trusted click will automatically retry the lock request. inspect detail.path ("w3c" or "provider") and detail.cause to determine the root cause',
+  'app-execution-tier-unavailable':
+    'inspect detail.missingCapabilities and detail.sharedEvidencePassed; use tier="auto" only when an observed fallback is acceptable',
+  'app-execution-bootstrap-failed':
+    'inspect detail.phase, moduleUrl and cause; export one default BootstrapEntry that creates only realm-local engine state',
+  'app-execution-deadline-exceeded':
+    'inspect detail.phase and timeoutMs; the timed-out Worker has been terminated, so fix startup or frame work before creating a new App',
+  'app-execution-kernel-failed':
+    'do not retry or draw the poisoned World; inspect detail.kernelName and cause, then call app.execution.rebuild()',
+  'app-execution-stale-world':
+    'discard the late message and keep the current World; inspect expectedIdentity, receivedIdentity and messageKind',
+  'app-execution-rebuild-failed':
+    'inspect detail.cause; this App remains stopped, so fix the bootstrap failure or create a new App explicitly',
 };
 
 /**

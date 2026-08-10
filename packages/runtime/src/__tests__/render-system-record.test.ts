@@ -91,6 +91,7 @@ import { describe, expect, it } from 'vitest';
     occlusionStrength?: number;
     clearcoat?: number;
     clearcoatRoughness?: number;
+    specularTint?: readonly [number, number, number];
   }): MaterialSnapshot {
     return {
       baseColor: opts.baseColor ?? [0.5, 0.6, 0.7, 1],
@@ -103,6 +104,7 @@ import { describe, expect, it } from 'vitest';
       ...(opts.occlusionStrength !== undefined && { occlusionStrength: opts.occlusionStrength }),
       ...(opts.clearcoat !== undefined && { clearcoat: opts.clearcoat }),
       ...(opts.clearcoatRoughness !== undefined && { clearcoatRoughness: opts.clearcoatRoughness }),
+      ...(opts.specularTint !== undefined && { specularTint: opts.specularTint }),
     } as unknown as MaterialSnapshot;
   }
 
@@ -124,6 +126,7 @@ import { describe, expect, it } from 'vitest';
         occlusionStrength: 1,
         clearcoat: 0.85,
         clearcoatRoughness: 0.12,
+        specularTint: [0.11, 0.22, 0.33],
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
       expect(buf.byteLength).toBe(304);
@@ -159,7 +162,23 @@ import { describe, expect, it } from 'vitest';
       // clearcoat layer (offsets 72..79).
       expect(f32[18]).toBeCloseTo(0.85);
       expect(f32[19]).toBeCloseTo(0.12);
+      // specularTint vec3 (offsets 80..92).
+      expect(f32[20]).toBeCloseTo(0.11);
+      expect(f32[21]).toBeCloseTo(0.22);
+      expect(f32[22]).toBeCloseTo(0.33);
       expect(f32[72]).toBe(1);
+    });
+
+    it('writes schema-carried alphaCutoff into the baseline PBR payload', () => {
+      if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
+        throw new Error('helper not exported yet');
+      }
+      const payload = mod.buildPbrMaterialUboPayload({
+        ...makePbrSnapshot({}),
+        paramSnapshot: { alphaCutoff: 0.5 },
+      } as MaterialSnapshot);
+      const f32 = new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4);
+      expect(f32[17]).toBeCloseTo(0.5);
     });
 
     it('keeps engine-owned texture UV tails aligned across PBR and sprite layouts', () => {
@@ -1026,7 +1045,7 @@ import { describe, expect, it } from 'vitest';
 // --- from feat-20260625-refactor-sprite-as-transparent-mesh M1 / w2 ---
 {
   // standard-pbr regression: the generic writer over the engine-shipped
-  // default-standard-pbr.material.json paramSchema (14 numeric entries
+  // default-standard-pbr.material.json paramSchema (15 numeric entries
   // std140-packed into 96 B) must produce byte-identical output to
   // buildPbrMaterialUboPayload. This is the gate plan-strategy section 2
   // D-2 sets so the generic writer can replace the inline overlay without
@@ -1060,12 +1079,13 @@ import { describe, expect, it } from 'vitest';
     { name: 'alphaCutoff', type: 'f32', default: 0 },
     { name: 'clearcoat', type: 'f32', default: 0 },
     { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
+    { name: 'specularTint', type: 'vec3', default: [1, 1, 1] },
   ];
 
   describe('applyParamSnapshotToUbo: standard-pbr byte-identical via derive (M1 / w2)', () => {
-    it('derive(standard-pbr).uboLayout matches the 80 B authored numeric layout', () => {
+    it('derive(standard-pbr).uboLayout matches the 96 B authored numeric layout', () => {
       const { uboLayout } = derive(STANDARD_PBR_SCHEMA);
-      expect(uboLayout.totalBytes).toBe(80);
+      expect(uboLayout.totalBytes).toBe(96);
       const byName = new Map(uboLayout.entries.map((e) => [e.name, e]));
       expect(byName.get('baseColor')?.offset).toBe(0);
       expect(byName.get('metallic')?.offset).toBe(16);
@@ -1081,6 +1101,7 @@ import { describe, expect, it } from 'vitest';
       expect(byName.get('alphaCutoff')?.offset).toBe(68);
       expect(byName.get('clearcoat')?.offset).toBe(72);
       expect(byName.get('clearcoatRoughness')?.offset).toBe(76);
+      expect(byName.get('specularTint')?.offset).toBe(80);
     });
 
     it('generic writer over standard-pbr snapshot equals buildPbrMaterialUboPayload bytes', () => {
@@ -1112,6 +1133,7 @@ import { describe, expect, it } from 'vitest';
         alphaCutoff: 0,
         clearcoat: 0,
         clearcoatRoughness: 0.5,
+        specularTint: [1, 1, 1],
       } as unknown as MaterialSnapshot;
       const baseline = mod.buildPbrMaterialUboPayload(material);
       // Construct the generic-writer output: start from the same explicit
@@ -1131,6 +1153,7 @@ import { describe, expect, it } from 'vitest';
         emissive,
         emissiveIntensity,
         occlusionStrength,
+        specularTint: [1, 1, 1],
       };
       mod.applyParamSnapshotToUbo(candidate, STANDARD_PBR_SCHEMA, snapshot);
       expect(new Uint8Array(candidate)).toEqual(new Uint8Array(baseline));

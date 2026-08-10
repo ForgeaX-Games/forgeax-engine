@@ -1,4 +1,4 @@
-// errors.ts — GameProjectError class (D-2)
+// errors.ts — GameProjectError closed error surface (D-2)
 //
 // Four-field surface: .code / .expected / .hint / .detail
 // Structurally parallel to PackError (engine-pack) — same interface shape
@@ -16,17 +16,6 @@
 // ```
 
 import type { z } from 'zod';
-
-// ── code union (6 members, self-contained within engine-project) ────────────
-export type GameProjectErrorCode =
-  | 'forge-missing'
-  | 'forge-parse-failed'
-  | 'forge-schema-invalid'
-  | 'forge-unknown-field'
-  | 'forge-guid-malformed'
-  | 'forge-scene-unresolved';
-
-// ── detail: discriminated union narrowed per code (D-2) ─────────────────────
 
 /** forge.json file not found at the expected path. */
 export interface ForgeMissingDetail {
@@ -65,22 +54,26 @@ export interface ForgeSceneUnresolvedDetail {
   readonly guid: string;
 }
 
-export type GameProjectErrorDetail =
-  | ForgeMissingDetail
-  | ForgeParseFailedDetail
-  | ForgeSchemaInvalidDetail
-  | ForgeUnknownFieldDetail
-  | ForgeGuidMalformedDetail
-  | ForgeSceneUnresolvedDetail;
+type GameProjectErrorDetailByCode = {
+  'forge-missing': ForgeMissingDetail;
+  'forge-parse-failed': ForgeParseFailedDetail;
+  'forge-schema-invalid': ForgeSchemaInvalidDetail;
+  'forge-unknown-field': ForgeUnknownFieldDetail;
+  'forge-guid-malformed': ForgeGuidMalformedDetail;
+  'forge-scene-unresolved': ForgeSceneUnresolvedDetail;
+};
+
+export type GameProjectErrorCode = keyof GameProjectErrorDetailByCode;
+export type GameProjectErrorDetail = GameProjectErrorDetailByCode[GameProjectErrorCode];
 
 // ── constructor args ────────────────────────────────────────────────────────
 
-export interface GameProjectErrorArgs {
-  readonly code: GameProjectErrorCode;
+export type GameProjectErrorArgs<C extends GameProjectErrorCode = GameProjectErrorCode> = {
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: GameProjectErrorDetail;
-}
+  readonly detail: GameProjectErrorDetailByCode[C];
+};
 
 // ── GameProjectError class (D-2) ─────────────────────────────────────────────
 
@@ -91,7 +84,7 @@ export interface GameProjectErrorArgs {
  * Aligns with PackError four-field surface (.code/.expected/.hint/.detail)
  * per charter P4 (consistent abstraction) and AC-10.
  */
-export class GameProjectError extends Error {
+class GameProjectErrorClass extends Error {
   readonly code: GameProjectErrorCode;
   readonly expected: string;
   readonly hint: string;
@@ -106,3 +99,20 @@ export class GameProjectError extends Error {
     this.detail = args.detail;
   }
 }
+
+type GameProjectErrorVariant<C extends GameProjectErrorCode> = GameProjectErrorClass & {
+  readonly code: C;
+  readonly detail: GameProjectErrorDetailByCode[C];
+};
+
+export type GameProjectError = {
+  [C in GameProjectErrorCode]: GameProjectErrorVariant<C>;
+}[GameProjectErrorCode];
+
+interface GameProjectErrorConstructor {
+  new <C extends GameProjectErrorCode>(args: GameProjectErrorArgs<C>): GameProjectErrorVariant<C>;
+  readonly prototype: GameProjectErrorClass;
+}
+
+export const GameProjectError: GameProjectErrorConstructor =
+  GameProjectErrorClass as unknown as GameProjectErrorConstructor;

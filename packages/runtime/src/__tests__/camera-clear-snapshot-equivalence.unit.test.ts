@@ -52,7 +52,7 @@ describe('w13 -- CameraSnapshot.clearColor equivalence + fallback (AC-11 / D-3)'
     expect(Array.from(cam.clearColor)).toEqual(authored.map((v) => Math.fround(v)));
   });
 
-  it('Camera spawned without clearColor defaults to opaque black [0,0,0,1] on the snapshot', () => {
+  it('Camera spawned without clearColor defaults to transparent black [0,0,0,0] on the snapshot', () => {
     const world = new World();
     world
       .spawn(
@@ -65,7 +65,7 @@ describe('w13 -- CameraSnapshot.clearColor equivalence + fallback (AC-11 / D-3)'
     const cam = frame.cameras[0];
     expect(cam).toBeDefined();
     if (!cam) return;
-    expect(Array.from(cam.clearColor)).toEqual([0, 0, 0, 1]);
+    expect(Array.from(cam.clearColor)).toEqual([0, 0, 0, 0]);
   });
 
   it('zero-Camera fallback snapshot carries clearColor = [0,0,0,1] (frame-snapshot.ts)', () => {

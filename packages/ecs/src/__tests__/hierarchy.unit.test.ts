@@ -27,7 +27,7 @@ import { Update } from '../schedule-token';
 //   - packages/ecs/src/__tests__/world-spawn-array-fallback.test.ts
 //   - packages/ecs/src/__tests__/world-spawn-defaults.test.ts
 //   - packages/ecs/src/__tests__/world-spawn-direct.test.ts
-//   - packages/ecs/src/component-default-fallback.test.ts
+//   - packages/ecs/src/__tests__/component-default-fallback.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
@@ -43,7 +43,7 @@ import {
   type SceneEntity,
   unwrapHandle,
 } from '@forgeax/engine-types';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import * as componentModule from '../component';
 import { type Component, type ComponentSchema, TYPE_METADATA } from '../component';
 import { fillComponentDefaults, typeDefault } from '../component-default-fallback';
@@ -75,7 +75,6 @@ import {
   RelationshipSelfCycleError,
   World,
 } from '../index';
-import type { ColumnBundle } from '../query';
 import { UniqueRefStore } from '../unique-ref-store';
 import { handleNumeric } from './utils/handle-numeric';
 
@@ -287,13 +286,9 @@ describe('reserveArrayCapacity', () => {
 
       world.addSystem(Update, {
         name: 'counter',
-        queries: [{ with: [Pos, EntityComponent] }],
+        queries: [{ read: [Pos] }],
         fn: (_world, queryResults) => {
-          for (const result of queryResults) {
-            for (const bundle of result) {
-              entityCountDuringSystem += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) entityCountDuringSystem += [...query].length;
         },
         after: ['spawner'],
       });
@@ -326,14 +321,10 @@ describe('reserveArrayCapacity', () => {
 
       world.addSystem(Update, {
         name: 'checker',
-        queries: [{ with: [Tag, EntityComponent] }],
+        queries: [{ read: [Tag] }],
         fn: (_world, queryResults) => {
-          for (const result of queryResults) {
-            for (const bundle of result) {
-              if (bundle.Entity.self.length > 0) {
-                entitySeenDuringSystem = true;
-              }
-            }
+          for (const query of queryResults) {
+            if ([...query].length > 0) entitySeenDuringSystem = true;
           }
         },
         after: ['destroyer'],
@@ -469,13 +460,9 @@ describe('reserveArrayCapacity', () => {
       let count = 0;
       world.addSystem(Update, {
         name: 'counter',
-        queries: [{ with: [Tag, EntityComponent] }],
+        queries: [{ read: [Tag] }],
         fn: (_world, queryResults) => {
-          for (const result of queryResults) {
-            for (const bundle of result) {
-              count += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) count += [...query].length;
         },
       });
 
@@ -505,13 +492,9 @@ describe('reserveArrayCapacity', () => {
       let found = 0;
       world.addSystem(Update, {
         name: 'verifier',
-        queries: [{ with: [Pos, EntityComponent] }],
+        queries: [{ read: [Pos] }],
         fn: (_world, queryResults) => {
-          for (const result of queryResults) {
-            for (const bundle of result) {
-              found += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) found += [...query].length;
         },
       });
 
@@ -2855,26 +2838,14 @@ describe('reserveArrayCapacity', () => {
       // Register a movement system that integrates velocity into position
       world.addSystem(Update, {
         name: 'movement',
-        queries: [{ with: [Position, Velocity, EntityComponent] }],
+        queries: [{ read: [Velocity], write: [Position] }],
         fn: (_world, queryResults) => {
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              const posFields = bundle.IntPos as Record<string, Float32Array>;
-              const velFields = bundle.IntVel as Record<string, Float32Array>;
-              // biome-ignore lint/style/noNonNullAssertion: controlled test context — fields guaranteed by spawn
-              const x = posFields.x!;
-              // biome-ignore lint/style/noNonNullAssertion: controlled test context
-              const y = posFields.y!;
-              // biome-ignore lint/style/noNonNullAssertion: controlled test context
-              const vx = velFields.vx!;
-              // biome-ignore lint/style/noNonNullAssertion: controlled test context
-              const vy = velFields.vy!;
-              for (let i = 0; i < bundle.Entity.self.length; i++) {
-                // biome-ignore lint/style/noNonNullAssertion: controlled test context
-                x[i] = x[i]! + vx[i]!;
-                // biome-ignore lint/style/noNonNullAssertion: controlled test context
-                y[i] = y[i]! + vy[i]!;
-              }
+          for (const query of queryResults) {
+            for (const row of query) {
+              const position = row.mut(Position);
+              const velocity = row.get(Velocity);
+              position.x += velocity.vx;
+              position.y += velocity.vy;
             }
           }
         },
@@ -2928,14 +2899,10 @@ describe('reserveArrayCapacity', () => {
 
       world.addSystem(Update, {
         name: 'counter',
-        queries: [{ with: [Tag, EntityComponent] }],
+        queries: [{ read: [Tag] }],
         fn: (_world, queryResults) => {
           spawnedCount = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              spawnedCount += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) spawnedCount += [...query].length;
         },
         after: ['spawner'],
       });
@@ -2991,15 +2958,22 @@ describe('reserveArrayCapacity', () => {
       );
 
       // Query for Position + Health (hot-table, Float32Array + Int32Array)
-      const bundles: ColumnBundle[] = [];
+      let x: Float32Array | undefined;
+      let y: Float32Array | undefined;
+      let current: Int32Array | undefined;
+      let max: Int32Array | undefined;
       world.addSystem(Update, {
         name: 'mixedReader',
-        queries: [{ with: [Position, Health, EntityComponent] }],
+        queries: [{ read: [Position, Health] }],
         fn: (_world, queryResults) => {
-          bundles.length = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              bundles.push(bundle);
+          for (const query of queryResults) {
+            for (const span of query.spans().unwrap()) {
+              const position = span.get(Position);
+              const health = span.get(Health);
+              x = position.x;
+              y = position.y;
+              current = health.current;
+              max = health.max;
             }
           }
         },
@@ -3007,16 +2981,6 @@ describe('reserveArrayCapacity', () => {
 
       world.update();
 
-      expect(bundles.length).toBe(1);
-      // biome-ignore lint/style/noNonNullAssertion: controlled test context
-      const bundle = bundles[0]!;
-      expect(bundle.Entity?.self?.length).toBe(1);
-
-      // Nested structure: bundle.MixPos.x, bundle.MixHp.current
-      const posFields = bundle.MixPos as Record<string, Float32Array>;
-      const hpFields = bundle.MixHp as Record<string, Int32Array>;
-      const x = posFields.x;
-      const y = posFields.y;
       expect(x).toBeInstanceOf(Float32Array);
       expect(y).toBeInstanceOf(Float32Array);
       // biome-ignore lint/style/noNonNullAssertion: controlled test context
@@ -3024,9 +2988,6 @@ describe('reserveArrayCapacity', () => {
       // biome-ignore lint/style/noNonNullAssertion: controlled test context
       expect(y![0]).toBeCloseTo(2.5);
 
-      // Health fields should be Int32Array
-      const current = hpFields.current;
-      const max = hpFields.max;
       expect(current).toBeInstanceOf(Int32Array);
       expect(max).toBeInstanceOf(Int32Array);
       // biome-ignore lint/style/noNonNullAssertion: controlled test context
@@ -3053,14 +3014,13 @@ describe('reserveArrayCapacity', () => {
       let matchCount = 0;
       world.addSystem(Update, {
         name: 'tagQuery',
-        queries: [{ with: [Position, Player, EntityComponent] }],
+        queries: [{ read: [Position], with: [Player] }],
         fn: (_world, queryResults) => {
           matchCount = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              matchCount += bundle.Entity.self.length;
-              // Only Position fields should be present, not Player (tag = no data)
-              expect((bundle.TagMixPos as Record<string, unknown>)?.x).toBeDefined();
+          for (const query of queryResults) {
+            for (const row of query) {
+              matchCount += 1;
+              expect(row.get(Position).x).toBeDefined();
             }
           }
         },
@@ -3073,14 +3033,10 @@ describe('reserveArrayCapacity', () => {
       let excludedCount = 0;
       world.addSystem(Update, {
         name: 'excludeTag',
-        queries: [{ with: [Position, EntityComponent], without: [Player] }],
+        queries: [{ read: [Position], without: [Player] }],
         fn: (_world, queryResults) => {
           excludedCount = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              excludedCount += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) excludedCount += [...query].length;
         },
       });
 
@@ -3109,14 +3065,10 @@ describe('reserveArrayCapacity', () => {
       let pvCount = 0;
       world.addSystem(Update, {
         name: 'pvCounter',
-        queries: [{ with: [Position, Velocity, EntityComponent] }],
+        queries: [{ read: [Position, Velocity] }],
         fn: (_world, queryResults) => {
           pvCount = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              pvCount += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) pvCount += [...query].length;
         },
       });
 
@@ -3124,14 +3076,10 @@ describe('reserveArrayCapacity', () => {
       let pvgCount = 0;
       world.addSystem(Update, {
         name: 'pvgCounter',
-        queries: [{ with: [Position, Velocity, Gravity, EntityComponent] }],
+        queries: [{ read: [Position, Velocity, Gravity] }],
         fn: (_world, queryResults) => {
           pvgCount = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              pvgCount += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) pvgCount += [...query].length;
         },
       });
 
@@ -3171,14 +3119,10 @@ describe('reserveArrayCapacity', () => {
       let aNotBCount = 0;
       world.addSystem(Update, {
         name: 'aNotB',
-        queries: [{ with: [A, EntityComponent], without: [B] }],
+        queries: [{ read: [A], without: [B] }],
         fn: (_world, queryResults) => {
           aNotBCount = 0;
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              aNotBCount += bundle.Entity.self.length;
-            }
-          }
+          for (const query of queryResults) aNotBCount += [...query].length;
         },
       });
 
@@ -3221,20 +3165,14 @@ describe('reserveArrayCapacity', () => {
 
       world.addSystem(Update, {
         name: 'posReader',
-        queries: [{ with: [Pos, EntityComponent] }],
+        queries: [{ read: [Pos] }],
         fn: (_world, queryResults) => {
           totalPosEntities = 0;
           posValues = [];
-          for (const archetypeBundles of queryResults) {
-            for (const bundle of archetypeBundles) {
-              totalPosEntities += bundle.Entity.self.length;
-              const posFields = bundle.MultiPos as Record<string, Float32Array>;
-              // biome-ignore lint/style/noNonNullAssertion: controlled test context
-              const x = posFields.x!;
-              for (let i = 0; i < bundle.Entity.self.length; i++) {
-                // biome-ignore lint/style/noNonNullAssertion: controlled test context
-                posValues.push(x[i]!);
-              }
+          for (const query of queryResults) {
+            for (const row of query) {
+              totalPosEntities += 1;
+              posValues.push(row.get(Pos).x);
             }
           }
         },
@@ -3701,7 +3639,12 @@ describe('reserveArrayCapacity', () => {
     });
   });
 
-  describe('AC-05 — dropped registration codes stay outside EcsErrorCode', () => {
+  describe('AC-05 — EcsErrorCode remains a closed source-owned union', () => {
+    it('includes the mutation epoch exhaustion fail-fast', () => {
+      const code: EcsErrorCode = 'change-epoch-exhausted';
+      expectTypeOf(code).toEqualTypeOf<'change-epoch-exhausted'>();
+    });
+
     it('the dropped register codes are not assignable to EcsErrorCode', () => {
       // @ts-expect-error — COMPONENT_ALREADY_REGISTERED was removed from the union.
       const dropped1: EcsErrorCode = 'COMPONENT_ALREADY_REGISTERED';
@@ -3712,7 +3655,7 @@ describe('reserveArrayCapacity', () => {
   });
 }
 {
-  // --- from component-default-fallback.test.ts ---
+  // --- from component-default-fallback.test.ts (__tests__/) ---
   describe('layer-3 typeDefault — scalar arms', () => {
     it('f32 -> 0', () => {
       expect(typeDefault('f32')).toBe(0);

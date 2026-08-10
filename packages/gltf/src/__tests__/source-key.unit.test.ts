@@ -71,9 +71,45 @@ describe('glTF producer sourceKey', () => {
       ],
       existing,
     );
-    expect(result.subAssets).toMatchObject([
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.subAssets).toMatchObject([
       { guid: '01928000-7c00-7000-8000-000000000002', sourceIndex: 0, sourceKey: 'mesh:Body' },
       { guid: '01928000-7c00-7000-8000-000000000001', sourceIndex: 1, sourceKey: 'mesh:Hero' },
+    ]);
+  });
+
+  it('preserves keyed identity when a new output is inserted', () => {
+    const existing: GltfMetaJson = {
+      ...META_BASE,
+      subAssets: [
+        {
+          guid: '01928000-7c00-7000-8000-000000000004',
+          sourceIndex: 0,
+          kind: 'mesh',
+          sourceKey: 'mesh:Hero',
+        },
+        {
+          guid: '01928000-7c00-7000-8000-000000000005',
+          sourceIndex: 1,
+          kind: 'mesh',
+          sourceKey: 'mesh:Body',
+        },
+      ],
+    };
+    const result = reimportReuseMeta(
+      [
+        { kind: 'mesh', sourceIndex: 0, name: 'New' },
+        { kind: 'mesh', sourceIndex: 1, name: 'Hero' },
+        { kind: 'mesh', sourceIndex: 2, name: 'Body' },
+      ],
+      existing,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.subAssets.slice(1)).toMatchObject([
+      { guid: '01928000-7c00-7000-8000-000000000004', sourceKey: 'mesh:Hero' },
+      { guid: '01928000-7c00-7000-8000-000000000005', sourceKey: 'mesh:Body' },
     ]);
   });
 
@@ -90,7 +126,9 @@ describe('glTF producer sourceKey', () => {
       ],
     };
     const result = reimportReuseMeta([{ kind: 'scene', sourceIndex: 9 }], existing);
-    expect(result.subAssets).toEqual([
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.subAssets).toEqual([
       {
         guid: '01928000-7c00-7000-8000-000000000003',
         sourceIndex: 9,

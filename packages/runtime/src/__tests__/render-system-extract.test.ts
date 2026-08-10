@@ -1031,7 +1031,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(cam0.clearColor[2]).toBeCloseTo(0.3, 6);
     });
 
-    it('Camera spawned without explicit clearColor defaults to opaque black [0,0,0,1]', () => {
+    it('Camera spawned without explicit clearColor defaults to transparent black [0,0,0,0]', () => {
       const world = new World();
       world
         .spawn(
@@ -1047,7 +1047,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const cam = frame.cameras[0];
       expect(cam).toBeDefined();
       if (!cam) return;
-      expect(Array.from(cam.clearColor)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(cam.clearColor)).toEqual([0, 0, 0, 0]);
     });
   });
 }
@@ -1225,6 +1225,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const mesh = registerQuadMesh(world);
       const baseColorHandle = makeTextureHandle(world);
       const metallicRoughnessHandle = makeTextureHandle(world);
+      const samplerHandle = world.allocSharedRef('SamplerAsset', {
+        kind: 'sampler',
+        magFilter: 'nearest',
+        minFilter: 'nearest',
+      });
       const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [
@@ -1236,7 +1241,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         ],
         values: {
           baseColor: [1, 1, 1, 1],
-          baseColorTexture: baseColorHandle,
+          baseColorTexture: {
+            texture: baseColorHandle,
+            sampler: samplerHandle,
+          } as unknown as number,
           metallicRoughnessTexture: metallicRoughnessHandle,
         },
       });
@@ -1275,6 +1283,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(snapshot?.textureHandles?.get('metallicRoughnessTexture')).toBe(
         metallicRoughnessHandle,
       );
+      expect(snapshot?.samplerHandles?.get('baseColorTexture')).toBe(samplerHandle);
     });
   });
 }

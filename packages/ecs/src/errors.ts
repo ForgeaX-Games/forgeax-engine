@@ -4,14 +4,20 @@
 // disclosure format: one-line summary → context fields → hint fix suggestion.
 // Each exposes a `.hint` readonly property for programmatic extraction.
 
+import type { QuerySpanUnavailableReason } from './errors/query-and-component-errors';
+
 // ────────────────────────────────────────────────────────────────────────────
 // Re-exports from split error sub-files (w3-b — package cohesion split)
 // ────────────────────────────────────────────────────────────────────────────
 
 export {
   ComponentNotDefinedError,
-  QueryCombinationsEntityRequiredError,
-  QueryDescriptorOptionalConflictError,
+  QueryDataRequiresFieldsError,
+  QueryDescriptorConflictError,
+  QueryIterationActiveError,
+  QueryIterationInvalidatedError,
+  QuerySpanUnavailableError,
+  type QuerySpanUnavailableReason,
   RemoveEssentialComponentError,
   SpawnDataUnknownFieldError,
 } from './errors/query-and-component-errors';
@@ -36,10 +42,6 @@ export {
   SpriteAnimationInvalidError,
   validateEnumFieldValues,
 } from './errors/validation-errors';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Existing errors (carried from @forgeax/engine-ecs)
-// ────────────────────────────────────────────────────────────────────────────
 
 /**
  * Thrown when an attempt is made to encode an entity index that does not fit
@@ -102,9 +104,22 @@ export class SchemaUnsupportedFieldError extends Error {
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// New 6 errors for @forgeax/engine-ecs
-// ────────────────────────────────────────────────────────────────────────────
+export class SparseStorageRequiresTagError extends Error {
+  override readonly name = 'SparseStorageRequiresTagError';
+  readonly code = 'sparse-storage-requires-tag' as const;
+  readonly expected = 'sparse components have an empty schema and no relationship metadata';
+  readonly hint = 'remove all fields and relationship metadata, or use storage: table';
+  readonly detail: { readonly componentName: string };
+
+  constructor(componentName: string) {
+    super(
+      `Sparse component "${componentName}" must be a zero-field, non-relationship tag.\n` +
+        `  component: ${componentName}\n` +
+        `  hint: remove all fields and relationship metadata, or use storage: table`,
+    );
+    this.detail = { componentName };
+  }
+}
 
 /**
  * Thrown (or returned via the `Result` err branch — `r.ok === false`, `r.error`)
@@ -358,6 +373,19 @@ export class ResourceNotFoundError extends Error {
     const hint = `Resource "${key}" not found. Insert with world.insertResource() first.`;
     super(`Resource "${key}" not found.\n` + `  key: ${key}\n` + `  hint: ${hint}`);
     this.hint = hint;
+  }
+}
+
+export class ChangeEpochExhaustedError extends Error {
+  override readonly name = 'ChangeEpochExhaustedError';
+  readonly code = 'change-epoch-exhausted' as const;
+  readonly expected = 'mutationEpoch < Number.MAX_SAFE_INTEGER';
+  readonly hint = 'Rebuild the World before performing another mutation.';
+  readonly detail: { readonly epoch: number };
+
+  constructor(epoch: number) {
+    super(`World mutation epoch is exhausted at ${epoch}.\n  hint: Rebuild the World.`);
+    this.detail = { epoch };
   }
 }
 
@@ -1043,11 +1071,18 @@ export type EcsErrorCode =
   // were dropped by feat-20260602 along with the per-World register concept).
   | 'entity-index-overflow'
   | 'schema-unsupported-field'
+  | 'sparse-storage-requires-tag'
   | 'stale-entity'
   | 'component-already-present'
   | 'component-not-present'
   | 'cyclic-dependency'
   | 'resource-not-found'
+  | 'change-epoch-exhausted'
+  | 'query-descriptor-conflict'
+  | 'query-data-requires-fields'
+  | 'query-span-unavailable'
+  | 'query-iteration-invalidated'
+  | 'query-iteration-active'
   // ECS time and schedule-scope errors (M2 w16, approved 43 -> 46 baseline; verify hotfix +1 → 47).
   | 'time-delta-invalid'
   | 'time-config-invalid'
@@ -1122,11 +1157,6 @@ export type EcsErrorCode =
   | 'relationship-mirror-component-not-registered'
   | 'relationship-mirror-field-type-mismatch'
   | 'relationship-detach-mismatch'
-  // feat-20260531-query-optional-components M1 — createQueryState descriptor
-  // self-consistency check when a component token appears in both `with` and
-  // `optional`. 31 -> 32 minor evolution per AGENTS.md Error model evolution
-  // contract.
-  | 'query-descriptor-with-optional-conflict'
   // feat-20260602-drop-component-registration w16-a — scene instantiate
   // fail-fast when a SceneAsset entity names a component that was never defined
   // via defineComponent (the per-World register concept was dropped; a
@@ -1162,19 +1192,13 @@ export type EcsErrorCode =
   // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w2 —
   // SpriteInstances primitive + tilemap terrain static-batch path. Three
   // codes declared together; fire path lands in M3 w13 at the
-  // render-system-extract queryRun callback. Minor evolution +3 per
+  // render-system-extract QueryRow loop. Minor evolution +3 per
   // AGENTS.md §Error model evolution contract; plan-strategy D-6 keeps the
   // detection in the render domain (not the ECS spawn path) to avoid an
   // ECS -> AssetRegistry reverse dep for the shader-id lookup.
   | 'sprite-instances-count-mismatch'
   | 'sprite-instances-requires-sprite-shader'
   | 'sprite-instances-mutually-exclusive-with-instances'
-  // solo bevy-examples round 20260713-194533 — queryCombinations requires the
-  // Entity component in the query's `with` list (the entity handle is the unit
-  // it yields per combination). Minor evolution +1 per AGENTS.md §Error model
-  // evolution contract; fail-fast at the queryCombinations entry (mirrors
-  // query-descriptor-with-optional-conflict's setup-time self-consistency shape).
-  | 'query-combinations-entity-required'
   // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
   // P3 shared-field value gate. A `shared<T>` scalar or `array<shared<T>>`
   // element must be a resolved numeric Handle; a raw GUID string / `{ guid }` /
@@ -1194,7 +1218,10 @@ export type EcsErrorCode =
   // Minor evolution +1 per AGENTS.md §Error model evolution contract.
   | 'system-set-not-registered'
   // Closed enum field writes fail before archetype or column mutation.
-  | 'component-field-invalid-value';
+  | 'component-field-invalid-value'
+  | 'shared-kernel-ineligible'
+  | 'shared-kernel-failed'
+  | 'world-poisoned';
 
 /**
  * Discriminated `.detail` payload per `.code`.
@@ -1204,6 +1231,35 @@ export type EcsErrorCode =
  * only the w5 family + `cyclic-injection` carry structured payloads today.
  */
 export type EcsErrorDetail =
+  | {
+      readonly code: 'shared-kernel-ineligible';
+      readonly kernelName: string;
+      readonly reason: string;
+    }
+  | {
+      readonly code: 'shared-kernel-failed';
+      readonly kernelName: string;
+      readonly worldIdentity: string;
+      readonly cause: unknown;
+      readonly partialWrite: boolean;
+      readonly retryable: false;
+    }
+  | { readonly code: 'world-poisoned'; readonly worldIdentity: string; readonly fault: unknown }
+  | { readonly code: 'sparse-storage-requires-tag'; readonly componentName: string }
+  | {
+      readonly code: 'query-descriptor-conflict';
+      readonly componentName: string;
+      readonly roles: readonly string[];
+    }
+  | { readonly code: 'query-data-requires-fields'; readonly componentName: string }
+  | { readonly code: 'query-span-unavailable'; readonly reason: QuerySpanUnavailableReason }
+  | {
+      readonly code: 'query-iteration-invalidated';
+      readonly expectedStructureEpoch: number;
+      readonly actualStructureEpoch: number;
+    }
+  | { readonly code: 'query-iteration-active' }
+  | { readonly code: 'change-epoch-exhausted'; readonly epoch: number }
   | { readonly code: 'unique-ref-released'; readonly handle: number; readonly target: string }
   | {
       readonly code: 'unique-ref-double-release';
@@ -1349,12 +1405,6 @@ export type EcsErrorDetail =
       readonly expectedParent: number;
       readonly actualParent: number;
     }
-  // feat-20260531-query-optional-components M1 — createQueryState descriptor
-  // self-consistency (31 -> 32).
-  | {
-      readonly code: 'query-descriptor-with-optional-conflict';
-      readonly tokenName: string;
-    }
   // feat-20260602-drop-component-registration w16-a — scene instantiate
   // unknown-component fail-fast (30 -> 31). `.detail.name` carries the
   // component name that was never defined via defineComponent.
@@ -1412,14 +1462,6 @@ export type EcsErrorDetail =
       readonly code: 'sprite-instances-mutually-exclusive-with-instances';
       readonly entityId: number;
     }
-  // solo bevy-examples round 20260713-194533 — queryCombinations called with a
-  // state whose `with` list omits the Entity component. `.detail.withNames`
-  // carries the descriptor's declared component names so the AI user sees what
-  // was passed and adds `Entity` to it.
-  | {
-      readonly code: 'query-combinations-entity-required';
-      readonly withNames: readonly string[];
-    }
   // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
   // shared-field value gate. `.detail.component` / `.detail.field` locate the
   // shared reference field; `.detail.fieldType` is the schema-declared type
@@ -1461,19 +1503,9 @@ export type EcsErrorDetail =
       readonly cycle: readonly string[];
     };
 
-// ────────────────────────────────────────────────────────────────────────────
-// Layer-3 routing envelope (relocated from former managed-array-view.ts in
-// feat-20260515-buffer-array-vocab-collapse w10; the value-shape view classes
-// were deleted in favour of the direct TypedArray snapshot contract, but the
-// shared error envelope remains the SSOT for `errorRouter` callbacks across
-// the StringView + writeArrayField paths).
-// ────────────────────────────────────────────────────────────────────────────
-
 /**
- * Layer-3 error envelope routed through `errorRouter` callbacks. Mirrors the
- * `EcsError` shape so AI users can branch on `.code`. `.detail` is intentionally
- * left as `unknown` here -- callers narrow it via the `EcsErrorDetail` discriminated
- * union when the envelope is forwarded to a structured error handler.
+ * Layer-3 error envelope routed through managed-storage callbacks. Callers
+ * narrow `detail` through the source-owned `EcsErrorDetail` union.
  */
 export interface ManagedArrayErrorEnvelope {
   readonly code: EcsErrorCode;

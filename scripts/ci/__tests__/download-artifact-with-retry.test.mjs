@@ -8,10 +8,32 @@ import test from 'node:test';
 import {
   ensureArtifactDestination,
   isRetryableTransportError,
+  observeArtifactDownload,
   parseArtifactIds,
   RETRY_DELAYS_SECONDS,
   retryArtifact,
 } from '../download-artifact-with-retry.mjs';
+
+test('records download timing around the physical transport owner exactly once', async () => {
+  const timestamps = [1000, 3250];
+  let calls = 0;
+  const observation = await observeArtifactDownload(
+    async () => {
+      calls += 1;
+      return 4096;
+    },
+    { nowFn: () => timestamps.shift() },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(observation, {
+    compressedArchiveBytes: 4096,
+    download: {
+      startedAt: '1970-01-01T00:00:01.000Z',
+      completedAt: '1970-01-01T00:00:03.250Z',
+      elapsedSeconds: 2.25,
+    },
+  });
+});
 
 test('creates nested artifact destinations before extraction', async () => {
   const root = await mkdtemp(join(tmpdir(), 'forgeax-artifact-destination-'));

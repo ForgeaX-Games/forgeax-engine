@@ -28,7 +28,19 @@ export interface AnimationDiagnostic {
   readonly detail: Readonly<AnimationDiagnosticDetail>;
 }
 
-const warnedKeysByWorld = new WeakMap<World, Set<string>>();
+export type AnimationDiagnosticListener = (
+  world: World,
+  diagnostic: Readonly<AnimationDiagnostic>,
+) => void;
+
+const emittedKeysByWorld = new WeakMap<World, Set<string>>();
+const listeners = new Set<AnimationDiagnosticListener>();
+
+/** Observe unique channel-level diagnostic facts for editor/runtime projection. */
+export function subscribeAnimationDiagnostics(listener: AnimationDiagnosticListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
 
 /** @internal */
 export function isAnimationDevMode(): boolean {
@@ -39,19 +51,32 @@ export function isAnimationDevMode(): boolean {
 
 export function emitAnimationDiagnostic(world: World, diagnostic: AnimationDiagnostic): void {
   if (!isAnimationDevMode()) return;
-  let warned = warnedKeysByWorld.get(world);
-  if (warned === undefined) {
-    warned = new Set();
-    warnedKeysByWorld.set(world, warned);
+  let emitted = emittedKeysByWorld.get(world);
+  if (emitted === undefined) {
+    emitted = new Set();
+    emittedKeysByWorld.set(world, emitted);
   }
   const { player, clip, channel, targetId, reason } = diagnostic.detail;
-  const key = `${player}|${clip}|${channel}|${targetId}|${reason}`;
-  if (warned.has(key)) return;
-  warned.add(key);
-  console.warn(Object.freeze({ ...diagnostic, detail: Object.freeze({ ...diagnostic.detail }) }));
+  const emittedKey = `${player}|${clip}|${channel}|${targetId}|${reason}`;
+  if (emitted.has(emittedKey)) return;
+  emitted.add(emittedKey);
+
+  const frozen = Object.freeze({
+    ...diagnostic,
+    detail: Object.freeze({ ...diagnostic.detail }),
+  });
+  for (const listener of listeners) {
+    try {
+      listener(world, frozen);
+    } catch {
+      // Diagnostics must never break animation evaluation.
+    }
+  }
+
+  console.warn(frozen);
 }
 
 /** @internal */
 export function _resetAnimationWarnsForTests(world: World): void {
-  warnedKeysByWorld.delete(world);
+  emittedKeysByWorld.delete(world);
 }

@@ -11,7 +11,7 @@
 // The clearColor field is read each frame by the record stage from the first
 // camera entity's SoA column.
 
-import { Entity, queryRun, createQueryState, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera } from '@forgeax/engine-render';
@@ -44,16 +44,12 @@ export function stepClearColor(world: World, snapshot: InputSnapshot | null): vo
 
   const spaceDown = snapshot.keyboard.down(' ');
 
-  const state = createQueryState({ with: [Camera, Transform, Entity] });
+  const query = world.query({ with: [Camera, Transform] }).unwrap();
   let camHandle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    for (let i = 0; i < selfCol.length; i++) {
-      const handle = (selfCol[i] ?? 0) as EntityHandle;
-      camHandle = handle;
-      return;
-    }
-  });
+  for (const row of query) {
+    camHandle = row.entity;
+    break;
+  }
 
   if (camHandle !== null && spaceDown && !wasSpaceDown) {
     const cur = world.get(camHandle, Camera);

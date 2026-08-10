@@ -1,6 +1,8 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
 // RHI-debug frame capture wired via the shared preset (forgeaxShader +
@@ -9,6 +11,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-4-1-depth-testing');
 
 export default withRhiDebug({
   here,
@@ -17,7 +20,9 @@ export default withRhiDebug({
   materialPackages: [resolve(here, 'src/depth-viz.pack.json')],
   extraPlugins: [
     pluginPack({
+      runtimeBinding,
       refresh: reloadAssetHost(),
+      importers: [imageImporter],
       roots: [
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),

@@ -1,11 +1,12 @@
-import { createQueryState, queryRun, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import type { Handle, ParticleEffectAsset } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { ParticleEffectPlayer, type ParticleEffectPlayerData } from '../index.js';
 
 const asset: ParticleEffectAsset = {
   kind: 'particle-effect',
-  schemaVersion: 1,
+  schemaVersion: 2,
+  programFingerprint: 'sha256:test',
   emitters: [],
 };
 
@@ -48,7 +49,7 @@ describe('ParticleEffectPlayer ECS contract', () => {
     expect(roundTrip).toEqual(payload);
   });
 
-  it('uses the shared asset identity in a real spawn and queryRun callback', () => {
+  it('uses the shared asset identity in a real spawn and QueryRow loop', () => {
     const world = new World();
     const effect = world.allocSharedRef('ParticleEffectAsset', asset);
     const entity = world
@@ -57,19 +58,18 @@ describe('ParticleEffectPlayer ECS contract', () => {
         data: { effect, playing: true, seed: 7, timeScale: 0.25 },
       })
       .unwrap();
-    const state = createQueryState({ with: [ParticleEffectPlayer] });
+    const query = world.query({ read: [ParticleEffectPlayer] }).unwrap();
     let observed = false;
 
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.ParticleEffectPlayer.effect).toEqualTypeOf<
-        import('@forgeax/engine-ecs').ManagedColumnReader<'shared<ParticleEffectAsset>'>
-      >();
-      expectTypeOf(bundle.ParticleEffectPlayer.playing).toEqualTypeOf<Uint8Array>();
-      expectTypeOf(bundle.ParticleEffectPlayer.seed).toEqualTypeOf<Uint32Array>();
-      expectTypeOf(bundle.ParticleEffectPlayer.timeScale).toEqualTypeOf<Float32Array>();
-      expect(bundle.ParticleEffectPlayer.effect.get(0)).toBe(effect);
+    for (const row of query) {
+      const player = row.get(ParticleEffectPlayer);
+      expectTypeOf(player.effect).toEqualTypeOf<Handle<'ParticleEffectAsset', 'shared'>>();
+      expectTypeOf(player.playing).toBeBoolean();
+      expectTypeOf(player.seed).toBeNumber();
+      expectTypeOf(player.timeScale).toBeNumber();
+      expect(player.effect).toBe(effect);
       observed = true;
-    });
+    }
 
     expect(entity).toBeDefined();
     expect(observed).toBe(true);

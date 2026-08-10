@@ -14,6 +14,9 @@ If a source requests a UV set that the primitive does not provide, handle `gltf-
 
 > Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` consumed by build-time CLI plugin bin `forgeax-engine-remote-gltf` (resolved via PATH-prefix scan for `forgeax-engine-remote-`) writing `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
 
+> [!IMPORTANT]
+> `toAssetPack` and `reimportReuseMeta` return `Result` values. The producer derives semantic `sourceKey` values before GUID reuse; duplicate or ambiguous identities return `duplicate-source-key` / `ambiguous-source-key` and the CLI leaves the previous sidecar untouched. `sourceIndex` is a locator only, never a generated identity.
+
 ## Evidence and recovery
 
 glTF remains a producer boundary: the `.meta.json` source declaration and importer settings are joined with the producer `CookReceipt`, the catalog `packageUrl`/`cookReceiptUrl`, and the Pack v2 descriptors as `AssetEvidence`. The runtime loader consumes packaged bytes; it does not mint cook facts.

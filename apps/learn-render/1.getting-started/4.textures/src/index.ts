@@ -112,7 +112,7 @@ import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { createDevImportTransport, Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-wood.pack.json';
@@ -154,6 +154,9 @@ const WOOD_MATERIAL_GUID = '019e2cc6-5e6a-757c-a001-b69bc85af3c3';
 // fetch(/pack-index.json) -> entry.kind='texture' -> fetch(jpg/.bin) ->
 // parseImage (dev) / skip-decode (prod) -> AssetRegistry.uploadTexture.
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-4-textures',
+);
 
 interface MaterialPackEntry {
   readonly guid: string;
@@ -200,7 +203,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       // raw container.jpg row resolves through POST /__import on a DDC
       // miss. Absent => loadByGuid<TextureAsset> would surface
       // `asset-not-imported`.
-      { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+      { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
     );
     renderer.onError((e) => {
       console.error('[learn-render 1.4 textures] renderer.onError:', e.code, e.hint);
@@ -219,6 +222,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // configured URL. `@forgeax/engine-vite-plugin-pack` serves the
     // catalog at this URL in dev and emits the same file in `dist/` at
     // build time (charter P4 consistent abstraction).
+    assets.configureRuntimeBinding(runtimeBinding);
     assets.configurePackIndex(PACK_INDEX_URL);
 
     // Parse the 3 GUID literals once. Each parse Result narrows the

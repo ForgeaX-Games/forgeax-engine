@@ -18,6 +18,7 @@ import {
   GPU_BUFFER_USAGE_UNIFORM,
 } from '../gpu-usage';
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import { SKIN_MATERIAL_SHADER_ID } from '../pbr-pipeline';
 import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
 import { MATERIAL_PER_ENTITY_STRIDE } from '../render-system';
@@ -50,6 +51,7 @@ type MaterialPipelineLookup = {
   readonly passKind: PassKind;
   readonly meshAttributes: unknown;
   readonly sampleCount: number;
+  readonly colorFormatOverride: GPUTextureFormat | undefined;
   readonly handle: RenderPipeline | null;
 };
 
@@ -110,6 +112,16 @@ export function recordGeometryDraws(
     validatedOrdered,
     splitLdrSprite,
   } = c;
+  const linearLdrAttachment =
+    !tonemapActive &&
+    runtime.device.caps.storageBuffer &&
+    frameState.perFrameGraph?.getColorTargetTexture('ldrColor') !== undefined;
+  const ldrColorFormat = linearLdrAttachment
+    ? frameState.perFrameGraph?.getColorTargetDescriptor('ldrColor')?.format
+    : undefined;
+  const colorFormatOverride = linearLdrAttachment
+    ? (ldrColorFormat as GPUTextureFormat | undefined)
+    : undefined;
   let lastVertexBuffer: GpuBuffer | null = null;
   let lastIndexBuffer: GpuBuffer | null = null;
   // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):
@@ -259,6 +271,7 @@ export function recordGeometryDraws(
             passKind,
             undefined, // meshAttributes — skin probe uses first submesh, derive from entry
             sampleCount,
+            colorFormatOverride,
           ) ?? null)
         : null;
     if (skinResources !== null && skinPsoProbe !== null) {
@@ -445,14 +458,30 @@ export function recordGeometryDraws(
         entry.source.skin !== undefined
           ? SKIN_MATERIAL_SHADER_ID
           : submeshMaterial.materialShaderId;
+      const isSpriteShader =
+        smMaterialShaderId === 'forgeax::sprite' || smMaterialShaderId === 'forgeax::sprite-lit';
+      // Preserve the dedicated sprite-pass state when the linear-LDR graph
+      // routes a sprite through this generic geometry path. Negative scale
+      // flips winding, so back-face culling would erase the quad.
+      const pipelineRenderState = isSpriteShader
+        ? {
+            ...submeshMaterial.renderState,
+            depthWriteEnabled: false,
+            depthCompare: 'less-equal' as const,
+            cullMode: 'none' as const,
+            blend: submeshMaterial.renderState?.blend ?? SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+          }
+        : submeshMaterial.renderState;
       let smPipelineHandle: typeof pipelineState.unlitPipeline;
       const nonDefaultTopology = smTopology !== 'triangle-list';
       if (smMaterialShaderId === undefined || smMaterialShaderId === 'forgeax::default-unlit') {
+        const unlitShaderId = smMaterialShaderId ?? 'forgeax::default-unlit';
         const unlitRsp =
-          (submeshMaterial.renderState !== undefined || nonDefaultTopology) &&
-          smMaterialShaderId !== undefined
+          submeshMaterial.renderState !== undefined ||
+          nonDefaultTopology ||
+          colorFormatOverride !== undefined
             ? runtime.getMaterialShaderPipeline?.(
-                smMaterialShaderId,
+                unlitShaderId,
                 tonemapActive,
                 submeshMaterial.renderState,
                 smTopology,
@@ -461,10 +490,14 @@ export function recordGeometryDraws(
                 passKind,
                 undefined, // meshAttributes — unlit uses 4-attribute layout
                 sampleCount,
+                colorFormatOverride,
               )
             : undefined;
         smPipelineHandle =
-          unlitRsp ?? selectGeometryPipeline(pipelineState, tonemapActive, msaaActive);
+          unlitRsp ??
+          (colorFormatOverride === undefined
+            ? selectGeometryPipeline(pipelineState, tonemapActive, msaaActive)
+            : null);
       } else if (smMaterialShaderId !== undefined) {
         // feat-20260609 M4.5 / w38 (D-11): the variantSet handed to
         // getMaterialShaderPipeline MUST mirror the boot-time
@@ -508,13 +541,14 @@ export function recordGeometryDraws(
             ? false
             : previousPipelineLookup.materialShaderId === smMaterialShaderId &&
               previousPipelineLookup.tonemapActive === tonemapActive &&
-              previousPipelineLookup.renderState === submeshMaterial.renderState &&
+              previousPipelineLookup.renderState === pipelineRenderState &&
               previousPipelineLookup.topology === smTopology &&
               previousPipelineLookup.indexFormat === entry.mesh.indexFormat &&
               previousPipelineLookup.variantSet === variantSet &&
               previousPipelineLookup.passKind === passKind &&
               previousPipelineLookup.meshAttributes === meshUvAttributes &&
-              previousPipelineLookup.sampleCount === sampleCount;
+              previousPipelineLookup.sampleCount === sampleCount &&
+              previousPipelineLookup.colorFormatOverride === colorFormatOverride;
         const cachedPipeline: RenderPipeline | null = lookupHit
           ? (previousPipelineLookup?.handle ?? null)
           : profileGeometrySegment(
@@ -525,26 +559,28 @@ export function recordGeometryDraws(
                 runtime.getMaterialShaderPipeline?.(
                   smMaterialShaderId,
                   tonemapActive,
-                  submeshMaterial.renderState,
+                  pipelineRenderState,
                   smTopology,
                   entry.mesh.indexFormat,
                   variantSet,
                   passKind,
                   meshUvAttributes,
                   sampleCount,
+                  colorFormatOverride,
                 ) ?? null,
             );
         if (!lookupHit) {
           materialPipelineLookupState.current = {
             materialShaderId: smMaterialShaderId,
             tonemapActive,
-            renderState: submeshMaterial.renderState,
+            renderState: pipelineRenderState,
             topology: smTopology,
             indexFormat: entry.mesh.indexFormat,
             variantSet,
             passKind,
             meshAttributes: meshUvAttributes,
             sampleCount,
+            colorFormatOverride,
             handle: cachedPipeline,
           };
         }

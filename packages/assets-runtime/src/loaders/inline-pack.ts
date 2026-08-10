@@ -299,14 +299,33 @@ export const materialLoader: Loader = {
     // paramSchema via `ctx.getMaterialShaderTextureFieldNames`. When the
     // shader is registered (the common case), only declared texture fields
     // are resolved — identical to the old hardcoded-Set behaviour without the
-    // SSOT duplication. When the shader is not yet registered (cross-worktree
-    // shader-late-register, plan R-4), every int-typed paramValue in
-    // [0, refs.length) is attempted; the M4 / w23 extract layer's paramSchema
-    // validation catches misclassified scalars and falls back to
-    // MISSING_TEXTURE_HANDLE.
+    // SSOT duplication. Authored material parameters are an equally valid
+    // schema source and remain available before shader registration; this is
+    // what keeps a scalar zero (for example metallic) distinct from texture
+    // ref index zero. Only legacy payloads with neither schema retain the
+    // try-every-integer fallback.
     const values: Record<string, unknown> = { ...rawParamValues };
     if (refs && refs.length > 0) {
       const shaderTextureFields = collectShaderTextureFieldNames(passesFromPayload, ctx);
+      const authoredTextureFields = Array.isArray(matPayload.parameters)
+        ? new Set(
+            matPayload.parameters
+              .filter(
+                (parameter): parameter is { name: string; type: string } =>
+                  typeof parameter === 'object' &&
+                  parameter !== null &&
+                  'name' in parameter &&
+                  typeof parameter.name === 'string' &&
+                  'type' in parameter &&
+                  parameter.type === 'texture',
+              )
+              .map((parameter) => parameter.name),
+          )
+        : undefined;
+      const textureFields =
+        authoredTextureFields !== undefined
+          ? new Set([...(shaderTextureFields ?? []), ...authoredTextureFields])
+          : shaderTextureFields;
       // Walk every value so the structured MaterialTextureValue shape remains
       // resolvable even when a shader is registered with an empty/late
       // paramSchema (pbr-skin currently takes this path). Scalar values still
@@ -316,7 +335,7 @@ export const materialLoader: Loader = {
       for (const fieldName of candidateFields) {
         const value = values[fieldName];
         if (typeof value === 'number' && Number.isInteger(value)) {
-          if (shaderTextureFields !== undefined && !shaderTextureFields.has(fieldName)) {
+          if (textureFields !== undefined && !textureFields.has(fieldName)) {
             continue;
           }
           const refGuid = refGuidAt(refs, value);
@@ -325,10 +344,10 @@ export const materialLoader: Loader = {
             // a texture by the shader paramSchema (the OOB is unambiguous).
             // For the graceful "try every int" fallback, OOB simply means
             // "this scalar was not a refs index" — don't spam parse errors.
-            if (shaderTextureFields !== undefined) delete values[fieldName];
+            if (textureFields !== undefined) delete values[fieldName];
             continue;
           }
-          values[fieldName] = refGuid;
+          values[fieldName] = textureFields === undefined ? refGuid : { texture: refGuid };
           continue;
         }
 
@@ -342,7 +361,7 @@ export const materialLoader: Loader = {
           if (typeof textureIndex !== 'number' || !Number.isInteger(textureIndex)) continue;
           const textureGuid = refGuidAt(refs, textureIndex);
           if (textureGuid === undefined) {
-            if (shaderTextureFields !== undefined) delete values[fieldName];
+            if (textureFields !== undefined) delete values[fieldName];
             continue;
           }
           const resolved: Record<string, unknown> = {
@@ -364,7 +383,9 @@ export const materialLoader: Loader = {
       return {
         kind: 'material',
         passes: passesFromPayload as readonly MaterialPass[],
+        parameters: matPayload.parameters,
         values,
+        colorSpace: matPayload.colorSpace,
         parentGuid,
       } as MaterialAsset & { parentGuid?: string };
     }
@@ -372,7 +393,9 @@ export const materialLoader: Loader = {
     if (parentGuid !== undefined) {
       return {
         kind: 'material',
+        parameters: matPayload.parameters,
         values,
+        colorSpace: matPayload.colorSpace,
         parentGuid,
       } as unknown as MaterialAsset & { parentGuid?: string };
     }
@@ -431,7 +454,8 @@ export const samplerLoader: Loader = {
     };
     const lodMinClamp = numericField('lodMinClamp');
     const lodMaxClamp = numericField('lodMaxClamp');
-    if (lodMinClamp === null || lodMaxClamp === null) return undefined;
+    const maxAnisotropy = numericField('maxAnisotropy');
+    if (lodMinClamp === null || lodMaxClamp === null || maxAnisotropy === null) return undefined;
     return {
       kind: 'sampler',
       ...(magFilter === undefined ? {} : { magFilter }),
@@ -443,6 +467,7 @@ export const samplerLoader: Loader = {
       ...(lodMinClamp === undefined ? {} : { lodMinClamp }),
       ...(lodMaxClamp === undefined ? {} : { lodMaxClamp }),
       ...(compare === undefined ? {} : { compare }),
+      ...(maxAnisotropy === undefined ? {} : { maxAnisotropy }),
     };
   },
 };

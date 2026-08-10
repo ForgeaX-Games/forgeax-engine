@@ -2,9 +2,9 @@
 //
 // Pure-function single-shot conversion helpers for the SpotLight + PointLight
 // extract path. Host calls each helper once per light entity per frame; the
-// shader then sees only pre-computed `cos*` / `invRangeSquared` values
-// (plan-strategy D-S2 byte freeze + charter P4 host pre-multiplication
-// parity; KHR_lights_punctual industrial convention per research Finding 1).
+// shader then sees only pre-computed `cos*` / `invRangeSquared` values. The
+// runtime range owner is the revision-pinned Three r184 squared window; KHR
+// values remain an import/reference boundary and are not substituted here.
 //
 // AC anchors: requirements AC-03 (deg -> rad -> cos host two-step
 // conversion) + AC-08 (a + b) (KHR quartic + range = 0 NaN protection
@@ -38,14 +38,13 @@ export function degToCos(deg: number): number {
 /**
  * Convert PointLight / SpotLight `range` (meters) to `1 / range^2`.
  *
- * Three-branch fold mirrors the KHR_lights_punctual quartic falloff term
- * `max(min(1 - (d^2 * invR^2)^2, 1), 0) / max(d^2, 1e-4)`:
+ * Three-branch fold supplies `1 / range^2` for the Three r184 finite-range
+ * window `clamp(1 - (d / range)^4, 0, 1)^2`:
  *
  *   - `range = +Infinity` -> `0` (no truncation; quartic factor collapses
  *     to `1`, falloff reduces to plain `1 / d^2`).
- *   - `range = 0` -> `1e8` (NaN protection; the literal `0 * Infinity` would
- *     produce `NaN` and silently corrupt the entire pixel; plan-strategy
- *     D-S5 Layer 1 host fallback).
+ *   - `range = 0` -> `1e8` (host safety boundary; glTF `range: 0` is mapped
+ *     to the no-cutoff `Infinity` value before this helper is called).
  *   - `range > 0` -> `1 / (range * range)` (standard quartic factor).
  *
  * @param range meters (component schema field `range`); `+Infinity` is the

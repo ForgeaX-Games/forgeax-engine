@@ -195,6 +195,11 @@ export class RhiNullComputePassEncoder implements RhiComputePassEncoder {
     this.dispatchCount++;
   }
 
+  dispatchWorkgroupsIndirect(indirectBuffer: Buffer, _indirectOffset: number): void {
+    this.lastValidation = this.bookkeeper.validateOwnership(indirectBuffer);
+    this.dispatchCount++;
+  }
+
   end(): void {
     this.counter?.recordPassName(this.passName);
   }

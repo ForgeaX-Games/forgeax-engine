@@ -6,7 +6,6 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
-  Entity,
   Time,
   Update,
   World,
@@ -78,15 +77,16 @@ function counterX(playerCount: number, elapsed: number): number {
 
 const PlayerCounter = defineSystemParam({
   name: 'player-counter',
-  queries: [{ with: [SystemParamPlayer, Entity] }],
+  queries: [{ with: [SystemParamPlayer] }],
   resources: [SYSTEM_PARAM_COUNT],
-  resolve: (world, queryResults) => ({
-    playerCount: queryResults[0]?.reduce(
-      (count, bundle) => count + bundle.Entity.self.length,
-      0,
-    ) ?? 0,
-    resource: world.getResource<PlayerCountResource>(SYSTEM_PARAM_COUNT),
-  }),
+  resolve: (world, queryResults) => {
+    let playerCount = 0;
+    for (const _row of queryResults[0]) playerCount += 1;
+    return {
+      playerCount,
+      resource: world.getResource<PlayerCountResource>(SYSTEM_PARAM_COUNT),
+    };
+  },
 });
 
 export function buildSystemParamWorld(world: World): SystemParamState {

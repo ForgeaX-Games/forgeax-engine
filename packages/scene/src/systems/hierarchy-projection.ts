@@ -1,4 +1,4 @@
-import type { Archetype, EntityHandle, World } from '@forgeax/engine-ecs';
+import type { EntityHandle, Table, World } from '@forgeax/engine-ecs';
 import { Entity } from '@forgeax/engine-ecs';
 import { ChildOf } from '../components';
 import type { SceneErrorCode, SceneErrorDetail } from '../errors';
@@ -17,7 +17,7 @@ export interface SceneHierarchySnapshot {
 }
 
 interface HierarchyGraph {
-  readonly archetypes: ReadonlyArray<Archetype | undefined>;
+  readonly tables: ReadonlyArray<Table | undefined>;
 }
 
 interface InternalWorldSurface {
@@ -25,12 +25,8 @@ interface InternalWorldSurface {
   _getGraph(): HierarchyGraph;
 }
 
-function readColumn(
-  archetype: Archetype,
-  componentId: number,
-  fieldName: string,
-): Uint32Array | undefined {
-  return archetype.columns.get(componentId)?.get(fieldName)?.view as Uint32Array | undefined;
+function readColumn(table: Table, componentId: number, fieldName: string): Uint32Array | undefined {
+  return table.storage.get(componentId)?.fields.get(fieldName)?.view as Uint32Array | undefined;
 }
 
 function diagnostic(
@@ -60,12 +56,12 @@ export function projectHierarchy(world: World): SceneHierarchySnapshot {
   const liveEntities = new Set<EntityHandle>();
   const authoredParents = new Map<EntityHandle, EntityHandle>();
 
-  for (const archetype of graph.archetypes) {
-    if (archetype === undefined) continue;
-    const entities = readColumn(archetype, Entity.id, 'self');
+  for (const table of graph.tables) {
+    if (table === undefined) continue;
+    const entities = readColumn(table, Entity.id, 'self');
     if (entities === undefined) continue;
-    const parents = readColumn(archetype, ChildOf.id, 'parent');
-    for (let row = 0; row < archetype.size; row++) {
+    const parents = readColumn(table, ChildOf.id, 'parent');
+    for (let row = 0; row < table.size; row++) {
       const entity = (entities[row] ?? 0) as EntityHandle;
       liveEntities.add(entity);
       if (parents !== undefined) {

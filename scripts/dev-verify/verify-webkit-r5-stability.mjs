@@ -37,7 +37,12 @@
 //   1  any mode fails
 
 import { webkit } from 'playwright';
-import { detectWasmCrash, runWithRetry } from './retry-until-pass.mjs';
+import {
+  closeBrowserWithDeadline,
+  detectWasmCrash,
+  evaluateWithDeadline,
+  runWithRetry,
+} from './retry-until-pass.mjs';
 
 const DEV_SERVER_URL = (process.env.DEV_SERVER_URL ?? 'http://localhost:5181/').replace(/\/$/, '');
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 60000);
@@ -49,43 +54,49 @@ const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS ?? 3);
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-async function screenshotAndSample(page, path) {
+async function screenshotAndSample(page, path, timeoutMs) {
   await page.screenshot({ path, fullPage: false });
   const fs = await import('node:fs/promises');
   const png = await fs.readFile(path);
   const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
-  return page.evaluate(async (url) => {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    const off = document.createElement('canvas');
-    off.width = img.width;
-    off.height = img.height;
-    const ctx = off.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const sample = (x, y) => [...ctx.getImageData(x, y, 1, 1).data];
-    // Non-black gate over the whole 512x512 canvas region, not just the
-    // center: the over-capacity (mode a) frame renders a grid of tiny meshes
-    // clustered in a band, so a single center sample is a false negative.
-    // Scan a 16px grid and count any pixel whose RGB exceeds the black floor.
-    let nonBlackCount = 0;
-    const firstNonBlack = [];
-    for (let y = 0; y < 512; y += 16) {
-      for (let x = 0; x < 512; x += 16) {
-        const c = sample(x, y);
-        if (c.slice(0, 3).some((v) => v > 16)) {
-          nonBlackCount += 1;
-          if (firstNonBlack.length < 3) firstNonBlack.push({ x, y, c: c.slice(0, 3) });
+  return evaluateWithDeadline(
+    page,
+    async (url) => {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      const off = document.createElement('canvas');
+      off.width = img.width;
+      off.height = img.height;
+      const ctx = off.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const sample = (x, y) => [...ctx.getImageData(x, y, 1, 1).data];
+      // Non-black gate over the whole 512x512 canvas region, not just the
+      // center: the over-capacity (mode a) frame renders a grid of tiny meshes
+      // clustered in a band, so a single center sample is a false negative.
+      // Scan a 16px grid and count any pixel whose RGB exceeds the black floor.
+      let nonBlackCount = 0;
+      const firstNonBlack = [];
+      for (let y = 0; y < 512; y += 16) {
+        for (let x = 0; x < 512; x += 16) {
+          const c = sample(x, y);
+          if (c.slice(0, 3).some((v) => v > 16)) {
+            nonBlackCount += 1;
+            if (firstNonBlack.length < 3) firstNonBlack.push({ x, y, c: c.slice(0, 3) });
+          }
         }
       }
-    }
-    return {
-      center: sample(256, 256),
-      nonBlackCount,
-      firstNonBlack,
-      allBlack: nonBlackCount === 0,
-    };
-  }, dataUrl);
+      return {
+        center: sample(256, 256),
+        nonBlackCount,
+        firstNonBlack,
+        allBlack: nonBlackCount === 0,
+      };
+    },
+    dataUrl,
+    timeoutMs,
+    'R5 screenshot probe',
+  );
 }
 
 // Each mode launches its OWN fresh browser per attempt: the WebKit wasm
@@ -99,6 +110,7 @@ async function runMode(label, hash, screenshotPath) {
   const browser = await webkit.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    page.setDefaultTimeout(TIMEOUT_MS);
 
     const logs = [];
     page.on('console', (msg) => logs.push({ type: msg.type(), text: msg.text() }));
@@ -124,13 +136,16 @@ async function runMode(label, hash, screenshotPath) {
     let ready = false;
     try {
       await page.waitForFunction(() => '__r5Ready' in window, { timeout: 15000 });
-      ready = await page.evaluate(
+      ready = await evaluateWithDeadline(
+        page,
         (ms) =>
           Promise.race([
             window.__r5Ready.then(() => true),
             new Promise((r) => setTimeout(() => r(false), ms)),
           ]),
         TIMEOUT_MS,
+        TIMEOUT_MS + 5000,
+        'R5 readiness probe',
       );
     } catch {
       ready = false;
@@ -153,28 +168,40 @@ async function runMode(label, hash, screenshotPath) {
     // Channel proof
     let channelProof = null;
     try {
-      channelProof = await page.evaluate(() => ({
-        hasGpu: typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu,
-        gl2: !!document.createElement('canvas').getContext('webgl2'),
-      }));
+      channelProof = await evaluateWithDeadline(
+        page,
+        () => ({
+          hasGpu: typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu,
+          gl2: !!document.createElement('canvas').getContext('webgl2'),
+        }),
+        undefined,
+        TIMEOUT_MS,
+        'R5 channel probe',
+      );
     } catch {
       /* ok */
     }
 
     let ss = null;
     try {
-      ss = await screenshotAndSample(page, screenshotPath);
+      ss = await screenshotAndSample(page, screenshotPath, TIMEOUT_MS);
       console.log(`  SCREENSHOT: ${screenshotPath}`);
     } catch (e) {
       console.log(`  SCREENSHOT FAILED: ${e}`);
     }
 
-    const probe = await page.evaluate(() => window.__r5Probe ?? null);
+    const probe = await evaluateWithDeadline(
+      page,
+      () => window.__r5Probe ?? null,
+      undefined,
+      TIMEOUT_MS,
+      'R5 probe snapshot',
+    );
 
     const pixNonBlack = ss && !ss.allBlack;
     return { navOk, panicSeen, ready, logs, channelProof, ss, probe, pixNonBlack };
   } finally {
-    await browser.close();
+    await closeBrowserWithDeadline(browser, 10000, 'R5 WebKit browser close');
   }
 }
 

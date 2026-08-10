@@ -1,13 +1,13 @@
-// types.test-d.ts -- M5 (w14) compile-time fixture for the
-// AppErrorCode 5-member closed union + .detail discriminated per code +
-// 23-arm exhaustive switch over (AppError | RhiError) + dual-layer
+// types.test-d.ts -- compile-time fixture for the
+// AppErrorCode 12-member closed union + .detail discriminated per code +
+// 30-arm exhaustive switch over (AppError | RhiError) + dual-layer
 // instanceof EngineEnvironmentError + switch (err.code) pattern (D-6).
 //
 // Anchors:
 //   - requirements AC-07: type-level assertions on the closed union and
 //     discriminated detail; exhaustive switch must compile under tsc
 //     strict mode without falling through to a `default` arm.
-//   - plan-strategy D-3: AppErrorCode stays at 5 (no 'app-device-lost'
+//   - plan-strategy D-3: AppErrorCode excludes 'app-device-lost'
 //     -- device-lost rides on RhiError 18-member union).
 //   - plan-strategy D-6: AI-user error consumption form is two-layer
 //     `if (err instanceof EngineEnvironmentError) { ... } else { switch
@@ -26,6 +26,12 @@ import { describe, expectTypeOf, it } from 'vitest';
 import {
   AppError,
   type AppDetailCanvasDetached,
+  type AppDetailExecutionBootstrapFailed,
+  type AppDetailExecutionDeadlineExceeded,
+  type AppDetailExecutionKernelFailed,
+  type AppDetailExecutionRebuildFailed,
+  type AppDetailExecutionStaleWorld,
+  type AppDetailExecutionTierUnavailable,
   type AppDetailEmpty,
   type AppDetailPointerLockFailed,
   type AppDetailSystemUpdateFailed,
@@ -40,14 +46,37 @@ import type {
 } from '../src/load-game-errors';
 import type { App } from '../src/types';
 
-describe('AppErrorCode is the 5-member closed union (AC-07)', () => {
-  it('is assignable from each of the 6 string literals', () => {
+describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
+  it('matches the exact twelve-code owner', () => {
+    expectTypeOf<AppErrorCode>().toEqualTypeOf<
+      | 'app-not-started'
+      | 'app-already-running'
+      | 'app-canvas-detached'
+      | 'app-paused-while-stop'
+      | 'app-system-update-failed'
+      | 'app-pointer-lock-failed'
+      | 'app-execution-tier-unavailable'
+      | 'app-execution-bootstrap-failed'
+      | 'app-execution-deadline-exceeded'
+      | 'app-execution-kernel-failed'
+      | 'app-execution-stale-world'
+      | 'app-execution-rebuild-failed'
+    >();
+  });
+
+  it('is assignable from each current string literal', () => {
     expectTypeOf<'app-not-started'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-already-running'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-canvas-detached'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-paused-while-stop'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-system-update-failed'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-pointer-lock-failed'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-tier-unavailable'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-bootstrap-failed'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-deadline-exceeded'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-kernel-failed'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-stale-world'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-execution-rebuild-failed'>().toMatchTypeOf<AppErrorCode>();
   });
 
   it('rejects strings outside the closed union (D-3 lock: no app-device-lost)', () => {
@@ -114,6 +143,73 @@ describe('AppError.detail is discriminated per code (AC-07)', () => {
       }>();
     }
   });
+
+  it('execution variants preserve constructor inference and detail narrowing', () => {
+    const unavailable = new AppError({
+      code: 'app-execution-tier-unavailable',
+      expected: '',
+      hint: '',
+      detail: {
+        requestedTier: 'shared',
+        missingCapabilities: ['sharedArrayBuffer'],
+        sharedEvidencePassed: true,
+      },
+    });
+    const bootstrap = new AppError({
+      code: 'app-execution-bootstrap-failed',
+      expected: '',
+      hint: '',
+      detail: { phase: 'bootstrap', moduleUrl: 'bootstrap.mjs', cause: new Error('boom') },
+    });
+    const deadline = new AppError({
+      code: 'app-execution-deadline-exceeded',
+      expected: '',
+      hint: '',
+      detail: { phase: 'frame', timeoutMs: 100 },
+    });
+    const kernel = new AppError({
+      code: 'app-execution-kernel-failed',
+      expected: '',
+      hint: '',
+      detail: {
+        kernelName: 'sum',
+        worldIdentity: 'world-1',
+        cause: new Error('partial'),
+        partialWrite: true,
+        retryable: false,
+      },
+    });
+    const stale = new AppError({
+      code: 'app-execution-stale-world',
+      expected: '',
+      hint: '',
+      detail: { expectedIdentity: 'world-2', receivedIdentity: 'world-1', messageKind: 'ready' },
+    });
+    const rebuild = new AppError({
+      code: 'app-execution-rebuild-failed',
+      expected: '',
+      hint: '',
+      detail: { worldIdentity: null, cause: new Error('rebuild') },
+    });
+    if (unavailable.code === 'app-execution-tier-unavailable') {
+      expectTypeOf(unavailable.detail).toEqualTypeOf<AppDetailExecutionTierUnavailable>();
+    }
+    if (bootstrap.code === 'app-execution-bootstrap-failed') {
+      expectTypeOf(bootstrap.detail).toEqualTypeOf<AppDetailExecutionBootstrapFailed>();
+    }
+    if (deadline.code === 'app-execution-deadline-exceeded') {
+      expectTypeOf(deadline.detail).toEqualTypeOf<AppDetailExecutionDeadlineExceeded>();
+    }
+    if (kernel.code === 'app-execution-kernel-failed') {
+      expectTypeOf(kernel.detail).toEqualTypeOf<AppDetailExecutionKernelFailed>();
+    }
+    if (stale.code === 'app-execution-stale-world') {
+      expectTypeOf(stale.detail).toEqualTypeOf<AppDetailExecutionStaleWorld>();
+    }
+    if (rebuild.code === 'app-execution-rebuild-failed') {
+      expectTypeOf(rebuild.detail).toEqualTypeOf<AppDetailExecutionRebuildFailed>();
+    }
+  });
 });
 
 describe('error detail unions derive from their code resolvers', () => {
@@ -123,6 +219,12 @@ describe('error detail unions derive from their code resolvers', () => {
       | AppDetailCanvasDetached
       | AppDetailSystemUpdateFailed
       | AppDetailPointerLockFailed
+      | AppDetailExecutionTierUnavailable
+      | AppDetailExecutionBootstrapFailed
+      | AppDetailExecutionDeadlineExceeded
+      | AppDetailExecutionKernelFailed
+      | AppDetailExecutionStaleWorld
+      | AppDetailExecutionRebuildFailed
     >();
   });
 
@@ -136,7 +238,7 @@ describe('error detail unions derive from their code resolvers', () => {
 });
 
 describe('exhaustive switch over (AppError | RhiError) compiles with no default arm (AC-07)', () => {
-  it('covers all 23 codes (5 AppError + 18 RhiError) without a default fallback', () => {
+  it('covers all 30 codes (12 AppError + 18 RhiError) without a default fallback', () => {
     // The `never` return on the unreachable tail is what asserts
     // exhaustiveness: if a future commit adds a code without updating
     // this switch, the assignment to `_unreachable: never` fails tsc.
@@ -153,6 +255,12 @@ describe('exhaustive switch over (AppError | RhiError) compiles with no default 
         case 'app-system-update-failed':
           return 'e';
         case 'app-pointer-lock-failed':
+        case 'app-execution-tier-unavailable':
+        case 'app-execution-bootstrap-failed':
+        case 'app-execution-deadline-exceeded':
+        case 'app-execution-kernel-failed':
+        case 'app-execution-stale-world':
+        case 'app-execution-rebuild-failed':
           return 'f';
         case 'adapter-unavailable':
         case 'feature-not-enabled':
@@ -201,6 +309,12 @@ describe('dual-layer instanceof EngineEnvironmentError + switch pattern (D-6)', 
         case 'app-paused-while-stop':
         case 'app-system-update-failed':
         case 'app-pointer-lock-failed':
+        case 'app-execution-tier-unavailable':
+        case 'app-execution-bootstrap-failed':
+        case 'app-execution-deadline-exceeded':
+        case 'app-execution-kernel-failed':
+        case 'app-execution-stale-world':
+        case 'app-execution-rebuild-failed':
           return 'app';
         case 'adapter-unavailable':
         case 'feature-not-enabled':

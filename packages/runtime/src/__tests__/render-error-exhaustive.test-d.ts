@@ -14,6 +14,8 @@ import type { RenderError, RenderErrorCode } from '@forgeax/engine-render/intern
 
 function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
   switch (code) {
+    case 'observation-unavailable':
+      return code;
     case 'shadow-invalid-config':
       return code;
     case 'equirect-projection-failed':
@@ -67,6 +69,10 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
 
 function narrowRenderError(err: RenderError): void {
   switch (err.code) {
+    case 'observation-unavailable':
+      void err.detail.reason;
+      void err.detail.recovery;
+      break;
     case 'shadow-invalid-config':
       void err.detail.field; // string
       void err.detail.value; // number

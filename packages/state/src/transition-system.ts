@@ -17,11 +17,11 @@
 // - plan-strategy sec 3.2: 8-step flowchart + OnEnter/OnExit dispatch between flip and despawn
 // - plan-strategy D-2: unified world.despawn via linkedSpawn cascade
 // - plan-strategy D-5: fn[] registry + transition body dispatch, zero ECS change
-// - research F-6: queryRun + world.despawn sufficient, no new query API needed
+// - research F-6: row iteration + world.despawn is sufficient
 // - requirements sec 7: despawn tolerance (entity already dead = no error)
 
 import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
-import { createQueryState, Entity, queryRun, resolveComponent } from '@forgeax/engine-ecs';
+import { resolveComponent } from '@forgeax/engine-ecs';
 import { getRegisteredTokens } from './define-state';
 import { getCallbacks, OnEnter, OnExit } from './on-enter-on-exit';
 import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
@@ -48,22 +48,12 @@ interface NextStatePayload {
  * instantiated subtree so nothing is left pointing at the dead root.
  */
 function scopeDespawn(world: World, scopedComponent: Component, mode: number, value: number): void {
-  const state = createQueryState({ with: [scopedComponent, Entity] });
+  const query = world.query({ read: [scopedComponent] }).unwrap();
   const despawns: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    const raw = bundle as unknown as Record<string, Record<string, unknown>>;
-    const rows = raw[scopedComponent.name];
-    if (!rows) return;
-    const values = rows.value as Uint32Array;
-    const modes = rows.mode as Uint32Array;
-    const handles = (raw.Entity as Record<string, Uint32Array>).self;
-    if (!handles) return;
-    for (let i = 0; i < handles.length; i++) {
-      if (modes[i] === mode && values[i] === value) {
-        despawns.push(handles[i] as unknown as EntityHandle);
-      }
-    }
-  });
+  for (const row of query) {
+    const scoped = row.get(scopedComponent);
+    if (scoped.mode === mode && scoped.value === value) despawns.push(row.entity);
+  }
   // SceneInstance is resolved by name through the global registry so the state
   // package stays free of a runtime dependency (layering: state -> ecs only).
   const sceneInstance = resolveComponent('SceneInstance');

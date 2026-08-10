@@ -58,5 +58,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .unwrap();
 
   const started = app.start();
-  if (!started.ok) console.error('[bevy-axes] app.start failed:', started.error);
+  if (!started.ok) {
+    console.error('[bevy-axes] app.start failed:', started.error);
+    return;
+  }
+  (globalThis as { __bevyAxesReady?: boolean }).__bevyAxesReady = true;
 }

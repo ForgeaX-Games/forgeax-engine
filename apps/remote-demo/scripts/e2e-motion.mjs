@@ -13,8 +13,7 @@ import { Update } from '@forgeax/engine-ecs';
 // and awaits returned Promises. Use (async () => { ... })() pattern.
 // _import() is the injected dynamic import alias.
 //
-// Real queryRun callback form (research F2):
-//   queryRun(state, world, (bundle) => { r = bundle.Entity.self[i]; })
+// Handle discovery uses the World-owned row iterator.
 //
 // Pass verdict: position(N+1) != position(N) — entity truly moves.
 
@@ -118,14 +117,12 @@ async function main() {
   const client = clientRes.value;
   logCase('connect', true, {});
 
-  // 4. Handle discovery via eval — async IIFE + real callback.
+  // 4. Handle discovery via eval — async IIFE + World-owned query.
   const discoverScript =
     "(async () => {" +
-    "var dh; var m = await _import('@forgeax/engine-ecs'); " +
-    "var st = m.createQueryState({ with: [m.Entity] }); " +
-    "m.queryRun(st, world, function(b) { " +
-    "  if (b.Entity.self.length > 0) dh = b.Entity.self[0]; " +
-    "});" +
+    "var dh; var q = world.query({}); " +
+    "if (!q.ok) throw q.error; " +
+    "for (var row of q.value) { dh = row.entity; break; }" +
     "return dh;" +
     "})()";
   let handle = null;

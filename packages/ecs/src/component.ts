@@ -8,14 +8,15 @@
 // ComponentId is used by archetype storage, bitmask matching, and edges cache.
 
 import type { Handle } from '@forgeax/engine-types';
-import type { ManagedColumnReader } from './column';
 import type { EntityHandle } from './entity-handle';
 import {
   ManagedArrayElementTypeNotAllowedError,
   RelationshipMirrorComponentNotRegisteredError,
   RelationshipMirrorFieldTypeMismatchError,
   SchemaUnsupportedFieldError,
+  SparseStorageRequiresTagError,
 } from './errors';
+import type { ManagedColumnReader } from './storage/column';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Field types — schema vocab keywords (AC-01).
@@ -464,8 +465,7 @@ export type FieldInputType<T extends SchemaFieldType> = T extends 'bool'
                         : never;
 
 /**
- * Maps a SchemaFieldType to its column-bundle view type (read-side surface
- * exposed via `appendComponentColumns` / `NestedColumnBundle`).
+ * Maps a SchemaFieldType to its zero-copy query-column view type.
  *
  * Three storage shapes share the keyword space:
  *
@@ -585,6 +585,7 @@ let nextComponentId = 0;
 
 /** Numeric identifier for a component type, used by bitmask matching and archetype edges. */
 export type ComponentId = number;
+export type ComponentStorage = 'table' | 'sparse';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Global name → Component token index
@@ -701,7 +702,7 @@ declare const __componentBrand: unique symbol;
  * The `N` parameter defaults to `string` to keep existing single-parameter
  * `Component<S>` annotations source-compatible. When inferred from a
  * `defineComponent('Position', ...)` call, `N` is the literal `'Position'`,
- * which lets `NestedColumnBundle<Cs>` resolve `{ [K in N]: ... }` to a
+ * which lets query row/span mapped types resolve `{ [K in N]: ... }` to a
  * concrete keyed object instead of a degraded index signature (KD-1).
  */
 export interface Component<N extends string = string, S extends ComponentSchema = ComponentSchema> {
@@ -716,6 +717,7 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    *   every World.
    */
   readonly id: ComponentId;
+  readonly storage: ComponentStorage;
   /**
    * Offline manifest discoverability surface (feat-20260515-buffer-array-vocab-collapse
    * plan-strategy §8.4): trivial alias for `JSON.stringify(this.schema)`. AI
@@ -1145,7 +1147,7 @@ export type FieldsInput = Record<string, FieldSpec>;
  * (field-name -> type keyword). A bare-keyword spec maps to itself (identity,
  * so existing flat-string call-sites infer exactly as before); a descriptor
  * spec maps to its `type`. This keeps `Component<N, SchemaOf<F>>` driving every
- * downstream type (ShapeOf / NestedColumnBundle / TypedArrayFor) unchanged.
+ * downstream type (ShapeOf / query row/span projection / TypedArrayFor) unchanged.
  */
 export type SchemaOf<F extends FieldsInput> = {
   [K in keyof F]: F[K] extends FieldDescriptor<infer T>
@@ -1161,6 +1163,7 @@ export type SchemaOf<F extends FieldsInput> = {
 
 /** Optional configuration for `defineComponent` (w4, M3 consumer; w21 layer-2 defaults). */
 export interface DefineComponentOptions<S extends ComponentSchema = ComponentSchema> {
+  readonly storage?: ComponentStorage;
   /**
    * Optional spawn-time payload validator (feat-20260519 / w5+w8 / plan-
    * strategy D-S3 a). Invoked by `world.spawn` (and `world.addComponent`)
@@ -1297,7 +1300,7 @@ function fieldSpecType(fieldName: string, spec: FieldSpec): string {
  *
  * The `<const N>` modifier lifts `name` to its string-literal type so the
  * returned `Component<N, SchemaOf<S>>` drives precise key-based mapped types
- * downstream (e.g. `NestedColumnBundle<Cs>`). At runtime `name` is a plain
+ * downstream (for example QueryRow and QuerySpan projections). At runtime `name` is a plain
  * string.
  *
  * Schema-field validation accepts both the legacy scalar tier
@@ -1333,6 +1336,13 @@ export function defineComponent<const N extends string, const S extends FieldsIn
   fields: S,
   options?: DefineComponentOptions<SchemaOf<S>>,
 ): Component<N, SchemaOf<S>> {
+  const storage = options?.storage ?? 'table';
+  if (
+    storage === 'sparse' &&
+    (Object.keys(fields).length !== 0 || options?.relationship !== undefined)
+  ) {
+    throw new SparseStorageRequiresTagError(name);
+  }
   const schema: Record<string, string> = {};
   const reflectedFields: Record<string, FieldReflection> = {};
   const collectedMeta: Record<string, unknown> = {};
@@ -1457,6 +1467,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     name,
     schema: frozenSchema,
     id,
+    storage,
     defaults: frozenDefaults,
     validate: options?.validate,
     cardinality: options?.cardinality,

@@ -171,14 +171,15 @@ describe('inspect-core atoms — shared SSOT used by buildFrameModel + inspectDr
 // ============================================================================
 
 describe('m1-1 SSOT — DRAW_KINDS covers all draw + indirect + dispatch kinds', () => {
-  it('the exported set matches the 5 canonical draw/dispatch kinds; frame-model + inspect-core count the same', () => {
+  it('the exported set matches the 6 canonical draw/dispatch kinds; frame-model + inspect-core count the same', () => {
     // SSOT membership (locks any future addition/removal from silently drifting between callers).
     expect(DRAW_KINDS.has('draw')).toBe(true);
     expect(DRAW_KINDS.has('drawIndexed')).toBe(true);
     expect(DRAW_KINDS.has('drawIndirect')).toBe(true);
     expect(DRAW_KINDS.has('drawIndexedIndirect')).toBe(true);
     expect(DRAW_KINDS.has('dispatchWorkgroups')).toBe(true);
-    expect(DRAW_KINDS.size).toBe(5);
+    expect(DRAW_KINDS.has('dispatchWorkgroupsIndirect')).toBe(true);
+    expect(DRAW_KINDS.size).toBe(6);
 
     // Build a tape covering all 5 kinds. buildFrameModel.meta.totalDraws is the
     // pure-frame-model side; countDraws (inspect-core internal via SSOT) is the

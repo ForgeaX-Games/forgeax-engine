@@ -25,13 +25,16 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { PointLight } from '@forgeax/engine-render';
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 // 2. example glue
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-4-normal-mapping',
+);
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json
 const BRICKWALL_GUID_STR = '019e3969-1d45-78a4-9f59-a41c910656f4';
@@ -61,7 +64,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.4 normal-mapping] createApp failed:', appRes.error);
@@ -77,7 +80,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
-  // Wire the pack-index URL for GUID-based texture loading.
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Parse texture GUIDs.

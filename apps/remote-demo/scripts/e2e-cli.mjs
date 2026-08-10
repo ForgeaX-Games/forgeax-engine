@@ -7,8 +7,7 @@
 // Starts an in-process remote sever, connects via InspectorClient, and
 // exercises the eval channel: read/write/await-import/handle-discovery.
 // The remote package now exports only eval (no Registry / 17 inspect commands /
-// sandbox write-denied). All assertions use the real queryRun callback form
-// (research F2): queryRun(state, world, (bundle) => { ... }).
+// sandbox write-denied). Query discovery uses the World-owned row iterator.
 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

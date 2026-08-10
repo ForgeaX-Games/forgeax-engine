@@ -1,93 +1,78 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
-import { Entity } from '../entity';
-import { createQueryState, queryRun } from '../query';
 import { World } from '../world';
 
 const Marker = defineComponent('ChangeDetectionMarker', { value: 'f32' });
-const AddedMarker = defineComponent('ChangeDetectionAddedMarker', { value: 'f32' });
 
-describe('change detection', () => {
-  it('tracks Changed rows and keeps filtered bundles live and contiguous', () => {
+describe('mutation epoch evidence', () => {
+  it('advances once per successful mutation and not for failures or no-ops', () => {
+    const Other = defineComponent('MutationEpochOther', { value: 'f32' });
     const world = new World();
-    const first = world.spawn({ component: Marker, data: { value: 1 } }).unwrap();
-    const second = world.spawn({ component: Marker, data: { value: 2 } }).unwrap();
-    const changed = createQueryState<readonly [typeof Marker, typeof Entity]>({
-      with: [Marker, Entity],
-      changed: [Marker],
-    });
-    const values: number[] = [];
+    const entity = world.spawn({ component: Marker, data: { value: 1 } }).unwrap();
+    expect(world._getMutationEpoch()).toBe(1);
+    expect(world._getComponentChange(entity, Marker.id)).toEqual({ added: 1, changed: 1 });
 
-    queryRun(changed, world, (bundle) => {
-      values.push(bundle.Entity.self.length);
-    });
-    expect(values).toEqual([2]);
-    values.length = 0;
-    queryRun(changed, world, (bundle) => values.push(bundle.Entity.self.length));
-    expect(values).toEqual([]);
+    expect(world.set(entity, Other, { value: 2 }).ok).toBe(false);
+    world.removeResource('missing');
+    expect(world._getMutationEpoch()).toBe(1);
 
-    world.update(1 / 60).unwrap();
-    world.set(second, Marker, { value: 20 }).unwrap();
-    values.length = 0;
-    queryRun(changed, world, (bundle) => values.push(bundle.Entity.self.length));
-    expect(values).toEqual([1]);
-    expect(world.get(second, Marker).unwrap().value).toBe(20);
-    expect(world.get(first, Marker).unwrap().value).toBe(1);
+    world.set(entity, Marker, { value: 2 }).unwrap();
+    expect(world._getMutationEpoch()).toBe(2);
+    expect(world._getComponentChange(entity, Marker.id)).toEqual({ added: 1, changed: 2 });
   });
 
-  it('distinguishes Added from later Changed writes', () => {
-    const world = new World();
-    const added = createQueryState<readonly [typeof AddedMarker, typeof Entity]>({
-      with: [AddedMarker, Entity],
-      added: [AddedMarker],
-    });
-    const entity = world.spawn({ component: AddedMarker, data: { value: 3 } }).unwrap();
-    const seen: number[] = [];
-
-    queryRun(added, world, (bundle) => seen.push(bundle.Entity.self.length));
-    expect(seen).toEqual([1]);
-    seen.length = 0;
-    world.update(1 / 60).unwrap();
-    world.set(entity, AddedMarker, { value: 4 }).unwrap();
-    queryRun(added, world, (bundle) => seen.push(bundle.Entity.self.length));
-    expect(seen).toEqual([]);
-  });
-
-  it('records resource insertion and overwrite ticks', () => {
+  it('keeps resource evidence on its ResourceStore entry', () => {
     const world = new World();
     world.insertResource('ChangeDetectionResource', { value: 1 });
-    const added = world.getResourceChange('ChangeDetectionResource');
-    expect(added?.added).toBe(0);
-    expect(added?.changed).toBe(0);
+    expect(world.getResourceChange('ChangeDetectionResource')).toEqual({ added: 1, changed: 1 });
     world.update(1 / 60).unwrap();
     world.insertResource('ChangeDetectionResource', { value: 2 });
-    expect(world.getResourceChange('ChangeDetectionResource')?.changed).toBe(1);
+    expect(world.getResourceChange('ChangeDetectionResource')).toEqual({ added: 1, changed: 2 });
   });
 
-  it('does not mark variable arrays changed when reserving capacity', () => {
-    const Values = defineComponent('ReserveChangeDetectionValues', { values: 'array<u32>' });
+  it('keeps independent query cursors and retries after consumer throws', () => {
     const world = new World();
-    const entity = world.spawn({ component: Values, data: { values: [4, 5] } }).unwrap();
-    const changed = createQueryState<readonly [typeof Values, typeof Entity]>({
-      with: [Values, Entity],
-      changed: [Values],
-    });
-    const seen: number[] = [];
+    const entity = world.spawn({ component: Marker, data: { value: 1 } }).unwrap();
+    const first = world.query({ read: [Marker], changed: [Marker] }).unwrap();
+    const second = world.query({ read: [Marker], changed: [Marker] }).unwrap();
 
-    queryRun(changed, world, (bundle) => seen.push(bundle.Entity.self.length));
-    expect(seen).toEqual([1]);
-    seen.length = 0;
-    world.update(1 / 60).unwrap();
+    expect(() => {
+      for (const _row of first) throw new Error('consumer failure');
+    }).toThrow('consumer failure');
+    expect([...first].map((row) => row.entity)).toEqual([entity]);
+    expect([...second].map((row) => row.entity)).toEqual([entity]);
+  });
 
-    world.reserveArrayCapacity(entity, Values, 'values', 32).unwrap();
-    queryRun(changed, world, (bundle) => seen.push(bundle.Entity.self.length));
-    expect(seen).toEqual([]);
+  it('does not inherit evidence when a slot generation is reused', () => {
+    const world = new World();
+    const retired = world.spawn({ component: Marker, data: { value: 1 } }).unwrap();
+    const added = world.query({ read: [Marker], added: [Marker] }).unwrap();
+    expect([...added].map((row) => row.entity)).toEqual([retired]);
 
-    world.update(1 / 60).unwrap();
-    const failure = world.reserveArrayCapacity(entity, Values, 'values', 70_000);
-    expect(failure.ok).toBe(false);
-    queryRun(changed, world, (bundle) => seen.push(bundle.Entity.self.length));
-    expect(seen).toEqual([]);
-    expect([...world.get(entity, Values).unwrap().values]).toEqual([4, 5]);
+    world.despawn(retired).unwrap();
+    const reused = world.spawn({ component: Marker, data: { value: 2 } }).unwrap();
+    expect((reused as number) & 0xffffff).toBe((retired as number) & 0xffffff);
+    expect(reused).not.toBe(retired);
+    expect([...added].map((row) => row.entity)).toEqual([reused]);
+  });
+
+  it('carries evidence through grow, migration, and swap-pop', () => {
+    const Attached = defineComponent('MutationEpochAttached', { flag: 'u8' });
+    const world = new World();
+    const entities = Array.from({ length: 65 }, (_, value) =>
+      world.spawn({ component: Marker, data: { value } }).unwrap(),
+    );
+    const changed = world.query({ read: [Marker], changed: [Marker] }).unwrap();
+    expect([...changed].length).toBe(65);
+
+    const survivor = entities[0];
+    const removed = entities[1];
+    if (survivor === undefined || removed === undefined) throw new Error('fixture');
+    world.addComponent(survivor, { component: Attached, data: { flag: 1 } }).unwrap();
+    world.despawn(removed).unwrap();
+    expect([...changed]).toEqual([]);
+
+    world.set(survivor, Marker, { value: 99 }).unwrap();
+    expect([...changed].map((row) => row.entity)).toEqual([survivor]);
   });
 });

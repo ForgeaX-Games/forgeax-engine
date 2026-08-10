@@ -25,7 +25,7 @@ import { Update } from '@forgeax/engine-ecs';
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
@@ -254,16 +254,12 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
   world.addSystem(Update, {
     name: 'learn-render-materials-scroll-fov',
     after: ['input-frame-start-scan'],
-    queries: [{ with: [Camera, Entity] }],
+    queries: [{ write: [Camera] }],
     fn: (world, queryResults) => {
       const snapshot = renderer.input.snapshot(world);
       if (snapshot === undefined) return;
       scrollFov.apply(snapshot.mouse.wheelDelta);
-      for (const bundles of queryResults[0]) {
-        for (let i = 0; i < bundles.Entity.self.length; i++) {
-          bundles.Camera.fov[i] = scrollFov.fovRad;
-        }
-      }
+      for (const row of queryResults[0]) row.mut(Camera).fov = scrollFov.fovRad;
     },
   });
 }

@@ -246,6 +246,135 @@ function emitErrors(errors) {
   process.stdout.write(`${JSON.stringify(first)}\n`);
 }
 
+function uniqueStrings(value) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && item.length > 0) &&
+    new Set(value).size === value.length
+  );
+}
+
+function validateReturnOwners(contract, cacheFamily) {
+  const errors = [];
+  const cacheOwners = [cacheFamily?.producer, cacheFamily?.consumer];
+  if (!uniqueStrings(cacheOwners)) {
+    errors.push({
+      code: 'ci-artifact-contract-return-owner',
+      actual: cacheFamily ?? null,
+      expected: 'merged-ddc declares distinct non-empty producer and consumer owners',
+    });
+  }
+
+  const producerRoster = new Set(contract.provenance?.producerRoster ?? []);
+  for (const [family, definition] of Object.entries(contract.artifactClasses ?? {})) {
+    if (
+      typeof definition.producer !== 'string' ||
+      !producerRoster.has(definition.producer) ||
+      typeof definition.transferArtifact !== 'string' ||
+      definition.transferArtifact.length === 0
+    ) {
+      errors.push({
+        code: 'ci-artifact-contract-return-owner',
+        actual: {
+          family,
+          producer: definition.producer ?? null,
+          transferArtifact: definition.transferArtifact ?? null,
+        },
+        expected: 'artifact producer in provenance.producerRoster and physical transferArtifact',
+      });
+    }
+  }
+  return errors;
+}
+
+function validateReturnFields(fields) {
+  const groups = ['common', 'cache', 'artifact'];
+  const flattened = groups.flatMap((group) => fields?.[group] ?? []);
+  if (
+    fields &&
+    groups.every((group) => uniqueStrings(fields[group])) &&
+    new Set(flattened).size === flattened.length
+  ) {
+    return [];
+  }
+  return [
+    {
+      code: 'ci-artifact-contract-field-applicability',
+      actual: fields ?? null,
+      expected: 'common/cache/artifact groups contain unique, non-overlapping field names',
+    },
+  ];
+}
+
+function validateInvalidEvidence(invalidEvidence) {
+  const codes = invalidEvidence?.codes;
+  const codeEntries =
+    codes && typeof codes === 'object' && !Array.isArray(codes) ? Object.entries(codes) : [];
+  const shapeValid =
+    uniqueStrings(invalidEvidence?.requiredFields) &&
+    codeEntries.length > 0 &&
+    codeEntries.every(
+      ([code, detailFields]) => /^[a-z][a-z0-9-]*$/.test(code) && uniqueStrings(detailFields),
+    );
+  if (shapeValid) {
+    return [];
+  }
+  return [
+    {
+      code: 'ci-artifact-contract-invalid-evidence',
+      actual: invalidEvidence ?? null,
+      expected: 'requiredFields and codes/detail fields are unique non-empty strings',
+    },
+  ];
+}
+
+function validateReturnEvidence(contract) {
+  if (contract.version < 3) return [];
+
+  const errors = [];
+  const returnEvidence = contract.returnEvidence;
+  if (!returnEvidence || typeof returnEvidence !== 'object') {
+    return [
+      {
+        code: 'ci-artifact-contract-return-evidence-version',
+        actual: 'missing returnEvidence',
+        expected: 'returnEvidence.schemaVersion=1',
+      },
+    ];
+  }
+
+  if (contract.version !== 3 || returnEvidence.schemaVersion !== 1) {
+    errors.push({
+      code: 'ci-artifact-contract-return-evidence-version',
+      actual: `contract=${contract.version}, returnEvidence=${returnEvidence.schemaVersion}`,
+      expected: 'contract=3, returnEvidence=1',
+    });
+  }
+
+  const cacheFamilies = returnEvidence.cacheFamilies;
+  if (
+    Object.hasOwn(returnEvidence, 'artifactFamilies') ||
+    !Array.isArray(cacheFamilies) ||
+    cacheFamilies.length !== 1 ||
+    cacheFamilies[0]?.family !== 'merged-ddc'
+  ) {
+    errors.push({
+      code: 'ci-artifact-contract-family-roster',
+      actual: Array.isArray(cacheFamilies)
+        ? cacheFamilies.map((entry) => entry?.family ?? null)
+        : cacheFamilies,
+      expected: 'artifactClasses keys plus exactly one cache family: merged-ddc',
+    });
+  }
+
+  errors.push(...validateReturnOwners(contract, cacheFamilies?.[0]));
+  errors.push(...validateReturnFields(returnEvidence.fieldApplicability));
+  errors.push(...validateInvalidEvidence(returnEvidence.invalidEvidence));
+
+  return errors;
+}
+
 // ============================================================================
 // Main validator
 // ============================================================================
@@ -934,6 +1063,7 @@ function main() {
   // Validate contract schema
   const allErrors = [
     ...validateContract(contract),
+    ...validateReturnEvidence(contract),
     ...validateTimingRoster(contract),
     ...validateProvenance(contract),
   ];

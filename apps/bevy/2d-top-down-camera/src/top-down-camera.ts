@@ -16,11 +16,8 @@
 // Bevy constants: player speed=100, camera decay rate=2.0
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -48,21 +45,15 @@ const ORTHO_HALF_H = WORLD_H / 2;
 export const Player = defineComponent('Player', {});
 
 function firstCamera(world: World): EntityHandle | null {
-  const state = createQueryState({ with: [Camera, Transform, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Camera, Transform] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 function firstPlayer(world: World): EntityHandle | null {
-  const state = createQueryState({ with: [Player, Transform, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Player, Transform] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 /** Build the 2D top-down scene: floor + player quad + orthographic camera. */

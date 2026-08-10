@@ -27,6 +27,7 @@ import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { ImportTransport } from '@forgeax/engine-types';
 
 import type { AppError, AppErrorCode } from './errors';
+import type { ExecutionControl, ExecutionOptions } from './execution';
 
 // Re-export AppError + AppErrorCode (the canonical SSOT lives in
 // `./errors`). Pre-M5 (M1..M4) referenced these as type-only declarations
@@ -74,9 +75,9 @@ export interface DrawSourceResult {
 /**
  * Stable frame-loop phase vocabulary for opt-in performance diagnostics.
  *
- * The observer is deliberately engine-neutral: it receives boundaries only;
- * a host decides how to record them (for example, User Timing in a browser).
- * When omitted, the frame loop keeps its normal path and does not emit events.
+ * Local and Worker execution record these phases through the same optional
+ * Profiler capability. When omitted, the frame loop keeps its normal path and
+ * does not allocate capture records.
  */
 export const APP_PHASE_CATALOG = [
   'frame-total',
@@ -84,6 +85,10 @@ export const APP_PHASE_CATALOG = [
   'draw-source',
   'world-update-injected',
   'renderer-draw',
+  'host-frame',
+  'engine-update',
+  'kernel-wait',
+  'host-audio',
 ] as const;
 
 /**
@@ -152,6 +157,8 @@ export interface AppAssembleArgs {
  * default noise, but reachable when the AI user scrolls the type).
  */
 export interface CreateAppOptions {
+  /** Opt into realm-local engine execution. Omission preserves the existing local assembly path. */
+  readonly execution?: ExecutionOptions;
   /** Host-owned UI root whose events do not enter gameplay input. */
   readonly uiRoot?: Node;
   /** Producer-owned render features forwarded to the renderer unchanged. */
@@ -304,6 +311,8 @@ export interface App {
   readonly renderer: Renderer;
   /** Caller-owned World (reference equality with the assemble input). */
   readonly world: World;
+  /** Host-side lifecycle and immutable diagnostics for the selected execution tier. */
+  readonly execution: ExecutionControl;
   /**
    * Plugin registry produced by runPlugins() —— Map<string, Plugin>.
    * The caller passes this to wireDefaultInspectors context so the
@@ -424,6 +433,12 @@ export interface App {
    */
   readonly remote?: import('@forgeax/engine-types').RemoteHandle | undefined;
 }
+
+/** Host control returned by the unified execution path. Engine-owned objects remain realm-local. */
+export type ExecutionApp = Pick<
+  App,
+  'execution' | 'input' | 'audio' | 'start' | 'stop' | 'pause' | 'resume' | 'onError' | 'lastError'
+>;
 
 /**
  * Error union returned by the assemble-form entry. The canvas-form thin

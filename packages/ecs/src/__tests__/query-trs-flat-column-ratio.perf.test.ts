@@ -29,8 +29,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
-import { Entity } from '../entity';
-import { createQueryState, queryRun } from '../query';
 import { World } from '../world';
 
 const N = 10_000;
@@ -92,12 +90,12 @@ function spawnCandidateWorld(): World {
 
 /** Sum all 10 TRS lanes over every entity via per-axis scalar columns. */
 function traverseBaseline(world: World): number {
-  const state = createQueryState({ with: [BaselineTrs10, Entity] });
+  const query = world.query({ read: [BaselineTrs10] }).unwrap();
   let sum = 0;
   for (let rep = 0; rep < INNER_REPEATS; rep++) {
-    queryRun(state, world, (bundle) => {
-      const b = bundle.W5_BaselineTrs10;
-      const n = bundle.Entity.self.length;
+    for (const span of query.spans().unwrap()) {
+      const b = span.get(BaselineTrs10);
+      const n = span.length;
       for (let i = 0; i < n; i++) {
         sum +=
           (b.posX[i] as number) +
@@ -111,22 +109,22 @@ function traverseBaseline(world: World): number {
           (b.scaleY[i] as number) +
           (b.scaleZ[i] as number);
       }
-    });
+    }
   }
   return sum;
 }
 
 /** Sum all 10 TRS lanes over every entity via flat stride-N array columns. */
 function traverseCandidate(world: World): number {
-  const state = createQueryState({ with: [CandidateTrsVec, Entity] });
+  const query = world.query({ read: [CandidateTrsVec] }).unwrap();
   let sum = 0;
   for (let rep = 0; rep < INNER_REPEATS; rep++) {
-    queryRun(state, world, (bundle) => {
-      const c = bundle.W5_CandidateTrsVec;
+    for (const span of query.spans().unwrap()) {
+      const c = span.get(CandidateTrsVec);
       const pos = c.pos;
       const quat = c.quat;
       const scale = c.scale;
-      const n = bundle.Entity.self.length;
+      const n = span.length;
       for (let i = 0; i < n; i++) {
         sum +=
           (pos[i * 3] as number) +
@@ -140,7 +138,7 @@ function traverseCandidate(world: World): number {
           (scale[i * 3 + 1] as number) +
           (scale[i * 3 + 2] as number);
       }
-    });
+    }
   }
   return sum;
 }

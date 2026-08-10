@@ -33,7 +33,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { dispatchBench } from '../run-all.mjs';
+import { dispatchBench, METRIC_KINDS } from '../run-all.mjs';
 
 let pkgRoot;
 
@@ -70,6 +70,13 @@ function fakeBenchPayload(medianMs) {
 }
 
 describe('dispatchBench retry-once semantics (M3 w11 / K-6 / AC-09)', () => {
+  it('exposes all five metric kinds to the dispatcher contract', () => {
+    expect(METRIC_KINDS).toHaveLength(5);
+    expect(new Set(METRIC_KINDS)).toEqual(
+      new Set(['bundle-size', 'fps', 'bench', 'gate', 'spike-report']),
+    );
+  });
+
   it('(i) missing artefact + spawn success -> status=ok, spawn called exactly once', () => {
     const spawnFn = vi.fn().mockImplementation(() => {
       // Simulator: pretend the spawned pnpm command produced bench-result.json

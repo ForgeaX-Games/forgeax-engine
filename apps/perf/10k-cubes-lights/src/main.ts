@@ -1,14 +1,9 @@
 import { createApp } from '@forgeax/engine-app';
 import { createProfiler, buildProfileModel, validateProfileCapture } from '@forgeax/engine-profiler';
 import {
-  Entity,
   Time,
   Update,
   World,
-  createQueryState,
-  queryRun,
-  type EntityHandle,
-  type QueryState,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
@@ -38,10 +33,6 @@ const PROFILE_FRAME_LIMIT = 180;
 const PROFILE_EVENT_LIMIT = 8192;
 const CUBE_SCALE = [0.32, 0.32, 0.32] as const;
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
-
-type CubeQueryState = QueryState<readonly [typeof Transform, typeof MeshFilter, typeof MeshRenderer, typeof Entity]>;
-type PointQueryState = QueryState<readonly [typeof Transform, typeof PointLight, typeof Entity]>;
-type SpotQueryState = QueryState<readonly [typeof Transform, typeof SpotLight, typeof Entity]>;
 
 function errorText(error: unknown): string {
   if (typeof error !== 'object' || error === null) return String(error);
@@ -211,10 +202,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     )
     .unwrap();
 
-  const cubeQuery = createQueryState({ with: [Transform, MeshFilter, MeshRenderer, Entity] });
-  const pointQuery = createQueryState({ with: [Transform, PointLight, Entity] });
-  const spotQuery = createQueryState({ with: [Transform, SpotLight, Entity] });
-  const postSpawn = inspectSpawnedWorld(app.world, cubeQuery, pointQuery, spotQuery, materialHandle);
+  const postSpawn = inspectSpawnedWorld(app.world, materialHandle);
   const evidence: PerfEvidence = {
     workloadFingerprint: workloadFingerprint(options),
     seed: PERF_WORKLOAD_SEED,
@@ -240,23 +228,15 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
   app.world
     .addSystem(Update, {
       name: 'perf-10k-cubes-rotate',
-      queries: [{ with: [Transform, MeshFilter, MeshRenderer, Entity] }],
+      queries: [{ write: [Transform], with: [MeshFilter, MeshRenderer] }],
       fn: (world, results) => {
         const start = performance.now();
         elapsed += world.getResource(Time).delta;
         let processed = 0;
-        for (const bundle of results[0] ?? []) {
-          const rows = bundle.Entity.self.length;
-          for (let index = 0; index < rows; index++) {
-            const base = index * 4;
-            const angle = elapsed * (0.35 + (index % 17) * 0.013) + index * 0.0007;
-            const quaternion = yawQuaternion(angle);
-            bundle.Transform.quat[base] = quaternion[0];
-            bundle.Transform.quat[base + 1] = quaternion[1];
-            bundle.Transform.quat[base + 2] = quaternion[2];
-            bundle.Transform.quat[base + 3] = quaternion[3];
-            processed += 1;
-          }
+        for (const row of results[0] ?? []) {
+          const angle = elapsed * (0.35 + (processed % 17) * 0.013) + processed * 0.0007;
+          row.mut(Transform).quat.set(yawQuaternion(angle));
+          processed += 1;
         }
         evidence.frameProgress += 1;
         evidence.processedCubeCount = processed;
@@ -277,19 +257,10 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
   app.world
     .addSystem(Update, {
       name: 'perf-center-camera-rotate',
-      queries: [{ with: [Transform, Camera, Entity] }],
+      queries: [{ write: [Transform], with: [Camera] }],
       fn: (_world, results) => {
         const quaternion = yawQuaternion(evidence.cameraRotationRadians);
-        for (const bundle of results[0] ?? []) {
-          const rows = bundle.Entity.self.length;
-          for (let index = 0; index < rows; index++) {
-            const base = index * 4;
-            bundle.Transform.quat[base] = quaternion[0];
-            bundle.Transform.quat[base + 1] = quaternion[1];
-            bundle.Transform.quat[base + 2] = quaternion[2];
-            bundle.Transform.quat[base + 3] = quaternion[3];
-          }
-        }
+        for (const row of results[0] ?? []) row.mut(Transform).quat.set(quaternion);
       },
     })
     .unwrap();
@@ -305,39 +276,26 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
 
 function inspectSpawnedWorld(
   world: World,
-  cubeQuery: CubeQueryState,
-  pointQuery: PointQueryState,
-  spotQuery: SpotQueryState,
   materialHandle: unknown,
 ): PerfEvidence['postSpawn'] {
   let cubeCount = 0;
   let meshHandleMatches = 0;
   let materialHandleMatches = 0;
   const positions: number[] = [];
-  queryRun(cubeQuery, world, (bundle) => {
-    for (let index = 0; index < bundle.Entity.self.length; index++) {
-      const entity = bundle.Entity.self[index];
-      const base = index * 3;
-      positions.push(
-        bundle.Transform.pos[base] ?? 0,
-        bundle.Transform.pos[base + 1] ?? 0,
-        bundle.Transform.pos[base + 2] ?? 0,
-      );
-      cubeCount += 1;
-      if (entity !== undefined) {
-        const mesh = world.get(entity as EntityHandle, MeshFilter);
-        const renderer = world.get(entity as EntityHandle, MeshRenderer);
-        if (mesh.ok && mesh.value.assetHandle === HANDLE_CUBE) meshHandleMatches += 1;
-        if (renderer.ok && renderer.value.materials.length === 1 && renderer.value.materials[0] === materialHandle) {
-          materialHandleMatches += 1;
-        }
-      }
+  const cubeQuery = world.query({ read: [Transform, MeshFilter, MeshRenderer] }).unwrap();
+  for (const row of cubeQuery) {
+    const position = row.get(Transform).pos;
+    positions.push(position[0] ?? 0, position[1] ?? 0, position[2] ?? 0);
+    cubeCount += 1;
+    const mesh = row.get(MeshFilter);
+    const renderer = row.get(MeshRenderer);
+    if (mesh.assetHandle === HANDLE_CUBE) meshHandleMatches += 1;
+    if (renderer.materials.length === 1 && renderer.materials[0] === materialHandle) {
+      materialHandleMatches += 1;
     }
-  });
-  let pointLightCount = 0;
-  queryRun(pointQuery, world, (bundle) => { pointLightCount += bundle.Entity.self.length; });
-  let spotLightCount = 0;
-  queryRun(spotQuery, world, (bundle) => { spotLightCount += bundle.Entity.self.length; });
+  }
+  const pointLightCount = [...world.query({ with: [PointLight] }).unwrap()].length;
+  const spotLightCount = [...world.query({ with: [SpotLight] }).unwrap()].length;
   return {
     cubeCount,
     pointLightCount,

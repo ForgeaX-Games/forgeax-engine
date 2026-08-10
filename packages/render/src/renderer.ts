@@ -22,10 +22,11 @@ import type { SkinError } from '@forgeax/engine-skinning';
 import type { ImageError, RenderPipelineAsset } from '@forgeax/engine-types';
 import type { EngineMetrics } from './engine-metrics';
 import type { RecoverError } from './errors/recover';
-import type { RenderError } from './errors/render';
+import type { ObservationUnavailableError, RenderError } from './errors/render';
 import type { RenderFeature, RenderFeatureDiagnostics } from './features/types';
 import type { PipelineError } from './pipeline-errors';
 import type { PostProcessError } from './post-process-errors';
+import type { FrameObservation, FrameObservationOptions } from './record/frame-observation';
 import type { RenderPipeline } from './render-pipeline';
 
 export type RenderResult<T, E> =
@@ -509,6 +510,13 @@ export interface Renderer {
    *   const r = renderer.draw([scene, editor], { cameraOwner: 0, resourceOwner: 1 });
    */
   draw(worlds: World[], options: DrawOwnerOptions): RenderResult<void, RhiError>;
+  /**
+   * Observe the producer-owned linear HDR attachment from the most recently
+   * completed frame. This never reads the final display canvas.
+   */
+  observeCurrentFrame(
+    options: FrameObservationOptions,
+  ): Promise<RenderResult<FrameObservation, ObservationUnavailableError>>;
   /**
    * Read the canvas's current pixel contents back into an RGBA Uint8Array.
    *

@@ -15,8 +15,18 @@ import {
   RenderGraphError,
   type Result,
 } from './errors.js';
+import {
+  type CurrentFrameObservationDescriptor,
+  type CurrentFrameObservationLease,
+  createCurrentFrameObservationLease,
+} from './observation.js';
 import type { PassEntry } from './pass-registry.js';
 import { PassRegistry } from './pass-registry.js';
+import {
+  type ColorDomainConnection,
+  type ColorValueDomain,
+  validateColorDomainConnection,
+} from './pipeline/color-value-domain.js';
 import type { ResourceEntry } from './resource-registry.js';
 import { ResourceRegistry } from './resource-registry.js';
 
@@ -57,6 +67,16 @@ export interface ColorTargetDescriptor {
   readonly sample?: number | undefined;
   readonly usage?: number | undefined;
   readonly viewFormats?: readonly string[] | undefined;
+  /** Semantic color domain. Omitted only for legacy graphs without domain connections. */
+  readonly domain?: ColorValueDomain | undefined;
+}
+
+export interface ResolvedColorTargetDescriptor {
+  readonly texture: Texture;
+  readonly format: string;
+  readonly size: { readonly width: number; readonly height: number };
+  readonly usage: number;
+  readonly sample: number;
 }
 
 export interface ResourceDescriptor {
@@ -86,6 +106,8 @@ export interface PassDescriptor<Ctx = unknown> {
   readonly execute?: ((ctx: Ctx) => void) | ((ctx: Ctx, resolve: ResolveContext) => void);
   readonly compute?: boolean;
   readonly storageBuffer?: boolean;
+  /** Explicit resource-to-resource color-domain edges validated at compile time. */
+  readonly colorConnections?: readonly ColorDomainConnection[] | undefined;
 }
 
 /** Optional nested observer for per-pass execution attribution. */
@@ -259,6 +281,22 @@ export class RenderGraph<Ctx = unknown> {
     return this.compiled?.resolvedTextures.get(`${name}::tex`);
   }
 
+  getColorTargetDescriptor(name: string): ResolvedColorTargetDescriptor | undefined {
+    const meta = this.resources.getColorTargetMeta(name);
+    const texture = this.compiled?.resolvedTextures.get(`${name}::tex`);
+    if (meta === undefined || texture === undefined) return undefined;
+    return {
+      texture: texture as unknown as Texture,
+      format: meta.format,
+      size: {
+        width: this.resolveWidth(meta.size),
+        height: this.resolveHeight(meta.size),
+      },
+      usage: meta.usage,
+      sample: meta.sample,
+    };
+  }
+
   /**
    * Declare a color target alias: both names share the same physical texture.
    * The source must already be registered via addColorTarget.
@@ -296,6 +334,17 @@ export class RenderGraph<Ctx = unknown> {
   }
 
   /**
+   * Validate a producer-scoped current-frame texture without exposing graph
+   * resource names through the observation lease.
+   */
+  createCurrentFrameObservationLease(
+    descriptor: CurrentFrameObservationDescriptor,
+    currentFrameId: number,
+  ): Result<CurrentFrameObservationLease, RenderGraphError> {
+    return createCurrentFrameObservationLease(descriptor, currentFrameId);
+  }
+
+  /**
    * Compile the graph into an internalized form.
    *
    * Phases (plan-strategy 3.1):
@@ -316,6 +365,9 @@ export class RenderGraph<Ctx = unknown> {
 
     const capErr = this.validateCaps(passList, caps);
     if (capErr) return capErr;
+
+    const colorDomainErr = this.validateColorDomains(passList);
+    if (colorDomainErr) return colorDomainErr;
 
     const unknownErr = this.validateNoUnknownResource(passList);
     if (unknownErr) return unknownErr;
@@ -665,6 +717,24 @@ export class RenderGraph<Ctx = unknown> {
             } satisfies CapMissingDetail,
           }),
         );
+      }
+    }
+    return null;
+  }
+
+  private validateColorDomains(
+    passList: readonly PassEntry<Ctx>[],
+  ): Result<never, RenderGraphError> | null {
+    for (const pass of passList) {
+      for (const connection of pass.descriptor.colorConnections ?? []) {
+        const source = this.resources.get(connection.source)?.colorTarget?.domain;
+        const destination = this.resources.get(connection.destination)?.colorTarget?.domain;
+        const validation = validateColorDomainConnection(
+          source,
+          destination,
+          connection.conversion,
+        );
+        if (!validation.ok) return err(validation.error);
       }
     }
     return null;

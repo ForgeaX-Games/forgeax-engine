@@ -4,81 +4,53 @@ import { mat4 } from '@forgeax/engine-math';
 import { Camera } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform, scenePlugin } from '@forgeax/engine-scene';
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, type Handle, type MaterialAsset } from '@forgeax/engine-types';
 import {
-  loadParticleEffect,
-  PARTICLE_SIMULATION_RESOURCE_KEY,
+  loadVfxGpuEffect,
   ParticleEffectPlayer,
-  particleEffectPackLoader,
-  particleSimulationPlugin,
-  ParticleSimulation,
-  createStockParticleCpuExecutorRegistry,
+  VFX_GPU_RUNTIME_RESOURCE_KEY,
+  type VfxGpuRuntime,
 } from '@forgeax/engine-vfx';
-import { particleRenderFeature, particleSceneSpaceResolver } from '@forgeax/engine-vfx-render';
+import { createVfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createBossScene, type BossSceneMaterials } from './scene';
 
+const EFFECT_GUID = '019e9c00-0000-7000-8000-000000000000';
 const BOSS_BODY_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000003';
 const BOSS_ACCENT_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000004';
 const GROUND_WARNING_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000005';
 const STRIKE_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000002';
 const MOUTH_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000001';
-const PREPARATION_WARMUP_MS = 1000;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('boss-lightning: missing canvas');
 
 const validationErrors: Array<{ code: string; hint: string; detail: unknown }> = [];
-const warmupErrors: Array<{ code: string; hint: string; detail: unknown }> = [];
-const readinessTransitions: Array<{ readiness: string; bucketCount: number }> = [];
 let cameraReady = false;
-let previousReadiness: string | undefined;
+let cameraEntity = 0 as EntityHandle;
 
-function observeReadiness(feature: ReturnType<typeof particleRenderFeature>) {
-  const diagnostics = feature.diagnostics();
-  if (diagnostics.readiness !== previousReadiness) {
-    previousReadiness = diagnostics.readiness;
-    readinessTransitions.push({
-      readiness: diagnostics.readiness,
-      bucketCount: diagnostics.bucketCount,
-    });
-  }
-  return diagnostics;
-}
-
-function hasNextFrameRecovery(detail: unknown): boolean {
-  return (
-    typeof detail === 'object' &&
-    detail !== null &&
-    'recovery' in detail &&
-    detail.recovery === 'next-frame'
-  );
-}
-
-function cameraSource(readCamera: () => EntityHandle) {
+function cameraSource() {
   return {
-    read(currentWorld: World) {
-      const camera = readCamera();
-      const transform = currentWorld.get(camera, Transform);
-      const cameraValue = currentWorld.get(camera, Camera);
-      if (!transform.ok || !cameraValue.ok) return undefined;
+    read(world: World) {
+      const transform = world.get(cameraEntity, Transform);
+      const camera = world.get(cameraEntity, Camera);
+      if (!transform.ok || !camera.ok) return undefined;
       cameraReady = true;
       const position = new Float32Array(transform.value.pos);
-      const viewProjection = mat4.computeViewProj(
-        mat4.create(),
-        position,
-        [0, 0.8, 0],
-        [0, 1, 0],
-        cameraValue.value.fov,
-        cameraValue.value.aspect,
-        cameraValue.value.near,
-        cameraValue.value.far,
-      );
       return {
         position,
         right: new Float32Array([1, 0, 0]),
         up: new Float32Array([0, 1, 0]),
-        viewProjection,
+        viewProjection: mat4.computeViewProj(
+          mat4.create(),
+          position,
+          [0, 0.8, 0],
+          [0, 1, 0],
+          camera.value.fov,
+          camera.value.aspect,
+          camera.value.near,
+          camera.value.far,
+        ),
       };
     },
   };
@@ -89,8 +61,7 @@ async function loadMaterial(
   assets: NonNullable<Awaited<ReturnType<typeof createRenderer>>['assets']>,
   guid: string,
 ): Promise<Handle<'MaterialAsset', 'shared'>> {
-  const parsed = assets.parseGuid(guid);
-  const loaded = await assets.loadByGuid<MaterialAsset>(parsed);
+  const loaded = await assets.loadByGuid<MaterialAsset>(assets.parseGuid(guid));
   if (!loaded.ok) throw new Error(`boss-lightning: material load failed ${guid}: ${loaded.error.hint}`);
   return world.allocSharedRef('MaterialAsset', loaded.value);
 }
@@ -98,41 +69,31 @@ async function loadMaterial(
 export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const falsifyMode = new URLSearchParams(globalThis.location.search).get('boss-lightning-falsify');
   const world = new World();
-  const chargeFeature = particleRenderFeature({
-    observations: {
-      read(currentWorld) {
-        const simulation = currentWorld.getResource<ParticleSimulation>(PARTICLE_SIMULATION_RESOURCE_KEY);
-        const observation = simulation?.read(playerEntity);
-        return observation === undefined ? [] : [observation];
-      },
-    },
-    camera: cameraSource(() => cameraEntity),
-  });
+  const host = createVfxRuntimeHost({ camera: cameraSource() });
   const renderer = await createRenderer(
     target,
-    { features: [chargeFeature] },
+    { features: falsifyMode === 'disable-vfx' ? [] : [host.feature] },
     forgeaxBundlerAdapter(),
   );
   const ready = await renderer.ready;
   if (!ready.ok) throw new Error(`boss-lightning: renderer not ready: ${ready.error.hint}`);
-  const warmupStartedAt = performance.now();
   renderer.onError(error => {
-    const detail = 'detail' in error ? error.detail : undefined;
-    const event = { code: error.code, hint: error.hint, detail };
-    if (
-      error.code === 'render-feature-preparation-failed' &&
-      performance.now() - warmupStartedAt <= PREPARATION_WARMUP_MS &&
-      hasNextFrameRecovery(detail)
-    ) {
-      warmupErrors.push(event);
-      return;
-    }
-    validationErrors.push(event);
+    if (validationErrors.length >= 32) return;
+    validationErrors.push({
+      code: error.code,
+      hint: error.hint,
+      detail: 'detail' in error ? error.detail : undefined,
+    });
   });
   const assets = renderer.assets;
   if (assets === null) throw new Error('boss-lightning: renderer has no AssetRegistry');
-  assets.loaders.registerPackLoader(particleEffectPackLoader);
-  assets.configurePackIndex('/pack-index.json');
+  if (import.meta.env.DEV) {
+    assets.configureRuntimeBinding(createStandaloneRuntimeAssetBinding('hello-boss-lightning'));
+  } else {
+    assets.configurePackIndex('/pack-index.json');
+  }
+  const attached = await host.attachWorld({ world, assets });
+  if (!attached.ok) throw new Error(`boss-lightning: VFX host attach failed: ${attached.error.hint}`);
 
   const [body, accent, mouth, groundWarning, strike] = await Promise.all([
     loadMaterial(world, assets, BOSS_BODY_MATERIAL_GUID),
@@ -143,14 +104,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   ]);
   const materials: BossSceneMaterials = { body, accent, mouth, groundWarning, strike };
   const scene = createBossScene(world, materials);
-  playerEntity = scene.player;
   cameraEntity = scene.camera;
-  const resolver = particleSceneSpaceResolver({
-    world,
-    resolveJoint: () => scene.mouthJoint,
-  });
-  const loaded = await loadParticleEffect(assets, '019e9c00-0000-7000-8000-000000000000');
-  if (!loaded.ok) throw new Error(`boss-lightning: effect load failed: ${loaded.error.hint}`);
+  const loaded = await loadVfxGpuEffect(assets, EFFECT_GUID);
+  if (!loaded.ok) throw new Error(`boss-lightning: GPU effect load failed: ${String(loaded.error)}`);
   const effect = world.allocSharedRef('ParticleEffectAsset', loaded.value);
   world.addComponent(scene.player, {
     component: ParticleEffectPlayer,
@@ -161,18 +117,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       timeScale: 1,
     },
   }).unwrap();
-  const appResult = await createApp({
-    renderer,
-    world,
-    plugins: [
-      scenePlugin(),
-      particleSimulationPlugin({
-        assets,
-        cpuExecutors: createStockParticleCpuExecutorRegistry(),
-        spaceResolver: resolver,
-      }),
-    ],
-  });
+  const appResult = await createApp({ renderer, world, plugins: [scenePlugin()] });
   if (!appResult.ok) throw new Error(`boss-lightning: app assembly failed: ${appResult.error.hint}`);
   appResult.value.start();
   Object.assign(globalThis, {
@@ -181,12 +126,18 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       world,
       player: scene.player,
       renderer,
-      feature: chargeFeature,
+      feature: host.feature,
+      effectAsset: loaded.value,
       scene,
-      status: () => observeReadiness(chargeFeature),
+      status: () => {
+        const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+        return {
+          queuedIntents: runtime.snapshot().length,
+          diagnostics: runtime.diagnostics(),
+          hasPlayer: runtime.hasPlayer(scene.player),
+        };
+      },
       validationErrors,
-      warmupErrors,
-      readinessTransitions,
       get cameraReady() {
         return cameraReady;
       },
@@ -194,8 +145,6 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 }
 
-let playerEntity = 0 as EntityHandle;
-let cameraEntity = 0 as EntityHandle;
 void bootstrap(canvas).catch((error: unknown) => {
   console.error('[boss-lightning] bootstrap failed', error);
 });

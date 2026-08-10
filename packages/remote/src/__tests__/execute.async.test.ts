@@ -2,7 +2,7 @@
 // TDD green-phase tests for async executeScript (w5):
 //   w1 — async read of world/renderer/assets state
 //   w2 — async write without sandbox interception (route B, no inspector-write-denied)
-//   w3 — _import('@forgeax/engine-ecs') + queryRun callback
+//   w3 — _import('@forgeax/engine-ecs') + World.query discovery
 //
 // Route B (D-1): host realm eval via new Function with injected _import.
 // Scripts that need dynamic import use the _import parameter:
@@ -18,7 +18,7 @@ import { executeScript } from '../execute';
 
 function makeMockWorld() {
   const state: unknown[] = [];
-  // Archetype shape must satisfy queryRun internals:
+  // Archetype shape retained for scripts that inspect the mock World internals:
   // - columns: Map<compId, Map<fieldName, { length: number }>>
   //   The Entity component (id=0) has field 'self' with Uint32Array length.
   function mkArchetype(id: number) {
@@ -207,8 +207,8 @@ describe('executeScript async - _import (w3)', () => {
     const ctx = makeCtx();
     const script = aw(
       [
-        'const { createQueryState, queryRun, Entity } = await _import("@forgeax/engine-ecs");',
-        'return typeof createQueryState === "function";',
+        'const { World } = await _import("@forgeax/engine-ecs");',
+        'return typeof World.prototype.query === "function";',
       ].join('\n'),
     );
     const result = await executeScript(script, ctx);
@@ -218,18 +218,14 @@ describe('executeScript async - _import (w3)', () => {
     }
   });
 
-  it('queryRun callback retrieves entity handles', async () => {
+  it('World.query and Entity are discoverable in eval', async () => {
     const ctx = makeCtx();
-    // Verify _import works + queryRun symbols are callable.
-    // The mock world may not satisfy full ECS column shape, so we only
-    // assert the eval infrastructure works: import resolves, queryRun
-    // returns void (does not crash), Entity is an object.
+    // Verify _import works and the final query surface is discoverable.
     const script = aw(
       [
-        'const { createQueryState, queryRun, Entity } = await _import("@forgeax/engine-ecs");',
+        'const { World, Entity } = await _import("@forgeax/engine-ecs");',
         'return {',
-        '  hasCreateQueryState: typeof createQueryState === "function",',
-        '  hasQueryRun: typeof queryRun === "function",',
+        '  hasWorldQuery: typeof World.prototype.query === "function",',
         '  hasEntity: typeof Entity === "object",',
         '};',
       ].join('\n'),
@@ -238,26 +234,21 @@ describe('executeScript async - _import (w3)', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       const v = result.value as {
-        hasCreateQueryState: boolean;
-        hasQueryRun: boolean;
+        hasWorldQuery: boolean;
         hasEntity: boolean;
       };
-      expect(v.hasCreateQueryState).toBe(true);
-      expect(v.hasQueryRun).toBe(true);
+      expect(v.hasWorldQuery).toBe(true);
       expect(v.hasEntity).toBe(true);
     }
   });
 
-  it('queryRun returns void (callback form, not chainable)', async () => {
-    // Verify queryRun type: it's a function that takes 3 args.
-    // The real callback signature is (state, world, callback) => void.
-    // We verify this by checking queryRun's length and return type.
+  it('World.query accepts one descriptor', async () => {
     const script = aw(
       [
-        'const { queryRun } = await _import("@forgeax/engine-ecs");',
+        'const { World } = await _import("@forgeax/engine-ecs");',
         'return {',
-        '  isFunction: typeof queryRun === "function",',
-        '  arity: queryRun.length,',
+        '  isFunction: typeof World.prototype.query === "function",',
+        '  arity: World.prototype.query.length,',
         '};',
       ].join('\n'),
     );
@@ -266,15 +257,14 @@ describe('executeScript async - _import (w3)', () => {
     if (result.ok) {
       const v = result.value as { isFunction: boolean; arity: number };
       expect(v.isFunction).toBe(true);
-      // queryRun takes 3 parameters: (state, world, callback)
-      expect(v.arity).toBe(3);
+      expect(v.arity).toBe(1);
     }
   });
 
-  it('bundle shape: Entity component has self field', async () => {
+  it('Entity component keeps its self field', async () => {
     // Verify Entity component is defined and has a 'self' field.
     // This confirms the component token exists in the imported module,
-    // which is what eval scripts use for queryRun.
+    // which remains useful to eval scripts for component access.
     const script = aw(
       [
         'const { Entity } = await _import("@forgeax/engine-ecs");',
@@ -294,14 +284,12 @@ describe('executeScript async - _import (w3)', () => {
     }
   });
 
-  it('zero new ECS API: only createQueryState/queryRun/Entity', async () => {
+  it('the final World query entry point is discoverable', async () => {
     const ctx = makeCtx();
     const script = aw(
       [
         'const ecs = await _import("@forgeax/engine-ecs");',
-        'return typeof ecs.createQueryState === "function" &&',
-        '       typeof ecs.queryRun === "function" &&',
-        '       typeof ecs.Entity === "object";',
+        'return typeof ecs.World.prototype.query === "function";',
       ].join('\n'),
     );
     const result = await executeScript(script, ctx);
@@ -353,7 +341,7 @@ describe('executeScript - un-wrapped top-level return / await', () => {
     const ctx = makeCtx();
     const script = [
       'const ecs = await _import("@forgeax/engine-ecs");',
-      'return typeof ecs.createQueryState;',
+      'return typeof ecs.World.prototype.query;',
     ].join('\n');
     const result = await executeScript(script, ctx);
     expect(result.ok).toBe(true);

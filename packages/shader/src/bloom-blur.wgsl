@@ -34,6 +34,7 @@
 //   @binding(2) params : BloomBlurParams (UBO) -- texelSize + radius (16B std140)
 //
 // Content marker (marker triage): bloomBlurDir
+// linearHdrColorDomain: bloom samples and writes linear HDR values only.
 
 #import forgeax_view::common::FullscreenOutput
 #import forgeax_view::common::fullscreen_triangle

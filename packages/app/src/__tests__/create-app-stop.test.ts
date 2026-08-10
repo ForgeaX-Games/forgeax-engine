@@ -246,7 +246,12 @@ describe('w4: AC-04 assemble form does not auto-destroy external backend', () =>
       setVolume: vi.fn(),
       setBusVolume: vi.fn(),
       setBusMute: vi.fn(),
-      getState: vi.fn(() => ({ contextState: 'running' as const, activeSourceCount: 0 })),
+      setListenerPose: vi.fn(),
+      getState: vi.fn(() => ({
+        contextState: 'running' as const,
+        activeSourceCount: 0,
+        lastError: null,
+      })),
       getActiveSourceCount: vi.fn(() => 0),
       destroy: destroySpy,
     };
@@ -278,8 +283,8 @@ describe('w4: AC-04 assemble form does not auto-destroy external backend', () =>
 // feat-20260619 M3: auto-register audioTickSystem (w13/w14 tests, w15 impl)
 // ---------------------------------------------------------------------------
 
-import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource } from '@forgeax/engine-audio';
-import { audioPlugin, WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource, audioPlugin } from '@forgeax/engine-audio';
+import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 
 function createTestBufferForApp(duration = 1, sampleRate = 48000): AudioBuffer {
   return {
@@ -487,7 +492,8 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         // Alloc a clip handle so clipResolver can resolve it.
         const clipHandle = world.sharedRefs.alloc('AudioClipAsset', {
           kind: 'audio',
-          buffer: createTestBufferForApp(),
+          sourceKey: 'stop-fixture-a',
+          bytes: new Uint8Array([1]),
         });
 
         // Spawn entity with playing=false. After frame 1, turn playing=true
@@ -570,7 +576,8 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         const world = new World();
         const clipHandle = world.sharedRefs.alloc('AudioClipAsset', {
           kind: 'audio',
-          buffer: createTestBufferForApp(),
+          sourceKey: 'stop-fixture-b',
+          bytes: new Uint8Array([2]),
         });
         world.spawn({
           // biome-ignore lint/suspicious/noExplicitAny: handle type is opaque branded via alloc
@@ -635,7 +642,8 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         const world = new World();
         const clipHandle = world.sharedRefs.alloc('AudioClipAsset', {
           kind: 'audio',
-          buffer: createTestBufferForApp(),
+          sourceKey: 'stop-fixture-c',
+          bytes: new Uint8Array([3]),
         });
 
         // Spawn entity with playing=false so first frame walks the

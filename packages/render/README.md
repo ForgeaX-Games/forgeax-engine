@@ -1,5 +1,47 @@
 # `@forgeax/engine-render`
 
+## Direct-light parity contract
+
+The direct-light proposition is: one public `DirectionalLight`/`PointLight`/
+`SpotLight` semantic snapshot must produce the same analytic result in URP and
+HDRP. The M4 authority is the revision-pinned
+[`three-r184-finite-range-authority.json`](../../apps/parity/color-lighting/cases/direct-light/calibration/three-r184-finite-range-authority.json).
+It is `ready` only when its Three revision, source hash, config, and expected
+samples are present. Missing authority or paired GPU captures is `blocked`; do
+not repair that state with a multiplier, a backend profile, or a demo asset.
+
+Run the focused contract checks with:
+
+```sh
+pnpm exec vitest run apps/parity/color-lighting/src/analytic/__tests__/three-r184-finite-range.test.ts
+pnpm exec vitest run apps/parity/color-lighting/src/integration/__tests__/light-snapshot.test.ts
+```
+
+The public mapping is deliberately small:
+
+| Fact | Contract | Owner or evidence |
+|:--|:--|:--|
+| World scale | `1` world unit is `1` meter | Light components and glTF bridge |
+| Exposure | `1` by default; applied after lighting at tone/output | Camera tone contract and paired capture |
+| Intensity | Directional uses lux; point and spot use candela | `DirectionalLight`, `PointLight`, `SpotLight` |
+| Color | Linear RGB; no hidden global multiplier | Light snapshot and buffer layout |
+| Range and decay | Positive range is meters; `Infinity` means no cutoff; runtime uses `e=2` | Three r184 authority |
+| Cone | KHR radians import to component degrees; snapshot stores `cosInner` and `cosOuter` | glTF bridge and extract |
+| Direction | KHR local `-Z` after world rotation; extract normalizes once; downstream shaders consume the result | Extract snapshot and URP/HDRP shaders |
+
+The runtime finite-range factor is the Three r184 squared window:
+`clamp(1 - (d / c)^4, 0, 1)^2`. The KHR
+[`three-r184-khr-calibration.json`](../../apps/parity/color-lighting/cases/direct-light/calibration/three-r184-khr-calibration.json)
+curve is an explicit unsquared import/reference curve only; it is not a
+substitute for the runtime authority. The squared and unsquared samples are
+kept separate so a replacement remains a visible falsification.
+
+For a blocked case, inspect the authority fixture first, then the normalized
+light snapshot and the independent Forge/Three captures. The parity report
+must retain `provenance`, `captures`, `raw hash`, `analyticMax`, `roiMax`, and
+`verdict` for each backend x pipeline x case. A same-canvas self-comparison or
+analytic-only green result is not direct-light parity evidence.
+
 ## Particle feature boundary
 
 Particle rendering is provided by
@@ -50,6 +92,53 @@ rebuilds those modules before the next prepared draw rather than relying on a on
 | Camera/light/mesh vocabulary, `Renderer`, render errors, documented pipeline operations | Backend selection, asset import, ECS scheduling, animation playback, optional text/tile/sprite authoring |
 
 The stable surface is [`src/index.ts`](src/index.ts). `RenderError` is closed and carries actionable detail. Runtime alone owns host assembly and its `EngineEnvironmentError` rejection contract; render's construction seam is internal to that dependency path.
+
+## Tone mapping output contract
+
+The public mode names are the same names used by the Three r184 oracle:
+
+| Mode | Public constant | Output behavior |
+|:--|:--|:--|
+| `linear` | `TONEMAP_LINEAR` | Exposure, then clamp to LDR |
+| `reinhard` | `TONEMAP_REINHARD` | Per-channel Reinhard |
+| `cineon` | `TONEMAP_CINEON` | Cineon filmic curve |
+| `aces-filmic` | `TONEMAP_ACES_FILMIC` | ACES filmic curve |
+| `agx` | `TONEMAP_AGX` | AgX curve |
+| `neutral` | `TONEMAP_NEUTRAL` | Khronos neutral curve |
+
+`TONEMAP_REINHARD_EXTENDED` is the existing ForgeaX luminance-domain curve. Its
+separate `reinhard-extended` name is intentional: it is not a second formula
+hidden behind the Three `reinhard` name.
+
+Tone-enabled cameras use one output contract:
+
+```text
+linearHdr -- exposure + named tone curve --> linearLdr --> displayEncoded
+```
+
+The final capture is the encoded surface result. A linear capture, when a
+parity adapter exposes one, remains a separate `linearHdr` or `linearLdr`
+sample and must not be compared as if it were the final display capture. The
+contract is available as `resolveToneOutputContract(camera.tonemap)` from the
+render package. The camera remains the runtime entry point:
+
+```ts
+import { Camera, TONEMAP_AGX, perspective } from '@forgeax/engine-render';
+
+world.spawn({
+  component: Camera,
+  data: {
+    ...perspective({ fov: Math.PI / 4, aspect: 1 }),
+    tonemap: TONEMAP_AGX,
+    exposure: 1,
+  },
+}).unwrap();
+```
+
+The built-in pass samples the HDR target and writes the LDR result through the
+registered `forgeax::tonemap` fullscreen shader. Shader source authority is
+[`packages/shader/src/tonemap.wgsl`](../shader/src/tonemap.wgsl); the render
+package does not duplicate those formulas.
 
 ## Optional CPU profiling
 
@@ -122,6 +211,18 @@ if (ready.ok) renderer.draw([world], { owner: 0 });
 | RenderGraph pass | One declared graph execution node contributed to the active pipeline | Graph host |
 | Material pass | One shader-facing pass in a `MaterialAsset` | Material asset |
 | Prepared graphics | Opaque pipeline, binding, vertex/index, and attachment references prepared by the host | Render host |
+| Prepared GPU work | Opaque persistent compute program, binding, buffer, dispatch, and indirect-draw references | Render host |
+
+### Prepared compute resources
+
+`RenderFeature` producers can prepare cooked compute pipelines, reflected name-based bindings,
+uniform/storage/indirect buffers, direct or indirect dispatches, and direct or indirect draws. The
+renderer retains device, encoder, graph, generation, and submission ownership. Persistent buffers
+retain their device identity across frames and are recreated after the feature-host generation
+advances; a storage buffer may also be consumed as renderer-declared vertex data.
+
+Compute and graphics passes use the same contribution graph. `after` names an earlier local pass,
+so a producer can express compute-to-draw ordering without receiving a raw RHI handle.
 
 Feature contexts never expose raw GPU graphics state, a complete pipeline
 context, submit authority, or a command encoder. They expose an immutable
@@ -145,16 +246,21 @@ opaque reference kinds. A producer requests preparation during `prepare`,
 retains only the returned references, and contributes declarative records. The
 render host owns generation checks, graph composition, recording, and submit.
 
+Persistent GPU work follows the same ownership rule. A feature may retain opaque bindings for an
+active producer; bindings retain their transitive program and buffers. Untouched resources are
+detached after a successful feature frame and destroyed after queue completion, never while an
+in-flight command can still reference them.
+
 ```ts
 import { ok } from '@forgeax/engine-types';
 import type { RenderFeature } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
-import type { ParticleRenderBatch } from '@forgeax/engine-vfx';
 
-const batch: ParticleRenderBatch = { batches: [] };
+type PreparedFrame = { readonly items: readonly unknown[] };
+const frame: PreparedFrame = { items: [] };
 const feature = {
   identity: 'package.prepared-feature',
-  extract: () => ok(batch),
+  extract: () => ok(frame),
   prepare: (_data, context) => {
     const pipeline = context.graphics.preparePipeline('package.pipeline', {
       shader: 'package.shader',
@@ -166,15 +272,14 @@ const feature = {
     return ok(undefined);
   },
   contribute: () => ok(undefined),
-} satisfies RenderFeature<ParticleRenderBatch>;
+} satisfies RenderFeature<PreparedFrame>;
 
 const renderer = await createRenderer(canvas, { features: [feature] });
 ```
 
-This recipe proves public type reachability and host preparation only. It does
-not add a visible particle draw path, simulation, VFX production adapter, or
-particle demo. `ParticleRenderBatch` remains a producer-owned VFX value; the
-render package accepts generic prepared graphics declarations.
+This recipe proves public type reachability and host preparation only. The
+render package accepts producer-owned frame data and generic prepared graphics
+declarations.
 
 ### Failure and recovery
 

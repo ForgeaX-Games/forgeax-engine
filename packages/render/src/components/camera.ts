@@ -28,6 +28,7 @@
 //          plan-tasks.json w9 acceptanceCheck.
 
 import { defineComponent, type ShapeOf } from '@forgeax/engine-ecs';
+import { TONEMAP_SHADER_MODE } from '@forgeax/engine-shader';
 
 /**
  * Projection discriminator literal union (AC-16 narrowing surface).
@@ -60,18 +61,19 @@ export function cameraProjectionFromF32(value: number): CameraProjection {
  *   `'none'`              - default; render-target stays `bgra8unorm-srgb`
  *                            and the geometry pass writes directly to the
  *                            swap-chain (zero-overhead opt-out path).
- *   `'reinhard-extended'` - Reinhard 2002 extended (luminance-domain) opt-in;
+ *   `'reinhard-extended'` - Forgeax Reinhard 2002 extended (luminance-domain)
+ *                            opt-in;
+ *   `'reinhard'`          - Three r184 per-channel Reinhard opt-in;
  *                            geometry pass routes through an `rgba16float`
  *                            HDR target and a fullscreen tonemap pass
  *                            (`packages/shader/src/tonemap.wgsl`).
  *
- * Future modes (`'aces'` / `'agx'`) are deferred per requirements section
- * OOS-04; the closed union shape leaves room for additive growth without
- * breaking the f32 enum encoding (D-1).
+ * The remaining members mirror the Three r184 public names and formulas.
  */
 export type Tonemap =
   | 'none'
   | 'reinhard-extended'
+  | 'reinhard'
   | 'linear'
   | 'cineon'
   | 'aces-filmic'
@@ -79,33 +81,35 @@ export type Tonemap =
   | 'neutral';
 
 /** Numeric encoding of the no-op tonemap path (schema value for `tonemap`). */
-export const TONEMAP_NONE = 0;
+export const TONEMAP_NONE = TONEMAP_SHADER_MODE.none;
 /**
  * Numeric encoding of the Reinhard-extended tonemap path
  * (schema value for `tonemap`).
  */
-export const TONEMAP_REINHARD_EXTENDED = 1;
+export const TONEMAP_REINHARD_EXTENDED = TONEMAP_SHADER_MODE.reinhardExtended;
+/** Numeric encoding of the Three r184 per-channel Reinhard path. */
+export const TONEMAP_REINHARD = TONEMAP_SHADER_MODE.reinhard;
 /** Numeric encoding of the linear (identity after exposure) tonemap path. */
-export const TONEMAP_LINEAR = 2;
+export const TONEMAP_LINEAR = TONEMAP_SHADER_MODE.linear;
 /** Numeric encoding of the Cineon (Kodak log) tonemap path. */
-export const TONEMAP_CINEON = 3;
+export const TONEMAP_CINEON = TONEMAP_SHADER_MODE.cineon;
 /** Numeric encoding of the ACES filmic (Narkowicz 2015) tonemap path. */
-export const TONEMAP_ACES_FILMIC = 4;
+export const TONEMAP_ACES_FILMIC = TONEMAP_SHADER_MODE.acesFilmic;
 /** Numeric encoding of the AgX (Troy Sobotka / Blender 3.x) tonemap path. */
-export const TONEMAP_AGX = 5;
+export const TONEMAP_AGX = TONEMAP_SHADER_MODE.agx;
 /** Numeric encoding of the Khronos PBR neutral tonemap path. */
-export const TONEMAP_NEUTRAL = 6;
+export const TONEMAP_NEUTRAL = TONEMAP_SHADER_MODE.neutral;
 
 /**
  * Map a `camera.tonemap` numeric value to the closed `Tonemap` string-literal
- * union. Values other than 0 / 1 fall back to `'none'` (charter proposition 4
- * no silent exception); shader-side `max(Y, 1e-5)` floor + opt-in default
- * keep this safe even when AI users pass a stale numeric.
+ * union. Unknown values fall back to `'none'` for defensive schema decoding.
  */
 export function tonemapFromF32(value: number): Tonemap {
   switch (value) {
     case TONEMAP_REINHARD_EXTENDED:
       return 'reinhard-extended';
+    case TONEMAP_REINHARD:
+      return 'reinhard';
     case TONEMAP_LINEAR:
       return 'linear';
     case TONEMAP_CINEON:
@@ -133,6 +137,8 @@ export function tonemapToU32(mode: Tonemap): number {
   switch (mode) {
     case 'reinhard-extended':
       return TONEMAP_REINHARD_EXTENDED;
+    case 'reinhard':
+      return TONEMAP_REINHARD;
     case 'linear':
       return TONEMAP_LINEAR;
     case 'cineon':
@@ -143,9 +149,10 @@ export function tonemapToU32(mode: Tonemap): number {
       return TONEMAP_AGX;
     case 'neutral':
       return TONEMAP_NEUTRAL;
-    default:
+    case 'none':
       return TONEMAP_NONE;
   }
+  throw new RangeError(`Invalid tonemap mode: ${String(mode)}.`);
 }
 
 /**
@@ -238,14 +245,12 @@ export function bloomEnabledFromF32(value: number): BloomEnabled {
  *                              @applicableWhen tonemap === 'reinhard-extended'
  *                              @minimum 0 (shader floor `max(Y, 1e-5)` keeps
  *                              the divisor finite even at 0; D-O3)
- *   clearColor = [0, 0, 0, 1]
+ *   clearColor = [0, 0, 0, 0]
  *                            - feat-20260709 M3 / D-3: clear-color is one
  *                              inline `array<f32,4>` column (collapsed from the
  *                              feat-20260608 clearR/G/B/A quartet). Defaults to
- *                              opaque black; the record stage reads it
- *                              first-archetype-hit and uses the same
- *                              `[0, 0, 0, 1]` fallback when no Camera entity
- *                              exists (AC-05).
+ *                              transparent black; an explicit alpha remains
+ *                              visible through this public field.
  *
  * MVP supports a single active camera (the first archetype iteration hit;
  * N>1 fires 'render-system-multi-camera' + uses first). Multi-viewport is
@@ -317,10 +322,9 @@ export const Camera = defineComponent('Camera', {
   // inline stride-N SoA column, read on the hot path as `col[i*N+a]` with zero
   // allocation, so collapsing four scalars into one column removes three field
   // names a reader must track without changing the storage layout or read
-  // pattern. Explicit layer-2 default `[0, 0, 0, 1]` (opaque black); the array
-  // layer-3 fallback is all-zero, so the non-zero alpha MUST be declared here
-  // (D-5).
-  clearColor: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
+  // pattern. The default `[0, 0, 0, 0]` is transparent black; explicit alpha
+  // stays visible through the same public array field.
+  clearColor: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 0]) },
   // feat-20260617-host-engine-contract-and-video-cutscene / M3 / D-4: the
   // aspect-sync sidecar on the createApp(canvas) path writes
   // canvas.width / canvas.height into `aspect` every frame when this flag is
@@ -438,7 +442,7 @@ function cameraPodFromDefaults(): CameraPod {
  * world.spawn({ component: Camera, data: camData }).unwrap();
  * ```
  *
- * @example With non-default clear color (default is `[0, 0, 0, 1]`).
+ * @example With non-default clear color (default is `[0, 0, 0, 0]`).
  * `clearColor` is an inline `array<f32,4>` field on `Camera`; spread the
  * factory then override:
  * ```ts

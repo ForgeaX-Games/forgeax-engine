@@ -4,6 +4,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { observeArtifactDownload } from './download-artifact-with-retry.mjs';
+import { isFingerprint } from './evidence/fingerprint.mjs';
 import { parseGhPages } from './parse-gh-pages.mjs';
 
 const maxDelaySeconds = 60;
@@ -86,11 +88,16 @@ async function measureExpandedBytes(artifacts) {
       async (artifact) => {
         const archive = join(root, `${artifact.id}.zip`);
         const destination = join(root, String(artifact.id));
-        const { stdout: bytes } = await execFileAsync(
-          'gh',
-          ['api', `repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`],
-          { encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 },
-        );
+        let bytes;
+        const observed = await observeArtifactDownload(async () => {
+          const response = await execFileAsync(
+            'gh',
+            ['api', `repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`],
+            { encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 },
+          );
+          bytes = response.stdout;
+          return bytes.byteLength;
+        });
         writeFileSync(archive, bytes);
         // Artifact ZIPs can contain duplicate paths when producers merge outputs.
         // Cost collection is a read-only measurement, so overwrite deterministically
@@ -102,7 +109,13 @@ async function measureExpandedBytes(artifacts) {
         const kibibytes = Number(diskUsage.trim().split(/\s+/)[0]);
         if (!Number.isFinite(kibibytes))
           fail('ci-cost-expanded-bytes-missing', { artifactId: artifact.id });
-        return [artifact.id, kibibytes * 1024];
+        return [
+          artifact.id,
+          {
+            ...observed,
+            expandedDiskBytes: kibibytes * 1024,
+          },
+        ];
       },
     );
     return Object.fromEntries(measurements);
@@ -124,7 +137,7 @@ function validateMerged(merged, contract, runId) {
     if (
       !expected.has(artifact?.class) ||
       typeof artifact.artifactId !== 'string' ||
-      !Number.isInteger(artifact.producerAttempt) ||
+      !Number.isInteger(artifact.producerRunAttempt) ||
       mapping.has(artifact.class)
     )
       fail('ci-provenance-merged-invalid', { artifact });
@@ -300,7 +313,7 @@ function classifyConsumer(consumer, contract, mapping, artifactsById, jobs) {
   const detail = {
     jobIdentity: consumer.jobIdentity,
     artifactIds: selected.map((artifact) => artifact.id),
-    producerAttempts: records.map((record) => record.producerAttempt),
+    producerAttempts: records.map((record) => record.producerRunAttempt),
     lastRequiredArtifactReadyAt: artifactReady.created_at,
     artifactProviderReadyAt: artifactProviderJob?.completed_at ?? null,
     lastPrerequisiteReadyAt: effectiveReadyAt,
@@ -321,6 +334,291 @@ function classifyConsumer(consumer, contract, mapping, artifactsById, jobs) {
       code: 'ci-cost-artifact-ready-to-job-start-budget-exceeded',
     };
   return { ...detail, status: 'pass' };
+}
+
+function familyBase(family, runId, runAttempt, producer, producerRunAttempt, inputFingerprint) {
+  return {
+    family,
+    identity: {
+      runId: Number.isInteger(runId) ? runId : null,
+      runAttempt: Number.isInteger(runAttempt) ? runAttempt : null,
+    },
+    producer: {
+      owner: producer ?? null,
+      producerRunAttempt: Number.isInteger(producerRunAttempt) ? producerRunAttempt : null,
+    },
+    consumer: {
+      owner: 'cost-reporter',
+      runAttempt: Number.isInteger(runAttempt) ? runAttempt : null,
+    },
+    inputFingerprint:
+      typeof inputFingerprint === 'string' && inputFingerprint.length > 0 ? inputFingerprint : null,
+  };
+}
+
+function invalidFamily(contract, base, code, expected, detail) {
+  const detailFields = contract.returnEvidence?.invalidEvidence?.codes?.[code];
+  if (!Array.isArray(detailFields)) fail('ci-cost-contract-invalid', { code });
+  const normalizedDetail = Object.fromEntries(
+    detailFields.map((field) => [field, detail?.[field] ?? null]),
+  );
+  return {
+    ...base,
+    status: 'invalidEvidence',
+    code,
+    expected,
+    hint: 'Check the selected producer or consumer owner facts, then collect a new evidence sample.',
+    detail: normalizedDetail,
+  };
+}
+
+function validUpload(value) {
+  return (
+    value &&
+    timestamp(value.startedAt) &&
+    timestamp(value.completedAt) &&
+    Number.isFinite(value.elapsedSeconds) &&
+    value.elapsedSeconds >= 0 &&
+    Number.isInteger(value.transferAttempt) &&
+    value.transferAttempt >= 1
+  );
+}
+
+function validDownload(value) {
+  return (
+    value &&
+    timestamp(value.startedAt) &&
+    timestamp(value.completedAt) &&
+    Number.isFinite(value.elapsedSeconds) &&
+    value.elapsedSeconds >= 0
+  );
+}
+
+function artifactFamilyResult({
+  contract,
+  family,
+  record,
+  artifact,
+  measurement,
+  runId,
+  runAttempt,
+  aggregateAttempt,
+  selectedAttempt,
+}) {
+  const declared = contract.artifactClasses[family];
+  const observedAttempt = record?.producerRunAttempt;
+  const base = familyBase(
+    family,
+    runId,
+    runAttempt,
+    record?.producer,
+    observedAttempt,
+    record?.inputFingerprint,
+  );
+  if (aggregateAttempt !== runAttempt)
+    return invalidFamily(
+      contract,
+      base,
+      'aggregate-attempt-mismatch',
+      { runAttempt },
+      { observedRunAttempt: aggregateAttempt },
+    );
+  if (!record || record.producer !== declared.producer)
+    return invalidFamily(
+      contract,
+      base,
+      'provenance-missing',
+      { producer: declared.producer },
+      { producer: record?.producer ?? null },
+    );
+  if (observedAttempt !== selectedAttempt)
+    return invalidFamily(
+      contract,
+      base,
+      'foreign-producer-attempt',
+      { producer: declared.producer, producerRunAttempt: selectedAttempt ?? null },
+      { observedProducerAttempt: observedAttempt ?? null },
+    );
+  if (typeof record.inputFingerprint !== 'string' || record.inputFingerprint.length === 0)
+    return invalidFamily(
+      contract,
+      base,
+      'fingerprint-missing',
+      { inputFingerprint: 'producer-owned per-family fingerprint' },
+      { producer: declared.producer },
+    );
+  if (!isFingerprint(record.inputFingerprint))
+    return invalidFamily(
+      contract,
+      base,
+      'fingerprint-mismatch',
+      { inputFingerprint: 'sha256:<64 lowercase hex digest>' },
+      { observedFingerprint: record.inputFingerprint },
+    );
+  if (!artifact || String(artifact.id) !== record.artifactId)
+    return invalidFamily(
+      contract,
+      base,
+      'artifact-identity-mismatch',
+      { artifactId: record.artifactId },
+      { observedArtifactId: artifact?.id ?? null },
+    );
+  if (Number(artifact.workflow_run?.id) !== runId)
+    return invalidFamily(
+      contract,
+      base,
+      'cross-run',
+      { runId },
+      { observedRunId: Number(artifact.workflow_run?.id) || null },
+    );
+  if (!Number.isFinite(artifact.size_in_bytes))
+    return invalidFamily(
+      contract,
+      base,
+      'owner-fact-missing',
+      { owner: 'github-artifact-rest', field: 'compressedArchiveBytes' },
+      { owner: 'github-artifact-rest', field: 'compressedArchiveBytes' },
+    );
+  if (!validUpload(record.upload))
+    return invalidFamily(
+      contract,
+      base,
+      'owner-fact-missing',
+      { owner: declared.producer, field: 'upload' },
+      { owner: declared.producer, field: 'upload' },
+    );
+  if (!measurement || !Number.isFinite(measurement.expandedDiskBytes))
+    return invalidFamily(
+      contract,
+      base,
+      'owner-fact-missing',
+      { owner: 'cost-reporter', field: 'expandedDiskBytes' },
+      { owner: 'cost-reporter', field: 'expandedDiskBytes' },
+    );
+  if (!validDownload(measurement.download))
+    return invalidFamily(
+      contract,
+      base,
+      'owner-fact-missing',
+      { owner: 'cost-reporter', field: 'download' },
+      { owner: 'cost-reporter', field: 'download' },
+    );
+  return {
+    ...base,
+    status: 'valid',
+    inputFingerprint: record.inputFingerprint,
+    artifactId: record.artifactId,
+    compressedArchiveBytes: artifact.size_in_bytes,
+    expandedDiskBytes: measurement.expandedDiskBytes,
+    upload: record.upload,
+    download: measurement.download,
+    physicalScope: 'artifact',
+  };
+}
+
+function cacheFamilyResult(contract, value, runId, runAttempt, aggregateAttempt) {
+  const declared = contract.returnEvidence.cacheFamilies[0];
+  const observedAttempt = value?.producer?.producerRunAttempt;
+  const base = familyBase(
+    declared.family,
+    runId,
+    runAttempt,
+    value?.producer?.owner,
+    observedAttempt,
+    value?.inputFingerprint,
+  );
+  if (aggregateAttempt !== runAttempt)
+    return invalidFamily(
+      contract,
+      base,
+      'aggregate-attempt-mismatch',
+      { runAttempt },
+      { observedRunAttempt: aggregateAttempt },
+    );
+  if (!value || typeof value !== 'object')
+    return invalidFamily(
+      contract,
+      base,
+      'owner-fact-missing',
+      { owner: declared.producer, field: 'cacheOwnerPacket' },
+      { owner: declared.producer, field: 'cacheOwnerPacket' },
+    );
+  if (Number(value.identity?.runId) !== runId)
+    return invalidFamily(
+      contract,
+      base,
+      'cross-run',
+      { runId },
+      { observedRunId: Number(value.identity?.runId) || null },
+    );
+  if (value.identity?.runAttempt !== runAttempt || observedAttempt !== runAttempt)
+    return invalidFamily(
+      contract,
+      base,
+      'aggregate-attempt-mismatch',
+      { runAttempt },
+      { observedRunAttempt: value.identity?.runAttempt ?? observedAttempt ?? null },
+    );
+  if (value.producer?.owner !== declared.producer || value.consumer?.owner !== declared.consumer)
+    return invalidFamily(
+      contract,
+      base,
+      'provenance-missing',
+      { producer: declared.producer, consumer: declared.consumer },
+      { producer: value.producer?.owner ?? null },
+    );
+  if (typeof value.inputFingerprint !== 'string' || value.inputFingerprint.length === 0)
+    return invalidFamily(
+      contract,
+      base,
+      'fingerprint-missing',
+      { inputFingerprint: 'producer-owned merged DDC fingerprint' },
+      { producer: declared.producer },
+    );
+  if (!isFingerprint(value.inputFingerprint))
+    return invalidFamily(
+      contract,
+      base,
+      'fingerprint-mismatch',
+      { inputFingerprint: 'sha256:<64 lowercase hex digest>' },
+      { observedFingerprint: value.inputFingerprint },
+    );
+  const requestedKey = typeof value.requestedKey === 'string' ? value.requestedKey : '';
+  const matchedKey = typeof value.matchedKey === 'string' ? value.matchedKey : '';
+  const cacheHit = typeof value.cacheHit === 'string' ? value.cacheHit : '';
+  const restoreValid =
+    Number.isFinite(value.restore?.elapsedSeconds) && value.restore.elapsedSeconds >= 0;
+  const exact = cacheHit === 'true' && requestedKey !== '' && matchedKey === requestedKey;
+  const prefix =
+    cacheHit === 'false' && requestedKey !== '' && matchedKey !== '' && matchedKey !== requestedKey;
+  const miss =
+    cacheHit === '' &&
+    requestedKey !== '' &&
+    matchedKey === '' &&
+    typeof value.save?.outcome === 'string' &&
+    value.save.outcome !== '' &&
+    value.save.outcome !== 'notApplicable' &&
+    Number.isFinite(value.save?.elapsedSeconds) &&
+    value.save.elapsedSeconds >= 0;
+  const hitSaveValid = (exact || prefix) && value.save?.outcome === 'notApplicable';
+  if (!restoreValid || (!miss && !hitSaveValid))
+    return invalidFamily(
+      contract,
+      base,
+      'cache-output-inconsistent',
+      { classification: 'exact-hit, prefix-hit, or observed miss+save' },
+      { cacheHit, requestedKey, matchedKey },
+    );
+  return {
+    ...base,
+    status: 'valid',
+    inputFingerprint: value.inputFingerprint,
+    classification: exact ? 'exact-hit' : prefix ? 'prefix-hit' : 'miss',
+    requestedKey,
+    matchedKey,
+    restore: value.restore,
+    save: value.save,
+  };
 }
 
 const inputPath = argument('--input');
@@ -353,9 +651,9 @@ const cacheTimingPath = argument('--cache-timing');
 const cacheAudit = cacheAuditPath
   ? readJson(resolve(cacheAuditPath), 'ci-cost-cache-audit-missing')
   : null;
-const cacheTiming = cacheTimingPath
-  ? readJson(resolve(cacheTimingPath), 'ci-cost-cache-timing-missing')
-  : null;
+const cacheTiming =
+  input?.cacheTiming ??
+  (cacheTimingPath ? readJson(resolve(cacheTimingPath), 'ci-cost-cache-timing-missing') : null);
 const contractPath = resolve(argument('--contract') ?? 'scripts/ci/build-artifact-contract.json');
 const contract = readJson(contractPath, 'ci-cost-contract-invalid');
 const sharedEvidencePath = argument('--shared-evidence');
@@ -383,11 +681,7 @@ const artifacts = input
 const jobs = input
   ? flattenPages(input.jobPages, 'jobs')
   : ghPages(`repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/jobs`, 'jobs');
-const artifactsById = new Map(
-  artifacts
-    .filter((artifact) => Number(artifact.workflow_run?.id ?? runId) === runId)
-    .map((artifact) => [String(artifact.id), artifact]),
-);
+const artifactsById = new Map(artifacts.map((artifact) => [String(artifact.id), artifact]));
 const sharedProduction = sharedProductionFacts(
   input?.sharedProduction ?? merged.sharedProduction,
   merged,
@@ -397,28 +691,72 @@ const sharedProduction = sharedProductionFacts(
   jobs,
 );
 const sharedEvidence = sharedEvidenceFacts(sharedEvidenceInput);
-const expanded =
-  input?.expandedBytesByArtifactId ??
-  (await measureExpandedBytes(
-    [...mapping.values()].map((record) => artifactsById.get(record.artifactId)),
-  ));
-const factsArtifacts = [...mapping.values()].map((record) => {
-  const artifact = artifactsById.get(record.artifactId);
-  const compressedBytes = artifact?.size_in_bytes;
-  if (!artifact || !Number.isFinite(compressedBytes) || !timestamp(artifact.created_at))
-    fail('ci-cost-artifact-fact-missing', { artifactId: record.artifactId, class: record.class });
-  const expandedBytes = expanded[record.artifactId];
-  if (!Number.isFinite(expandedBytes))
-    fail('ci-cost-expanded-bytes-missing', { artifactId: record.artifactId, class: record.class });
+const measurements = input
+  ? Object.fromEntries(
+      [...new Set([...mapping.values()].map((record) => record.artifactId))].map((artifactId) => [
+        artifactId,
+        {
+          expandedDiskBytes: input.expandedBytesByArtifactId?.[artifactId],
+          download: input.downloadObservationsByArtifactId?.[artifactId],
+        },
+      ]),
+    )
+  : await measureExpandedBytes(
+      [...mapping.values()]
+        .map((record) => artifactsById.get(record.artifactId))
+        .filter((artifact) => artifact && Number(artifact.workflow_run?.id) === runId),
+    );
+const artifactFamilyResults = Object.keys(contract.artifactClasses).map((family) => {
+  const record = mapping.get(family);
+  return artifactFamilyResult({
+    contract,
+    family,
+    record,
+    artifact: record ? artifactsById.get(record.artifactId) : null,
+    measurement: record ? measurements[record.artifactId] : null,
+    runId,
+    runAttempt,
+    aggregateAttempt: merged.aggregateAttempt,
+    selectedAttempt: record ? merged.producerAttempts[record.producer] : null,
+  });
+});
+const cacheFamily = cacheFamilyResult(
+  contract,
+  cacheTiming,
+  runId,
+  runAttempt,
+  merged.aggregateAttempt,
+);
+const validArtifactFamilies = artifactFamilyResults.filter(({ status }) => status === 'valid');
+const physicalArtifacts = [
+  ...new Map(
+    validArtifactFamilies.map((row) => [
+      row.artifactId,
+      {
+        artifactId: row.artifactId,
+        compressedArchiveBytes: row.compressedArchiveBytes,
+        expandedDiskBytes: row.expandedDiskBytes,
+        upload: row.upload,
+        download: row.download,
+      },
+    ]),
+  ).values(),
+];
+const factsArtifacts = validArtifactFamilies.map((row) => {
+  const record = mapping.get(row.family);
+  const artifact = artifactsById.get(row.artifactId);
   return {
     name: record.artifactName,
-    class: record.class,
-    id: record.artifactId,
-    producer: record.producer,
-    producerAttempt: record.producerAttempt,
-    compressedBytes,
-    expandedBytes,
-    readyAt: artifact.created_at,
+    class: row.family,
+    id: row.artifactId,
+    producer: row.producer.owner,
+    producerAttempt: row.producer.producerRunAttempt,
+    inputFingerprint: row.inputFingerprint,
+    compressedBytes: row.compressedArchiveBytes,
+    expandedBytes: row.expandedDiskBytes,
+    upload: row.upload,
+    download: row.download,
+    readyAt: timestamp(artifact?.created_at),
   };
 });
 const perConsumer = contract.timingRoster.map((consumer) =>
@@ -432,47 +770,58 @@ const ac06Status =
       : perConsumer.some((consumer) => consumer.status === 'fail')
         ? 'fail'
         : 'pass';
-const artifactBytes = new Map(
-  factsArtifacts.map((artifact) => [artifact.class, artifact.compressedBytes]),
-);
 function compressionRatio(compressedBytes, expandedBytes) {
   return expandedBytes === 0 ? null : Number((compressedBytes / expandedBytes).toFixed(6));
 }
 const artifactBytesByClass = Object.fromEntries(
-  factsArtifacts.map((artifact) => [
-    artifact.class,
+  validArtifactFamilies.map((row) => [
+    row.family,
     {
-      compressedBytes: artifact.compressedBytes,
-      expandedBytes: artifact.expandedBytes,
-      compressionRatio: compressionRatio(artifact.compressedBytes, artifact.expandedBytes),
+      compressedBytes: row.compressedArchiveBytes,
+      expandedBytes: row.expandedDiskBytes,
+      compressionRatio: compressionRatio(row.compressedArchiveBytes, row.expandedDiskBytes),
     },
   ]),
 );
-const totalCompressedBytes = factsArtifacts.reduce(
-  (sum, artifact) => sum + artifact.compressedBytes,
+const totalCompressedBytes = physicalArtifacts.reduce(
+  (sum, artifact) => sum + artifact.compressedArchiveBytes,
   0,
 );
-const totalExpandedBytes = factsArtifacts.reduce(
-  (sum, artifact) => sum + artifact.expandedBytes,
+const totalExpandedBytes = physicalArtifacts.reduce(
+  (sum, artifact) => sum + artifact.expandedDiskBytes,
   0,
 );
 const consumers = contract.timingRoster.map((consumer) => {
   const timing = perConsumer.find((entry) => entry.jobIdentity === consumer.jobIdentity);
   const classes = requiredArtifactClasses(contract, consumer);
+  const artifactIds = new Set(
+    validArtifactFamilies
+      .filter((row) => classes.includes(row.family))
+      .map((row) => row.artifactId),
+  );
   return {
     name: consumer.jobIdentity,
     downloadedBytes: consumer.notApplicable
       ? 0
-      : classes.reduce((sum, className) => sum + (artifactBytes.get(className) ?? 0), 0),
+      : physicalArtifacts
+          .filter((artifact) => artifactIds.has(artifact.artifactId))
+          .reduce((sum, artifact) => sum + artifact.compressedArchiveBytes, 0),
     startedAt: timingJobForIdentity(jobs, consumer.jobIdentity)?.started_at ?? null,
     lastRequiredArtifactReadyAt: timing?.lastRequiredArtifactReadyAt ?? null,
   };
 });
 const result = {
+  schemaVersion: contract.returnEvidence.schemaVersion,
   runId,
   runAttempt,
   producerAttempts: merged.producerAttempts,
   artifacts: factsArtifacts,
+  physicalArtifacts,
+  returnEvidence: {
+    schemaVersion: contract.returnEvidence.schemaVersion,
+    contractVersion: contract.version,
+    families: [cacheFamily, ...artifactFamilyResults],
+  },
   artifactBytes: {
     totalCompressedBytes,
     totalExpandedBytes,
@@ -480,16 +829,29 @@ const result = {
     byClass: artifactBytesByClass,
   },
   jobs: jobs.map((job) => ({
+    jobId: job.id ?? null,
     name: job.name,
+    runAttempt: job.run_attempt ?? null,
     startedAt: job.started_at ?? null,
     completedAt: job.completed_at ?? null,
     result: job.conclusion ?? null,
+    runnerId: job.runner_id ?? null,
+    runnerName: job.runner_name ?? null,
+    runnerGroupId: job.runner_group_id ?? null,
+    labels: Array.isArray(job.labels) ? job.labels : [],
   })),
   consumers,
-  cache: input?.cache ?? {
-    activeBytes: cacheAudit?.activeBytesAfter ?? null,
-    warmRestoreSeconds: cacheTiming?.warmRestoreSeconds ?? null,
-    entries: cacheAudit?.entries ?? [],
+  cache: {
+    ...(input?.cache ?? {}),
+    activeBytes: input?.cache?.activeBytes ?? cacheAudit?.activeBytesAfter ?? null,
+    warmRestoreSeconds:
+      cacheFamily.status === 'valid'
+        ? cacheFamily.restore.elapsedSeconds
+        : (input?.cache?.warmRestoreSeconds ?? null),
+    cacheHit: cacheTiming?.cacheHit ?? null,
+    inputFingerprint: cacheTiming?.inputFingerprint ?? null,
+    producerRunAttempt: cacheTiming?.producer?.producerRunAttempt ?? null,
+    entries: input?.cache?.entries ?? cacheAudit?.entries ?? [],
   },
   sharedProduction,
   wallClock: { requiredJobRoster: contract.requiredCIJobRoster },

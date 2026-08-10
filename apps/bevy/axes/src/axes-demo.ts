@@ -12,18 +12,15 @@
 //                                   Before it, DebugDraw had line/aabb/sphere/frustum only, so
 //                                   drawing an entity's local frame meant hand-assembling
 //                                   arrowhead segments + local-axis endpoints + the RGB convention.
-//   - ShowAxes query               -> queryRun over the tagged cubes, reading Transform.world
+//   - ShowAxes query               -> row iteration over tagged cubes, reading Transform.world
 //
 // drawAxesForEntities(world, debugDraw) is a pure function of (world, debugDraw) so the
 // headless smoke can call it and assert the exact gizmo vertices (axis endpoints match the
 // cubes' rotated local axes) — proving the gizmo reads local, not world, frames.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -99,12 +96,9 @@ export interface AxesDrawTarget {
  * emitted gizmo vertices.
  */
 export function drawAxesForEntities(world: World, debugDraw: AxesDrawTarget): void {
-  const state = createQueryState({ with: [Transform, ShowAxes, Entity] });
+  const query = world.query({ with: [Transform, ShowAxes] }).unwrap();
   const handles: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    for (let i = 0; i < selfCol.length; i++) handles.push((selfCol[i] ?? 0) as EntityHandle);
-  });
+  for (const row of query) handles.push(row.entity);
   for (const handle of handles) {
     const t = world.get(handle, Transform);
     if (!t.ok) continue;

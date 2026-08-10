@@ -44,7 +44,7 @@ import {
  * recordMainPass. Runs after the geometry pass when there are sprite / LDR
  * transparent entities and the split path is active (splitLdrSprite && a raw
  * unorm swap-chain view exists). Ends the geometry `pass`, opens a `spritePass`
- * on the non-sRGB blend view (loadOp=load), draws the sprite / sprite-lit
+ * on the resolved transparent-pass view (loadOp=load), draws the sprite / sprite-lit
  * entities (fold-instanced where possible) then the generic per-submesh
  * transparent PBR submeshes, and ends the sprite pass. Returns the updated
  * `geometryPassEnded` flag so the caller skips the unconditional pass.end().
@@ -65,25 +65,26 @@ export function recordSpritePass(
     pipelineState,
     encoder,
     msaaActive,
-    ldrSpriteUnormView,
+    ldrSpritePassView,
     ldrSpriteColorView,
     geometryDepthView,
     viewBindGroup,
     splitLdrSprite,
   } = c;
   let geometryPassEnded = false;
-  if (splitLdrSprite && ldrSpriteUnormView !== null) {
+  if (splitLdrSprite && ldrSpritePassView !== null) {
     pass.end();
     geometryPassEnded = true;
 
     // feat-20260604 M2 / w9 (F-1): under MSAA the sprite sub-pass writes the
-    // count=4 unorm view of the SAME multisample texture the geometry pass
-    // wrote (loadOp=load preserves geometry under sprites) and resolves the
-    // combined result to the single-sample swap-chain unorm view at this
-    // (last) pass end. Depth reuses the shared count=4 multisample depth
-    // (depthLoadOp=load preserves sprite-vs-mesh occlusion). The single-
+    // count=4 transparent-pass view of the SAME multisample texture the
+    // geometry pass wrote (loadOp=load preserves geometry under sprites) and
+    // resolves the combined result to the single-sample transparent-pass
+    // view at this (last) pass end. Depth reuses the shared count=4
+    // multisample depth (depthLoadOp=load preserves sprite-vs-mesh occlusion).
+    // The single-
     // sample path is byte-for-byte unchanged (writes the swap-chain view).
-    const spriteColorView = msaaActive ? ldrSpriteColorView : ldrSpriteUnormView;
+    const spriteColorView = msaaActive ? ldrSpriteColorView : ldrSpritePassView;
     // sprite-split sub-pass: forward shape with both color and depth loaded
     // (preserves prior content from the main forward pass under the sprites).
     // Stencil ops auto-emitted by the helper because depthFormat carries
@@ -91,14 +92,11 @@ export function recordSpritePass(
     const spritePass: RhiRenderPassEncoder = encoder.beginRenderPass(
       buildBeginRenderPassDescriptor(
         {
-          // bug-20260616: SSOT for the sprite-pass color format is the
-          // runtime swap-chain storage format. The sprite PSO target was
-          // pre-feat wired to `swapChainFormats.storage` (raw, non-srgb)
-          // and this pass writes through the raw view of the same texture
-          // (`ldrSpriteUnormView`), so encoder + PSO must agree. Hard-coding
-          // `'bgra8unorm'` here broke Channel 3 / dawn-node where the
-          // storage format is `rgba8unorm` (Attachment state mismatch fired
-          // every frame: PSO target rgba8unorm-srgb vs encoder bgra8unorm).
+          // SSOT for the sprite-pass color format is the resolved transparent
+          // attachment. Native linear-LDR frames use graph-owned `ldrColor`
+          // (possibly rgba16float); swap-chain fallback frames use their raw
+          // storage format. WebGPU requires the attachment format and PSO
+          // target to match, so both are resolved by the same helper.
           colorFormats: [transparentPassColorFormat(c) as unknown as GPUTextureFormat],
           depthFormat: 'depth24plus-stencil8',
           sampleCount: msaaActive ? 4 : 1,
@@ -106,7 +104,7 @@ export function recordSpritePass(
         {
           colorViews: [spriteColorView],
           depthView: geometryDepthView,
-          ...(msaaActive ? { resolveTargets: [ldrSpriteUnormView] } : {}),
+          ...(msaaActive ? { resolveTargets: [ldrSpritePassView] } : {}),
         },
         'forward',
         { colorLoadOp: 'load', depthLoadOp: 'load' },
@@ -172,19 +170,12 @@ export function recordSpritePass(
         undefined,
         msaaActive ? 4 : 1,
         // feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up:
-        // the LDR sprite split sub-pass writes through the storage
-        // (non-sRGB) view of the swap-chain texture (`ldrSpriteUnormView`;
-        // see beginRenderPass colorFormats=`pipelineState.format` above).
-        // Pre-w14 the dedicated `forgeax::default-sprite` SPEC_CONST
-        // entries baked this non-sRGB mapping into SPRITE_ATTACHMENTS_*
-        // (deleted); the generic lazy build path that replaced them
-        // defaults to `colorAttachmentFormat` (the sRGB VIEW format used
-        // by the geometry pass), so without this override the PSO builds
-        // with `rgba8unorm-srgb` while the encoder declares `rgba8unorm`
-        // — WebGPU rejects SetPipeline with "Attachment state ... not
-        // compatible". Threading `pipelineState.format` (storage,
-        // non-sRGB) here keeps PSO + encoder in sync (bug-20260527-
-        // sprite-pipeline-bgra8unorm-srgb-not-blendable parity).
+        // the split sub-pass PSO must use the same attachment format as the
+        // encoder. Native linear-LDR frames resolve graph-owned `ldrColor`
+        // (possibly rgba16float); swap-chain fallback frames resolve their raw
+        // storage format. `transparentPassColorFormat` is the single owner for
+        // this format so lazy PSO construction cannot fall back to the geometry
+        // sRGB view.
         transparentPassColorFormat(c, pipelineState) as unknown as GPUTextureFormat,
       ) ?? null;
     const spritePH_withRegion =
@@ -263,7 +254,8 @@ export function recordSpritePass(
     // glTF alphaMode=BLEND (the crosswalk decal submesh AND the 4.3-blending
     // window quad) — is drawn here with its real shader + per-submesh
     // geometry, reusing the geometry pass's PBR machinery but rendering into
-    // the non-sRGB blend view (colorFormatOverride = pipelineState.format).
+    // the resolved transparent attachment (colorFormatOverride =
+    // transparentPassColorFormat(c)).
     // Opaque submeshes of a mixed mesh were already drawn in the geometry pass
     // (per-submesh skip there).
     //
@@ -290,8 +282,8 @@ export function recordSpritePass(
  * blend sub-pass, extracted verbatim from the sprite split pass. Every
  * non-sprite transparent material (built-in PBR, single- or multi-submesh, incl.
  * glTF alphaMode=BLEND) draws here with its real shader + per-submesh geometry,
- * reusing the geometry pass's PBR machinery but rendering into the non-sRGB
- * blend view (colorFormatOverride = pipelineState.format). Opaque submeshes of a
+ * reusing the geometry pass's PBR machinery but rendering into the resolved
+ * transparent attachment (colorFormatOverride = transparentPassColorFormat(c)). Opaque submeshes of a
  * mixed mesh were already drawn in the geometry pass (per-submesh skip there).
  * Sprites are handled by the sprite loop; skinned / instanced transparent
  * submeshes are OOS here and fall through.
@@ -999,7 +991,8 @@ function transparentPassColorFormat(
   c: _InternalRenderPipelineContext,
   pipelineState: _InternalRenderPipelineContext['pipelineState'] = c.pipelineState,
 ): string {
-  return c.runtime.device.caps.storageBuffer
-    ? pipelineState.format
-    : pipelineState.colorAttachmentFormat;
+  if (!c.runtime.device.caps.storageBuffer) return pipelineState.colorAttachmentFormat;
+  return (
+    c.frameState.perFrameGraph?.getColorTargetDescriptor('ldrColor')?.format ?? pipelineState.format
+  );
 }

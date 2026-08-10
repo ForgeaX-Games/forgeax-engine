@@ -13,7 +13,7 @@
 // Anchors: plan-tasks m0-t9 / m0-t10; plan-strategy §D-1 per-cell entity TRS.
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import {
   encodeSortScope,
@@ -22,6 +22,7 @@ import {
   tilemapChunkExtractSystem,
 } from '@forgeax/engine-render/authoring';
 import {
+  Layer,
   MeshFilter,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
@@ -126,33 +127,9 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     tilemapChunkExtractSystem(world, 0);
     let px = Number.NaN;
     let py = Number.NaN;
-    for (const arch of world.inspect().archetypes) {
-      if (!arch.componentNames.includes('Transform')) continue;
-      if (!arch.componentNames.includes('MeshFilter')) continue;
-      if (!arch.componentNames.includes('Layer')) continue;
-      // Found derived archetype; read first entity's Transform via inspect.
-      // Use world.get on first entity in this archetype via the entity column.
-      // (M0 baseline: there is exactly one derived entity here.)
-      const derived = (
-        world as unknown as {
-          _getGraph(): {
-            archetypes: Array<{
-              key: string;
-              columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
-            }>;
-          };
-        }
-      )
-        ._getGraph()
-        .archetypes.find((a) => a.key === arch.key);
-      if (!derived) continue;
-      const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as
-        | Uint32Array
-        | undefined;
-      if (!entityCol) continue;
-      const firstEntity = entityCol[0];
-      if (firstEntity === undefined) continue;
-      const t = world.get(firstEntity as never, Transform).unwrap();
+    const query = world.query({ read: [Transform], with: [MeshFilter, Layer] }).unwrap();
+    for (const row of query) {
+      const t = row.get(Transform);
       px = t.pos[0] ?? Number.NaN;
       py = t.pos[1] ?? Number.NaN;
     }
@@ -175,29 +152,9 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     let sy = Number.NaN;
     let qz = Number.NaN;
     let qw = Number.NaN;
-    for (const arch of world.inspect().archetypes) {
-      if (!arch.componentNames.includes('Transform')) continue;
-      if (!arch.componentNames.includes('MeshFilter')) continue;
-      if (!arch.componentNames.includes('Layer')) continue;
-      const derived = (
-        world as unknown as {
-          _getGraph(): {
-            archetypes: Array<{
-              key: string;
-              columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
-            }>;
-          };
-        }
-      )
-        ._getGraph()
-        .archetypes.find((a) => a.key === arch.key);
-      if (!derived) continue;
-      const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as
-        | Uint32Array
-        | undefined;
-      const firstEntity = entityCol?.[0];
-      if (firstEntity === undefined) continue;
-      const t = world.get(firstEntity as never, Transform).unwrap();
+    const query = world.query({ read: [Transform], with: [MeshFilter, Layer] }).unwrap();
+    for (const row of query) {
+      const t = row.get(Transform);
       sx = t.scale[0] ?? Number.NaN;
       sy = t.scale[1] ?? Number.NaN;
       qz = t.quat[2] ?? Number.NaN;
@@ -214,28 +171,9 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     tiles[0] = 1;
     const { world } = makeSetup({ cols: 1, rows: 1, tiles });
     tilemapChunkExtractSystem(world, 0);
-    for (const arch of world.inspect().archetypes) {
-      if (!arch.componentNames.includes('MeshFilter')) continue;
-      if (!arch.componentNames.includes('Layer')) continue;
-      const derived = (
-        world as unknown as {
-          _getGraph(): {
-            archetypes: Array<{
-              key: string;
-              columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
-            }>;
-          };
-        }
-      )
-        ._getGraph()
-        .archetypes.find((a) => a.key === arch.key);
-      if (!derived) continue;
-      const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as
-        | Uint32Array
-        | undefined;
-      const firstEntity = entityCol?.[0];
-      if (firstEntity === undefined) continue;
-      const mf = world.get(firstEntity as never, MeshFilter).unwrap();
+    const query = world.query({ read: [MeshFilter], with: [Layer] }).unwrap();
+    for (const row of query) {
+      const mf = row.get(MeshFilter);
       // Compare raw u32 (unwrap brand via numeric cast).
       expect(mf.assetHandle as unknown as number).toBe(HANDLE_QUAD as unknown as number);
     }

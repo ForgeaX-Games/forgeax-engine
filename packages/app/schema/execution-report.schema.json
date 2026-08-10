@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/execution-report.schema.json",
+  "title": "ForgeaX ExecutionReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "requestedTier",
+    "actualTier",
+    "selectionReason",
+    "sharedEvidencePassed",
+    "capabilities",
+    "engine",
+    "world",
+    "kernelDispatch",
+    "performance",
+    "audio",
+    "fault"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "requestedTier": { "enum": ["auto", "main-serial", "engine-worker", "shared"] },
+    "actualTier": { "enum": [null, "main-serial", "engine-worker", "shared"] },
+    "selectionReason": {
+      "enum": [null, "explicit-request", "auto-shared", "auto-engine-worker", "auto-main-serial"]
+    },
+    "sharedEvidencePassed": { "type": "boolean" },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worker",
+        "offscreenCanvas",
+        "workerAnimationFrame",
+        "workerWebGpu",
+        "crossOriginIsolated",
+        "sharedArrayBuffer",
+        "atomicsWait"
+      ],
+      "properties": {
+        "worker": { "$ref": "#/$defs/capability" },
+        "offscreenCanvas": { "$ref": "#/$defs/capability" },
+        "workerAnimationFrame": { "$ref": "#/$defs/capability" },
+        "workerWebGpu": { "$ref": "#/$defs/capability" },
+        "crossOriginIsolated": { "$ref": "#/$defs/capability" },
+        "sharedArrayBuffer": { "$ref": "#/$defs/capability" },
+        "atomicsWait": { "$ref": "#/$defs/capability" }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["realm", "health"],
+      "properties": {
+        "realm": { "enum": ["host", "worker"] },
+        "health": { "enum": ["idle", "starting", "running", "stopped", "faulted"] }
+      }
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "health", "partialWrite", "retryable"],
+      "properties": {
+        "identity": { "type": ["string", "null"] },
+        "health": { "enum": ["healthy", "poisoned"] },
+        "partialWrite": { "type": "boolean" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "kernelDispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "usedShared", "reason", "dispatched", "completed"],
+      "properties": {
+        "eligible": { "type": "boolean" },
+        "usedShared": { "type": "boolean" },
+        "reason": {
+          "enum": ["no-eligible-kernel", "zero-work", "small-span", "forced-inline", "shared", "poisoned"]
+        },
+        "dispatched": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostFrameMs", "engineUpdateMs", "kernelWaitMs", "hostAudioMs"],
+      "properties": {
+        "hostFrameMs": { "$ref": "#/$defs/nullableMeasurement" },
+        "engineUpdateMs": { "$ref": "#/$defs/nullableMeasurement" },
+        "kernelWaitMs": { "$ref": "#/$defs/nullableMeasurement" },
+        "hostAudioMs": { "$ref": "#/$defs/nullableMeasurement" }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "contextState", "activeSourceCount", "lastError"],
+      "properties": {
+        "owner": { "const": "host" },
+        "contextState": { "enum": ["running", "suspended", "closed"] },
+        "activeSourceCount": { "type": "integer", "minimum": 0 },
+        "lastError": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "expected", "hint", "detail"],
+              "properties": {
+                "code": { "type": "string", "minLength": 1 },
+                "expected": { "type": "string", "minLength": 1 },
+                "hint": { "type": "string", "minLength": 1 },
+                "detail": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fault": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "code", "expected", "hint", "detail", "partialWrite", "retryable"],
+          "properties": {
+            "source": { "enum": ["bootstrap", "handshake", "runtime", "kernel", "world", "rebuild"] },
+            "code": { "type": "string", "minLength": 1 },
+            "expected": { "type": "string", "minLength": 1 },
+            "hint": { "type": "string", "minLength": 1 },
+            "detail": {},
+            "partialWrite": { "type": "boolean" },
+            "retryable": { "type": "boolean" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "reason"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "p50", "p95", "p99", "jitter"],
+      "properties": {
+        "samples": { "type": "integer", "minimum": 1 },
+        "p50": { "type": "number", "minimum": 0 },
+        "p95": { "type": "number", "minimum": 0 },
+        "p99": { "type": "number", "minimum": 0 },
+        "jitter": { "type": "number", "minimum": 0 }
+      }
+    },
+    "nullableMeasurement": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/measurement" }]
+    }
+  }
+}

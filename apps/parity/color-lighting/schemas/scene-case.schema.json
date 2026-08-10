@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/color-lighting/scene-case.schema.json",
+  "title": "Color lighting parity scene case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["caseId", "required", "colorDomain", "scene", "budget"],
+  "properties": {
+    "caseId": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "required": { "type": "boolean" },
+    "colorDomain": { "enum": ["linearHdr", "linearLdr", "displayEncoded"] },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "engineId"],
+      "properties": {
+        "identity": { "enum": ["urp", "hdrp"] },
+        "engineId": { "enum": ["forgeax::urp", "forgeax::hdrp"] }
+      }
+    },
+    "light": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorityId", "kind", "color", "intensity"],
+      "properties": {
+        "authorityId": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["directional", "point", "spot"] },
+        "color": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "intensity": { "type": "number", "minimum": 0 },
+        "range": { "type": "number", "exclusiveMinimum": 0 },
+        "direction": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "number" }
+        },
+        "innerConeDeg": { "type": "number", "minimum": 0, "maximum": 90 },
+        "outerConeDeg": { "type": "number", "exclusiveMinimum": 0, "maximum": 90 }
+      }
+    },
+    "import": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "intensityScale", "rangeZero", "cone"],
+      "properties": {
+        "source": { "enum": ["none", "KHR_lights_punctual"] },
+        "intensityScale": { "type": "number", "minimum": 0 },
+        "rangeZero": { "enum": ["no-cutoff"] },
+        "cone": { "enum": ["radians-to-degrees"] }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primaryMetric"],
+      "properties": {
+        "primaryMetric": {
+          "enum": ["rgba", "alpha", "occupancy"],
+          "default": "rgba"
+        }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "background"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "background": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analyticMax", "roiMax", "byteMax"],
+      "properties": {
+        "analyticMax": { "type": "number", "minimum": 0 },
+        "roiMax": { "type": "number", "minimum": 0 },
+        "byteMax": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

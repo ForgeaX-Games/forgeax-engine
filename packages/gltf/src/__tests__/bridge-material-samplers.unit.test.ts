@@ -4,6 +4,30 @@ import { toMaterialAsset } from '../bridge.js';
 import type { GltfMaterialIr } from '../parse-gltf.js';
 
 describe('glTF material sampler mapping', () => {
+  it('maps BLEND to straight-alpha state without depth writes', () => {
+    const asset = toMaterialAsset({
+      baseColorFactor: [1, 1, 1, 0.4],
+      metallicFactor: 0,
+      roughnessFactor: 1,
+      alphaMode: 'BLEND',
+    } as unknown as GltfMaterialIr);
+    const state = asset.passes?.[0]?.renderState as {
+      blend?: {
+        color?: { srcFactor?: string; dstFactor?: string };
+        alpha?: { srcFactor?: string; dstFactor?: string };
+      };
+      depthWriteEnabled?: boolean;
+      queue?: number;
+    };
+
+    expect(state.queue).toBe(3000);
+    expect(state.depthWriteEnabled).toBe(false);
+    expect(state.blend).toMatchObject({
+      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    });
+  });
+
   it('maps each texture slot to its own sampler GUID', () => {
     const asset = toMaterialAsset(
       {

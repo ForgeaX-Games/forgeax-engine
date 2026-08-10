@@ -28,25 +28,10 @@ import {
   ASSET_REGISTRY_RESOURCE_KEY,
   AUDIO_ENGINE_RESOURCE_KEY,
   type AudioBackend,
-  AudioListener,
 } from '@forgeax/engine-audio';
-import {
-  createWebAudioBackend,
-  syncListenerFromWorldMatrix,
-  WebAudioEngine,
-} from '@forgeax/engine-audio-webaudio';
+import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import {
-  createQueryState,
-  Entity,
-  type EntityHandle,
-  err,
-  ok,
-  queryRun,
-  type Result,
-  Update,
-  World,
-} from '@forgeax/engine-ecs';
+import { err, ok, type Result, Update, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import type { Plugin, PluginSource } from '@forgeax/engine-plugin';
@@ -60,10 +45,20 @@ import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi
 import * as engineRuntimeModule from '@forgeax/engine-runtime';
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
-import { PROPAGATE_TRANSFORMS_SYSTEM, scenePlugin, Transform } from '@forgeax/engine-scene';
+import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { AppError } from './errors';
+import {
+  createExecutionReport,
+  type ExecutionControl,
+  probeExecutionCapabilities,
+  runBootstrapEntry,
+  selectExecutionTier,
+  unavailableExecutionCapabilities,
+} from './execution';
+import { createLocalExecutionControl } from './execution/control';
+import { createWorkerExecutionApp } from './execution/host-controller';
 import { makeCleanupFunnel } from './internal/cleanup';
 import { projectComponentIntrospection } from './internal/component-introspection';
 import { ErrorFanoutRegistry } from './internal/error-fanout';
@@ -81,6 +76,7 @@ import type {
   BundlerOptions,
   CanvasAppError,
   CreateAppOptions,
+  ExecutionApp,
 } from './types';
 
 function makeAppError<C extends AppErrorCode>(
@@ -115,6 +111,11 @@ function makeAppError<C extends AppErrorCode>(
  */
 export function createApp(
   canvas: HTMLCanvasElement,
+  opts: CreateAppOptions & { readonly execution: NonNullable<CreateAppOptions['execution']> },
+  bundler?: BundlerOptions,
+): Promise<Result<ExecutionApp, CanvasAppError>>;
+export function createApp(
+  canvas: HTMLCanvasElement,
   opts?: CreateAppOptions,
   bundler?: BundlerOptions,
 ): Promise<Result<App, CanvasAppError>>;
@@ -136,7 +137,7 @@ export function createApp(
   arg: HTMLCanvasElement | AppAssembleArgs,
   opts?: CreateAppOptions,
   bundler?: BundlerOptions,
-): Promise<Result<App, CanvasAppError>> {
+): Promise<Result<App | ExecutionApp, CanvasAppError>> {
   if ('tagName' in arg) {
     return createAppFromCanvas(arg, opts, bundler);
   }
@@ -153,7 +154,7 @@ async function createAppFromCanvas(
   // importTransport to AssetRegistry (AC-05 / R-4: keeps build-tool
   // injection out of RendererOptions / CreateAppOptions).
   bundler: BundlerOptions | undefined,
-): Promise<Result<App, CanvasAppError>> {
+): Promise<Result<App | ExecutionApp, CanvasAppError>> {
   // M4: 4-step thin wrapper per plan-strategy D-5.
   //
   // Step 1: canvas-detached fail-fast guard (AC-08). isConnected returns
@@ -177,6 +178,32 @@ async function createAppFromCanvas(
   // configures its swap chain; the same helper runs before each frame so a CSS
   // resize remains visible to both rendering and camera policy.
   syncCanvasDrawingBuffer(canvas);
+
+  let executionContext:
+    | {
+        readonly capabilities: import('./execution').ExecutionCapabilities;
+        readonly selection: import('./execution').ExecutionSelection;
+      }
+    | undefined;
+  if (opts?.execution !== undefined) {
+    const capabilities = await probeExecutionCapabilities(canvas);
+    const selected = selectExecutionTier({
+      requestedTier: opts.execution.tier ?? 'auto',
+      capabilities,
+      sharedEvidencePassed: true,
+    });
+    if (!selected.ok) return err(selected.error);
+    executionContext = { capabilities, selection: selected.value };
+    if (selected.value.actualTier !== 'main-serial') {
+      return createWorkerExecutionApp({
+        canvas,
+        appOptions: opts,
+        ...(bundler !== undefined ? { bundler } : {}),
+        capabilities,
+        selection: selected.value,
+      });
+    }
+  }
 
   // Step 2: createRenderer try/catch -> Result.err(EngineEnvironmentError)
   //   (AC-01 / research section 2.2). createRenderer throws at
@@ -567,19 +594,67 @@ async function createAppFromCanvas(
   if (!pluginResult.ok) {
     return err(pluginResult.error);
   }
+  if (opts?.execution !== undefined) {
+    const bootstrapped = await runBootstrapEntry(
+      new URL(opts.execution.bootstrap, globalThis.location?.href).href,
+      world,
+    );
+    if (!bootstrapped.ok) return err(bootstrapped.error);
+  }
+
+  const executionControl = createLocalExecutionControl(
+    executionContext === undefined
+      ? {
+          ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
+          actualTier: 'main-serial',
+          selectionReason: 'explicit-request',
+          sharedEvidencePassed: true,
+          engine: { realm: 'host', health: 'idle' },
+          world: {
+            identity: world.identity,
+            health: world.execution.health,
+            partialWrite: false,
+            retryable: true,
+          },
+        }
+      : {
+          ...createExecutionReport(
+            opts?.execution?.tier ?? 'auto',
+            executionContext.capabilities,
+            executionContext.selection,
+          ),
+          engine: { realm: 'host', health: 'idle' },
+          world: {
+            identity: world.identity,
+            health: world.execution.health,
+            partialWrite: false,
+            retryable: true,
+          },
+        },
+    {
+      ...(audioBackend === undefined ? {} : { audio: () => audioBackend.getState() }),
+      world: () => ({
+        identity: world.identity,
+        health: world.execution.health,
+        partialWrite: world.execution.fault?.partialWrite ?? false,
+        retryable: world.execution.fault?.retryable ?? true,
+      }),
+    },
+  );
 
   // Step 3.3: Remote eval server auto-start (deferred from Step 2.4 so
   // World is available). Dynamic import keeps @forgeax/engine-app free
   // of static dep on @forgeax/engine-remote. Component reflection crosses
   // this boundary as JSON-safe host data; app does not own any component.
   const remoteHandle = shouldStartRemote
-    ? await startRemoteServer(world, renderer, _debugAdapter, opts?.profiler)
+    ? await startRemoteServer(world, renderer, _debugAdapter, opts?.profiler, executionControl)
     : undefined;
 
   const buildArgs: BuildAppArgs = {
     renderer,
     world,
     pluginRegistry: pluginResult.value,
+    executionControl,
     ...(inputBackend !== undefined ? { inputBackend } : {}),
     ...(inputHandle !== undefined
       ? {
@@ -678,6 +753,7 @@ async function createAppFromCanvas(
             runtimeModule: engineRuntimeModule,
             ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
             ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
+            execution: built.value.execution,
             port: bridgePort,
           }),
         )
@@ -686,50 +762,6 @@ async function createAppFromCanvas(
           // the engine continues without remote-live; the relay simply never
           // sees this page.
         });
-    }
-
-    // feat-20260619 M7: auto-register audio listener-sync system (D-7).
-    // Runs as an ECS addSystem (after propagateTransforms) — NOT via
-    // Update system — so it reads the CURRENT frame's Transform.world
-    // mat4, not the previous frame. The audioTickSystem (D-2) has no
-    // frame-order constraint and uses Update system; listener sync
-    // MUST use the ECS DAG seam because Transform.world is written by
-    // propagateTransforms inside world.update(1 / 60).unwrap().
-    //
-    // The closure lives in the app layer (D-8): audio-webaudio has no
-    // dependency on runtime, so the query+world.get path must be
-    // constructed where both packages are visible. Only canvas-form
-    // apps receive this system (assemble form hosts manage their own
-    // sync). The queryRun/bundle pattern follows syncCameraAspect's
-    // structure (create-app.ts:524-538).
-    if (audioBackend !== undefined && audioBackend instanceof WebAudioEngine) {
-      const backend = audioBackend;
-      world.addSystem(Update, {
-        name: 'audio-listener-sync',
-        after: [PROPAGATE_TRANSFORMS_SYSTEM],
-        queries: [],
-        fn: () => {
-          const query = createQueryState({ with: [AudioListener, Entity] });
-          queryRun(query, world, (bundle) => {
-            const entitySelf = bundle.Entity.self;
-            for (let i = 0; i < entitySelf.length; i++) {
-              const entity = (entitySelf[i] ?? 0) as EntityHandle;
-              const tf = world.get(entity, Transform);
-              if (!tf.ok) continue;
-              // backend.listener is a lazy getter that builds the AudioContext
-              // on first access (ensureContext -> new AudioContext). Touch it
-              // ONLY when an AudioListener entity actually exists, so a
-              // headless host (dawn-node smoke: AudioEngine resource present
-              // but no AudioListener entity, no AudioContext global) never
-              // forces context creation and crashes.
-              const listener = backend.listener;
-              if (listener === undefined) break;
-              syncListenerFromWorldMatrix(listener, tf.value.world);
-              break;
-            }
-          });
-        },
-      });
     }
   }
   return built;
@@ -825,20 +857,17 @@ export function syncCameraAspect(world: World, canvasW: number, canvasH: number)
   if (canvasW <= 0 || canvasH <= 0) return;
   const aspect = canvasW / canvasH;
 
-  const query = createQueryState({ with: [Camera, Entity] });
-  queryRun(query, world, (bundle) => {
-    const entitySelf = bundle.Entity.self;
-    for (let i = 0; i < entitySelf.length; i++) {
-      const entity = (entitySelf[i] ?? 0) as EntityHandle;
-      const r = world.get(entity, Camera);
-      if (!r.ok) continue;
-      // world.get narrows the bool column to a real boolean (D-5); the
-      // perspective discriminator is the numeric column value.
-      if (r.value.autoAspect !== true) continue;
-      if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
-      world.set(entity, Camera, { aspect });
-    }
-  });
+  const query = world.query({ with: [Camera] }).unwrap();
+  for (const row of query) {
+    const entity = row.entity;
+    const r = world.get(entity, Camera);
+    if (!r.ok) continue;
+    // world.get narrows the bool column to a real boolean (D-5); the
+    // perspective discriminator is the numeric column value.
+    if (r.value.autoAspect !== true) continue;
+    if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+    world.set(entity, Camera, { aspect });
+  }
 }
 
 async function startRemoteServer(
@@ -846,6 +875,7 @@ async function startRemoteServer(
   renderer: Renderer,
   debugAdapter: unknown | undefined,
   profiler: import('@forgeax/engine-profiler').Profiler | undefined,
+  execution: ExecutionControl,
 ): Promise<{ readonly port: number; close(): Promise<void> } | undefined> {
   try {
     const remoteServerMod = (await import(
@@ -860,6 +890,7 @@ async function startRemoteServer(
         debugAdapter?: unknown;
         introspection?: readonly unknown[];
         profiler?: unknown;
+        execution?: unknown;
       }) => Promise<{
         ok: boolean;
         value?: { port: number; close(): Promise<void> };
@@ -874,6 +905,7 @@ async function startRemoteServer(
       introspection: projectComponentIntrospection(),
       ...(debugAdapter !== undefined ? { debugAdapter } : {}),
       ...(profiler !== undefined ? { profiler } : {}),
+      execution,
     });
     if (serverResult.ok && serverResult.value !== undefined) {
       return { port: serverResult.value.port, close: serverResult.value.close };
@@ -908,14 +940,44 @@ async function createAppFromAssemble(
     undefined,
     (globalThis as { process?: { env?: { FORGEAX_ENGINE_REMOTE_SERVE?: string } } }).process?.env,
   );
+  const assembledAudioBackend = args.world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)
+    ? args.world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY)
+    : undefined;
+  const executionControl = createLocalExecutionControl(
+    {
+      ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
+      actualTier: 'main-serial',
+      selectionReason: 'explicit-request',
+      sharedEvidencePassed: true,
+      engine: { realm: 'host', health: 'idle' },
+      world: {
+        identity: args.world.identity,
+        health: args.world.execution.health,
+        partialWrite: false,
+        retryable: true,
+      },
+    },
+    {
+      ...(assembledAudioBackend === undefined
+        ? {}
+        : { audio: () => assembledAudioBackend.getState() }),
+      world: () => ({
+        identity: args.world.identity,
+        health: args.world.execution.health,
+        partialWrite: args.world.execution.fault?.partialWrite ?? false,
+        retryable: args.world.execution.fault?.retryable ?? true,
+      }),
+    },
+  );
   const remoteHandle = shouldStartRemote
-    ? await startRemoteServer(args.world, args.renderer, undefined, args.profiler)
+    ? await startRemoteServer(args.world, args.renderer, undefined, args.profiler, executionControl)
     : undefined;
 
   const buildArgs: BuildAppArgs = {
     renderer: args.renderer,
     world: args.world,
     pluginRegistry: pluginResult.value,
+    executionControl,
     ...(remoteHandle !== undefined ? { remoteHandle } : {}),
   };
 
@@ -928,9 +990,9 @@ async function createAppFromAssemble(
       inputBackend: args.world.getResource<InputBackend>(INPUT_BACKEND_KEY),
     });
   }
-  if (args.world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)) {
+  if (assembledAudioBackend !== undefined) {
     Object.assign(buildArgs, {
-      audioBackend: args.world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY),
+      audioBackend: assembledAudioBackend,
     });
   }
   if (args.silenceUnhandledErrors !== undefined) {
@@ -993,6 +1055,7 @@ interface BuildAppArgs {
       }
     | undefined;
   readonly profiler?: import('@forgeax/engine-profiler').Profiler;
+  readonly executionControl?: import('./execution/control').LocalExecutionControl;
 }
 
 /**
@@ -1056,6 +1119,32 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   const fanout = new ErrorFanoutRegistry(
     silenceUnhandledErrors !== undefined ? { silenceUnhandledErrors } : {},
   );
+  const execution =
+    args.executionControl ??
+    createLocalExecutionControl(
+      {
+        ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
+        actualTier: 'main-serial',
+        selectionReason: 'explicit-request',
+        sharedEvidencePassed: true,
+        engine: { realm: 'host', health: 'idle' },
+        world: {
+          identity: world.identity,
+          health: world.execution.health,
+          partialWrite: world.execution.fault?.partialWrite ?? false,
+          retryable: world.execution.fault?.retryable ?? true,
+        },
+      },
+      {
+        ...(audioBackend === undefined ? {} : { audio: () => audioBackend.getState() }),
+        world: () => ({
+          identity: world.identity,
+          health: world.execution.health,
+          partialWrite: world.execution.fault?.partialWrite ?? false,
+          retryable: world.execution.fault?.retryable ?? true,
+        }),
+      },
+    );
 
   function dispatch(e: AppDispatchError): void {
     fanout.fire(e);
@@ -1166,6 +1255,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   const stub: App = {
     renderer,
     world,
+    execution,
     pluginRegistry: args.pluginRegistry,
     ...(inputBackend !== undefined ? { input: inputBackend } : {}),
     ...(audioBackend !== undefined ? { audio: audioBackend } : {}),
@@ -1183,12 +1273,14 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       // (or zero, which setStopped no-ops on) and there is no NPE.
       const r = loop.start();
       if (r.ok) {
+        execution.setEngineHealth('running');
         subscribeRendererErrors();
       }
       return r;
     },
     stop(): Result<void, AppError> {
       const r = loop.stop();
+      if (r.ok) execution.setEngineHealth('stopped');
       // R-4 stop path: even if loop.stop returned err (e.g. paused state
       // or double-stop), input cleanup still runs (input-attach.ts:97-104
       // is idempotent). Unsubscribe the device-lost listener so a host
@@ -1199,10 +1291,14 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       return r;
     },
     pause(): Result<void, AppError> {
-      return loop.pause();
+      const r = loop.pause();
+      if (r.ok) execution.setEngineHealth('idle');
+      return r;
     },
     resume(): Result<void, AppError> {
-      return loop.resume();
+      const r = loop.resume();
+      if (r.ok) execution.setEngineHealth('running');
+      return r;
     },
     onError(cb: (e: AppDispatchError) => void): () => void {
       return fanout.add(cb);

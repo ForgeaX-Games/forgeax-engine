@@ -1,7 +1,9 @@
 import { defineSystem, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { pick, viewportToWorld } from '@forgeax/engine-picking';
 import type { InputSnapshot } from '@forgeax/engine-input';
+import { inState } from '@forgeax/engine-state';
 import type { HudHandle, ViewMode } from './hud';
+import { GameState } from './gameplay-state';
 import { GameplayInput, PlayerBodyPart, PlayerMotion } from './components/gameplay';
 import { resolveShotDirection } from './gameplay-aim';
 
@@ -24,6 +26,7 @@ export function installGameplayInput(ctx: GameplayInputContext): void {
 
   const gameLook = defineSystem({
     name: 'game-look',
+    runIf: inState(GameState, 'Play'),
     queries: [] as const,
     after: ['input-frame-start-scan'],
     fn: () => {
@@ -50,6 +53,7 @@ export function installGameplayInput(ctx: GameplayInputContext): void {
 
   const gamePickShoot = defineSystem({
     name: 'game-pick-shoot',
+    runIf: inState(GameState, 'Play'),
     queries: [] as const,
     after: ['input-frame-start-scan'],
     fn: () => {

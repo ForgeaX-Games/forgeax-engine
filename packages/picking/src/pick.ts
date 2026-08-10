@@ -41,9 +41,9 @@ import { Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import {
-  type ArchetypeLike,
   computeScreenRay,
   readWorldMatrix,
+  type TableLike,
   type WorldInternalView,
 } from './pick-core';
 
@@ -107,26 +107,24 @@ export function pick(
   // by the `componentIds.includes` guards below, so unregistered components
   // naturally yield an empty walk (D-2).
 
-  const graph = (
-    worldInternal as unknown as { _getGraph(): { archetypes: ArchetypeLike[] } }
-  )._getGraph();
+  const graph = (worldInternal as unknown as { _getGraph(): { tables: TableLike[] } })._getGraph();
 
   const worldAabb = box3.create();
   let bestDistance = Number.POSITIVE_INFINITY;
   let bestEntity: EntityHandle | undefined;
 
-  for (const arch of graph.archetypes) {
-    if (!arch || arch.size === 0) continue;
-    if (!arch.components.some((c) => c.id === MeshRenderer.id)) continue;
-    if (!arch.components.some((c) => c.id === MeshFilter.id)) continue;
-    if (!arch.components.some((c) => c.id === Transform.id)) continue;
+  for (const table of graph.tables) {
+    if (!table || table.size === 0) continue;
+    if (!table.components.some((c) => c.id === MeshRenderer.id)) continue;
+    if (!table.components.some((c) => c.id === MeshFilter.id)) continue;
+    if (!table.components.some((c) => c.id === Transform.id)) continue;
 
-    const mfCols = arch.columns.get(MeshFilter.id);
+    const mfCols = table.storage.get(MeshFilter.id)?.fields;
     if (!mfCols) continue;
     const assetHandleView = mfCols.get('assetHandle')?.view as Uint32Array | undefined;
     if (!assetHandleView) continue;
 
-    for (let i = 0; i < arch.size; i++) {
+    for (let i = 0; i < table.size; i++) {
       const assetHandleRaw = Math.round(assetHandleView[i] ?? 0);
       if (assetHandleRaw === 0) continue;
       const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
@@ -138,7 +136,7 @@ export function pick(
 
       // read the packed Entity for this row from the essential id=0 Entity
       // column (`self` field); the column exists on every archetype.
-      const entitySelfView = arch.columns.get(Entity.id)?.get('self')?.view as
+      const entitySelfView = table.storage.get(Entity.id)?.fields.get('self')?.view as
         | Uint32Array
         | undefined;
       const entity = (entitySelfView?.[i] ?? 0) as EntityHandle;

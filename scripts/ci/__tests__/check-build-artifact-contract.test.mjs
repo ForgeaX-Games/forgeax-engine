@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -19,6 +19,46 @@ import { fileURLToPath } from 'node:url';
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = realpathSync(join(__dirname, '..', '..', '..'));
 const checkerPath = join(repoRoot, 'scripts', 'ci', 'check-build-artifact-contract.mjs');
+
+const returnEvidenceContract = () => ({
+  schemaVersion: 1,
+  cacheFamilies: [
+    {
+      family: 'merged-ddc',
+      producer: 'cache-warm',
+      consumer: 'cost-reporter',
+    },
+  ],
+  fieldApplicability: {
+    common: ['identity', 'inputFingerprint', 'producer', 'consumer'],
+    cache: ['classification', 'requestedKey', 'matchedKey', 'restore', 'save'],
+    artifact: [
+      'artifactId',
+      'compressedArchiveBytes',
+      'expandedDiskBytes',
+      'upload',
+      'download',
+      'physicalScope',
+    ],
+  },
+  invalidEvidence: {
+    requiredFields: ['code', 'expected', 'hint', 'detail'],
+    codes: {
+      'identity-missing': ['field'],
+      'cross-run': ['observedRunId'],
+      'aggregate-attempt-mismatch': ['observedRunAttempt'],
+      'provenance-missing': ['producer'],
+      'foreign-producer-attempt': ['observedProducerAttempt'],
+      'fingerprint-missing': ['producer'],
+      'fingerprint-mismatch': ['observedFingerprint'],
+      'artifact-identity-mismatch': ['observedArtifactId'],
+      'owner-fact-missing': ['owner', 'field'],
+      'cache-output-inconsistent': ['cacheHit', 'requestedKey', 'matchedKey'],
+      'family-roster-mismatch': ['observedFamilies'],
+      'schema-incompatible': ['observedSchemaVersion'],
+    },
+  },
+});
 
 /**
  * Write a temp contract JSON and return the temp dir + contract path.
@@ -64,28 +104,38 @@ function runChecker(args = []) {
  */
 function validContract(overrides = {}) {
   return {
-    version: 1,
+    version: 3,
     extractionRoot: '.',
     artifactClasses: {
       'engine-dist': {
         description: 'Package dist outputs',
         fileClasses: ['packages/*/dist'],
+        producer: 'core-build',
+        transferArtifact: 'engine-dist',
       },
       'wasm-runtime': {
         description: 'wgpu-wasm package',
         fileClasses: ['packages/wgpu-wasm/pkg'],
+        producer: 'core-build',
+        transferArtifact: 'wasm-runtime',
       },
       'wasm-fbx': {
         description: 'FBX WASM package',
         fileClasses: ['packages/fbx/pkg'],
+        producer: 'core-build',
+        transferArtifact: 'wasm-fbx',
       },
       'wasm-codec': {
         description: 'Codec WASM package',
         fileClasses: ['packages/codec/pkg'],
+        producer: 'core-build',
+        transferArtifact: 'wasm-codec',
       },
       'app-dist': {
         description: 'App shader manifests and build reports',
         fileClasses: ['apps/**/dist'],
+        producer: 'app-shard-0',
+        transferArtifact: 'app-dist',
       },
     },
     consumers: {
@@ -127,41 +177,49 @@ function validContract(overrides = {}) {
       {
         jobIdentity: 'primary-pnpm',
         consumer: 'primary-pnpm',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'vitest-browser',
         consumer: 'vitest-browser',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'smoke-fleet',
         consumer: 'smoke-fleet',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'vitest-dawn',
         consumer: 'vitest-dawn',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'webkit-fallback',
         consumer: 'webkit-fallback',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'portability-bun',
         consumer: 'portability-bun',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'metrics-validate',
         consumer: 'metrics-validate',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'collectathon-boot-e2e',
         consumer: 'collectathon-boot-e2e',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
@@ -194,6 +252,7 @@ function validContract(overrides = {}) {
       mergedReader: 'cost-reporter',
       payloadClasses: ['engine-dist', 'wasm-runtime', 'wasm-fbx', 'wasm-codec', 'app-dist'],
     },
+    returnEvidence: returnEvidenceContract(),
     requiredCIJobRoster: [
       'post-merge-gate',
       'build-artifacts',
@@ -221,15 +280,33 @@ function validContract(overrides = {}) {
  */
 function minimalContract(overrides = {}) {
   return {
-    version: 1,
+    version: 3,
     extractionRoot: '.',
     artifactClasses: {
-      'engine-dist': { fileClasses: ['packages/*/dist'] },
-      'wasm-runtime': { fileClasses: ['packages/wgpu-wasm/pkg'] },
-      'wasm-fbx': { fileClasses: ['packages/fbx/pkg'] },
-      'wasm-codec': { fileClasses: ['packages/codec/pkg'] },
+      'engine-dist': {
+        fileClasses: ['packages/*/dist'],
+        producer: 'core-build',
+        transferArtifact: 'engine-dist',
+      },
+      'wasm-runtime': {
+        fileClasses: ['packages/wgpu-wasm/pkg'],
+        producer: 'core-build',
+        transferArtifact: 'wasm-runtime',
+      },
+      'wasm-fbx': {
+        fileClasses: ['packages/fbx/pkg'],
+        producer: 'core-build',
+        transferArtifact: 'wasm-fbx',
+      },
+      'wasm-codec': {
+        fileClasses: ['packages/codec/pkg'],
+        producer: 'core-build',
+        transferArtifact: 'wasm-codec',
+      },
       'app-dist': {
         fileClasses: ['apps/**/dist'],
+        producer: 'app-shard-0',
+        transferArtifact: 'app-dist',
       },
     },
     consumers: {
@@ -242,6 +319,7 @@ function minimalContract(overrides = {}) {
       {
         jobIdentity: 'primary-pnpm',
         consumer: 'primary-pnpm',
+        artifactProvider: 'build-artifacts',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
     ],
@@ -253,6 +331,7 @@ function minimalContract(overrides = {}) {
       mergedReader: 'cost-reporter',
       payloadClasses: ['engine-dist', 'wasm-runtime', 'wasm-fbx', 'wasm-codec', 'app-dist'],
     },
+    returnEvidence: returnEvidenceContract(),
     requiredCIJobRoster: ['build-artifacts', 'primary-pnpm'],
     ...overrides,
   };
@@ -310,6 +389,155 @@ test('t1: valid contract passes schema validation', async () => {
     assert.strictEqual(r.exitCode, 0, `valid contract should pass: ${r.stderr}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M1-T1: repository contract exposes one derived ten-family return roster', async () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  const families = [
+    ...Object.keys(contract.artifactClasses),
+    ...contract.returnEvidence.cacheFamilies.map(({ family }) => family),
+  ];
+
+  assert.equal(families.length, 10);
+  assert.equal(new Set(families).size, 10);
+  assert.equal(Object.hasOwn(contract.returnEvidence, 'artifactFamilies'), false);
+});
+
+test('M2-T1: producer fingerprint is path-order independent and content sensitive', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'producer-fingerprint-'));
+  try {
+    mkdirSync(join(root, 'nested'));
+    writeFileSync(join(root, 'a.txt'), 'alpha');
+    writeFileSync(join(root, 'nested', 'b.txt'), 'beta');
+    const { fingerprintFiles } = await import('../evidence/fingerprint.mjs');
+    const forward = await fingerprintFiles(root, ['a.txt', 'nested/b.txt']);
+    const reversed = await fingerprintFiles(root, ['nested/b.txt', 'a.txt']);
+
+    assert.match(forward, /^sha256:[a-f0-9]{64}$/);
+    assert.equal(reversed, forward);
+
+    writeFileSync(join(root, 'nested', 'b.txt'), 'changed');
+    assert.notEqual(await fingerprintFiles(root, ['a.txt', 'nested/b.txt']), forward);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('M2-T1: every artifact family is fingerprinted by its producer packet', () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  const source = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+
+  assert.match(source, /scripts\/ci\/evidence\/fingerprint\.mjs/);
+  for (const family of Object.keys(contract.artifactClasses)) {
+    assert.match(source, new RegExp(`['"]${family}['"]\\s*:`), family);
+  }
+  assert.match(source, /producerRunAttempt:\s*attempt/);
+  assert.doesNotMatch(
+    source.slice(source.indexOf('  build-artifacts:'), source.indexOf('  cache-warm:')),
+    /"runAttempt":\$\{GITHUB_RUN_ATTEMPT\}/,
+  );
+});
+
+test('M1-T1: unknown return evidence schema version fails closed', () => {
+  const c = validContract();
+  c.returnEvidence.schemaVersion = 2;
+  const { dir, fp } = tmpContract(c);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-return-evidence-version');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M1-T1: cache family roster rejects missing, duplicate, and unknown families', () => {
+  for (const cacheFamilies of [
+    [],
+    [...returnEvidenceContract().cacheFamilies, ...returnEvidenceContract().cacheFamilies],
+    [{ family: 'other-cache', producer: 'cache-warm', consumer: 'cost-reporter' }],
+  ]) {
+    const c = validContract();
+    c.returnEvidence.cacheFamilies = cacheFamilies;
+    const { dir, fp } = tmpContract(c);
+    try {
+      const result = runChecker([fp]);
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-family-roster');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('M1-T1: return evidence fields stay within their declared family kind', () => {
+  const c = validContract();
+  c.returnEvidence.fieldApplicability.cache.push('artifactId');
+  const { dir, fp } = tmpContract(c);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-field-applicability');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M1-T1: family owners are contract-validated', () => {
+  for (const mutate of [
+    (c) => {
+      c.returnEvidence.cacheFamilies[0].producer = 'cost-reporter';
+    },
+    (c) => {
+      delete c.artifactClasses['engine-dist'].producer;
+    },
+    (c) => {
+      delete c.artifactClasses['engine-dist'].transferArtifact;
+    },
+  ]) {
+    const c = validContract();
+    mutate(c);
+    const { dir, fp } = tmpContract(c);
+    try {
+      const result = runChecker([fp]);
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-return-owner');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('M1-T1: invalid evidence codes and detail shapes are closed', () => {
+  for (const mutate of [
+    (c) => {
+      c.returnEvidence.invalidEvidence.codes[''] = ['field'];
+    },
+    (c) => {
+      c.returnEvidence.invalidEvidence.codes['cross-run'] = ['observedRunId', 'observedRunId'];
+    },
+    (c) => {
+      c.returnEvidence.invalidEvidence.codes['owner-fact-missing'] = [];
+    },
+    (c) => {
+      c.returnEvidence.invalidEvidence.requiredFields = ['code', 'code', 'detail'];
+    },
+  ]) {
+    const c = validContract();
+    mutate(c);
+    const { dir, fp } = tmpContract(c);
+    try {
+      const result = runChecker([fp]);
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-invalid-evidence');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -537,13 +765,13 @@ test('t1: valid timing roster passes', async () => {
   }
 });
 
-test('t1: version 2 timing consumers must declare their artifact provider', async () => {
+test('t1: version 3 timing consumers must declare their artifact provider', async () => {
   const c = validContract();
-  c.version = 2;
+  delete c.timingRoster[0].artifactProvider;
   const { dir, fp } = tmpContract(c);
   try {
     const r = runChecker([fp]);
-    assert.notStrictEqual(r.exitCode, 0, 'version 2 must reject an implicit provider');
+    assert.notStrictEqual(r.exitCode, 0, 'version 3 must reject an implicit provider');
     const parsed = JSON.parse(r.stdout);
     assert.strictEqual(parsed.code, 'ci-artifact-contract-timing-roster-invalid');
     assert.match(parsed.actual, /missing artifactProvider/);
@@ -1599,4 +1827,64 @@ test('w5: app shard may hydrate declared shared classes through the verified ret
     rmSync(contractDir, { recursive: true, force: true });
     rmSync(workflowDir, { recursive: true, force: true });
   }
+});
+
+test('M4-T1: producer evidence reaches merged provenance and bounded PR observations', () => {
+  const source = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const action = readFileSync(
+    join(repoRoot, '.github', 'actions', 'upload-artifact-with-retry', 'action.yml'),
+    'utf8',
+  );
+  const buildArtifacts = source.slice(
+    source.indexOf('  build-artifacts:'),
+    source.indexOf('\n  cache-warm:'),
+  );
+  const costReporter = source.slice(
+    source.indexOf('  cost-reporter:'),
+    source.indexOf('\n  # L2 split-job sticky-comment', source.indexOf('  cost-reporter:')),
+  );
+
+  for (const output of [
+    'artifact-id',
+    'artifact-name',
+    'upload-started-at',
+    'upload-completed-at',
+    'upload-elapsed-seconds',
+    'upload-transfer-attempt',
+  ]) {
+    assert.match(action, new RegExp(`^  ${output}:`, 'm'), output);
+  }
+  for (const payload of [
+    'CORE_PROVENANCE',
+    'APP_SHARD_0_PROVENANCE',
+    'APP_SHARD_1_PROVENANCE',
+    'APP_SHARD_2_PROVENANCE',
+  ]) {
+    assert.match(buildArtifacts, new RegExp(payload));
+  }
+  assert.match(buildArtifacts, /name: Download shared producer provenance/);
+  assert.match(
+    buildArtifacts,
+    /name: Merge provenance records[\s\S]*--aggregate-attempt \$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(buildArtifacts, /name: Encode merged provenance output/);
+
+  assert.match(
+    costReporter,
+    /needs\.build-artifacts\.outputs\.provenance_payload[\s\S]*needs\.cache-warm\.outputs\.timing_payload[\s\S]*needs\.cache-warm\.outputs\.audit_payload/,
+  );
+  assert.match(
+    costReporter,
+    /collect-ci-cost-monitor\.mjs --run-id \$\{\{ github\.run_id \}\} --attempt \$\{\{ github\.run_attempt \}\}[\s\S]*--merged-provenance ci-cost-input\/ci-provenance-merged\.json[\s\S]*--cache-timing ci-cost-input\/cache\/ci-cache-timing\.json/,
+  );
+
+  const observationStart = costReporter.indexOf('name: Record return evidence observations');
+  assert.ok(observationStart >= 0, 'cost-reporter must expose the bounded PR observation');
+  const observation = costReporter.slice(observationStart);
+  assert.match(observation, /families\.length !== 10/);
+  assert.match(observation, /row\.status === 'invalidEvidence'/);
+  assert.match(observation, /row\.artifactId/);
+  assert.match(observation, /row\.classification/);
+  assert.match(observation, /ownerGap/);
+  assert.doesNotMatch(observation, /\b(?:speedup|effect|queue|criticalPath|runnerCost)\b/i);
 });

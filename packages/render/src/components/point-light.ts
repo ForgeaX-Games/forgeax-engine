@@ -4,9 +4,10 @@
 // color collapsed from 3 per-axis scalar columns to one inline array<f32,3>).
 // `position` comes from the Transform component; PointLight requires a
 // companion Transform on the same entity (ECS query: `[Transform, PointLight]`).
-// `range` units are meters; defaults to `10.0` (KHR_lights_punctual quartic
-// falloff with `1 / (range^2)` clamped at the host-side helper — see
-// `light-helpers.ts` `computeInvRangeSquared`).
+// `range` units are meters; defaults to `10.0`. Runtime finite-range
+// attenuation is the Three r184 squared window; the KHR unsquared curve is an
+// import/reference boundary only. See `light-helpers.ts` for the host-side
+// range projection.
 //
 // 0 light + standard material -> physically correct black render
 // (feat-20260518-pbr-direct-lighting-mvp). The runtime once-warn channel
@@ -34,12 +35,13 @@ import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-e
  * so the render system extract path can join the two via the
  * `[Transform, PointLight]` ECS query.
  *
- * `color` is linear-space rgb in `[0, 1]` per channel; `intensity` is a
- * scalar multiplier; `range` is in meters and defaults to `10.0`
+ * `color` is linear-space rgb in `[0, 1]` per channel; `intensity` is candela;
+ * `range` is in meters and defaults to `10.0`
  * (KHR convention; `+Infinity` is the KHR no-truncation value, retained
  * for KHR_lights_punctual `range: 0` bridging via `light-helpers.ts`).
- * Falloff follows `max(min(1 - (d^2 / range^2)^2, 1), 0) / max(d^2, 1e-4)`
- * (KHR quartic + shader-side `1/d^2` math safety net per plan-strategy D-S5).
+ * The runtime window is `clamp(1 - (d / range)^4, 0, 1)^2`; its no-cutoff
+ * boundary uses inverse-square decay with the shader safety floor. Exposure is
+ * applied after lighting and never multiplied into intensity.
  *
  * @example Spawn a single point light at (5, 3, 5):
  *   world.spawn(

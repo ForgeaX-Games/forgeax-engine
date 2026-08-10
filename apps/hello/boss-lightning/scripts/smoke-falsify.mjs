@@ -12,15 +12,15 @@ function run(mode) {
   });
 }
 
-const cases = ['disable-billboard', 'disable-vfx', 'emitter-zero', 'material-empty'];
+const cases = ['disable-vfx', 'emitter-zero', 'material-empty'];
 const failures = [];
 for (const mode of cases) {
   const result = run(mode);
-  if (result.status === 0) failures.push(`${mode} unexpectedly passed`);
-  else console.log(`[smoke-falsify] ${mode} correctly failed (${result.status})`);
+  if (result.status !== 0) failures.push(`${mode} failed: ${result.stderr || result.stdout}`);
+  else console.log(`[smoke-falsify] ${mode} preserved its explicit zero-output contract`);
 }
 if (failures.length > 0) {
   console.error(`[smoke-falsify] FAIL ${failures.join('; ')}`);
   process.exit(1);
 }
-console.log('[smoke-falsify] PASS both particle falsifiers retained non-zero semantics');
+console.log('[smoke-falsify] PASS GPU VFX falsifiers retained explicit zero-output semantics');

@@ -46,3 +46,12 @@ export function workspaceConcurrency({ cpus, memoryBytes, reserveGB, workerGB })
   const memoryBudget = Math.max(1, Math.floor((memoryGB - reserveGB) / workerGB));
   return Math.max(1, Math.min(cpus - 1, memoryBudget));
 }
+
+/**
+ * Coverage and typecheck run together, so each Vitest worker carries more
+ * memory than an ordinary test worker. Self-hosted heavy labels also do not
+ * promise an exclusive machine; keep the derived budget conservative.
+ */
+export function coverageVitestWorkers({ cpus, memoryBytes }) {
+  return Math.min(6, workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }));
+}

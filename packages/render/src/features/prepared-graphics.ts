@@ -4,12 +4,19 @@
  * The five prepared kinds are declarative references only: the render owner
  * retains device, resource, graph, recording, and submission ownership.
  */
-import { err, type MaterialRenderState, ok, type Result } from '@forgeax/engine-types';
+import {
+  err,
+  type MaterialRenderState,
+  ok,
+  type PrimitiveTopology,
+  type Result,
+} from '@forgeax/engine-types';
 import {
   type RenderError,
   RenderFeaturePreparationFailedError,
   RenderFeaturePreparedStateMismatchError,
 } from '../errors/render';
+import type { RenderFeatureGpuBufferRef } from './prepared-gpu-work';
 import type { RenderFeatureTargetHandle } from './targets';
 import type { RenderFeaturePreparedStateMismatchDetail } from './types';
 
@@ -19,6 +26,8 @@ export type PreparedKind = 'pipeline' | 'bindings' | 'vertex-data' | 'index-data
 /** Canonical vertex layouts owned by the prepared-graphics host. */
 export const RENDER_FEATURE_VERTEX_LAYOUTS = Object.freeze({
   positionSizeColorInstance: 'position-size-color-instance',
+  billboardMaterialInstance: 'billboard-material-instance',
+  meshGeometryMaterialInstance: 'mesh-geometry-material-instance',
 } as const);
 
 /**
@@ -41,6 +50,10 @@ export interface RenderFeaturePipelineDescriptor {
   readonly depthFormat?: string;
   /** Sample count of the target this pipeline will draw into. */
   readonly sampleCount?: 1 | 4;
+  /** Primitive topology consumed by the prepared draw. */
+  readonly topology?: PrimitiveTopology;
+  /** Index scalar format when the topology consumes an index buffer. */
+  readonly indexFormat?: 'uint16' | 'uint32';
   /**
    * Declarative raster/depth/blend overrides for this pipeline. The render
    * owner maps this portable material state onto the backend pipeline; a
@@ -56,16 +69,30 @@ export interface RenderFeatureBindingsDescriptor {
 }
 
 /** CPU-owned vertex data and its canonical layout identity. */
-export interface RenderFeatureVertexDataDescriptor {
-  readonly layout: string;
-  readonly data: ArrayBufferView | readonly number[];
-}
+export type RenderFeatureVertexDataDescriptor =
+  | {
+      readonly layout: string;
+      readonly data: ArrayBufferView | readonly number[];
+      readonly buffer?: never;
+    }
+  | {
+      readonly layout: string;
+      readonly buffer: RenderFeatureGpuBufferRef;
+      readonly data?: never;
+    };
 
-/** CPU-owned index data and its scalar format. */
-export interface RenderFeatureIndexDataDescriptor {
-  readonly format: 'uint16' | 'uint32';
-  readonly data: Uint16Array | Uint32Array;
-}
+/** CPU-owned or persistent GPU-owned index data and its scalar format. */
+export type RenderFeatureIndexDataDescriptor =
+  | {
+      readonly format: 'uint16' | 'uint32';
+      readonly data: Uint16Array | Uint32Array;
+      readonly buffer?: never;
+    }
+  | {
+      readonly format: 'uint16' | 'uint32';
+      readonly buffer: RenderFeatureGpuBufferRef;
+      readonly data?: never;
+    };
 
 /**
  * Feature-facing preparation facade. Call these methods during `prepare`, then
@@ -140,6 +167,11 @@ export interface RenderFeatureIndexedDrawCommand {
   readonly firstInstance?: number;
 }
 
+export interface RenderFeatureIndirectDrawCommand {
+  readonly buffer: RenderFeatureGpuBufferRef;
+  readonly offset?: number;
+}
+
 /** Index state attached to an indexed draw record. */
 export interface RenderFeatureIndexDataBinding {
   readonly resource: RenderFeaturePreparedRef<'index-data'>;
@@ -157,12 +189,28 @@ export type RenderFeatureDrawRecord =
       readonly command: RenderFeatureDrawCommand;
     }
   | {
+      readonly kind: 'draw-indirect';
+      readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
+      readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
+      readonly vertexData: readonly RenderFeatureVertexDataBinding[];
+      readonly indexData?: RenderFeatureIndexDataBinding;
+      readonly command: RenderFeatureIndirectDrawCommand;
+    }
+  | {
       readonly kind: 'draw-indexed';
       readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
       readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
       readonly vertexData: readonly RenderFeatureVertexDataBinding[];
       readonly indexData: RenderFeatureIndexDataBinding | undefined;
       readonly command: RenderFeatureIndexedDrawCommand;
+    }
+  | {
+      readonly kind: 'draw-indexed-indirect';
+      readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
+      readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
+      readonly vertexData: readonly RenderFeatureVertexDataBinding[];
+      readonly indexData: RenderFeatureIndexDataBinding | undefined;
+      readonly command: RenderFeatureIndirectDrawCommand;
     };
 
 /**
@@ -180,6 +228,7 @@ export interface RenderFeatureGraphicsContributionStaging {
   addGraphicsPass(
     name: string,
     descriptor: RenderFeatureGraphicsPassDescriptor,
+    options?: import('./graph-contribution').RenderFeaturePassOptions,
   ): Result<void, RenderError>;
 }
 
@@ -335,7 +384,13 @@ export function validateRenderFeatureGraphicsPass(
     ) {
       return invalid(featureIdentity, 'contribute');
     }
-    if (draw.kind === 'draw-indexed') {
+    if (
+      (draw.kind === 'draw-indirect' || draw.kind === 'draw-indexed-indirect') &&
+      draw.command.buffer.generation !== state.generation
+    ) {
+      return invalid(featureIdentity, 'contribute');
+    }
+    if (draw.kind === 'draw-indexed' || draw.kind === 'draw-indexed-indirect') {
       if (
         draw.indexData === undefined ||
         !validRef(draw.indexData.resource, 'index-data', state.generation) ||

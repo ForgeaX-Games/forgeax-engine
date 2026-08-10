@@ -35,6 +35,7 @@ import { Materials, Skylight } from '@forgeax/engine-render';
 
 import { createSphereGeometry } from '@forgeax/engine-geometry';
 import type { EquirectAsset, Handle, MaterialAsset } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
@@ -50,6 +51,9 @@ const SPHERE_SCALE = 0.9;
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-6-2-ibl-irradiance',
+);
 
 const CAMERA_FOV = Math.PI / 3;
 const CAMERA_POS_X = 0;
@@ -64,6 +68,7 @@ async function setupIblSkylight(
   world: World,
 ): Promise<Handle<'EquirectAsset', 'shared'> | null> {
   const assets = app.renderer.assets;
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   const guidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
@@ -107,7 +112,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // imported via POST /__import on a DDC miss. Hoisted to a single bundler
   // const so AC-11 "exactly 1 adapter call per demo file" holds across the
   // ternary (feat-20260608 / M3).
-  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
+  const bundler = {
+    ...forgeaxBundlerAdapter(),
+    importTransport: createDevImportTransport(runtimeBinding),
+  };
   const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
     overrideBackend === undefined
       ? await createApp(target, {}, bundler)

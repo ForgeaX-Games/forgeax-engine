@@ -21,13 +21,16 @@ import { Materials } from '@forgeax/engine-render';
 
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../../shared/src/learn-render-first-person';
 
 // 2. scene constants
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-3-1-shadow-mapping-full',
+);
 
 // Wood texture GUID from forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json.
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
@@ -78,7 +81,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.3.1 directional shadow] createApp failed:', appRes.error);
@@ -100,7 +103,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Wire the pack-index URL for GUID-based texture loading.
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Load wood texture through GUID pipeline.

@@ -17,7 +17,7 @@
 //   - sampleIblSpecular(N, V, roughness, F0, prefilterMap, prefilterSampler,
 //                       brdfLut, brdfLutSampler)
 
-#import forgeax_pbr::ibl_shared::{fresnelSchlickRoughness, inverseRotateEnvironment}
+#import forgeax_pbr::ibl_shared::{PI, fresnelSchlickRoughness, inverseRotateEnvironment}
 
 // Sample pre-convolved irradiance from the irradiance cubemap.
 // Y is negated to compensate for WebGPU's top-left texture origin vs the
@@ -30,7 +30,8 @@ fn sampleIblDiffuse(
 ) -> vec3<f32> {
   let rotated = inverseRotateEnvironment(normal, rotation);
   let dir = vec3<f32>(rotated.x, -rotated.y, rotated.z);
-  return textureSample(irradianceMap, irradianceSampler, dir).rgb;
+  let irradianceEOverPi = textureSample(irradianceMap, irradianceSampler, dir).rgb;
+  return irradianceEOverPi / PI;
 }
 
 // Split-sum specular IBL: prefiltered env * (F0 * scale + bias).

@@ -24,7 +24,12 @@ import type { RhiDevice, RhiInstance } from '@forgeax/engine-rhi';
 import { afterAll, describe, expect, it } from 'vitest';
 import { inspectDrawJson } from '../inspect-core';
 import { pixelDeltaAbsMean } from '../pixel-diff';
-import { readbackDrawRt, readbackTexturePixels } from '../readback';
+import {
+  readbackDrawRt,
+  readbackLiveLinearHdr,
+  readbackNamedLinearHdr,
+  readbackTexturePixels,
+} from '../readback';
 import { type CreateShaderModuleFn, wrap, wrapCreateShaderModule } from '../recorder';
 import { createReplay } from '../replayer';
 import { deserializeTape, serializeTape } from '../tape-format';
@@ -169,6 +174,189 @@ function createRTTexture(device: RhiDevice, width: number, height: number) {
   });
   if (!res.ok) throw new Error(`createTexture failed: ${res.error.code}`);
   return res.value;
+}
+
+interface DawnAlphaCase {
+  readonly caseId: string;
+  readonly mode: 'OPAQUE' | 'MASK' | 'BLEND';
+  readonly alpha: number;
+  readonly cutoff?: number;
+  readonly expectedVisible: boolean;
+  readonly clearValue: readonly [number, number, number, number];
+}
+
+const M2_DAWN_ALPHA_CASES: readonly DawnAlphaCase[] = [
+  {
+    caseId: 'material-alpha-rgba-factor',
+    mode: 'OPAQUE',
+    alpha: 0.4 * 0.35,
+    expectedVisible: true,
+    clearValue: [0, 0, 0, 0],
+  },
+  {
+    caseId: 'material-alpha-mask-default',
+    mode: 'MASK',
+    alpha: 0.49,
+    cutoff: 0.5,
+    expectedVisible: false,
+    clearValue: [0, 0, 0, 0],
+  },
+  {
+    caseId: 'material-alpha-mask-explicit',
+    mode: 'MASK',
+    alpha: 0.6,
+    cutoff: 0.25,
+    expectedVisible: true,
+    clearValue: [0, 0, 0, 0],
+  },
+  {
+    caseId: 'material-alpha-mask-zero',
+    mode: 'MASK',
+    alpha: 0.75,
+    cutoff: 0,
+    expectedVisible: true,
+    clearValue: [0, 0, 0, 0],
+  },
+  {
+    caseId: 'material-alpha-mask-one',
+    mode: 'MASK',
+    alpha: 0.99,
+    cutoff: 1,
+    expectedVisible: false,
+    clearValue: [0, 0, 0, 0],
+  },
+  {
+    caseId: 'material-alpha-mask-equal',
+    mode: 'MASK',
+    alpha: 0.5,
+    cutoff: 0.5,
+    expectedVisible: false,
+    clearValue: [0, 0, 0, 0],
+  },
+  {
+    caseId: 'material-alpha-blend',
+    mode: 'BLEND',
+    alpha: 0.4,
+    expectedVisible: true,
+    clearValue: [0.2, 0.4, 0.6, 1],
+  },
+] as const;
+
+const M2_ALPHA_STAGE_VS = /* wgsl */ `
+@vertex
+fn main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+  var pos = array<vec2<f32>, 3>(
+    vec2(-1.0, 3.0),
+    vec2(-1.0, -1.0),
+    vec2(3.0, -1.0),
+  );
+  return vec4(pos[vi], 0.0, 1.0);
+}`;
+
+function m2AlphaStageFs(testCase: DawnAlphaCase): string {
+  const cutoff =
+    testCase.cutoff === undefined
+      ? ''
+      : `if (${testCase.alpha} <= ${testCase.cutoff}) { discard; }`;
+  return /* wgsl */ `
+@fragment
+fn main() -> @location(0) vec4<f32> {
+  let alpha = ${testCase.alpha};
+  ${testCase.mode === 'MASK' ? cutoff : ''}
+  return vec4(0.8, 0.2, 0.1, alpha);
+}`;
+}
+
+interface DawnAlphaCapture {
+  readonly baseline: Uint8Array;
+  readonly replay: Uint8Array;
+  readonly tapeEventKinds: readonly string[];
+}
+
+async function captureDawnAlphaStage(
+  pack: DawnPack,
+  testCase: DawnAlphaCase,
+): Promise<DawnAlphaCapture> {
+  const { debugInst, wrappedCreateShader, wrappedDevice, rawDevice } = await makeWrappedCtx(pack);
+  const armRes = debugInst.arm(1);
+  if (!armRes.ok) throw new Error(`M2 alpha arm: ${armRes.error.code}`);
+
+  const texture = createRTTexture(wrappedDevice, RT_WIDTH, RT_HEIGHT);
+  const viewRes = wrappedDevice.createTextureView(texture, {});
+  if (!viewRes.ok) throw new Error(`M2 alpha view: ${viewRes.error.code}`);
+  const vs = await wrappedCreateShader(rawDevice, { code: M2_ALPHA_STAGE_VS });
+  if (!vs.ok) throw new Error(`M2 alpha vertex: ${vs.error.code}`);
+  const fs = await wrappedCreateShader(rawDevice, { code: m2AlphaStageFs(testCase) });
+  if (!fs.ok) throw new Error(`M2 alpha fragment: ${fs.error.code}`);
+  const bglRes = wrappedDevice.createBindGroupLayout({ entries: [] });
+  if (!bglRes.ok) throw new Error(`M2 alpha bgl: ${bglRes.error.code}`);
+  const layoutRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
+  if (!layoutRes.ok) throw new Error(`M2 alpha layout: ${layoutRes.error.code}`);
+  const target = {
+    format: 'rgba8unorm' as GPUTextureFormat,
+    ...(testCase.mode === 'BLEND'
+      ? {
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          },
+        }
+      : {}),
+  };
+  const pipelineRes = wrappedDevice.createRenderPipeline({
+    layout: layoutRes.value,
+    vertex: { module: vs.value, entryPoint: 'main', buffers: [] },
+    fragment: { module: fs.value, entryPoint: 'main', targets: [target] },
+    primitive: { topology: 'triangle-list' },
+  } as any);
+  if (!pipelineRes.ok) throw new Error(`M2 alpha pipeline: ${pipelineRes.error.code}`);
+  const encoderRes = wrappedDevice.createCommandEncoder({});
+  if (!encoderRes.ok) throw new Error(`M2 alpha encoder: ${encoderRes.error.code}`);
+  const pass = encoderRes.value.beginRenderPass({
+    colorAttachments: [
+      {
+        view: viewRes.value,
+        clearValue: {
+          r: testCase.clearValue[0] ?? 0,
+          g: testCase.clearValue[1] ?? 0,
+          b: testCase.clearValue[2] ?? 0,
+          a: testCase.clearValue[3] ?? 0,
+        },
+        loadOp: 'clear',
+        storeOp: 'store',
+      },
+    ],
+  } as any);
+  pass.setPipeline(pipelineRes.value as any);
+  pass.draw(3, 1, 0, 0);
+  pass.end();
+  const commandRes = encoderRes.value.finish();
+  if (!commandRes.ok) throw new Error(`M2 alpha finish: ${commandRes.error.code}`);
+  wrappedDevice.queue.submit([commandRes.value] as unknown as readonly never[]);
+  await wrappedDevice.queue.onSubmittedWorkDone();
+
+  const baseline = await readbackTexturePixels(wrappedDevice, texture, RT_WIDTH, RT_HEIGHT);
+  debugInst.onFrameEnd();
+  const tape = debugInst.getTape();
+  if (!tape) throw new Error(`M2 alpha Dawn tape missing for ${testCase.caseId}`);
+  const { json, blob } = serializeTape(tape as any);
+  const decoded = deserializeTape(json, blob);
+  if (!decoded.ok) throw new Error(`M2 alpha tape decode: ${decoded.error.code}`);
+  const { rawDev2 } = await makeFreshReplayDevice(pack);
+  teardownDevices.push(rawDev2);
+  const replayRes = createReplay(decoded.value, rawDev2, pack.createShaderModule);
+  if (!replayRes.ok) throw new Error(`M2 alpha replay: ${replayRes.error.code}`);
+  const stepRes = await replayRes.value.stepTo(decoded.value.events.length - 1);
+  if (!stepRes.ok) throw new Error(`M2 alpha replay step: ${stepRes.error.code}`);
+  const replayReadback = await replayRes.value.readbackRt(0);
+  if (!replayReadback.ok) throw new Error(`M2 alpha replay readback: ${replayReadback.error.code}`);
+  return {
+    baseline,
+    replay: replayReadback.value.pixels,
+    tapeEventKinds: (decoded.value.events as readonly { readonly kind: string }[]).map(
+      (event) => event.kind,
+    ),
+  };
 }
 
 /**
@@ -2494,6 +2682,60 @@ fn main() -> @builtin(frag_depth) f32 { return ${d.toFixed(3)}; }`;
   }, 60_000);
 });
 
+describe.skipIf(SKIP_DAWN)('live linear HDR producer readback', () => {
+  it('exposes the named raw attachment adapter used by M5 evidence', () => {
+    expect(typeof readbackNamedLinearHdr).toBe('function');
+  });
+
+  it('reads a real rgba16float texture with native bytes before lease retirement', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+    const { wrappedDevice } = await makeWrappedCtx(pack);
+    const textureResult = wrappedDevice.createTexture({
+      size: { width: 2, height: 1, depthOrArrayLayers: 1 },
+      format: 'rgba16float',
+      usage: 0x10 | 0x04 | 0x01,
+    });
+    if (!textureResult.ok) throw new Error(`texture: ${textureResult.error.code}`);
+    const texture = textureResult.value;
+    const liveLease = {
+      descriptor: {
+        texture,
+        format: 'rgba16float',
+        size: { width: 2, height: 1 },
+        usage: 0x10 | 0x04 | 0x01,
+        frameId: 12,
+        sample: 1,
+      },
+      lifetime: { frameId: 12, state: 'active' as const },
+      state: 'active' as const,
+      beginReadback: () => ({
+        ok: true as const,
+        value: {
+          texture,
+          descriptor: {
+            texture,
+            format: 'rgba16float',
+            size: { width: 2, height: 1 },
+            usage: 0x10 | 0x04 | 0x01,
+            frameId: 12,
+            sample: 1,
+          },
+          lifetime: { frameId: 12, state: 'active' as const },
+        },
+      }),
+      retire: () => undefined,
+    };
+    const result = await readbackLiveLinearHdr(wrappedDevice, liveLease);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.format).toBe('rgba16float');
+    expect(result.value.bytes.byteLength).toBe(16);
+    expect(result.value.rawHash).not.toBe('');
+    expect(result.value.lifetime.state).toBe('active');
+  }, 60_000);
+});
+
 /** Decode an IEEE half-float (16-bit) bit pattern to a JS number (test-local). */
 function halfBitsToFloat(h: number): number {
   const sign = (h & 0x8000) >> 15;
@@ -2524,3 +2766,29 @@ fn main(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
   let d : f32 = textureLoad(depthTex, vec2<i32>(fragCoord.xy), 0);
   return vec4<f32>(d, 0.0, 0.0, 1.0);
 }`;
+
+describe.skipIf(SKIP_DAWN)('color lighting M2 alpha Dawn owner', () => {
+  it('captures and replays real discard and blend pixels for every required alpha case', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) throw new Error('Dawn RHI unavailable');
+
+    for (const testCase of M2_DAWN_ALPHA_CASES) {
+      const evidence = await captureDawnAlphaStage(pack, testCase);
+      const firstPixel = evidence.baseline.slice(0, 4);
+      const clearBytes = testCase.clearValue.map((channel) => Math.round(channel * 255));
+      const isClear = firstPixel.every((channel, index) => channel === (clearBytes[index] ?? 0));
+      expect(isClear, `${testCase.caseId} must expose its discard/blend result`).toBe(
+        !testCase.expectedVisible,
+      );
+      if (testCase.expectedVisible) expect(firstPixel[0]).toBeGreaterThan(0);
+      expect(
+        pixelDeltaAbsMean(evidence.baseline, evidence.replay),
+        testCase.caseId,
+      ).toBeLessThanOrEqual(0.01);
+      expect(evidence.tapeEventKinds).toContain('createRenderPipeline');
+      expect(evidence.tapeEventKinds).toContain('beginRenderPass');
+      expect(evidence.tapeEventKinds).toContain('draw');
+      expect(evidence.tapeEventKinds).toContain('copyTextureToBuffer');
+    }
+  }, 60_000);
+});

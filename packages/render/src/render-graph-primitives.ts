@@ -417,21 +417,28 @@ export function addBloomPasses(
   graph.addPass('bloom-bright', {
     reads: [opts.hdrColor],
     writes: [opts.bright],
+    colorConnections: [{ source: opts.hdrColor, destination: opts.bright }],
     execute: recordBloomBrightPass as (c: RenderPipelineContext) => void,
   });
   graph.addPass('bloom-blur-h', {
     reads: [opts.bright],
     writes: [opts.blurH],
+    colorConnections: [{ source: opts.bright, destination: opts.blurH }],
     execute: recordBloomBlurHPass as (c: RenderPipelineContext) => void,
   });
   graph.addPass('bloom-blur-v', {
     reads: [opts.blurH],
     writes: [opts.blurV],
+    colorConnections: [{ source: opts.blurH, destination: opts.blurV }],
     execute: recordBloomBlurVPass as (c: RenderPipelineContext) => void,
   });
   graph.addPass('bloom-composite', {
     reads: [opts.hdrColor, opts.blurV],
     writes: [opts.hdrComposited],
+    colorConnections: [
+      { source: opts.hdrColor, destination: opts.hdrComposited },
+      { source: opts.blurV, destination: opts.hdrComposited },
+    ],
     execute: recordBloomCompositePass as (c: RenderPipelineContext) => void,
   });
 }
@@ -1002,6 +1009,8 @@ export interface AddTonemapPassOptions {
   readonly hdrColorWhenBloomOff?: string;
   /** Logical LDR output; defaults to the swap-chain. */
   readonly color?: string;
+  /** Run the final linear-LDR -> display-encoded output without tone mapping. */
+  readonly outputOnly?: boolean;
 }
 
 /**
@@ -1046,10 +1055,21 @@ export function addTonemapPass(
   graph.addPass(name, {
     reads: tonemapReads,
     writes: [opts.color ?? 'swapchain'],
+    ...(opts.color !== undefined && opts.color !== 'swapchain'
+      ? {
+          colorConnections: [
+            {
+              source: hdrColorWhenBloomOff,
+              destination: opts.color,
+              conversion: { kind: 'tone-map' as const },
+            },
+          ],
+        }
+      : {}),
     execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      // tonemapActive SSOT: derived from camera.tonemap (mirrors recordFrame's
-      // `camera.tonemap !== 'none'`); the `'none'` path is a zero-overhead skip.
-      if (ctx.camera.tonemap === 'none') return;
+      // Tonemap mode `none` still needs the final output encode when the scene
+      // was rendered into the graph-owned linear-LDR target.
+      if (ctx.camera.tonemap === 'none' && opts.outputOnly !== true) return;
       const registered = ctx.runtime.lookupPostProcess?.(TONEMAP_POST_PROCESS_ID);
       if (registered === undefined) {
         ctx.runtime.errorRegistry.fire(
@@ -1066,7 +1086,12 @@ export function addTonemapPass(
       // pass wrote hdrComposited; when off it was gated and never ran, so read
       // the main-rendered hdrColor instead (bug-20260625). Same texture for
       // pipelines that pass identical keys (e.g. HDRP).
-      const src = ctx.camera.bloom === 'on' ? opts.hdrComposited : hdrColorWhenBloomOff;
+      const src =
+        opts.outputOnly === true
+          ? hdrColorWhenBloomOff
+          : ctx.camera.bloom === 'on'
+            ? opts.hdrComposited
+            : hdrColorWhenBloomOff;
       dispatchFullscreenPass(
         ctx,
         name,
@@ -1074,6 +1099,8 @@ export function addTonemapPass(
         opts.color ?? 'swapchain',
         [src],
         resolveCtx,
+        false,
+        opts.outputOnly === true,
       );
     },
   });
@@ -1208,6 +1235,7 @@ function dispatchFullscreenPass(
   reads: readonly string[],
   resolveCtx?: ResolveContext,
   compositeOverSwapchain = false,
+  rawSwapchainOutput = false,
 ): void {
   if (shader === 'fxaa') {
     if (resolveCtx === undefined) {
@@ -1319,8 +1347,19 @@ function dispatchFullscreenPass(
   // recordFxaaPass). Otherwise resolve the declared color through the graph and
   // fall back to ctx.view (swap-chain srgb view) for normal post passes.
   let writeView: TextureView | null | undefined;
-  let writeFormat = 'rgba8unorm-srgb';
-  if (compositeOverSwapchain) {
+  // The attachment format follows the actual write target. Graph-owned
+  // targets may be linear HDR/LDR textures (for example rgba16float), while
+  // the swap-chain path uses the backend-selected surface view format.
+  let writeFormat = ctx.pipelineState?.colorAttachmentFormat ?? 'rgba8unorm-srgb';
+  if (rawSwapchainOutput && color === 'swapchain') {
+    const rawViewRes = ctx.runtime.device.createTextureView(ctx.currentTexture, {});
+    if (!rawViewRes.ok) {
+      ctx.runtime.errorRegistry.fire(rawViewRes.error);
+      return;
+    }
+    writeView = rawViewRes.value;
+    writeFormat = ctx.pipelineState?.format ?? 'rgba8unorm';
+  } else if (compositeOverSwapchain) {
     const storageViewRes = ctx.runtime.device.createTextureView(ctx.currentTexture, {});
     if (!storageViewRes.ok) {
       ctx.runtime.errorRegistry.fire(storageViewRes.error);
@@ -1330,17 +1369,15 @@ function dispatchFullscreenPass(
     writeFormat = ctx.pipelineState?.format ?? 'rgba8unorm';
   } else {
     const internalCtx = ctx as unknown as Partial<_InternalRenderPipelineContext>;
+    const graphColorFormat =
+      internalCtx.frameState?.perFrameGraph?.getColorTargetDescriptor(color)?.format;
+    if (graphColorFormat !== undefined) writeFormat = graphColorFormat;
     const resolvedColor = (resolveCtx?.resolve(color) as TextureView | undefined) ?? null;
     writeView =
       (internalCtx.frameState === undefined
         ? resolvedColor
-        : resolveGraphColorAttachmentView(
-            ctx.runtime,
-            internalCtx.frameState,
-            ctx.pipelineState,
-            color,
-            resolvedColor,
-          )) ?? ctx.view;
+        : resolveGraphColorAttachmentView(internalCtx.frameState, color, resolvedColor)) ??
+      ctx.view;
   }
   if (writeView === null || writeView === undefined) return;
 
@@ -1395,30 +1432,14 @@ function dispatchFullscreenPass(
   // skip the pass for that frame. Second frame onward: cached pipeline is
   // returned synchronously.
   //
-  // Color format SSOT: the backend-aware swap-chain decision in
-  // createRenderer.ts (selectSwapChainFormat) sets ctx.pipelineState.
-  // colorAttachmentFormat per frame; Channel 2 (storageBufferCapable) picks the
-  // UA preferred canvas format ('bgra8unorm-srgb' on macOS/Windows since
-  // bug-20260612-webgpu-canvas-format-prefer-bgra) and Channel 3 (GLES
-  // fallback) picks 'rgba8unorm-srgb'. The fullscreen post pass writes into the
-  // swap-chain view (`color: 'swapchain'` -> ctx.view), so its PSO target
-  // format MUST equal colorAttachmentFormat or dawn rejects the pass with an
-  // attachment-state mismatch (the framebuffers/gamma/hdr learn-render demos hit
-  // this on BGRA runners: nightly #385/#391). The `?? 'rgba8unorm-srgb'`
-  // fallback keeps the unit fixtures that build a bare ctx without pipelineState
-  // (makeSpyCtx in dispatch-fullscreen-stage-custom-reads.dawn.test.ts) green.
-  // FXAA's rgba8unorm storage-view path is unaffected: it routes through
-  // `recordFxaaStage` (the if(shader==='fxaa') branch above) and never reaches
-  // this dispatcher line.
-  // The PSO target format MUST equal the render-pass attachment format. For
-  // the composite-over-swap-chain path that is the non-srgb storage format
-  // (writeFormat); otherwise the backend-aware colorAttachmentFormat.
+  // Color format SSOT: graph-owned writes use their resolved descriptor format;
+  // swap-chain writes use the backend-aware surface format in pipelineState.
+  // This keeps the PSO target and render-pass attachment identical when a
+  // fullscreen pass writes an intermediate rgba16float target (for example
+  // tonemap -> FXAA), while preserving the native surface storage/sRGB split.
   const lookupPipeline = ctx.runtime.getPostProcessPipeline;
   if (lookupPipeline === undefined) return;
-  const postColorFormat = (compositeOverSwapchain
-    ? writeFormat
-    : (ctx.pipelineState?.colorAttachmentFormat ??
-      'rgba8unorm-srgb')) as unknown as GPUTextureFormat;
+  const postColorFormat = writeFormat as unknown as GPUTextureFormat;
   const pipeline = lookupPipeline(shader, built.bindGroupLayout, postColorFormat);
   if (pipeline === null) return;
   const handle = built.createHandle(name, pipeline, paramsBuffer);

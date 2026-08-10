@@ -19,7 +19,7 @@ describe('FrameEnd deferred visibility', () => {
       name: 'observer',
       queries: [{ with: [Marker] }],
       fn: (_world, results) => {
-        observed = results[0].length;
+        observed = [...results[0]].length;
       },
     });
 

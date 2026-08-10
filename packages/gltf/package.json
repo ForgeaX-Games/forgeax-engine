@@ -34,7 +34,6 @@
   },
   "dependencies": {
     "@forgeax/engine-animation": "workspace:*",
-    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",

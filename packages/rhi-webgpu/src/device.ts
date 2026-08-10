@@ -515,10 +515,12 @@ function makeRenderPassEncoder(
       rawPass.setStencilReference(reference);
     },
     drawIndirect(indirectBuffer: Buffer, indirectOffset: number): void {
-      rawPass.drawIndirect(indirectBuffer as unknown as GPUBuffer, indirectOffset);
+      const rawBuf = BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
+      rawPass.drawIndirect(rawBuf, indirectOffset);
     },
     drawIndexedIndirect(indirectBuffer: Buffer, indirectOffset: number): void {
-      rawPass.drawIndexedIndirect(indirectBuffer as unknown as GPUBuffer, indirectOffset);
+      const rawBuf = BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
+      rawPass.drawIndexedIndirect(rawBuf, indirectOffset);
     },
     pushDebugGroup(groupLabel: string): void {
       rawPass.pushDebugGroup(groupLabel);
@@ -733,6 +735,11 @@ function makeCommandEncoder(
         },
         dispatchWorkgroups(x, y, z) {
           rawPass.dispatchWorkgroups(x, y, z);
+        },
+        dispatchWorkgroupsIndirect(indirectBuffer, indirectOffset) {
+          const rawBuffer =
+            BUFFER_RAW_MAP.get(indirectBuffer) ?? (indirectBuffer as unknown as GPUBuffer);
+          rawPass.dispatchWorkgroupsIndirect(rawBuffer, indirectOffset);
         },
         end() {
           rawPass.end();

@@ -46,7 +46,7 @@ It saves before/after PNG evidence under `apps/hello/audio/.forgeax-audio/browse
 ## API surface
 
 ```ts
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin } from '@forgeax/engine-audio';
 import { physicsPlugin } from '@forgeax/engine-physics';
 
 // 1. One-shot takeoff -- audioPlugin() auto-attaches the WebAudioBackend;

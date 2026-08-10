@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "App shell + game loop helper (rAF + start/stop/pause + auto input) for forgeax-engine.",
+  "description": "Host assembly and execution tiers for ForgeaX: frame credit, input, Engine Worker, shared Kernels, reports, and rebuild.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

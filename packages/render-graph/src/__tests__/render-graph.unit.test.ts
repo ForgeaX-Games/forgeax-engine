@@ -24,6 +24,88 @@ import { err, ok, RenderGraphError, type RenderGraphErrorCode } from '../errors.
 import { RenderGraph } from '../graph.js';
 
 {
+  describe('color domain compile contract', () => {
+    const caps = { compute: true, storageBuffer: true } as never;
+
+    function graphWithTargets(sourceDomain: unknown, destinationDomain: unknown): RenderGraph {
+      const graph = new RenderGraph();
+      graph.addColorTarget('source', {
+        format: 'rgba16float',
+        size: { w: 1, h: 1 },
+        domain: sourceDomain,
+      } as never);
+      graph.addColorTarget('destination', {
+        format: 'rgba8unorm',
+        size: { w: 1, h: 1 },
+        domain: destinationDomain,
+      } as never);
+      graph.addPass('source-seed', { reads: [], writes: ['source'] });
+      return graph;
+    }
+
+    it('rejects a domain connection when the source domain is unknown', () => {
+      const graph = graphWithTargets('gamma-magic', 'linear-ldr');
+      graph.addPass('blend', {
+        reads: ['source'],
+        writes: ['destination'],
+        colorConnections: [{ source: 'source', destination: 'destination' }],
+      } as never);
+
+      const result = graph.compile({ backendKind: 'null', caps });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected invalid color domain');
+      expect(result.error.code).toBe('invalid-color-domain');
+    });
+
+    it('rejects a connection whose destination domain is missing', () => {
+      const graph = graphWithTargets('linear-ldr', undefined);
+      graph.addPass('blend', {
+        reads: ['source'],
+        writes: ['destination'],
+        colorConnections: [{ source: 'source', destination: 'destination' }],
+      } as never);
+
+      const result = graph.compile({ backendKind: 'null', caps });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected missing color domain');
+      expect(result.error.code).toBe('missing-color-domain');
+      expect(result.error.hint).toContain('domain');
+    });
+
+    it('rejects an implicit linear-to-encoded connection', () => {
+      const graph = graphWithTargets('linear-ldr', 'display-encoded');
+      graph.addPass('blend', {
+        reads: ['source'],
+        writes: ['destination'],
+        colorConnections: [{ source: 'source', destination: 'destination' }],
+      } as never);
+
+      const result = graph.compile({ backendKind: 'null', caps });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected a domain mismatch');
+      expect(result.error.code).toBe('color-domain-mismatch');
+      expect(result.error.expected).toContain('explicit');
+    });
+
+    it('accepts an explicit output encoding connection', () => {
+      const graph = graphWithTargets('linear-ldr', 'display-encoded');
+      graph.addPass('encode', {
+        reads: ['source'],
+        writes: ['destination'],
+        colorConnections: [
+          {
+            source: 'source',
+            destination: 'destination',
+            conversion: { kind: 'encode-srgb' },
+          },
+        ],
+      } as never);
+
+      const result = graph.compile({ backendKind: 'null', caps });
+      expect(result.ok).toBe(true);
+    });
+  });
+
   describe('whole-graph retirement', () => {
     it('relinquishes transient and persistent targets before GPU completion, then reclaims both', async () => {
       const destroyed: object[] = [];
@@ -660,8 +742,8 @@ import { RenderGraph } from '../graph.js';
   // --- from errors.test.ts ---
   // ── Closed union exhaustiveness ──────────────────────────────────
 
-  describe('RenderGraphErrorCode exhaustive switch (7 members)', () => {
-    it('has exactly 7 members including resource-alloc-failed and invalid-format', () => {
+  describe('RenderGraphErrorCode exhaustive switch', () => {
+    it('lists the complete closed error union', () => {
       const allCodes: RenderGraphErrorCode[] = [
         'dangling-read',
         'cap-missing',
@@ -670,11 +752,20 @@ import { RenderGraph } from '../graph.js';
         'unknown-resource',
         'resource-alloc-failed',
         'invalid-format',
+        'invalid-color-domain',
+        'missing-color-domain',
+        'color-domain-mismatch',
+        'observation-absent',
+        'observation-invalid-format',
+        'observation-invalid-size',
+        'observation-missing-copy-src',
+        'observation-stale',
+        'observation-retired',
       ];
-      expect(allCodes).toHaveLength(7);
+      expect(allCodes).toHaveLength(16);
     });
 
-    it('allows exhaustive switch without default covering all 7 members', () => {
+    it('allows exhaustive switch without default covering every member', () => {
       function handle(code: RenderGraphErrorCode): string {
         switch (code) {
           case 'dangling-read':
@@ -691,6 +782,24 @@ import { RenderGraph } from '../graph.js';
             return 'alloc';
           case 'invalid-format':
             return 'format';
+          case 'invalid-color-domain':
+            return 'invalid-domain';
+          case 'missing-color-domain':
+            return 'missing-domain';
+          case 'color-domain-mismatch':
+            return 'domain-mismatch';
+          case 'observation-absent':
+            return 'observation-absent';
+          case 'observation-invalid-format':
+            return 'observation-invalid-format';
+          case 'observation-invalid-size':
+            return 'observation-invalid-size';
+          case 'observation-missing-copy-src':
+            return 'observation-missing-copy-src';
+          case 'observation-stale':
+            return 'observation-stale';
+          case 'observation-retired':
+            return 'observation-retired';
         }
       }
 
@@ -701,6 +810,9 @@ import { RenderGraph } from '../graph.js';
       expect(handle('unknown-resource')).toBe('unknown');
       expect(handle('resource-alloc-failed')).toBe('alloc');
       expect(handle('invalid-format')).toBe('format');
+      expect(handle('invalid-color-domain')).toBe('invalid-domain');
+      expect(handle('missing-color-domain')).toBe('missing-domain');
+      expect(handle('color-domain-mismatch')).toBe('domain-mismatch');
     });
   });
 

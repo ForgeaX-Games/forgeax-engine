@@ -36,6 +36,7 @@
 // single-entry indexability; AC-03 grep gate).
 
 import type { AnimationTargetIdValue } from './animation-target';
+import type { AudioClipAsset } from './asset.js';
 import type { Handle } from './handle';
 import type { MaterialAsset } from './material/asset.js';
 import type { ParticleEffectAsset } from './vfx';
@@ -436,6 +437,7 @@ export interface SamplerAsset {
   readonly lodMinClamp?: number;
   readonly lodMaxClamp?: number;
   readonly compare?: GPUCompareFunction;
+  readonly maxAnisotropy?: number;
 }
 
 // feat-20260613 fix-issue-4: MATERIAL_PARAM_TYPES_V1 (9-Set) deleted —
@@ -1573,26 +1575,6 @@ export interface AnimationGraph {
   readonly kind: 'animation-graph';
   readonly nodes: readonly AnimationGraphNode[];
   readonly root: number;
-}
-
-/**
- * Audio clip asset POD shape -- decoded PCM buffer ready for playback
- * (feat-20260527-audio-system M1 / w7; plan-strategy D-6).
- *
- * `buffer` carries the `AudioBuffer` decoded by `decodeAudioData`.
- * The `AudioBuffer` memory is shared across all `AudioClipAsset` handles
- * pointing to the same source -- only one decode per GUID (research
- * Finding "AudioBufferSourceNode one-shot" confirms AudioBuffer is
- * the single heavy resource).
- *
- * Consumers spawn `AudioSource` components with a
- * `Handle<'AudioClipAsset', 'shared'>` referring to this asset;
- * the `audioTickSystem` creates fresh `AudioBufferSourceNode` instances
- * per play edge.
- */
-export interface AudioClipAsset {
-  readonly kind: 'audio';
-  readonly buffer: AudioBuffer;
 }
 
 // === VideoAsset POD shape (feat-20260623-world-space-video-asset M1) ==========

@@ -1,20 +1,5 @@
 import type { ImportDiagnostic } from '@forgeax/engine-types';
 
-export type UiErrorCode =
-  | 'invalid-environment'
-  | 'invalid-root'
-  | 'invalid-asset'
-  | 'invalid-layer'
-  | 'invalid-preview-rect'
-  | 'preview-invalid-transition'
-  | 'preview-disposed'
-  | 'preview-stale-completion'
-  | 'preview-load-failed'
-  | 'preview-scenario-failed'
-  | 'preview-scenario-missing-part'
-  | 'preview-scenario-timeout'
-  | 'capture-not-ready'
-  | 'capture-failed';
 export type UiError =
   | {
       readonly code: 'invalid-environment';
@@ -92,6 +77,7 @@ export type UiError =
       readonly hint: string;
       readonly detail: { readonly message: string; readonly stage: string };
     };
+export type UiErrorCode = UiError['code'];
 export type UiResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: UiError };

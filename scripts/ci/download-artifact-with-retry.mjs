@@ -63,6 +63,28 @@ export async function retryArtifact(operation, { sleepFn = sleep, onRetry = () =
   throw new Error('artifact retry exhausted');
 }
 
+export async function observeArtifactDownload(operation, { nowFn = Date.now } = {}) {
+  const startedMillis = nowFn();
+  const compressedArchiveBytes = await operation();
+  const completedMillis = nowFn();
+  if (
+    !Number.isFinite(startedMillis) ||
+    !Number.isFinite(completedMillis) ||
+    completedMillis < startedMillis ||
+    !Number.isFinite(compressedArchiveBytes) ||
+    compressedArchiveBytes < 0
+  )
+    throw new Error('artifact download observation is invalid');
+  return {
+    compressedArchiveBytes,
+    download: {
+      startedAt: new Date(startedMillis).toISOString(),
+      completedAt: new Date(completedMillis).toISOString(),
+      elapsedSeconds: (completedMillis - startedMillis) / 1000,
+    },
+  };
+}
+
 function headers() {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error('GITHUB_TOKEN is required');

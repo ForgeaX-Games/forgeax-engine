@@ -15,6 +15,7 @@ import {
   type RenderPipeline,
   type Result,
   RhiError,
+  type Sampler,
 } from '@forgeax/engine-rhi';
 import type {
   Handle,
@@ -23,6 +24,7 @@ import type {
   ParamSchemaEntry,
   PassKind,
   PrimitiveTopology,
+  SamplerAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
@@ -279,6 +281,22 @@ export function residentTextureView(
     return undefined;
   }
   return store.getTextureGpuView(handle, worldId);
+}
+
+function residentSampler(
+  world: World,
+  store: GpuResourceStore,
+  runtime: RenderSystemRuntime,
+  handle: Handle<'SamplerAsset', 'shared'>,
+): Sampler | undefined {
+  const podRes = resolveAssetHandle<SamplerAsset>(world, handle);
+  if (!podRes.ok) return undefined;
+  const residentRes = store.ensureSamplerResident(handle, podRes.value);
+  if (!residentRes.ok) {
+    runtime.errorRegistry.fire(residentRes.error);
+    return undefined;
+  }
+  return residentRes.value;
 }
 
 // feat-20260623-world-space-video-asset M4 / w16 (D-3): resolve the
@@ -602,12 +620,14 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
   // occlusionStrength (offset 64)
   f32[16] = material.occlusionStrength ?? 1;
   // alphaCutoff (offset 68).
-  f32[17] = 0;
+  const alphaCutoff = material.paramSnapshot?.alphaCutoff;
+  f32[17] = typeof alphaCutoff === 'number' ? alphaCutoff : 0;
   f32[18] = material.clearcoat ?? 0;
   f32[19] = material.clearcoatRoughness ?? 0.5;
-  f32[20] = 1;
-  f32[21] = 1;
-  f32[22] = 1;
+  const specularTint = material.specularTint;
+  f32[20] = specularTint?.[0] ?? 1;
+  f32[21] = specularTint?.[1] ?? 1;
+  f32[22] = specularTint?.[2] ?? 1;
   f32[72] = material.normalScale ?? 1;
   // Schema-driven paramSnapshot overlay (feat-20260523 M9-T05, AC-14):
   // for user-shaders with a paramSnapshot, project the first vec4/color
@@ -782,6 +802,11 @@ export function buildPerSubmeshMaterialBg(
     submeshMaterial.materialParamSchema ??
     (smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined);
   const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
+  const smSamplerForField = (field: string | undefined): Sampler => {
+    const handle = field === undefined ? undefined : submeshMaterial.samplerHandles?.get(field);
+    if (handle === undefined) return pipelineState.defaultSampler;
+    return residentSampler(world, store, runtime, handle) ?? pipelineState.defaultSampler;
+  };
   const smBaseEntries: BindGroupEntry[] = [
     {
       binding: 0,
@@ -829,7 +854,7 @@ export function buildPerSubmeshMaterialBg(
     smBaseEntries.push(
       {
         binding: samplerBinding,
-        resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+        resource: { kind: 'sampler' as const, value: smSamplerForField(field) },
       },
       {
         binding: textureBinding,
@@ -850,9 +875,9 @@ export function buildPerSubmeshMaterialBg(
     if (view !== undefined) smOcclusionView = view;
   }
   const smEmissiveAo: EmissiveAoBindGroupResources = {
-    emissiveSampler: pipelineState.defaultSampler,
+    emissiveSampler: smSamplerForField('emissiveTexture'),
     emissiveView: smEmissiveView as never,
-    occlusionSampler: pipelineState.defaultSampler,
+    occlusionSampler: smSamplerForField('occlusionTexture'),
     occlusionView: smOcclusionView as never,
   };
   const smMergedEntries = assembleMaterialWithSkylightEntries(

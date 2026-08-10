@@ -41,10 +41,10 @@ export type WorldInternalView = World & {
 };
 
 /** Minimal shape of an archetype as exposed by the engine-internal `_getGraph()`. */
-export interface ArchetypeLike {
+export interface TableLike {
   size: number;
   components: ReadonlyArray<{ readonly id: number }>;
-  columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
+  storage: Map<number, { fields: Map<string, { view: ArrayLike<number> }> }>;
 }
 
 /**

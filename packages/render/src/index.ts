@@ -17,8 +17,10 @@ export {
   TONEMAP_LINEAR,
   TONEMAP_NEUTRAL,
   TONEMAP_NONE,
+  TONEMAP_REINHARD,
   TONEMAP_REINHARD_EXTENDED,
   tonemapFromF32,
+  tonemapToU32,
 } from './components/camera';
 export * from './components/directional-light';
 export { Instances, type InstancesData } from './components/instances';
@@ -50,6 +52,7 @@ export {
 } from './components/visibility';
 export {
   type EquirectProjectionFailedDetail,
+  ObservationUnavailableError,
   type RenderError,
   type RenderErrorCode,
   RenderFeatureCapabilityMissingError,
@@ -76,6 +79,14 @@ export * from './features';
 export { Materials } from './materials';
 export { PipelineError, type PipelineErrorCode } from './pipeline-errors';
 export { PostProcessError, type PostProcessErrorCode } from './post-process-errors';
+export {
+  type FrameObservation,
+  type FrameObservationMetadata,
+  type FrameObservationOptions,
+  type FrameObservationReadback,
+  type FrameObservationSource,
+  observeCurrentFrame,
+} from './record/frame-observation';
 export type {
   AddBloomPassesOptions,
   AddFullscreenPassOptions,
@@ -99,10 +110,14 @@ export {
   addTonemapPass,
   TONEMAP_POST_PROCESS_ID,
 } from './render-graph-primitives';
-export type {
-  RenderFeatureTargetContext,
-  RenderPipeline,
-  RenderPipelineData,
+export {
+  type RenderColorDomain,
+  type RenderFeatureTargetContext,
+  type RenderPipeline,
+  type RenderPipelineData,
+  resolvePostColorDomainContract,
+  resolveToneOutputContract,
+  type ToneOutputContract,
 } from './render-pipeline';
 export type { RenderPipelineContext } from './render-pipeline-context';
 export type {

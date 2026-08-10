@@ -4,8 +4,9 @@ import type { DrawOwnerOptions, Renderer } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 import { createFrameLoop } from '../internal/frame-loop';
+import { APP_PHASE_CATALOG } from '../types';
 
-const APP_PHASES = [
+const FRAME_LOOP_PHASES = [
   'frame-total',
   'world-update-primary',
   'draw-source',
@@ -66,7 +67,7 @@ function finish(profiler: ReturnType<typeof createProfiler>): ProfileCapture {
 }
 
 describe('App profiler frame token', () => {
-  it('records five App phases with one token per logical frame', () => {
+  it('records the local frame phases with one token per logical frame', () => {
     const profiler = createProfiler();
     expect(startSession(profiler).captureId).toBe('capture-0001');
     const scheduler = makeScheduler();
@@ -89,21 +90,21 @@ describe('App profiler frame token', () => {
     loop.stop().unwrap();
 
     const capture = finish(profiler);
-    expect(capture.phaseCatalog.app).toEqual(APP_PHASES);
+    expect(capture.phaseCatalog.app).toEqual(APP_PHASE_CATALOG);
     expect(capture.captureId).toBe('capture-0001');
     expect(capture.records.filter((record) => record.source === 'app')).toHaveLength(10);
     expect(
       capture.records
         .filter((record) => record.source === 'app' && record.kind === 'phase')
         .map((record) => record.phase),
-    ).toEqual(expect.arrayContaining([...APP_PHASES]));
+    ).toEqual(expect.arrayContaining([...FRAME_LOOP_PHASES]));
     expect(
       new Set(
         capture.records
           .filter((record) => record.source === 'app' && record.kind === 'phase')
           .map((record) => record.phase),
       ),
-    ).toEqual(new Set(APP_PHASES));
+    ).toEqual(new Set(FRAME_LOOP_PHASES));
     expect(
       new Set(
         capture.records.filter((record) => record.source === 'app').map((record) => record.frameId),

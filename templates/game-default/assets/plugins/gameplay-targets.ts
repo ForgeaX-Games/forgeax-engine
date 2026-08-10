@@ -15,6 +15,7 @@ import { installTargetHealth, TargetHealth, type TargetHealthHandle } from './ta
 import { installVisibilityLoop, type VisibilityLoopHandle } from './visibility-loop';
 import { firstScoringTarget, scoringTargetEntities } from './scoring-target';
 import { assembleGameplayScene, type GameplaySceneAssembly } from './gameplay-scene';
+import { createTargetRelay, type TargetRelayHandle } from './target-relay';
 
 export type GameplayTargetFeatures = GameplaySceneAssembly & {
   readonly targetEntities: () => EntityHandle[];
@@ -30,6 +31,7 @@ export type GameplayTargetFeatures = GameplaySceneAssembly & {
   readonly targetProfile: TargetProfileLoop | undefined;
   readonly toggleProfile: () => ReturnType<typeof targetProfileSnapshot>;
   readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
+  readonly targetRelay: TargetRelayHandle;
   readonly damageTarget: (entity: EntityHandle, points: number) => void;
 };
 
@@ -45,7 +47,7 @@ export async function createGameplayTargetFeatures(
   options: GameplayTargetOptions = {},
 ): Promise<GameplayTargetFeatures> {
   const scene = await assembleGameplayScene(world, host);
-  const targetEntities = (): EntityHandle[] => scoringTargetEntities(world, scene.targetQuery);
+  const targetEntities = (): EntityHandle[] => scoringTargetEntities(scene.targetQuery);
   const primaryTarget = (): EntityHandle | undefined => firstScoringTarget(world, scene.targetQuery);
   const targetHealth = installTargetHealth(world, scene.targetQuery);
   const targetDisabling = installTargetDisabling(world, scene.targetQuery);
@@ -83,6 +85,16 @@ export async function createGameplayTargetFeatures(
       : { world, assets: host?.assets, target: guidedFbxTarget, ...(physics === undefined ? {} : { physics }) },
   );
   host?.registerCleanup?.(() => fbxSkinnedTarget?.dispose());
+  const relayVariation = guidedFbxTarget === undefined || fbxSkinnedTarget === undefined
+    ? undefined
+    : {
+        variationTarget: guidedFbxTarget,
+        variationAvailable: true,
+        setVariationActive: (active: boolean) => {
+          if (fbxSkinnedTarget.companionActive() !== active) fbxSkinnedTarget.toggleCompanion();
+        },
+      };
+  const targetRelay = createTargetRelay(world, scene.targetQuery, relayVariation);
 
   const skylightEntity = scene.loaded?.nodes
     .find((node) => (node.components.Name as { value?: string } | undefined)?.value === 'Skylight')
@@ -119,6 +131,7 @@ export async function createGameplayTargetFeatures(
     targetProfile,
     toggleProfile,
     fbxSkinnedTarget,
+    targetRelay,
     damageTarget,
   };
 }

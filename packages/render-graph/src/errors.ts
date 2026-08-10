@@ -3,7 +3,7 @@
 //
 // Shape (plan-strategy D-3):
 // - RenderGraphErrorCode, RenderGraphErrorDetail, and the constructor argument
-//   union derive from one private seven-code code-to-detail map.
+//   union derive from one private code-to-detail map.
 // - RenderGraphError extends Error { readonly code; readonly expected;
 //   readonly hint; readonly detail } — four-field structured error surface,
 //   aligned with RhiError (research Finding 8).
@@ -34,6 +34,15 @@ interface RenderGraphErrorDetailByCode {
   'unknown-resource': DanglingReadDetail;
   'resource-alloc-failed': ResourceAllocFailedDetail;
   'invalid-format': InvalidFormatDetail;
+  'observation-absent': ObservationDetail;
+  'observation-invalid-format': ObservationDetail;
+  'observation-invalid-size': ObservationDetail;
+  'observation-missing-copy-src': ObservationDetail;
+  'observation-stale': ObservationDetail;
+  'observation-retired': ObservationDetail;
+  'invalid-color-domain': ColorDomainDetail;
+  'missing-color-domain': ColorDomainDetail;
+  'color-domain-mismatch': ColorDomainDetail;
 }
 
 /** Closed RenderGraphErrorCode union derived from the private detail map. */
@@ -92,6 +101,19 @@ export interface InvalidFormatDetail {
   readonly expected: readonly string[];
 }
 
+/** Generic current-frame observation failures. */
+export interface ObservationDetail {
+  readonly frameId?: number | undefined;
+  readonly expected?: string | undefined;
+}
+
+export interface ColorDomainDetail {
+  readonly value?: string | undefined;
+  readonly resourceKey?: string | undefined;
+  readonly sourceDomain?: string | undefined;
+  readonly destinationDomain?: string | undefined;
+}
+
 /**
  * Structured RenderGraph error.
  *
@@ -100,7 +122,7 @@ export interface InvalidFormatDetail {
  * - `.code` — closed union member (L1 key signal).
  * - `.expected` — expected-state description (L2 detail).
  * - `.hint` — actionable recovery guidance (L2 detail).
- * - `.detail` — narrowed payload per code variant (7 variants).
+ * - `.detail` — narrowed payload per code variant.
  */
 export class RenderGraphError extends Error {
   readonly code: RenderGraphErrorCode;

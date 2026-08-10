@@ -1,10 +1,8 @@
 import {
   Disabled,
-  Entity,
+  type Query,
   World,
-  createQueryState,
   defineComponent,
-  queryRun,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
 import { ScoringTarget, scoringTargetEntities, type ScoringTargetQuery } from './scoring-target';
@@ -24,19 +22,16 @@ export type TargetDisablingHandle = {
   readonly snapshot: () => TargetDisablingWitness;
 };
 
-function count(world: World, query: ReturnType<typeof createQueryState>): number {
+function count(query: Query): number {
   let total = 0;
-  queryRun(query, world, (bundle) => { total += bundle.Entity?.self?.length ?? 0; });
+  for (const _row of query) total += 1;
   return total;
 }
 
 export function installTargetDisabling(world: World, targetQuery: ScoringTargetQuery): TargetDisablingHandle {
-  // QueryState caches matched archetype ids and therefore belongs to one
-  // World. Preview may construct a staging World before the live World in the
-  // same module instance; module-global queries would reuse the staging cache.
-  const activeQuery = createQueryState({ with: [TargetDisabling, Entity] });
-  const disabledQuery = createQueryState({ with: [TargetDisabling, Disabled, Entity] });
-  for (const entity of scoringTargetEntities(world, targetQuery)) world.addComponent(entity, { component: TargetDisabling, data: {} }).unwrap();
+  const activeQuery = world.query({ with: [TargetDisabling] }).unwrap();
+  const disabledQuery = world.query({ with: [TargetDisabling, Disabled] }).unwrap();
+  for (const entity of scoringTargetEntities(targetQuery)) world.addComponent(entity, { component: TargetDisabling, data: {} }).unwrap();
   world.insertResource(GAME_DEFAULT_TARGET_DISABLING_WITNESS, { disableEvents: 0 });
   const state = world.getResource<{ disableEvents: number }>(GAME_DEFAULT_TARGET_DISABLING_WITNESS);
 
@@ -51,7 +46,7 @@ export function installTargetDisabling(world: World, targetQuery: ScoringTargetQ
     // its explicit Disabled query can invalidate the current chunk before every
     // row is visited. The query remains the read-side witness, while this stable
     // identity list makes reset deterministic.
-    for (const entity of scoringTargetEntities(world, targetQuery)) {
+    for (const entity of scoringTargetEntities(targetQuery)) {
       if (world.get(entity, Disabled).ok) {
         world.removeComponent(entity, Disabled).unwrap();
       }
@@ -62,8 +57,8 @@ export function installTargetDisabling(world: World, targetQuery: ScoringTargetQ
     disable,
     reset,
     snapshot: () => ({
-      activeCount: count(world, activeQuery),
-      disabledCount: count(world, disabledQuery),
+      activeCount: count(activeQuery),
+      disabledCount: count(disabledQuery),
       disableEvents: state.disableEvents,
     }),
   };

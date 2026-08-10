@@ -1,10 +1,8 @@
 import type { LoadContext } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { particleEffectPackLoader } from '../index.js';
+import { vfxGpuEffectPackLoader } from '../index.js';
 
 const EFFECT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d45c';
-const PROGRAM_ARTIFACT = 'particle-effect/program.json';
-
 function context(): LoadContext {
   return {
     fetchBinary: async () => {
@@ -38,9 +36,9 @@ const validPayload = {
   emitters: [{ id: 'spark', capacity: 32 }],
 };
 
-describe('particleEffectPackLoader v2 boundary', () => {
+describe('vfxGpuEffectPackLoader v2 boundary', () => {
   it('rejects a v1 package-global artifact shape', async () => {
-    const result = await particleEffectPackLoader.load(
+    const result = await vfxGpuEffectPackLoader.load(
       input(validPayload, {
         'effect/program.json': {
           descriptor: { path: 'program.json', mediaType: 'application/json' },
@@ -51,30 +49,22 @@ describe('particleEffectPackLoader v2 boundary', () => {
     );
 
     expect(result.ok).toBe(false);
-    if (
-      !result.ok &&
-      result.error.code === 'vfx-asset-load-failed' &&
-      result.error.detail.stage === 'artifact'
-    ) {
-      expect(result.error.detail.stage).toBe('artifact');
-      expect(result.error.detail.artifact).toBe(PROGRAM_ARTIFACT);
+    if (!result.ok) {
+      expect(result.error.code).toBe('vfx-asset-v2-invalid');
+      expect(result.error.detail.path).toBe('payload');
     }
   });
 
   it('rejects raw source fallback when the cooked program is absent', async () => {
-    const result = await particleEffectPackLoader.load(
+    const result = await vfxGpuEffectPackLoader.load(
       input({ ...validPayload, source: { emitters: [] }, sourcePath: 'effect.vfx.json' }),
       context(),
     );
 
     expect(result.ok).toBe(false);
-    if (
-      !result.ok &&
-      result.error.code === 'vfx-asset-load-failed' &&
-      result.error.detail.stage === 'artifact'
-    ) {
-      expect(result.error.detail.stage).toBe('artifact');
-      expect(result.error.detail.cause.code).toBe('vfx-artifact-missing');
+    if (!result.ok) {
+      expect(result.error.code).toBe('vfx-asset-v2-invalid');
+      expect(result.error.detail.path).toBe('payload');
     }
   });
 });

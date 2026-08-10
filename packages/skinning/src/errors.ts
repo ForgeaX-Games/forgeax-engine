@@ -336,16 +336,11 @@ export class JointEntityDanglingError extends Error {
 // -- SkinErrorCode / SkinError closed unions ------------------------------------
 
 /**
- * Closed union of skin-cluster error codes -- the 4 direct members plus the
- * 3-member SkinExtractErrorCode subset union. AI users perform exhaustive
- * `switch (err.code)` without default; TS guards completeness.
+ * Closed union of skin-cluster error codes derived from the correlated error
+ * union. AI users perform exhaustive `switch (err.code)` without default; TS
+ * guards completeness.
  */
-export type SkinErrorCode =
-  | 'skin-joint-count-exceeded'
-  | 'skin-joint-despawned'
-  | 'skin-joint-path-unresolved'
-  | 'skin-instances-coexist-forbidden'
-  | SkinExtractErrorCode;
+export type SkinErrorCode = SkinError['code'];
 
 /**
  * Closed union of the skin-cluster structured error classes, each carrying a

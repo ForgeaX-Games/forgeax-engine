@@ -7,7 +7,7 @@
 // calls and checks each emitted axis endpoint against the cube's rotated local axis — the
 // exact proof that the gizmo reads LOCAL (rotated) frames, not world axes. A real DebugDraw
 // instance verifies the same arrow/axes vertex geometry in the package unit tests
-// (packages/debug-draw/test/arrow-axes.test.ts); this smoke is the demo-integration proof.
+// (packages/debug-draw/__tests__/arrow-axes.test.ts); this smoke is the demo-integration proof.
 //
 // Verdict criteria:
 //   (a) backend === 'webgpu'

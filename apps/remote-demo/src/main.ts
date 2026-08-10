@@ -10,11 +10,9 @@
 //   import { defaultConnect } from '@forgeax/engine-types/inspector-client';
 //   const c = await defaultConnect('ws://localhost:<port>/inspector');
 //   if (!c.ok) throw c.error;
-//   // Discover handles — real queryRun callback form (research F2):
+//   // Discover handles through the World-owned row iterator:
 //   const ecs = await c.value.eval(
-//     "let r; const { createQueryState, queryRun, Entity } = await _import('@forgeax/engine-ecs'); " +
-//     "const st = createQueryState({ with: [Entity] }); " +
-//     "queryRun(st, world, (b) => { r = b.Entity.self[0]; }); r"
+//     "const q = world.query({}); if (!q.ok) throw q.error; Array.from(q.value, row => row.entity)"
 //   );
 //   // Read Transform position:
 //   const pos = await c.value.eval(
@@ -61,13 +59,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       '[remote-demo] connect: defaultConnect("ws://localhost:' +
         `${app.remote.port}/inspector") — then client.eval(script)`,
     );
-    console.warn('[remote-demo] handle discovery recipe (real queryRun callback):');
+    console.warn('[remote-demo] handle discovery recipe:');
     console.warn(
-      '[remote-demo]   let r; const { createQueryState, queryRun, Entity } = ' +
-        "await _import('@forgeax/engine-ecs');",
+      '[remote-demo]   const q = world.query({}); if (!q.ok) throw q.error; ' +
+        'Array.from(q.value, row => row.entity)',
     );
-    console.warn('[remote-demo]   const st = createQueryState({ with: [Entity] });');
-    console.warn('[remote-demo]   queryRun(st, world, (b) => { r = b.Entity.self[0]; }); r');
   } else {
     console.warn(
       '[remote-demo] app.remote not available (production build or headless without opt-in)',

@@ -42,7 +42,7 @@ import type {
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -57,7 +57,9 @@ import inversionShader from './shaders/inversion.wgsl';
 import passthroughShader from './shaders/passthrough.wgsl';
 import sharpenShader from './shaders/sharpen.wgsl';
 
-const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  'learn-render-4-5-framebuffers',
+);
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json.
 const CONTAINER_GUID_STR = '019e3969-1d46-773e-988c-a10e305ff2a4';
@@ -309,7 +311,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.5 framebuffers] createApp failed:', appRes.error);
@@ -329,8 +331,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
-  // Wire the pack-index URL for GUID-based texture loading.
-  assets.configurePackIndex(PACK_INDEX_URL);
+  // Bind the dev catalog and scoped import transport used by pluginPack.
+  assets.configureRuntimeBinding(runtimeBinding);
 
   // Parse + load the two textures (container.jpg for cubes, metal.png for
   // floor). Both routes return Result<...> -- explicit if (!.ok) checks per

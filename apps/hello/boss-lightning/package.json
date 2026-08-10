@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Boss Lightning CPU particle composition with billboard, mesh, and emissive strike outputs.",
+  "description": "Boss Lightning code-authored GPU particle composition with billboard, mesh, and emissive strike outputs.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:falsify": "node scripts/smoke-falsify.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-boss-lightning smoke",
@@ -26,7 +27,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "particle performance benchmarks are owned by the vfx package"
+        "reason": "the product smoke records correctness and pixels; no adapter-qualified timing baseline is frozen"
       },
       "gate": {
         "enabled": true,

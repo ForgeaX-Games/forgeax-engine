@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bevy-iter-combinations headless dawn smoke — reproduces the app's N-body World in
 // node-dawn and asserts a real lit render THAT MOVES + CLUMPS: a ring of bodies
-// attract each other (each unordered PAIR's force applied once via queryCombinations)
+// attract each other (each unordered pair's force applied once via Query.combinations)
 // and fall toward the central star, so (1) frames differ over time (motion) and
 // (2) the bodies' spread (max distance from origin) SHRINKS from an early frame to
 // a late one (the pairwise gravity actually pulls them together).
@@ -23,7 +23,7 @@
 //       delta > MOTION_THRESHOLD) — a static render (broken Time wiring) is identical.
 //   (e) CLUMP: the bodies' spread (max distance from origin) at the LATE capture is a
 //       clear fraction of its spread at the EARLY capture — the iter_combinations
-//       proof: queryCombinations pairwise gravity actually pulls the ring inward. A
+//       proof: Query.combinations pairwise gravity actually pulls the ring inward. A
 //       no-op combinations iterator (or frozen bodies) would keep the spread ~constant.
 //   (f) Renderer.onError fired 0 times.
 //
@@ -271,7 +271,7 @@ if (motionMeanDelta <= MOTION_THRESHOLD) {
   failures.push(`(d) motionMeanDelta ${motionMeanDelta.toFixed(5)} <= ${MOTION_THRESHOLD} — scene did NOT visibly move (Time wiring broken?)`);
 }
 if (!(lateSpread <= earlySpread * CLUMP_RATIO)) {
-  failures.push(`(e) bodies did NOT clump: lateSpread ${lateSpread.toFixed(4)} > earlySpread ${earlySpread.toFixed(4)} * ${CLUMP_RATIO} — queryCombinations gravity broken`);
+  failures.push(`(e) bodies did NOT clump: lateSpread ${lateSpread.toFixed(4)} > earlySpread ${earlySpread.toFixed(4)} * ${CLUMP_RATIO} — pairwise gravity broken`);
 }
 if (errors.length > 0) failures.push(`(f) Renderer.onError fired ${errors.length}x: [${errors.map((e) => e.code).join(', ')}]`);
 

@@ -69,7 +69,7 @@ export function installDebugAxes(args: {
     aabbCalls,
     frustumCalls,
     cameraReady: cameraSnapshot() !== null,
-    liveTargets: activeScoringTargetEntities(args.world, args.targetQuery).filter((entity) => args.world.get(entity, Transform).ok).length,
+    liveTargets: activeScoringTargetEntities(args.targetQuery).filter((entity) => args.world.get(entity, Transform).ok).length,
     resetCount,
   });
   const reset = () => {
@@ -82,7 +82,7 @@ export function installDebugAxes(args: {
     enabled,
     draw: () => {
       if (!enabled || args.debugDraw === undefined) return;
-      for (const entity of activeScoringTargetEntities(args.world, args.targetQuery)) {
+      for (const entity of activeScoringTargetEntities(args.targetQuery)) {
         const transform = args.world.get(entity, Transform);
         if (!transform.ok) continue;
         args.debugDraw.axes(transform.value.world, AXIS_LENGTH);

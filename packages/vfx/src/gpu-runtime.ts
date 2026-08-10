@@ -1,0 +1,356 @@
+import {
+  Entity,
+  type EntityHandle,
+  err,
+  FixedTime,
+  FixedUpdate,
+  ok,
+  type World,
+} from '@forgeax/engine-ecs';
+import { type Plugin, PluginError } from '@forgeax/engine-plugin';
+import { type Handle, toShared } from '@forgeax/engine-types';
+import type { VfxGpuEffectAsset, VfxGpuEmitterProgram } from './gpu-program.js';
+import { ParticleEffectPlayer } from './player.js';
+
+export const VFX_GPU_RUNTIME_RESOURCE_KEY = 'VfxGpuRuntime';
+
+export interface VfxGpuTickIntent {
+  readonly sequence: number;
+  readonly player: EntityHandle;
+  readonly emitter: VfxGpuEmitterProgram;
+  readonly programFingerprint: string;
+  readonly reset: boolean;
+  readonly fixedDelta: number;
+  readonly tick: number;
+  readonly seed: number;
+  readonly playCycle: number;
+  readonly spawnCount: number;
+  readonly firstParticleId: number;
+}
+
+export interface VfxGpuRuntimeDiagnostic {
+  readonly code: 'vfx-intent-queue-overflow' | 'vfx-effect-unavailable' | 'vfx-player-invalid';
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: { readonly player: EntityHandle; readonly maxQueuedTicks?: number };
+}
+
+interface PlayerState {
+  effect: Handle<'ParticleEffectAsset', 'shared'>;
+  seed: number;
+  playing: boolean;
+  sessionPlaying: boolean;
+  playCycle: number;
+  elapsed: number[];
+  rateRemainders: number[];
+  nextParticleIds: number[];
+  playCycles: number[];
+  visible: boolean[];
+  hasCommitted: boolean;
+}
+
+export interface VfxGpuRuntimeOptions {
+  readonly maxQueuedTicks?: number;
+}
+
+export class VfxGpuRuntime {
+  readonly #maxQueuedTicks: number;
+  readonly #players = new Map<EntityHandle, PlayerState>();
+  readonly #seen = new Set<EntityHandle>();
+  readonly #intents: VfxGpuTickIntent[] = [];
+  readonly #diagnostics: VfxGpuRuntimeDiagnostic[] = [];
+  readonly #visibility = new Map<string, boolean>();
+  readonly #replayRequests = new Set<EntityHandle>();
+  #sequence = 0;
+
+  constructor(options: VfxGpuRuntimeOptions = {}) {
+    this.#maxQueuedTicks = options.maxQueuedTicks ?? 8;
+  }
+
+  snapshot(): readonly VfxGpuTickIntent[] {
+    return this.#intents;
+  }
+
+  diagnostics(): readonly VfxGpuRuntimeDiagnostic[] {
+    return this.#diagnostics;
+  }
+
+  hasPlayer(player: EntityHandle): boolean {
+    return this.#players.has(player);
+  }
+
+  setEmitterVisibility(player: EntityHandle, emitterId: string, visible: boolean): void {
+    this.#visibility.set(`${player}:${emitterId}`, visible);
+  }
+
+  /** Restart from tick zero without changing authored `ParticleEffectPlayer.playing`. */
+  replay(player: EntityHandle): void {
+    this.#replayRequests.add(player);
+    const state = this.#players.get(player);
+    if (state !== undefined) state.sessionPlaying = true;
+  }
+
+  commit(sequence: number): void {
+    const committedPlayers = new Set<EntityHandle>();
+    for (const intent of this.#intents) {
+      if (intent.sequence > sequence) break;
+      const state = this.#players.get(intent.player);
+      if (state !== undefined) state.hasCommitted = true;
+      committedPlayers.add(intent.player);
+    }
+    const retained = this.#intents.findIndex((intent) => intent.sequence > sequence);
+    if (retained < 0) this.#intents.length = 0;
+    else if (retained > 0) this.#intents.splice(0, retained);
+    for (const player of committedPlayers) {
+      this.#clearDiagnostics(player, 'vfx-intent-queue-overflow');
+    }
+  }
+
+  reset(player: EntityHandle): void {
+    this.#players.delete(player);
+    this.#replayRequests.delete(player);
+    const prefix = `${player}:`;
+    for (const key of this.#visibility.keys()) {
+      if (key.startsWith(prefix)) this.#visibility.delete(key);
+    }
+  }
+
+  #report(diagnostic: VfxGpuRuntimeDiagnostic): void {
+    const prior = this.#diagnostics.at(-1);
+    if (prior?.code === diagnostic.code && prior.detail.player === diagnostic.detail.player) return;
+    if (this.#diagnostics.length === 64) this.#diagnostics.shift();
+    this.#diagnostics.push(diagnostic);
+  }
+
+  #clearDiagnostics(player: EntityHandle, code?: VfxGpuRuntimeDiagnostic['code']): void {
+    for (let index = this.#diagnostics.length - 1; index >= 0; index -= 1) {
+      const diagnostic = this.#diagnostics[index];
+      if (
+        diagnostic?.detail.player === player &&
+        (code === undefined || diagnostic.code === code)
+      ) {
+        this.#diagnostics.splice(index, 1);
+      }
+    }
+  }
+
+  advance(
+    world: World,
+    tick: number,
+    fixedDelta: number,
+    players: readonly {
+      readonly player: EntityHandle;
+      readonly effect: Handle<'ParticleEffectAsset', 'shared'>;
+      readonly playing: boolean;
+      readonly seed: number;
+      readonly timeScale: number;
+    }[],
+  ): void {
+    this.#seen.clear();
+    for (const input of players) {
+      this.#seen.add(input.player);
+      if (!Number.isFinite(input.timeScale) || input.timeScale < 0) {
+        this.#report({
+          code: 'vfx-player-invalid',
+          expected: 'a finite non-negative particle timeScale',
+          hint: 'repair ParticleEffectPlayer.timeScale and restart the player',
+          detail: { player: input.player },
+        });
+        continue;
+      }
+      this.#clearDiagnostics(input.player, 'vfx-player-invalid');
+      const resolved = world.sharedRefs.resolve<'ParticleEffectAsset', VfxGpuEffectAsset>(
+        input.effect,
+      );
+      if (!resolved.ok || resolved.value.schemaVersion !== 2) {
+        this.#report({
+          code: 'vfx-effect-unavailable',
+          expected: 'a loaded schemaVersion 2 GPU particle effect',
+          hint: 'load and recook the effect before the first FixedUpdate',
+          detail: { player: input.player },
+        });
+        continue;
+      }
+      this.#clearDiagnostics(input.player, 'vfx-effect-unavailable');
+      const previous = this.#players.get(input.player);
+      const replayRequested = this.#replayRequests.delete(input.player);
+      const sessionPlaying = replayRequested || previous?.sessionPlaying === true;
+      const restart =
+        previous === undefined ||
+        previous.effect !== input.effect ||
+        previous.seed !== input.seed ||
+        replayRequested ||
+        (!previous.playing && input.playing);
+      const state = restart
+        ? {
+            effect: input.effect,
+            seed: input.seed,
+            playing: input.playing,
+            sessionPlaying,
+            playCycle: (previous?.playCycle ?? -1) + 1,
+            elapsed: resolved.value.program.emitters.map(() => 0),
+            rateRemainders: resolved.value.program.emitters.map(() => 0),
+            nextParticleIds: resolved.value.program.emitters.map(() => 0),
+            playCycles: resolved.value.program.emitters.map(() => (previous?.playCycle ?? -1) + 1),
+            visible: resolved.value.program.emitters.map(() => true),
+            hasCommitted: false,
+          }
+        : previous;
+      this.#players.set(input.player, state);
+      state.sessionPlaying = sessionPlaying;
+      if (input.playing) state.sessionPlaying = false;
+      state.playing = input.playing || state.sessionPlaying;
+      if (!state.playing) continue;
+      const queuedForPlayer = this.#intents.reduce(
+        (count, intent) => count + (intent.player === input.player ? 1 : 0),
+        0,
+      );
+      if (
+        queuedForPlayer >=
+        this.#maxQueuedTicks * Math.max(1, resolved.value.program.emitters.length)
+      ) {
+        if (state.hasCommitted) {
+          this.#report({
+            code: 'vfx-intent-queue-overflow',
+            expected: `at most ${this.#maxQueuedTicks} unconsumed fixed ticks`,
+            hint: 'recover or restart the renderer; VFX does not silently discard simulation ticks',
+            detail: { player: input.player, maxQueuedTicks: this.#maxQueuedTicks },
+          });
+        }
+        continue;
+      }
+      const delta = fixedDelta * input.timeScale;
+      for (const [index, emitter] of resolved.value.program.emitters.entries()) {
+        const visible = this.#visibility.get(`${input.player}:${emitter.id}`) ?? true;
+        const becameVisible = visible && state.visible[index] === false;
+        state.visible[index] = visible;
+        if (!visible && emitter.simulationWhenCulled !== 'continue') continue;
+        const visibilityRestart =
+          becameVisible && emitter.simulationWhenCulled === 'restart-on-visible';
+        if (visibilityRestart) {
+          state.elapsed[index] = 0;
+          state.rateRemainders[index] = 0;
+          state.nextParticleIds[index] = 0;
+          state.playCycles[index] = (state.playCycles[index] ?? state.playCycle) + 1;
+        }
+        const previousElapsed = state.elapsed[index] ?? 0;
+        const scheduled = spawnCount(
+          emitter,
+          previousElapsed,
+          previousElapsed + delta,
+          restart || visibilityRestart,
+          state.rateRemainders[index] ?? 0,
+        );
+        state.rateRemainders[index] = scheduled.remainder;
+        const firstParticleId = state.nextParticleIds[index] ?? 0;
+        state.nextParticleIds[index] = firstParticleId + scheduled.count;
+        this.#intents.push(
+          Object.freeze({
+            sequence: this.#sequence++,
+            player: input.player,
+            emitter,
+            programFingerprint: resolved.value.program.fingerprint,
+            reset: restart || visibilityRestart,
+            fixedDelta: delta,
+            tick,
+            seed: input.seed,
+            playCycle: state.playCycles[index] ?? state.playCycle,
+            spawnCount: scheduled.count,
+            firstParticleId,
+          }),
+        );
+        state.elapsed[index] = previousElapsed + delta;
+      }
+    }
+    for (const player of this.#players.keys()) {
+      if (!this.#seen.has(player)) this.reset(player);
+    }
+  }
+}
+
+function spawnCount(
+  emitter: VfxGpuEmitterProgram,
+  previous: number,
+  next: number,
+  firstTick: boolean,
+  priorRemainder: number,
+): { readonly count: number; readonly remainder: number } {
+  const exactRate = emitter.schedule.rate * Math.max(0, next - previous) + priorRemainder;
+  let count = Math.floor(exactRate);
+  const loop = emitter.schedule.loopDuration;
+  for (const burst of emitter.schedule.bursts ?? []) {
+    if (loop === undefined) {
+      if ((firstTick && burst.time === 0) || (burst.time > previous && burst.time <= next)) {
+        count += burst.count;
+      }
+      continue;
+    }
+    const firstOccurrence = Math.max(0, Math.floor((previous - burst.time) / loop) + 1);
+    const lastOccurrence = Math.floor((next - burst.time) / loop);
+    const occurrences = Math.max(0, lastOccurrence - firstOccurrence + 1);
+    count += occurrences * burst.count;
+    if (firstTick && burst.time === 0) count += burst.count;
+  }
+  return { count, remainder: exactRate - Math.floor(exactRate) };
+}
+
+export function vfxGpuRuntimePlugin(options: VfxGpuRuntimeOptions = {}): Plugin {
+  const rows: {
+    player: EntityHandle;
+    effect: Handle<'ParticleEffectAsset', 'shared'>;
+    playing: boolean;
+    seed: number;
+    timeScale: number;
+  }[] = [];
+  return {
+    name: 'vfx-gpu-runtime',
+    build(world) {
+      if (world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) {
+        return err(
+          new PluginError({
+            code: 'plugin-build-failed',
+            expected: 'one VFX GPU runtime per World',
+            hint: 'reuse the attached VFX host or detach it before installing another',
+            detail: {
+              pluginName: 'vfx-gpu-runtime',
+              cause: `${VFX_GPU_RUNTIME_RESOURCE_KEY} already exists`,
+            },
+          }),
+        );
+      }
+      const runtime = new VfxGpuRuntime(options);
+      world.insertResource(VFX_GPU_RUNTIME_RESOURCE_KEY, runtime);
+      const added = world.addSystem(FixedUpdate, {
+        name: 'vfx-gpu-runtime',
+        queries: [{ with: [Entity, ParticleEffectPlayer] }],
+        fn: (world, queryResults) => {
+          rows.length = 0;
+          for (const row of queryResults[0]) {
+            const player = row.get(ParticleEffectPlayer);
+            rows.push({
+              player: row.entity,
+              effect: toShared<'ParticleEffectAsset'>(player.effect),
+              playing: player.playing,
+              seed: player.seed,
+              timeScale: player.timeScale,
+            });
+          }
+          const fixed = world.getResource(FixedTime);
+          runtime.advance(world, fixed.tick, fixed.delta, rows);
+        },
+      });
+      if (!added.ok) {
+        world.removeResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
+        return err(
+          new PluginError({
+            code: 'plugin-build-failed',
+            expected: 'the VFX GPU FixedUpdate system name to be available',
+            hint: 'remove the conflicting system before attaching the VFX host',
+            detail: { pluginName: 'vfx-gpu-runtime', cause: added.error.code },
+          }),
+        );
+      }
+      return ok(undefined);
+    },
+  };
+}

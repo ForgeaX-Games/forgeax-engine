@@ -4,6 +4,37 @@ import { toMaterialAsset } from '../bridge.js';
 import type { GltfMaterialIr } from '../parse-gltf.js';
 
 describe('glTF material bridge values', () => {
+  it('preserves all four base-color channels for factor and texture composition', () => {
+    const factor = [0.5, 0.75, 0.25, 0.4] as const;
+    const material = toMaterialAsset({
+      baseColorFactor: factor,
+      metallicFactor: 0.5,
+      roughnessFactor: 0.7,
+      baseColorTexture: { texture: 0 },
+    } as unknown as GltfMaterialIr);
+
+    expect(material.values).toMatchObject({ baseColor: factor });
+    expect(material.values).not.toHaveProperty('baseColorAlpha');
+    expect(material.values).not.toHaveProperty('textureAlphaFactor');
+  });
+
+  it.each([
+    ['default', undefined, 0.5],
+    ['explicit', 0.73, 0.73],
+    ['zero', 0, 0],
+    ['one', 1, 1],
+  ] as const)('projects MASK %s cutoff into the material contract', (_name, authored, expected) => {
+    const material = toMaterialAsset({
+      baseColorFactor: [1, 1, 1, 0.5],
+      metallicFactor: 0,
+      roughnessFactor: 1,
+      alphaMode: 'MASK',
+      ...(authored === undefined ? {} : { alphaCutoff: authored }),
+    } as unknown as GltfMaterialIr);
+
+    expect(material.values?.alphaCutoff).toBe(expected);
+  });
+
   it('projects five structured texture slots into standard-root values', () => {
     const material = toMaterialAsset(
       {

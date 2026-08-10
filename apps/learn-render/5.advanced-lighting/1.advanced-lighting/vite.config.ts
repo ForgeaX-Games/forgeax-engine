@@ -1,5 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
@@ -9,6 +11,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-5-1-advanced-lighting');
 
 export default withRhiDebug({
   here,
@@ -18,7 +21,9 @@ export default withRhiDebug({
   materialPackages: [resolve(here, 'src/blinn-phong.pack.json')],
   extraPlugins: [
     pluginPack({
+      runtimeBinding,
       refresh: reloadAssetHost(),
+      importers: [imageImporter],
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')],
     }),
   ],

@@ -142,7 +142,10 @@ export function extractDrawInfos(events: readonly RhiCallEvent[]): readonly Draw
     const pipelineInfo =
       currentPassHandleId !== undefined ? lastSeenPerPass.get(currentPassHandleId) : undefined;
     const pipelineKind =
-      pipelineInfo?.pipelineKind ?? (event.kind === 'dispatchWorkgroups' ? 'compute' : 'render');
+      pipelineInfo?.pipelineKind ??
+      (event.kind === 'dispatchWorkgroups' || event.kind === 'dispatchWorkgroupsIndirect'
+        ? 'compute'
+        : 'render');
     const pipelineHandleId = pipelineInfo?.pipelineHandleId ?? 'unknown';
     let drawCall: InspectDrawCall;
     if (event.kind === 'draw') {
@@ -178,6 +181,13 @@ export function extractDrawInfos(events: readonly RhiCallEvent[]): readonly Draw
         dispatchX: event.x,
         dispatchY: event.y,
         dispatchZ: event.z,
+      };
+    } else if (event.kind === 'dispatchWorkgroupsIndirect') {
+      drawCall = {
+        pipelineKind,
+        pipelineHandleId,
+        indirectBufferHandleId: event.indirectBufferHandleId,
+        indirectOffset: event.indirectOffset,
       };
     } else {
       // DRAW_KINDS is closed; keep a defensive shape if the set and event

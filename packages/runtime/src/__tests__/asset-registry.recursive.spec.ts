@@ -912,15 +912,11 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
   {
     label: 'audio',
     kind: 'audio',
-    makeAsset: () =>
-      // AudioClipAsset requires a real AudioBuffer; in this test we verify the
-      // leaf registry lifecycle (no sub-asset edges, OOS-11 no internal data
-      // pre-load). A typed partial satisfies the unit under test without
-      // decoding real PCM.
-      ({
-        kind: 'audio' as const,
-        buffer: { length: 0, sampleRate: 48000, numberOfChannels: 1, duration: 0 } as AudioBuffer,
-      }),
+    makeAsset: () => ({
+      kind: 'audio' as const,
+      sourceKey: 'fixture-audio',
+      bytes: new Uint8Array(),
+    }),
   },
   {
     label: 'font',

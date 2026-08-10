@@ -7,8 +7,8 @@ import type {
 import { ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
-type ParticleRenderBatch = {
-  readonly batches: readonly unknown[];
+type PreparedFrame = {
+  readonly items: readonly unknown[];
 };
 
 interface PreparedGraphicsRefs {
@@ -50,11 +50,11 @@ function describeRenderFeatureError(error: RenderFeatureErrorDescriptor): string
   }
 }
 
-function publicPreparedRecipe(batch: ParticleRenderBatch): RenderFeature<ParticleRenderBatch> {
+function publicPreparedRecipe(frame: PreparedFrame): RenderFeature<PreparedFrame> {
   let prepared: PreparedGraphicsRefs | undefined;
-  const feature: RenderFeature<ParticleRenderBatch> = {
+  const feature: RenderFeature<PreparedFrame> = {
     identity: 'docs.prepared-graphics',
-    extract: () => ok(batch),
+    extract: () => ok(frame),
     prepare: (data, context): Result<void, RenderError> => {
       const pipeline = context.graphics.preparePipeline('docs.pipeline', {
         shader: 'docs.shader',
@@ -64,7 +64,7 @@ function publicPreparedRecipe(batch: ParticleRenderBatch): RenderFeature<Particl
       if (!pipeline.ok) return pipeline;
       const bindings = context.graphics.prepareBindings('docs.bindings', {
         pipeline: pipeline.value,
-        values: { batchCount: data.batches.length },
+        values: { itemCount: data.items.length },
       });
       if (!bindings.ok) return bindings;
       const vertexData = context.graphics.prepareVertexData('docs.vertices', {
@@ -101,7 +101,7 @@ function publicPreparedRecipe(batch: ParticleRenderBatch): RenderFeature<Particl
             bindings: [prepared.bindings],
             vertexData: [{ slot: 0, resource: prepared.vertexData }],
             command: {
-              vertexCount: data.batches.length * 0,
+              vertexCount: data.items.length * 0,
               instanceCount: 1,
             },
           },
@@ -114,11 +114,11 @@ function publicPreparedRecipe(batch: ParticleRenderBatch): RenderFeature<Particl
 
 describe('public prepared graphics recipe', () => {
   it('keeps the public imports and callback inference type-safe', () => {
-    const batch: ParticleRenderBatch = { batches: [] };
-    expectTypeOf(publicPreparedRecipe).parameter(0).toMatchTypeOf<ParticleRenderBatch>();
-    expectTypeOf(publicPreparedRecipe).returns.toMatchTypeOf<RenderFeature<ParticleRenderBatch>>();
+    const frame: PreparedFrame = { items: [] };
+    expectTypeOf(publicPreparedRecipe).parameter(0).toMatchTypeOf<PreparedFrame>();
+    expectTypeOf(publicPreparedRecipe).returns.toMatchTypeOf<RenderFeature<PreparedFrame>>();
     expect(typeof publicPreparedRecipe).toBe('function');
-    expect(batch.batches).toHaveLength(0);
+    expect(frame.items).toHaveLength(0);
   });
 
   it('keeps structured error fields available without message parsing', () => {

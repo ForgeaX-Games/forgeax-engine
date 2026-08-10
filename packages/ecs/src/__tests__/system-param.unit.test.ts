@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defineComponent, defineSystemParam, Entity, Update, World } from '../index';
+import { defineComponent, defineSystemParam, Update, World } from '../index';
 
 const Player = defineComponent('SystemParamPlayer', {});
 const PLAYER_COUNT = 'systemParamPlayerCount';
@@ -8,11 +8,10 @@ describe('system parameters', () => {
   it('resolves a reusable query/resource bundle as a typed system argument', () => {
     const PlayerCounter = defineSystemParam({
       name: 'player-counter',
-      queries: [{ with: [Player, Entity] }],
+      queries: [{ with: [Player] }],
       resources: [PLAYER_COUNT],
       resolve: (world, queryResults) => ({
-        playerCount:
-          queryResults[0]?.reduce((count, bundle) => count + bundle.Entity.self.length, 0) ?? 0,
+        playerCount: queryResults[0] === undefined ? 0 : [...queryResults[0]].length,
         resource: world.getResource<{ value: number }>(PLAYER_COUNT),
       }),
     });

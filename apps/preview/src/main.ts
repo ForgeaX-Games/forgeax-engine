@@ -20,7 +20,7 @@ import {
   isLoadGameError,
   loadGame,
 } from '@forgeax/engine-app';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin } from '@forgeax/engine-audio';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';

@@ -22,6 +22,7 @@ import type {
   ResourceDescriptor,
   ResourceLifetime,
 } from './graph.js';
+import type { ColorValueDomain } from './pipeline/color-value-domain.js';
 
 /**
  * Per-resource GPU allocation metadata carried through compile.
@@ -34,6 +35,8 @@ export interface ColorTargetResourceMeta {
   readonly size: ColorTargetSize;
   readonly sample: number;
   readonly usage: number;
+  /** Explicit semantic color domain; never derived from format. */
+  readonly domain?: ColorValueDomain | undefined;
   /**
    * Extra texture view formats pre-declared at GPU texture creation. Mirrors
    * GPUTextureDescriptor.viewFormats. Used by the LDR MSAA path which needs a
@@ -91,6 +94,7 @@ export class ResourceRegistry {
       size: desc.size,
       sample: desc.sample ?? 1,
       usage: desc.usage ?? 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+      ...(desc.domain !== undefined ? { domain: desc.domain } : {}),
       ...(desc.viewFormats !== undefined ? { viewFormats: desc.viewFormats } : {}),
     };
     const entry: ResourceEntry = {
@@ -121,6 +125,7 @@ export class ResourceRegistry {
             size: sourceMeta.size,
             sample: sourceMeta.sample,
             usage: sourceMeta.usage,
+            ...(sourceMeta.domain !== undefined ? { domain: sourceMeta.domain } : {}),
             aliasedFrom: source,
           }
         : {
@@ -137,6 +142,10 @@ export class ResourceRegistry {
 
   get(key: string): ResourceEntry | undefined {
     return this.resources.get(key);
+  }
+
+  getColorTargetMeta(key: string): ColorTargetResourceMeta | undefined {
+    return this.resources.get(key)?.colorTarget;
   }
 
   has(key: string): boolean {

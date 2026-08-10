@@ -68,7 +68,7 @@ export class SharedFieldInvalidValueError extends Error {
 // (add member only).
 //
 // All 3 codes are DECLARED here (M1) but FIRED at the render-system-extract
-// queryRun callback (M3 w13) — plan-strategy D-6 "fail-fast at the render
+// QueryRow loop (M3 w13) — plan-strategy D-6 "fail-fast at the render
 // domain entry, not at ECS spawn-time (avoids reverse dep ECS -> AssetRegistry
 // to look up MaterialAsset.shadingModel)". M1 carries class declarations only;
 // the `_routeError` call sites land in M3.

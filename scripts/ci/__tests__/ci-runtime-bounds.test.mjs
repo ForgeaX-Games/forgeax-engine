@@ -19,8 +19,10 @@ const mesaVulkanAction = readFileSync(
   'utf8',
 );
 
-test('coverage-pnpm bounds Vitest workers on the shared self-hosted machine', () => {
-  assert.match(workflow, /pnpm exec vitest run --maxWorkers=4 --typecheck --coverage/);
+test('coverage-pnpm derives a bounded Vitest worker budget on the shared self-hosted machine', () => {
+  assert.match(workflow, /id: vitest-workers[\s\S]*?node scripts\/ci\/resolve-vitest-workers\.mjs/);
+  assert.match(workflow, /--maxWorkers="\$MAX_WORKERS" --typecheck --coverage/);
+  assert.doesNotMatch(workflow, /--maxWorkers=4 --typecheck --coverage/);
 });
 
 test('CI harness materialization uses a blob-filtered docs-only clone', () => {

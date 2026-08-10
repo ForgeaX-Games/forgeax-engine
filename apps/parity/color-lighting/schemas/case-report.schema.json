@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/color-lighting/case-report.schema.json",
+  "title": "Color lighting parity case report",
+  "oneOf": [
+    { "$ref": "#/$defs/crossRuntimeCaseReport" },
+    { "$ref": "#/$defs/captureMatrixCaseReport" },
+    { "$ref": "#/$defs/iblCaseReport" }
+  ],
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "version", "renderer", "adapterId"],
+      "properties": {
+        "implementation": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "renderer": { "type": "string", "minLength": 1 },
+        "adapterId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "status", "bytes", "format", "size", "rawHash", "frameId", "pipelineId", "backendId"],
+      "properties": {
+        "kind": { "enum": ["linearHdr", "finalDisplay"] },
+        "status": { "const": "ready" },
+        "bytes": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "format": { "type": "string", "minLength": 1 },
+        "size": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "rawHash": { "type": "string", "pattern": "^[0-9a-f-]{8,}$" },
+        "frameId": { "type": "integer", "minimum": 0 },
+        "pipelineId": { "enum": ["forgeax::urp", "forgeax::hdrp"] },
+        "backendId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pipelineId", "runtimeId", "backendId", "frameId", "copySrc", "lifetime", "provenance", "semantic", "source", "sourceHash", "semanticHash", "linearHdr", "finalDisplay"],
+      "properties": {
+        "pipelineId": { "enum": ["forgeax::urp", "forgeax::hdrp"] },
+        "runtimeId": { "enum": ["browser", "dawn"] },
+        "backendId": { "type": "string", "minLength": 1 },
+        "frameId": { "type": "integer", "minimum": 0 },
+        "copySrc": { "const": true },
+        "lifetime": { "const": "active" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "semantic": { "const": "linear-hdr" },
+        "source": { "const": "live-producer" },
+        "sourceHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "semanticHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "linearHdr": { "$ref": "#/$defs/observation" },
+        "finalDisplay": { "$ref": "#/$defs/observation" }
+      }
+    },
+    "attachmentEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producers", "attachmentReadbackStatus", "capabilityStatus", "executionStatus", "verdict", "capturedPipelineIds", "missingPipelineIds"],
+      "properties": {
+        "producers": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/producer" } },
+        "attachmentReadbackStatus": { "const": "complete" },
+        "capabilityStatus": { "const": "supported" },
+        "executionStatus": { "const": "complete" },
+        "verdict": { "const": "passed" },
+        "capturedPipelineIds": { "type": "array", "uniqueItems": true, "items": { "enum": ["urp", "hdrp"] } },
+        "missingPipelineIds": { "type": "array", "uniqueItems": true, "items": { "enum": ["urp", "hdrp"] } }
+      }
+    },
+    "crossRuntimeCaseReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "caseId", "required", "invocationId", "sceneCaseIdentity", "attachmentEvidence", "verdict", "status"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "caseId": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "invocationId": { "type": "string", "minLength": 1 },
+        "sceneCaseIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sourceHash", "semanticHash"],
+          "properties": {
+            "sourceHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "semanticHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        "attachmentEvidence": { "$ref": "#/$defs/attachmentEvidence" },
+        "verdict": { "const": "passed" },
+        "status": { "const": "complete" }
+      }
+    },
+    "namedCaptures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["linear", "final", "hash"],
+      "properties": {
+        "linear": { "type": "array", "items": { "type": "number" } },
+        "final": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "hash": { "type": "string", "pattern": "^[0-9a-f-]{8,}$" }
+      }
+    },
+    "captureMatrixCaseReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "caseId", "required", "invocationId", "sceneCaseIdentity", "primary", "dawn", "verdict", "status"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "kind": { "const": "capture-matrix" },
+        "caseId": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "invocationId": { "type": "string", "minLength": 1 },
+        "sceneCaseIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sourceHash", "semanticHash"],
+          "properties": {
+            "sourceHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "semanticHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        "primary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "backendId", "forgeax", "three", "metrics"],
+          "properties": {
+            "status": { "enum": ["pass", "failed"] },
+            "backendId": { "const": "browser-webgpu" },
+            "forgeax": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["provenance", "captures"],
+              "properties": {
+                "provenance": { "$ref": "#/$defs/provenance" },
+                "captures": { "$ref": "#/$defs/namedCaptures" }
+              }
+            },
+            "three": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["provenance", "captures"],
+              "properties": {
+                "provenance": { "$ref": "#/$defs/provenance" },
+                "captures": { "$ref": "#/$defs/namedCaptures" }
+              }
+            },
+            "metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["analyticMax", "roiMax", "differingBytes"],
+              "properties": {
+                "analyticMax": { "type": "number", "minimum": 0 },
+                "roiMax": { "type": "number", "minimum": 0 },
+                "differingBytes": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "dawn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "observations"],
+          "properties": {
+            "status": { "enum": ["pass", "failed"] },
+            "observations": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["caseId", "pipelineId", "backendId", "frameId", "bytes", "rawHash"],
+                "properties": {
+                  "caseId": { "type": "string", "minLength": 1 },
+                  "pipelineId": { "enum": ["forgeax::urp", "forgeax::hdrp"] },
+                  "backendId": { "type": "string", "minLength": 1 },
+                  "frameId": { "type": "integer", "minimum": 0 },
+                  "bytes": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+                  "rawHash": { "type": "string", "pattern": "^[0-9a-f-]{8,}$" }
+                }
+              }
+            }
+          }
+        },
+        "verdict": { "enum": ["passed", "failed"] },
+        "status": { "enum": ["complete", "failed"] }
+      }
+    },
+    "iblProducer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "evidence", "finalDisplay", "analytic"],
+      "properties": {
+        "capability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["capabilityStatus", "executionStatus", "verdict", "rgba16floatRenderable", "outputFormat", "fallbackArtifact", "expectedImpact", "hint", "lastKnownGood"],
+          "properties": {
+            "capabilityStatus": { "enum": ["missing", "unsupported", "degraded", "supported"] },
+            "executionStatus": { "enum": ["notExecuted", "running", "partial", "complete"] },
+            "verdict": { "enum": ["notRun", "failed", "passed"] },
+            "rgba16floatRenderable": { "type": "boolean" },
+            "outputFormat": { "type": ["string", "null"] },
+            "fallbackArtifact": { "enum": ["white-cube", null] },
+            "expectedImpact": { "type": "string", "minLength": 1 },
+            "hint": { "type": "string", "minLength": 1 },
+            "lastKnownGood": { "type": "string", "minLength": 1 }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "attachmentName", "layer", "bytes", "format", "size", "rawHash", "frameId", "lifetime", "capabilitySnapshot", "fallbackArtifact", "lastKnownGood"],
+          "properties": {
+            "status": { "enum": ["ready", "failed"] },
+            "attachmentName": { "type": "string", "minLength": 1 },
+            "layer": { "type": "integer", "minimum": 0 },
+            "bytes": { "type": ["array", "null"], "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+            "format": { "type": ["string", "null"] },
+            "size": { "type": ["object", "null"], "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 } } },
+            "rawHash": { "type": ["string", "null"], "pattern": "^[0-9a-f-]{8,}$" },
+            "frameId": { "type": ["integer", "null"], "minimum": 0 },
+            "lifetime": { "type": ["object", "null"], "additionalProperties": false, "required": ["frameId", "state"], "properties": { "frameId": { "type": "integer", "minimum": 0 }, "state": { "enum": ["active", "retired"] } } },
+            "capabilitySnapshot": { "type": "object", "additionalProperties": false, "required": ["rgba16floatRenderable"], "properties": { "rgba16floatRenderable": { "type": "boolean" } } },
+            "fallbackArtifact": { "type": ["string", "null"] },
+            "lastKnownGood": { "type": "string", "minLength": 1 }
+          }
+        },
+        "finalDisplay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "bytes", "format", "rawHash"],
+          "properties": {
+            "status": { "enum": ["ready", "failed"] },
+            "bytes": { "type": ["array", "null"], "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+            "format": { "enum": ["rgba8unorm", null] },
+            "rawHash": { "type": ["string", "null"], "pattern": "^[0-9a-f-]{8,}$" }
+          }
+        },
+        "analytic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["environment", "payload", "reconstructed", "maxError"],
+          "properties": {
+            "environment": { "type": "number" },
+            "payload": { "type": "number" },
+            "reconstructed": { "type": "number" },
+            "maxError": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "iblCaseReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "caseId", "required", "invocationId", "producers", "verdict", "status"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "kind": { "const": "ibl" },
+        "caseId": { "const": "ibl-constant-environment" },
+        "required": { "type": "boolean" },
+        "invocationId": { "type": "string", "minLength": 1 },
+        "producers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["browser", "dawn"],
+          "properties": {
+            "browser": { "$ref": "#/$defs/iblProducer" },
+            "dawn": { "$ref": "#/$defs/iblProducer" }
+          }
+        },
+        "verdict": { "enum": ["passed", "failed"] },
+        "status": { "enum": ["complete", "failed"] }
+      }
+    }
+  }
+}

@@ -18,7 +18,7 @@ describe('schedule-owned deferred commands', () => {
     world.addSystem(Update, {
       name: 'consumer',
       queries: [{ with: [Marker] }],
-      fn: (_world, results) => (observed += results[0].length),
+      fn: (_world, results) => (observed += [...results[0]].length),
     });
 
     expect(world.update(0).ok).toBe(true);
@@ -59,7 +59,7 @@ describe('schedule-owned deferred commands', () => {
     world.addSystem(FixedUpdate, {
       name: 'fixed-observer',
       queries: [{ with: [Marker] }],
-      fn: (_world, results) => (fixedObserved += results[0].length),
+      fn: (_world, results) => (fixedObserved += [...results[0]].length),
     });
 
     expect(world.update(1 / 60).ok).toBe(true);

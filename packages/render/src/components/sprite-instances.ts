@@ -164,7 +164,7 @@ export const SpriteInstances = defineComponent('SpriteInstances', {
  * slot). Both fields are typed as `Float32Array` so AI-user IDE
  * autocomplete picks up the typed-array shape and the AC-09 inference
  * surfaces without `as` casts inside `world.get(e, SpriteInstances)` and
- * queryRun callback paths.
+ * QueryRow access paths.
  *
  * @example
  *   import type { SpriteInstancesData } from '@forgeax/engine-render/authoring';

@@ -84,3 +84,28 @@ export class RecoverError extends Error {
     this.name = 'RecoverError';
   }
 }
+
+export type IblCapabilityLossCode = 'ibl-hdr-capability-loss';
+
+export interface IblCapabilityLossDetail {
+  readonly fallbackArtifact: 'white-cube';
+  readonly rgba16floatRenderable: false;
+  readonly lastKnownGood: string;
+}
+
+export class IblCapabilityLossError extends Error {
+  readonly code: IblCapabilityLossCode = 'ibl-hdr-capability-loss';
+  readonly expected = 'rgba16float renderability is required for the IBL HDR producer';
+  readonly hint = 'enable rgba16floatRenderable or inspect the last-known-good IBL capture';
+  readonly detail: IblCapabilityLossDetail;
+
+  constructor(lastKnownGood: string) {
+    super('ibl-hdr-capability-loss: IBL HDR producer is unavailable');
+    this.name = 'IblCapabilityLossError';
+    this.detail = {
+      fallbackArtifact: 'white-cube',
+      rgba16floatRenderable: false,
+      lastKnownGood,
+    };
+  }
+}

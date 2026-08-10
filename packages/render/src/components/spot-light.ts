@@ -11,10 +11,10 @@
 // `cosOuter` before GPU upload (plan-strategy section 8.2 naming convention
 // + D-3 host-side cone conversion).
 //
-// `range` units are meters; defaults to `10.0` (KHR_lights_punctual convention).
-// Falloff follows the same KHR quartic formula as PointLight; the cone falloff
-// is layered on top with `smoothstep(cosOuter, cosInner, dot(L, -direction))`
-// (plan-strategy D-S4).
+// `range` units are meters; defaults to `10.0`. Runtime finite-range
+// attenuation is the Three r184 squared window; the KHR unsquared curve is an
+// import/reference boundary only. The cone falloff is layered on top with
+// `smoothstep(cosOuter, cosInner, dot(L, -direction))` (plan-strategy D-S4).
 //
 // 0 light + standard material -> physically correct black render. The
 // once-warn channel collapses to "directionalCount + pointCount +
@@ -47,8 +47,9 @@ import { validateDirection } from './light-helpers';
  * `direction` @semantics outgoing -- points FROM light source TO the
  * scene (consistent with `DirectionalLight`; the shader internally negates
  * this vector to obtain the L vector for BRDF evaluation:
- * `let l = normalize(-light.direction)`). `normalize` yourself if needed --
- * the shader does not re-normalize. `position` source: the companion
+ * `let l = normalize(-light.direction)`). Extract owns the single
+ * normalization step for the snapshot; URP and HDRP consume that normalized
+ * value without re-normalizing. `position` source: the companion
  * `Transform` component on the same entity.
  *
  * `innerConeDeg` is the half-angle of the saturated bright region (cone
@@ -60,8 +61,9 @@ import { validateDirection } from './light-helpers';
  * only sees pre-computed cosines (plan-strategy D-S2 byte freeze; charter
  * P4 host pre-multiplication parity).
  *
- * `color` is linear-space rgb in `[0, 1]` per channel; `intensity` is a
- * scalar multiplier; `range` is in meters and defaults to `10.0`.
+ * `color` is linear-space rgb in `[0, 1]` per channel; `intensity` is candela;
+ * `range` is in meters and defaults to `10.0`. Exposure is a camera output
+ * operation and does not change the stored intensity.
  *
  * Shadow fields (embedded, aligned with DirectionalLight):
  *   castShadow    ∈ {true, false}    — shadow opt-out gate (default true)

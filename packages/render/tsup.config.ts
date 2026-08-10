@@ -12,5 +12,11 @@ export default defineConfig({
     '@forgeax/engine-ecs',
     '@forgeax/engine-math',
     '@forgeax/engine-pack',
+    // Backend modules own process-local device registries (for example the
+    // WebGPU RhiDevice -> GPUDevice reverse lookup used by lazy shader
+    // compilation). Bundling a second copy makes an otherwise live device
+    // appear unregistered when a custom material is compiled after boot.
+    '@forgeax/engine-rhi-webgpu',
+    '@forgeax/engine-rhi-wgpu',
   ],
 });

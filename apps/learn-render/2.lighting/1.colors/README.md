@@ -98,6 +98,49 @@ FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_TRANSFORM=1 pnpm --filter "@forgeax/app-l
 # from the same 2x2 texture; the UV0 response must remain distinguishable
 FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_UV_SET=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
 
+# Material base-color texture mipmap-filter control: use the real generated
+# 4x4 mip chain at a fixed half-level LOD so linear and nearest mip selection
+# produce distinct localized responses
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MIPMAP_FILTER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material base-color texture upper-LOD clamp control: use the same real 4x4
+# generated mip chain with a high-frequency nested sampler and coordinates;
+# the capped response must differ from the paired unclamped control
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MAX_CLAMP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material base-color texture lower-LOD clamp control: use the same real 4x4
+# generated mip chain at low-frequency coordinates; the raised response must
+# differ from the paired unclamped control
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_LOD_MIN_CLAMP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material base-color texture anisotropy control: use the same real 4x4 mip
+# chain with a high-frequency anisotropic UV footprint; maxAnisotropy=16 must
+# differ from the paired sampler with the field omitted (the effective value is 1)
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material base-color texture sRGB control: bind the same midrange texel with
+# either an sRGB or linear TextureAsset format; the two readback responses must differ
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SRGB=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SRGB=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material base-color texture mipmap control: bind the same 4x4 linear
+# high-frequency texture and fixed two-level sampler; only TextureAsset.mipmap
+# changes, so generated mip sampling and the single-level response stay distinct
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_MIPMAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_MIPMAP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# The browser capture path must preserve the same texture format through capture/replay
+VITE_FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SRGB=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_SRGB=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# The browser capture path must preserve the generated-mip level count while
+# replaying the paired single-level TextureAsset
+VITE_FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_MIPMAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_BASE_COLOR_TEXTURE_MIPMAP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
 # Material metallic-roughness texture control: bind a real black linear TextureAsset
 # to the same standard material's metallic/roughness slot; its response must move from default
 FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
@@ -110,6 +153,90 @@ FALSIFY_MATERIAL_METALLIC_CHANNEL=2 pnpm --filter "@forgeax/app-learn-render-2-l
 # Material metallic-channel positive control: select R=0 from that same texel;
 # R and the default G roughness lane are both one, so only metallic changes
 FALSIFY_MATERIAL_METALLIC_CHANNEL=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material roughness-channel negative control: bind [R=0,G=1,B=0,A=1] and keep
+# the glTF default G=1 selector, so the response stays at the default baseline
+FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material roughness-channel positive control: select B=2 from that same texel;
+# B=0 changes the sampled roughness response
+FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=2 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+
+# Material metallic-roughness texture UV-transform control: compare the same
+# 2x2 linear MR texture with and without the nested coordinates transform
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture UV-set control: clone the real cube with
+# UV1=[0.75,0.75], select coordinates.set=1 on the MR slot, and compare it with
+# the same 2x2 texture sampled through UV0
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler control: compare the same real
+# 2x2 MR texture through nested linear and nearest SamplerAsset descriptors
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler magFilter control: keep
+# minFilter=linear, mipmapFilter=nearest, addressMode=clamp-to-edge, and the
+# default cube UV footprint while comparing nearest versus linear magFilter on
+# the same real 2x2 MR texture. The control accepts 1=nearest and 0=linear.
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAG_FILTER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAG_FILTER=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAG_FILTER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAG_FILTER=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler-address control: sample the same
+# 2x2 MR texture at fixed UV=[1.25,0.75] through explicit clamp versus repeat addressing
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_ADDRESS=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler mipmapFilter control: compare the
+# same real 4x4 MR texture at fixed LOD 0.5 with generated mip levels and nested
+# nearest versus linear mipmap filtering.
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MIPMAP_FILTER=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler lodMinClamp control: compare the
+# same real 4x4 MR texture with lodMaxClamp fixed at 1 and minimum LOD 1 versus 0.
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MIN_CLAMP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler lodMaxClamp control: compare the
+# same real 4x4 MR texture with lodMinClamp fixed at 0 and maximum LOD 0 versus 1.
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_LOD_MAX_CLAMP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture sampler maxAnisotropy control: compare
+# maxAnisotropy=16 against the default maxAnisotropy=1 on a real 4x4 MR texture
+# with a repeat-heavy anisotropic footprint.
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER_MAX_ANISOTROPY=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+
+# Material metallic-roughness texture mipmap control: compare the same real 4x4
+# linear MR texture at fixed LOD 1 with generated mip levels enabled versus the
+# single authored level.
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:rhi-debug
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
+VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_MIPMAP=0 pnpm --filter "@forgeax/app-learn-render-2-lighting-1-colors" smoke:browser
 
 # Material clearcoat control: enable the same standard material's clearcoat layer;
 # its response must move from the default no-coat result
@@ -268,6 +395,97 @@ at one, so the cube moves to the fully metallic response. Both controls require 
 texture upload, binding, UBO selector, and `pick_channel` fragment path; unsupported control values
 are rejected before Dawn setup.
 
+The roughness-channel controls bind a 1x1 linear `[R=0,G=1,B=0,A=1]` MR texture while
+keeping authored `roughness=0.5`. The negative `FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=1` lane
+selects the glTF default G value and preserves the default response. The positive `=2` lane
+selects B=0 and must move `cubeCenter` by more than `0.02`, proving the producer-owned selector
+survives Materials construction, the param snapshot/UBO overlay, texture binding, and the
+fragment `pick_channel` path. The controls are mutually exclusive with the metallic-channel
+witness and generic MR-texture control; unsupported values fail before Dawn setup.
+
+The metallic-roughness texture UV-transform controls bind the same 2x2 linear texture with
+`[R=0,G=1,B=0,A=1]` at the origin and G=0 in the other texels. The positive `=1` lane adds
+the producer-owned nested coordinates transform `{offset:[0.25,0.25],scale:[0,0],rotation:0}`;
+the paired `=0` lane omits `coordinates`. The transformed lane samples the G=1 origin texel and
+returns `[0.5333,0.2667,0.1686]`, while the untransformed lane lands on the adjacent G=0 texel
+and returns `[0.5294,0.2549,0.1569]`. Each lane requires response distance `<=0.01` and paired
+distance `>0.01`, proving the nested coordinates survive the material snapshot/UBO, WGSL
+`metallicRoughnessCoordinates` projection, transformed UV path, and roughness `pick_channel`.
+The controls reject unsupported values and cannot be combined with generic MR texture or channel
+witnesses.
+
+The metallic-roughness texture UV-set controls use the same real 2x2 linear MR texture, but place
+G=1 at the UV1-targeted texel and leave the UV0 baseline at the adjacent filtered response. The
+positive `=1` lane adds `coordinates.set=1` and a real mesh UV1 attribute of `[0.75,0.75]`; the
+paired `=0` lane omits coordinates and uses the original UV0 attribute. Dawn returns
+`[0.5333,0.2667,0.1686]` for UV1 and `[0.5294,0.2510,0.1490]` for UV0, with paired distance
+`0.0254` and each response distance `<=0.01`. This proves the producer-owned coordinate set
+survives the material snapshot/UBO, mesh attribute layout, `metallicRoughnessCoordinates`
+projection, and roughness `pick_channel`. Unsupported values and generic MR/channel/transform
+combinations fail before Dawn setup.
+
+The metallic-roughness texture sampler controls use the same real 2x2 linear MR texture with G=1 at
+the origin and G=0 elsewhere. The positive `=1` lane adds a nested `SamplerAsset` with
+`magFilter=minFilter=mipmapFilter='nearest'`; the paired `=0` lane sets all three filters to
+`'linear'`, while both lanes keep `clamp-to-edge` addressing. Dawn returns
+`[0.5333,0.2667,0.1686]` for nearest and `[0.5294,0.2549,0.1569]` for linear. Each lane requires
+response distance `<=0.01` and paired distance `>0.01`, proving the nested sampler survives the
+material snapshot, texture/sampler binding, RHI tape, and Standard PBR roughness sampling path.
+The control rejects unsupported values and generic MR/channel/coordinate combinations.
+
+The metallic-roughness texture sampler-address controls use the same real 2x2 linear MR texture
+with G=1 at the repeat-target texel and G=0 at the clamp-target texel, sampled through a cloned
+cube whose UV0 is fixed at `[1.25,0.75]`. The positive `=1` lane sets
+`addressModeU/V/W='clamp-to-edge'`; the paired `=0` lane sets all three to `'repeat'`. Both lanes
+hold nearest filtering fixed. Dawn and browser replay must distinguish the clamped black response
+from the repeated green response while keeping the same Standard PBR material, texture, and
+roughness sampling path. Unsupported values and generic MR/channel/coordinate/sampler/mipmap
+combinations fail before Dawn setup.
+
+The metallic-roughness texture mipmap controls use the same Standard PBR slot with a real 4x4
+linear MR texture and a nested `SamplerAsset` fixed to `lodMinClamp=lodMaxClamp=1`. The positive
+`=1` lane sets `TextureAsset.mipmap=true`, so the sample comes from the generated level-1 average;
+the paired `=0` lane uses the same source texels and sampler with `mipmap=false`, forcing the
+single authored level. The lanes require distinct deterministic `cubeCenter` responses and prove
+that the producer-owned mip switch survives texture upload, sampler binding, RHI tape, and the
+Standard PBR roughness `pick_channel`. Unsupported values and generic MR/channel/coordinate/
+sampler combinations fail before Dawn setup.
+
+The metallic-roughness texture sampler mipmapFilter controls reuse that authored 4x4 linear MR
+texture, set `TextureAsset.mipmap=true`, fix the nested sampler to `lodMinClamp=lodMaxClamp=0.5`,
+and set the shared authored roughness scalar to `1` so the two filter responses remain distinguishable.
+The positive `=1` lane sets `mipmapFilter='nearest'`; the paired `=0` lane sets `mipmapFilter='linear'`.
+Dawn and browser replay must distinguish the nearest and linear half-LOD responses, proving the
+producer-owned mipmap filter survives the nested material sampler,
+texture mip chain, RHI tape, and Standard PBR roughness `pick_channel`. Unsupported values and generic
+MR/channel/coordinate/sampler/address/mipmap combinations fail before Dawn setup.
+
+The metallic-roughness texture sampler lodMinClamp controls reuse that authored 4x4 linear MR
+texture, set `TextureAsset.mipmap=true`, keep linear mag/min/mipmap filters and `lodMaxClamp=1`,
+and compare `lodMinClamp=1` against `lodMinClamp=0`. Dawn and browser replay must distinguish the
+clamped level from the lower-level paired response, proving the producer-owned minimum LOD clamp
+survives the nested material sampler, texture mip chain, RHI tape, and Standard PBR roughness
+`pick_channel`. Unsupported values and generic MR/channel/coordinate/sampler/address/mipmap-filter/
+mipmap combinations fail before Dawn setup.
+
+The metallic-roughness texture sampler lodMaxClamp control reuses that authored 4x4 linear MR
+texture, sets `TextureAsset.mipmap=true`, keeps linear mag/min/mipmap filters and `lodMinClamp=0`,
+uses the same fixed `coordinates.scale=[192,192]` to force a nonzero implicit LOD, and compares
+`lodMaxClamp=0` against `lodMaxClamp=1`. Dawn and browser replay must distinguish the
+max-clamped level from the paired upper-level response, proving the producer-owned maximum LOD
+clamp survives the nested material sampler, texture mip chain, RHI tape, and Standard PBR
+roughness `pick_channel`. Unsupported values and generic MR/channel/coordinate/sampler/address/
+mipmap-filter/lodMinClamp/mipmap combinations fail before Dawn setup.
+
+The metallic-roughness texture sampler `maxAnisotropy` control reuses the authored 4x4 linear MR
+texture with `TextureAsset.mipmap=true`, linear mag/min/mipmap filters, clamp-to-edge addressing,
+and `coordinates.scale=[192,8]` to create a repeat-heavy anisotropic footprint. The positive lane
+sets the producer-owned `SamplerAsset.maxAnisotropy=16`; the paired lane leaves it at the default
+of `1`. Dawn and browser replay must distinguish the two calibrated `cubeCenter` responses,
+proving the anisotropy value survives the nested material sampler, texture mip chain, RHI tape,
+and Standard PBR roughness `pick_channel`. Unsupported values and generic MR/channel/coordinate/
+sampler/address/mipmap controls fail before Dawn setup.
+
 The clearcoat control sets `clearcoat=1` and `clearcoatRoughness=0.5` on the same Standard PBR
 material. Its `cubeCenter` response must move beyond the calibrated clearcoat threshold, proving
 that the producer-owned clearcoat values reach the fragment path rather than being silently
@@ -277,6 +495,42 @@ The clearcoat-roughness control keeps `clearcoat=1` active and sets only
 `clearcoatRoughness=1`. Its response must differ from both the no-coat baseline and the prior
 clearcoat roughness `0.5` baseline, proving the scalar is consumed by the existing clearcoat lobe
 rather than only proving that clearcoat is enabled.
+
+The sampler upper-LOD control uses the same real 4x4 generated mip chain with a high-frequency
+`MaterialTextureValue.coordinates.transform` (`scale=[192,192]`). Its positive nested
+`SamplerAsset` sets `lodMinClamp=0` and `lodMaxClamp=0.5`; the paired `=0` lane leaves the upper
+clamp unset. The positive `cubeCenter` response must match `[0.2196078431,0.1176470588,0.0901960784]`
+and differ from the unclamped response, so a dropped upper clamp cannot pass by sampling the same
+high-frequency texel.
+
+The sampler lower-LOD control keeps that generated 4x4 texture but uses low-frequency coordinates
+(`offset=[0,0]`, `scale=[1,1]`) and a nested `SamplerAsset` with `lodMinClamp=1`. The positive
+`cubeCenter` response must match `[0.2352941176,0.1254901961,0.0901960784]`; the paired `=0` lane
+leaves the lower clamp unset and reaches `[0.4274509804,0.2117647059,0.1411764706]`. Both lanes
+share the real texture upload, mip chain, sampler binding, and Standard PBR shader, so ignoring the
+producer-owned lower clamp fails the response-distance oracle. The lower and upper clamp controls
+are mutually exclusive with other sampler, coordinate, channel, alpha, and discard controls.
+
+The sampler anisotropy control keeps that generated 4x4 texture and uses a high-frequency
+anisotropic coordinate footprint (`offset=[0.375,0.375]`, `scale=[192,8]`) with linear filtering and
+repeat addressing. The positive nested `SamplerAsset` sets `maxAnisotropy=16`, while the paired `=0`
+lane omits the field and uses the WebGPU default of 1. The positive `cubeCenter` response must match
+`[0.0666666667,0.0666666667,0.0666666667]`; the paired response reaches
+`[0.1294117647,0.0862745098,0.0745098039]`. Dawn and browser capture inspect the same sampler
+descriptor, so the witness covers the asset POD, inline-pack loader, GPU residency, and capture
+transport rather than only changing a local smoke constant. The control is mutually exclusive with
+the other sampler, coordinate, channel, alpha, and discard controls.
+
+The base-color-texture sRGB control binds the same Standard PBR `baseColorTexture` slot to a 1x1
+`TextureAsset` containing `[128,128,128,255]`. The positive `=1` lane uses
+`format='rgba8unorm-srgb'` and `colorSpace='srgb'`; the paired `=0` lane uses
+`format='rgba8unorm'` and `colorSpace='linear'`. Dawn readback calibrates the positive
+`cubeCenter` response to `[0.2666666667,0.1372549020,0.0980392157]` and the paired linear
+response to `[0.3921568627,0.1960784314,0.1294117647]`, proving that the texture descriptor's
+decode intent reaches the Standard PBR shader. The browser capture reports the corresponding
+`createTexture` format and fresh-Dawn replay remains pixel-identical (`mean=0.00000`) in both
+lanes. The control is mutually exclusive with other base-color texture, sampler, coordinate,
+channel, alpha, and discard controls.
 
 The occlusion control first enables a public solid-color `Skylight` with a dim gray tint, then
 binds a 1x1 linear black `TextureAsset` to `occlusionTexture`. The ambient-only baseline moves

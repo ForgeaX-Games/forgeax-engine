@@ -28,14 +28,7 @@
 // math never branches on graph mode; it just consumes whatever fills the slots.
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
-import {
-  createQueryState,
-  defineSystem,
-  Entity,
-  queryRun,
-  Time,
-  Update,
-} from '@forgeax/engine-ecs';
+import { defineSystem, Time, Update } from '@forgeax/engine-ecs';
 import type { AnimationClip, AnimationGraph, Handle } from '@forgeax/engine-types';
 import { AnimationPlayer } from '../animation-player';
 import { resolveAnimationAsset } from '../resolve-animation-asset';
@@ -87,21 +80,15 @@ function wrapTime(time: number, duration: number, looping: boolean): number {
 
 /**
  * Evaluate every graph-carrying AnimationPlayer for one frame, filling the
- * derived N-slot columns. Iterates archetypes via `queryRun` (like advance),
+ * derived N-slot columns. Iterates rows through the system Query (like advance),
  * collecting entity handles first, then resolving + writing each player outside
- * the transient query bundle.
+ * the transient row facade.
  */
 export function evaluateAnimationGraph(world: World, dt: number): void {
-  const state = createQueryState({ with: [AnimationPlayer, Entity] });
+  const query = world.query({ with: [AnimationPlayer] }).unwrap();
 
-  const entities: number[] = [];
-  queryRun(state, world, (bundle) => {
-    const entitySelf = bundle.Entity.self;
-    const rowCount = entitySelf.length;
-    for (let row = 0; row < rowCount; row++) {
-      entities.push(entitySelf[row] ?? 0);
-    }
-  });
+  const entities: EntityHandle[] = [];
+  for (const row of query) entities.push(row.entity);
 
   for (const entityRaw of entities) {
     evaluateOneEntity(world, entityRaw, dt);

@@ -1,4 +1,4 @@
-import { createQueryState, Entity, type EntityHandle, queryRun } from '@forgeax/engine-ecs';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import { createMemoryEndpointPair, type EndpointEvent, type PeerId } from '@forgeax/engine-net';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -122,12 +122,12 @@ describe('assembled Snake authority', () => {
     expect(server.world.update(1).ok).toBe(true);
     const snakes: EntityHandle[] = [];
     const segments: EntityHandle[] = [];
-    queryRun(createQueryState({ with: [Networked, Entity] }), server.world, (bundle) => {
-      for (const entity of bundle.Entity.self as unknown as EntityHandle[]) {
-        if (server.world.get(entity, Snake).ok) snakes.push(entity);
-        if (server.world.get(entity, SnakeSegment).ok) segments.push(entity);
-      }
-    });
+    const networked = server.world.query({ with: [Networked] }).unwrap();
+    for (const row of networked) {
+      const entity = row.entity;
+      if (server.world.get(entity, Snake).ok) snakes.push(entity);
+      if (server.world.get(entity, SnakeSegment).ok) segments.push(entity);
+    }
     expect(snakes).toHaveLength(1);
     expect(segments).toHaveLength(1);
     const body = server.world.get(snakes[0] as EntityHandle, SnakeBody).unwrap();
@@ -144,9 +144,8 @@ describe('assembled Snake authority', () => {
     expect(server.world.update(1).ok).toBe(true);
     expect(snake?.respawnAt).not.toBeNull();
     const projected = [] as EntityHandle[];
-    queryRun(createQueryState({ with: [Networked, Entity] }), server.world, (bundle) => {
-      projected.push(...(bundle.Entity.self as unknown as EntityHandle[]));
-    });
+    const networked = server.world.query({ with: [Networked] }).unwrap();
+    for (const row of networked) projected.push(row.entity);
     expect(projected.every((entity) => !server.world.get(entity, Snake).ok)).toBe(true);
   });
 

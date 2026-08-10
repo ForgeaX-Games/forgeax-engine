@@ -10,10 +10,9 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //   - createApp -> owns the frame loop AND auto-inserts the 'Time' resource
 //     (world.getResource(Time).delta) before each world.update().
 //   - world.addSystem (x2, chained) -> stepInteract (pairwise force accumulation
-//     via the new queryCombinations) then stepIntegrate (verlet), mirroring Bevy's
+//     via Query.combinations) then stepIntegrate (verlet), mirroring Bevy's
 //     (interact_bodies, integrate) in FixedUpdate.
-//   - stepInteract uses queryCombinations — the pairwise query iterator added in
-//     solo round 20260713-194533, mapping Bevy's Query::iter_combinations_mut.
+//   - stepInteract uses Query.combinations, mapping Bevy's Query::iter_combinations_mut.
 //
 // The World + step math live in the shared src/iter-combinations.ts (SSOT for this
 // app AND the dawn smoke), so the two never drift.

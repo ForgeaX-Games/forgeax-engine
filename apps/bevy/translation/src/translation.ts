@@ -22,9 +22,8 @@
 //                                   diagonal world direction, making the accessor
 //                                   (not a hard-coded world axis) the thing under
 //                                   test.
-//   - Query<(&mut Transform, &mut Movable)> -> createQueryState + queryRun over
-//                                   the two components, entity handle from
-//                                   bundle.Entity
+//   - Query<(&mut Transform, &mut Movable)> -> one row iterator over
+//                                   the two writable components
 //   - Res<Time>                  -> world.getResource(Time).delta (auto-provided
 //                                   each frame by createApp's frame-loop)
 //
@@ -33,11 +32,8 @@
 // and prove two frames at different times differ (motion, not a frozen render).
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -135,14 +131,9 @@ export function buildTranslationWorld(world: World): void {
  * accessor this round adds.
  */
 export function stepMove(world: World, dt: number): void {
-  const state = createQueryState({ with: [Transform, Movable, Entity] });
+  const query = world.query({ with: [Transform, Movable] }).unwrap();
   const targets: Array<{ handle: EntityHandle }> = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    for (let i = 0; i < selfCol.length; i++) {
-      targets.push({ handle: (selfCol[i] ?? 0) as EntityHandle });
-    }
-  });
+  for (const row of query) targets.push({ handle: row.entity });
   const localX = vec3.create();
   for (const { handle } of targets) {
     const t = world.get(handle, Transform);

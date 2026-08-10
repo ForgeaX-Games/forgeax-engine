@@ -214,7 +214,7 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
     reset: args.reset,
     ...(args.state ? { state: { requestReset: args.state.requestReset, requestInvalid: args.state.requestInvalid } } : {}),
     snapshot: () => ({
-      activeFlashCount: activeScoringTargetEntities(args.world, args.targetQuery).filter((entity) => args.isFlashed(entity)).length,
+      activeFlashCount: activeScoringTargetEntities(args.targetQuery).filter((entity) => args.isFlashed(entity)).length,
       hitFlashBlendEnabled: args.hitFlashBlendEnabled(),
       bloomEnabled: args.bloomEnabled(),
       depthOfField: args.depthOfField?.snapshot() ?? { enabled: false, mode: 'off', focalDistance: 0, aperture: 0, effect: 'unavailable' },

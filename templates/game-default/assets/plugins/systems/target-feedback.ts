@@ -14,6 +14,7 @@ import type { MatHandle } from '../scene-runtime';
 import { activeScoringTargetEntities, scoringPoints, type ScoringTargetQuery, ScoringTarget } from '../scoring-target';
 import { GameState } from '../gameplay-state';
 import { HitFlash, Projectile } from '../components/gameplay';
+import type { TargetRelayHandle } from '../target-relay';
 
 export type TargetFeedbackSystemContext = {
   readonly world: World;
@@ -21,6 +22,9 @@ export type TargetFeedbackSystemContext = {
   readonly projectileEntities: () => readonly EntityHandle[];
   readonly targetProfile: TargetProfileLoop | undefined;
   readonly onProfileHit?: () => void;
+  readonly targetRelay: TargetRelayHandle;
+  readonly onTargetImpact?: (entity: EntityHandle, impactScale: number) => void;
+  readonly onRelayHit?: () => void;
   readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
   readonly onAtlasHit?: () => void;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
@@ -38,6 +42,10 @@ export type TargetFeedbackSystemContext = {
   readonly hitStreak: HitStreakHandle | undefined;
 };
 
+export function resolveTargetImpactPoints(points: number, impactScale: number): number {
+  return Math.round(points * Math.max(1, impactScale));
+}
+
 /** Resolves projectile hits and owns the transient HitFlash component lifecycle. */
 export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): void {
   const hitRadiusSquared = 0.9 * 0.9;
@@ -52,7 +60,7 @@ export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): v
         const projectileTransform = ctx.world.get(projectileEntity, Transform);
         const projectile = ctx.world.get(projectileEntity, Projectile);
         if (!projectileTransform.ok || !projectile.ok) continue;
-        for (const entity of activeScoringTargetEntities(ctx.world, ctx.targetQuery)) {
+        for (const entity of activeScoringTargetEntities(ctx.targetQuery)) {
           const target = ctx.world.get(entity, ScoringTarget);
           if (!target.ok || target.value.slot >= 32) continue;
           const mask = 1 << target.value.slot;
@@ -68,13 +76,17 @@ export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): v
           if (dx * dx + dy * dy + dz * dz >= hitRadiusSquared) continue;
           const hitMask = projectile.value.hitMask | mask;
           ctx.world.set(projectileEntity, Projectile, { hitMask });
+          ctx.onTargetImpact?.(entity, projectile.value.impactScale);
+          const relayWasActive = ctx.targetRelay.snapshot().status === 'active';
           if (ctx.spriteAtlasLoop?.recordHit(projectileEntity)) ctx.onAtlasHit?.();
           if (recordTargetProfileHit(ctx.targetProfile, entity)) ctx.onProfileHit?.();
           const basePoints = scoringPoints(ctx.world, entity);
-          const impactScale = Math.max(1, projectile.value.impactScale);
           const points = basePoints === undefined
             ? undefined
-            : Math.round(targetProfilePoints(ctx.targetProfile, basePoints) * impactScale);
+            : resolveTargetImpactPoints(
+              targetProfilePoints(ctx.targetProfile, basePoints),
+              projectile.value.impactScale,
+            );
           if (points !== undefined) {
             const award = ctx.hitStreak?.recordHit(points) ?? { points, hits: 0, multiplier: 1 };
             ctx.changeDetection.recordHit(entity, award.points);
@@ -86,11 +98,12 @@ export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): v
             ctx.gameplayAudio?.triggerHit();
             ctx.vfxHitLoop.trigger();
           }
+          if (relayWasActive && ctx.targetRelay.recordHit(entity)) ctx.onRelayHit?.();
           const flash = ctx.world.get(entity, HitFlash);
           if (!flash.ok || flash.value.remaining <= 0) ctx.triggerFlash(entity);
         }
       }
-      for (const entity of activeScoringTargetEntities(ctx.world, ctx.targetQuery)) {
+      for (const entity of activeScoringTargetEntities(ctx.targetQuery)) {
         const flash = ctx.world.get(entity, HitFlash);
         if (!flash.ok || flash.value.remaining <= 0) continue;
         const remaining = flash.value.remaining - dt;

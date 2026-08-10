@@ -14,11 +14,8 @@
 // from the 3d-rotation demo (solo round 20260713-164916).
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -95,17 +92,9 @@ export function buildParentingWorld(world: World): void {
  * Spins around the X axis (Bevy's `transform.rotate_x(3.0 * dt)`).
  */
 export function stepRotate(world: World, dt: number): void {
-  const state = createQueryState({ with: [Transform, Rotator, Entity] });
+  const query = world.query({ read: [Rotator], with: [Transform] }).unwrap();
   const targets: Array<{ handle: EntityHandle; angle: number }> = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    const speedCol = bundle.Rotator.speed;
-    for (let i = 0; i < selfCol.length; i++) {
-      const handle = (selfCol[i] ?? 0) as EntityHandle;
-      const speed = speedCol[i] ?? 0;
-      targets.push({ handle, angle: speed * dt });
-    }
-  });
+  for (const row of query) targets.push({ handle: row.entity, angle: row.get(Rotator).speed * dt });
   for (const { handle, angle } of targets) {
     const cur = world.get(handle, Transform);
     if (!cur.ok) continue;

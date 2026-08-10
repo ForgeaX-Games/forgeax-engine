@@ -23,6 +23,7 @@
 export type { ManifestEntry, ParamSchemaEntry } from '@forgeax/engine-types';
 
 import type { MaterialAsset, MaterialParameter, MaterialValue } from '@forgeax/engine-types';
+import { STANDARD_PBR_ALPHA_CUTOFF_DEFAULT } from './material-schemas.js';
 
 export { MATERIAL_PARAM_TYPES } from '@forgeax/engine-types';
 export {
@@ -48,7 +49,10 @@ export {
   isMaterialShaderArtifact,
   type MaterialShaderArtifact,
 } from './material/artifact-types.js';
-export { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from './material-schemas.js';
+export {
+  DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+  STANDARD_PBR_ALPHA_CUTOFF_DEFAULT,
+} from './material-schemas.js';
 export {
   registerDefaultSpriteLit,
   type SpriteLitCaps,
@@ -80,6 +84,7 @@ const BUILTIN_PARAMETERS: Readonly<Record<BuiltinMaterialKind, readonly Material
     { name: 'baseColor', type: 'color' },
     { name: 'metallic', type: 'f32' },
     { name: 'roughness', type: 'f32' },
+    { name: 'alphaCutoff', type: 'f32', optional: true },
   ],
   unlit: [{ name: 'baseColor', type: 'color' }],
   sprite: [{ name: 'colorTint', type: 'vec4', colorSpace: 'srgb' }],
@@ -88,7 +93,12 @@ const BUILTIN_PARAMETERS: Readonly<Record<BuiltinMaterialKind, readonly Material
 const BUILTIN_VALUES: Readonly<
   Record<BuiltinMaterialKind, Readonly<Record<string, MaterialValue>>>
 > = {
-  standard: { baseColor: [1, 1, 1, 1], metallic: 0, roughness: 0.5 },
+  standard: {
+    baseColor: [1, 1, 1, 1],
+    metallic: 0,
+    roughness: 0.5,
+    alphaCutoff: STANDARD_PBR_ALPHA_CUTOFF_DEFAULT,
+  },
   unlit: { baseColor: [1, 1, 1, 1] },
   sprite: { colorTint: [1, 1, 1, 1] },
 };
@@ -117,3 +127,5 @@ export function createBuiltinMaterialAsset(kind: BuiltinMaterialKind): MaterialA
  * Value: `1e-5` — small enough to not perturb any plausible HDR luminance.
  */
 export const TONEMAP_LUMINANCE_EPSILON = 1e-5;
+
+export { TONEMAP_SHADER_MODE, type TonemapShaderMode } from './tonemap.js';

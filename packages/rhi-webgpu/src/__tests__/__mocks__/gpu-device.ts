@@ -203,6 +203,7 @@ export interface MockComputePassEncoder {
   setPipeline(pipeline: unknown): void;
   setBindGroup(...args: unknown[]): void;
   dispatchWorkgroups(...args: unknown[]): void;
+  dispatchWorkgroupsIndirect(...args: unknown[]): void;
   end(): void;
 }
 
@@ -469,6 +470,7 @@ function makeDevice(captured: MockCapture[], failures: MockFailures): MockDevice
             setPipeline() {},
             setBindGroup() {},
             dispatchWorkgroups() {},
+            dispatchWorkgroupsIndirect() {},
             end() {},
           };
           return pass;

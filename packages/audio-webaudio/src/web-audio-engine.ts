@@ -21,8 +21,13 @@
 // - P3 explicit failure: getState() returns real AudioContext.state, never a stale cache
 // - P4 consistent abstraction: implements AudioBackend interface, parallel to InputBackend
 
-import type { AudioBackend, AudioPlayOptions, AudioState, BusName } from '@forgeax/engine-audio';
-import type { TickStateEntry } from './audio-tick-system';
+import type {
+  AudioListenerPose,
+  AudioPlayOptions,
+  AudioState,
+  BusName,
+} from '@forgeax/engine-audio';
+import type { AudioClipAsset } from '@forgeax/engine-types';
 
 interface ActiveSource {
   node: AudioBufferSourceNode;
@@ -33,7 +38,7 @@ interface ActiveSource {
 
 const GESTURE_EVENTS = ['click', 'keydown', 'touchstart'] as const;
 
-export class WebAudioEngine implements AudioBackend {
+export class WebAudioEngine {
   private ctx: AudioContext | undefined;
   private closed = false;
   private masterGain: GainNode | undefined;
@@ -55,14 +60,6 @@ export class WebAudioEngine implements AudioBackend {
     ['music', false],
   ]);
 
-  // F25 de-singleton: per-entity tick state lives on the engine instance,
-  // not in module-level singletons. audioTickSystem reads these via same-package
-  // narrow (D-1). Each WebAudioEngine owns its own tick history.
-  /** @internal */
-  readonly _tickStates = new Map<number, TickStateEntry>();
-  /** @internal */
-  readonly _prevFrameEntities = new Set<number>();
-
   constructor() {
     // Lazy: AudioContext is NOT created here (D-3 / AC-01).
     // The gesture resume handler is a bound arrow so we can pass it
@@ -79,6 +76,19 @@ export class WebAudioEngine implements AudioBackend {
    */
   get listener(): AudioListener | undefined {
     return this.ensureContext().listener;
+  }
+
+  setListenerPose(pose: AudioListenerPose): void {
+    const listener = this.ensureContext().listener;
+    listener.positionX.value = pose.positionX;
+    listener.positionY.value = pose.positionY;
+    listener.positionZ.value = pose.positionZ;
+    listener.forwardX.value = pose.forwardX;
+    listener.forwardY.value = pose.forwardY;
+    listener.forwardZ.value = pose.forwardZ;
+    listener.upX.value = pose.upX;
+    listener.upY.value = pose.upY;
+    listener.upZ.value = pose.upZ;
   }
 
   // -----------------------------------------------------------------------
@@ -162,7 +172,16 @@ export class WebAudioEngine implements AudioBackend {
   // AudioBackend implementation
   // -----------------------------------------------------------------------
 
-  play(entityId: number, clipBuffer: AudioBuffer, opts: AudioPlayOptions): void {
+  decode(bytes: Uint8Array): Promise<AudioBuffer> {
+    return this.ensureContext().decodeAudioData(bytes.slice().buffer as ArrayBuffer);
+  }
+
+  play(entityId: number, clip: AudioBuffer | AudioClipAsset, opts: AudioPlayOptions): void {
+    if ('kind' in clip) {
+      void this.decode(clip.bytes).then((buffer) => this.play(entityId, buffer, opts));
+      return;
+    }
+    const clipBuffer = clip;
     // If this entity is already playing, stop it first (replace).
     if (this.sources.has(entityId)) {
       this.stop(entityId);
@@ -268,7 +287,7 @@ export class WebAudioEngine implements AudioBackend {
 
   getState(): AudioState {
     if (this.closed) {
-      return { contextState: 'closed', activeSourceCount: 0 };
+      return { contextState: 'closed', activeSourceCount: 0, lastError: null };
     }
     const contextState: 'running' | 'suspended' | 'closed' =
       this.ctx?.state === 'closed'
@@ -279,6 +298,7 @@ export class WebAudioEngine implements AudioBackend {
     return {
       contextState,
       activeSourceCount: this.sources.size,
+      lastError: null,
     };
   }
 
@@ -329,8 +349,4 @@ export class WebAudioEngine implements AudioBackend {
         return this.musicGain;
     }
   }
-}
-
-export function createWebAudioBackend(): AudioBackend {
-  return new WebAudioEngine();
 }

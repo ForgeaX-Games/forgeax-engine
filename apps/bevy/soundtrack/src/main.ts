@@ -1,8 +1,7 @@
 // Reproduce Bevy's `soundtrack` example.
 
 import { createApp } from '@forgeax/engine-app';
-import { AudioSource, type AudioBackend } from '@forgeax/engine-audio';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { AudioSource, type AudioBackend, audioPlugin } from '@forgeax/engine-audio';
 import { Time, Update } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';

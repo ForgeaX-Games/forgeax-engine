@@ -27,8 +27,8 @@
 //   - packages/runtime/src/__tests__/renderer-ready.test.ts
 //   - packages/runtime/src/__tests__/renderstate-pipeline-cache.test.ts
 //   - packages/runtime/src/__tests__/storage-buffer-caps.test.ts
-//   - packages/runtime/src/gpu-resource-store.test.ts
-//   - packages/runtime/src/render-data.test.ts
+//   - packages/runtime/src/__tests__/gpu-resource-store.test.ts
+//   - packages/runtime/src/__tests__/render-data.test.ts
 //   - packages/runtime/src/__tests__/hdrp-bgl-slots.test.ts
 //   - packages/runtime/src/__tests__/hdrp-caps-gate.test.ts
 //   - packages/runtime/src/__tests__/hdrp-grid-invalid.test.ts
@@ -5473,7 +5473,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 }
 
 {
-  // --- from gpu-resource-store.test.ts ---
+  // --- from gpu-resource-store.test.ts (__tests__/) ---
   const okShim = <T>(v: T) => ({ ok: true as const, value: v });
 
   interface DeviceProbe {
@@ -5726,7 +5726,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 }
 
 {
-  // --- from render-data.test.ts ---
+  // --- from render-data.test.ts (__tests__/) ---
   const GPU_BUFFER_USAGE_VERTEX = 0x20;
   const GPU_BUFFER_USAGE_INDEX = 0x10;
   const GPU_BUFFER_USAGE_COPY_DST = 0x08;

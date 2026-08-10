@@ -25,8 +25,8 @@ const legacyConsumerEvidence = {
     'packages/core/src/io/asset-io-primitives.ts',
     'packages/core/src/scene/mesh-original-materials.ts',
     'packages/core/src/session/import-ops.ts',
-    'packages/play-runtime/pack-catalog.ts',
-    'packages/play-runtime/src/__tests__/pack-catalog-equirect.test.ts',
+    'packages/play-runtime/src/main.ts',
+    'packages/play-runtime/vite.config.ts',
   ],
   typeErasedModules: [],
   jsonLiterals: [],
@@ -202,7 +202,7 @@ describe('neutral consumer with a registered host provider', () => {
     expect(legacyConsumerEvidence).toEqual({
       tsModules: expect.arrayContaining([
         'packages/core/src/io/asset-io-primitives.ts',
-        'packages/play-runtime/pack-catalog.ts',
+        'packages/play-runtime/src/main.ts',
       ]),
       typeErasedModules: [],
       jsonLiterals: [],

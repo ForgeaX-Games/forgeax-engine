@@ -114,7 +114,6 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { propagateTransforms, Transform } = await import('@forgeax/engine-scene');
-const { createQueryState, queryRun, Entity } = await import('@forgeax/engine-ecs');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildTimeElapsedWorld, stepByElapsed, oscillatorY, Oscillator } = await import(
@@ -148,12 +147,12 @@ const world = new World();
 buildTimeElapsedWorld(world);
 
 // Find the oscillator handle so we can read back its Transform.y.
-const oscState = createQueryState({ with: [Transform, Oscillator, Entity] });
+const oscQuery = world.query({ with: [Transform, Oscillator] }).unwrap();
 let oscHandle = 0;
-queryRun(oscState, world, (bundle) => {
-  const selfCol = bundle.Entity.self;
-  if (selfCol.length > 0) oscHandle = selfCol[0] ?? 0;
-});
+for (const row of oscQuery) {
+  oscHandle = row.entity;
+  break;
+}
 
 // --- readback helper ---
 const bytesPerPixel = 4;

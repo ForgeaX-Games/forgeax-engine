@@ -104,11 +104,10 @@ import {
 } from '@forgeax/engine-assets-runtime';
 import type { Archetype, EntityHandle, ErrorContext, FieldView, World } from '@forgeax/engine-ecs';
 import {
-  createQueryState,
   Entity,
   InstanceTransformsStrideMismatchError,
-  queryRun,
   Severity,
+  SpawnLightInvalidBoundsError,
   SpriteInstancesCountMismatchError,
   SpriteInstancesMutuallyExclusiveWithInstancesError,
   SpriteInstancesRequiresSpriteShaderError,
@@ -777,6 +776,8 @@ export interface MaterialSnapshot {
   readonly roughness: number;
   readonly clearcoat?: number | undefined;
   readonly clearcoatRoughness?: number | undefined;
+  /** Authored Standard PBR specular tint in linear runtime color space. */
+  readonly specularTint?: readonly [number, number, number] | undefined;
   /**
    * Schema-driven material shader identifier (feat-20260523 M4-T05).
    * Populated when the material asset uses the schema-driven path
@@ -843,8 +844,9 @@ export interface MaterialSnapshot {
    * reaches back into the MaterialAsset to learn a field is video-sourced.
    */
   readonly videoTextureFields?: ReadonlyMap<string, Handle<'VideoAsset', 'shared'>> | undefined;
+  /** Authored sampler handles keyed by their matching texture parameter. */
+  readonly samplerHandles?: ReadonlyMap<string, Handle<'SamplerAsset', 'shared'>> | undefined;
   readonly baseColorTexture?: Handle<'TextureAsset', 'shared'> | undefined;
-  readonly sampler?: Handle<'SamplerAsset', 'shared'> | undefined;
   /**
    * PBR metallic-roughness texture handle (present for PBR/sprite/skin
    * shaders). Undefined for the default-unlit shader
@@ -1065,11 +1067,10 @@ type WorldInternalView = World & {
   ): FieldView | undefined;
   /**
    * @internal Archetype graph access. tweak-20260611 M1: retained for one
-   * narrow purpose -- looking up the live `arch.version` for a queryRun
-   * callback's archetype (used as the cache key in
-   * `RenderableSnapshot.instances.archVersion`; the bundle does not surface
-   * this number). All four archetype-walk segments otherwise route through
-   * `createQueryState + queryRun`.
+   * narrow purpose -- looking up the live `arch.version` for a QueryRow's
+   * archetype (used as the cache key in
+   * `RenderableSnapshot.instances.archVersion`; the row does not surface
+   * this number). All extraction segments otherwise route through Query.
    */
   _getGraph: () => { readonly archetypes: ReadonlyArray<Archetype | undefined> };
 };
@@ -1333,6 +1334,22 @@ function collectMaterialTextureCoordinates(
   return out;
 }
 
+function collectMaterialTextureSamplers(
+  values: Readonly<Record<string, unknown>>,
+  resolveSampler: (value: unknown) => Handle<'SamplerAsset', 'shared'> | undefined,
+): Map<string, Handle<'SamplerAsset', 'shared'>> {
+  const out = new Map<string, Handle<'SamplerAsset', 'shared'>>();
+  for (const [field, value] of Object.entries(values)) {
+    const sampler = resolveSampler(materialTextureValue(value)?.sampler);
+    if (sampler !== undefined) out.set(field, sampler);
+  }
+  const legacySampler = resolveSampler(values.sampler);
+  if (legacySampler !== undefined && !out.has('baseColorTexture')) {
+    out.set('baseColorTexture', legacySampler);
+  }
+  return out;
+}
+
 /**
  * feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): collect the
  * user-region texture handles for a material by iterating the shader's
@@ -1495,6 +1512,7 @@ function resolveMaterialSnapshot(
   const clearcoatPv = typeof pv.clearcoat === 'number' ? pv.clearcoat : 0;
   const clearcoatRoughnessPv =
     typeof pv.clearcoatRoughness === 'number' ? pv.clearcoatRoughness : 0.5;
+  const specularTintPv = pv.specularTint as readonly number[] | undefined;
   const normalScalePv = materialNormalScale(pv);
 
   const paramSnap: Record<string, number | number[] | string> = {};
@@ -1550,7 +1568,9 @@ function resolveMaterialSnapshot(
     resolveTexLike,
     videoTextureFields,
   );
-  const samplerHandle = resolveTexLike(materialTextureRef(pv.sampler), 'SamplerAsset');
+  const samplerHandles = collectMaterialTextureSamplers(pv, (value) =>
+    resolveTexLike(materialTextureRef(value), 'SamplerAsset'),
+  );
   const emissiveTextureHandle = resolveTexLike(
     materialTextureRef(pv.emissiveTexture),
     'TextureAsset',
@@ -1571,6 +1591,13 @@ function resolveMaterialSnapshot(
     roughness: roughnessPv,
     clearcoat: clearcoatPv,
     clearcoatRoughness: clearcoatRoughnessPv,
+    ...(specularTintPv !== undefined && {
+      specularTint: [
+        specularTintPv[0] ?? 1,
+        specularTintPv[1] ?? 1,
+        specularTintPv[2] ?? 1,
+      ] as readonly [number, number, number],
+    }),
     normalScale: normalScalePv,
     materialShaderId: firstPassShader,
     materialHandle: handleRaw,
@@ -1580,12 +1607,12 @@ function resolveMaterialSnapshot(
     ...(textureCoordinates.size > 0 && { textureCoordinates }),
     ...(textureHandles.size > 0 && { textureHandles }),
     ...(videoTextureFields.size > 0 && { videoTextureFields }),
+    ...(samplerHandles.size > 0 && { samplerHandles }),
     ...(baseColorTextureHandle !== undefined && { baseColorTexture: baseColorTextureHandle }),
     ...(metallicRoughnessTextureHandle !== undefined && {
       metallicRoughnessTexture: metallicRoughnessTextureHandle,
     }),
     ...(normalTextureHandle !== undefined && { normalTexture: normalTextureHandle }),
-    ...(samplerHandle !== undefined && { sampler: samplerHandle }),
     ...(emissivePv !== undefined && {
       emissive: [emissivePv[0] ?? 0, emissivePv[1] ?? 0, emissivePv[2] ?? 0] as readonly [
         number,
@@ -2417,20 +2444,18 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   const visibility = context.visibility.hasAnyHiddenIntent ? context.visibility : undefined;
   const skinPaletteAllocator = pipelineState?.skinPaletteAllocator ?? null;
 
-  const directionalLightQuery = createQueryState({ with: [DirectionalLight, Entity] });
+  const directionalLightQuery = world.query({ read: [DirectionalLight] }).unwrap();
 
   // feat-20260601 D-3: camera / point / spot light world transforms are read
   // through the single resolved `Transform.world` mat4 (written by
   // propagateTransforms), not the retired GlobalTransform-column-switch.
   //
-  // tweak-20260611 M1: each segment routes through `createQueryState +
-  // queryRun` with `with: [PrimaryComp, Transform, Entity]` (or with Transform
-  // in `optional` for the point/spot variants whose archetype may lack
-  // Transform). The packed entity handle for `readWorldMat4Copy` /
-  // `_getArrayView` reads is recovered via `bundle.Entity.self[i]` -- the
+  // Each segment routes through a World-owned Query with explicit read and
+  // optional roles. The packed entity handle for `readWorldMat4Copy` /
+  // `_getArrayView` reads comes from `row.entity` -- the
   // archetype-graph back-door (`graph.archetypes` / `arch.components.some`) is gone.
   // Plan-decisions K-2 sniffing scheme B (archetype-edge sniff once via
-  // `bundle.X !== undefined`); K-3 invariant preserved (`_getArrayView`
+  // `row.get(X) !== undefined`); K-3 invariant preserved (`_getArrayView`
   // calls survive untouched, only the entity source changes).
   const worldInternal = world as WorldInternalView;
 
@@ -2439,64 +2464,61 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   // each surfaced camera in query order, parallel to `cameras[]`, so the
   // ActiveCamera resource (if any) can pick which one renders by entity id.
   const cameraEntities: number[] = [];
-  const cameraQuery = createQueryState({ with: [Camera, Transform, Entity] });
-  queryRun(cameraQuery, world, (bundle) => {
-    const cam = bundle.Camera;
-    const entitySelf = bundle.Entity.self;
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const entity = (entitySelf[i] ?? 0) as EntityHandle;
-      const view = worldInternal._getArrayView(entity, Transform, 'world');
-      if (view === undefined) continue;
-      const worldMat = new Float32Array(view);
-      // feat-20260519-tonemap-reinhard-mvp / M3 / T-M3.1: surface the
-      // closed `Tonemap` literal union via the `tonemapFromF32` narrowing
-      // helper. Defensive fallback to `'none'` for any unrecognised numeric.
-      const tonemap = tonemapFromF32(cam.tonemap[i] ?? 0);
-      const antialias = antialiasFromF32(cam.antialias[i] ?? 0);
-      // feat-20260531-bloom-first-declarative-render-graph-pass / w4:
-      // surface the closed `BloomEnabled` literal union via the
-      // `bloomEnabledFromF32` narrowing helper (fail-fast throw, charter P3).
-      const bloom = bloomEnabledFromF32(cam.bloom[i] ?? 0);
-      cameras.push({
-        position: mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like),
-        world: worldMat,
-        fov: cam.fov[i] ?? Math.PI / 4,
-        aspect: cam.aspect[i] ?? 1,
-        near: cam.near[i] ?? 0.1,
-        far: cam.far[i] ?? 100,
-        // feat-20260613 M6 / w20: surface the projection variant + ortho
-        // frustum quartet so render-system-extract's CSM frustum builder
-        // can pick perspective vs orthographic. Without this discrimination
-        // an ortho camera (fov=0) feeds a degenerate perspective matrix
-        // into the AABB-fit and the shadow atlas stays empty (root cause
-        // for shadow-m2 / shadow-m3 / shadow-opt-out dawn red).
-        projection: cameraProjectionFromF32(cam.projection?.[i] ?? 0),
-        orthoLeft: cam.left?.[i] ?? -1,
-        orthoRight: cam.right?.[i] ?? 1,
-        orthoBottom: cam.bottom?.[i] ?? -1,
-        orthoTop: cam.top?.[i] ?? 1,
-        tonemap,
-        exposure: cam.exposure[i] ?? 1.0,
-        whitePoint: cam.whitePoint[i] ?? 4.0,
-        antialias,
-        bloom,
-        bloomThreshold: cam.bloomThreshold[i] ?? 1.0,
-        bloomIntensity: cam.bloomIntensity[i] ?? 1.0,
-        bloomBlurRadius: cam.bloomBlurRadius[i] ?? 4.0,
-        // feat-20260709 M3 / D-3: clear-color read from the inline
-        // array<f32,4> column as a stride-4 subscript (zero-alloc bundle read,
-        // AC-09). Defaults to opaque black `[0, 0, 0, 1]` per lane when a slot
-        // is absent (e.g. an archetype migrated from a pre-feat snapshot).
-        clearColor: [
-          cam.clearColor[i * 4] ?? 0,
-          cam.clearColor[i * 4 + 1] ?? 0,
-          cam.clearColor[i * 4 + 2] ?? 0,
-          cam.clearColor[i * 4 + 3] ?? 1,
-        ],
-      });
-      cameraEntities.push(entity as number);
-    }
-  });
+  const cameraQuery = world.query({ read: [Camera], with: [Transform] }).unwrap();
+  for (const row of cameraQuery) {
+    const cam = row.get(Camera);
+    const entity = row.entity;
+    const view = worldInternal._getArrayView(entity, Transform, 'world');
+    if (view === undefined) continue;
+    const worldMat = new Float32Array(view);
+    // feat-20260519-tonemap-reinhard-mvp / M3 / T-M3.1: surface the
+    // closed `Tonemap` literal union via the `tonemapFromF32` narrowing
+    // helper. Defensive fallback to `'none'` for any unrecognised numeric.
+    const tonemap = tonemapFromF32(cam.tonemap);
+    const antialias = antialiasFromF32(cam.antialias);
+    // feat-20260531-bloom-first-declarative-render-graph-pass / w4:
+    // surface the closed `BloomEnabled` literal union via the
+    // `bloomEnabledFromF32` narrowing helper (fail-fast throw, charter P3).
+    const bloom = bloomEnabledFromF32(cam.bloom);
+    cameras.push({
+      position: mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like),
+      world: worldMat,
+      fov: cam.fov,
+      aspect: cam.aspect,
+      near: cam.near,
+      far: cam.far,
+      // feat-20260613 M6 / w20: surface the projection variant + ortho
+      // frustum quartet so render-system-extract's CSM frustum builder
+      // can pick perspective vs orthographic. Without this discrimination
+      // an ortho camera (fov=0) feeds a degenerate perspective matrix
+      // into the AABB-fit and the shadow atlas stays empty (root cause
+      // for shadow-m2 / shadow-m3 / shadow-opt-out dawn red).
+      projection: cameraProjectionFromF32(cam.projection),
+      orthoLeft: cam.left,
+      orthoRight: cam.right,
+      orthoBottom: cam.bottom,
+      orthoTop: cam.top,
+      tonemap,
+      exposure: cam.exposure,
+      whitePoint: cam.whitePoint,
+      antialias,
+      bloom,
+      bloomThreshold: cam.bloomThreshold,
+      bloomIntensity: cam.bloomIntensity,
+      bloomBlurRadius: cam.bloomBlurRadius,
+      // feat-20260709 M3 / D-3: clear-color read from the inline
+      // array<f32,4> column as a stride-4 subscript (zero-alloc bundle read,
+      // AC-09). Defaults to opaque black `[0, 0, 0, 1]` per lane when a slot
+      // is absent (e.g. an archetype migrated from a pre-feat snapshot).
+      clearColor: [
+        cam.clearColor[0] ?? 0,
+        cam.clearColor[1] ?? 0,
+        cam.clearColor[2] ?? 0,
+        cam.clearColor[3] ?? 1,
+      ],
+    });
+    cameraEntities.push(entity as number);
+  }
 
   // feat-20260630-viewport M2 / w12 / plan-strategy D-2: by-entity-id active
   // camera selection. When an `ActiveCamera` resource names one of the surfaced
@@ -2538,196 +2560,196 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         pcfKernelSize: number;
       }
     | undefined;
-  queryRun(directionalLightQuery, world, (bundle) => {
-    const l = bundle.DirectionalLight;
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      directionalCount += 1;
-      const intensity = l.intensity[i] ?? 1;
-      const snapshot: DirectionalLightSnapshot = {
-        kind: 'directional',
-        direction: vec3.create(
-          l.direction[i * 3] ?? 0,
-          l.direction[i * 3 + 1] ?? -1,
-          l.direction[i * 3 + 2] ?? 0,
-        ),
-        color: vec3.create(
-          (l.color[i * 3] ?? 1) * intensity,
-          (l.color[i * 3 + 1] ?? 1) * intensity,
-          (l.color[i * 3 + 2] ?? 1) * intensity,
-        ),
-        intensity,
+  for (const row of directionalLightQuery) {
+    const l = row.get(DirectionalLight);
+    directionalCount += 1;
+    const intensity = l.intensity;
+    const snapshot: DirectionalLightSnapshot = {
+      kind: 'directional',
+      direction: vec3.create(l.direction[0] ?? 0, l.direction[1] ?? -1, l.direction[2] ?? 0),
+      color: vec3.create(
+        (l.color[0] ?? 1) * intensity,
+        (l.color[1] ?? 1) * intensity,
+        (l.color[2] ?? 1) * intensity,
+      ),
+      intensity,
+    };
+    if (directional === undefined) {
+      // First hit wins; record-stage N>1 fail-fast (M3 / w19) flags duplicates.
+      directional = snapshot;
+      firstHitCastShadow = l.castShadow;
+      firstHitShadowFields = {
+        cascadeCount: l.cascadeCount,
+        splitLambda: l.splitLambda,
+        cascadeBlend: l.cascadeBlend,
+        mapSize: l.mapSize,
+        depthBias: l.depthBias,
+        normalBias: l.normalBias,
+        shadowDistance: l.shadowDistance,
+        pcfKernelSize: l.pcfKernelSize,
       };
-      if (directional === undefined) {
-        // First hit wins; record-stage N>1 fail-fast (M3 / w19) flags duplicates.
-        directional = snapshot;
-        firstHitCastShadow = (l.castShadow[i] ?? 1) !== 0;
-        firstHitShadowFields = {
-          cascadeCount: l.cascadeCount[i] ?? 4,
-          splitLambda: l.splitLambda[i] ?? 0.75,
-          cascadeBlend: l.cascadeBlend[i] ?? 0.2,
-          mapSize: l.mapSize[i] ?? 2048,
-          depthBias: l.depthBias[i] ?? 0.005,
-          normalBias: l.normalBias[i] ?? 0.05,
-          shadowDistance: l.shadowDistance[i] ?? 200,
-          pcfKernelSize: l.pcfKernelSize[i] ?? 3,
-        };
-      }
     }
-  });
+  }
 
   const pointSnapshots: PointLightSnapshot[] = [];
   // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4: track entity per
   // pointSnapshots index so the post-extract pointShadow join can stamp
   // `shadowAtlasLayer + shadowNear + shadowFar` onto the matching PointLight.
   const pointSnapshotEntities: number[] = [];
-  const pointLightQuery = createQueryState({
-    with: [PointLight, Entity],
-    optional: [Transform],
-  });
-  queryRun(pointLightQuery, world, (bundle) => {
-    const p = bundle.PointLight;
-    const entitySelf = bundle.Entity.self;
+  const pointLightQuery = world
+    .query({
+      read: [PointLight],
+      optional: [Transform],
+    })
+    .unwrap();
+  for (const row of pointLightQuery) {
+    const p = row.get(PointLight);
     // K-2 scheme B: archetype-edge sniff -- `bundle.Transform` key is absent
     // when the archetype does not carry the Transform column.
-    const hasTransform = bundle.Transform !== undefined;
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const intensity = p.intensity[i] ?? 1;
-      const range = p.range[i] ?? Number.POSITIVE_INFINITY;
-      const entityId = entitySelf[i] ?? 0;
-      // Position = world-space translation extracted from Transform.world.
-      // A point light archetype without a Transform column sits at the origin.
-      let worldMat: Float32Array | undefined;
-      if (hasTransform) {
-        const entity = entityId as EntityHandle;
-        const view = worldInternal._getArrayView(entity, Transform, 'world');
-        if (view !== undefined) worldMat = new Float32Array(view);
-      }
-      const position =
-        worldMat !== undefined
-          ? mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like)
-          : vec3.create(0, 0, 0);
-      pointSnapshots.push({
-        kind: 'point',
-        position,
-        color: vec3.create(
-          (p.color[i * 3] ?? 1) * intensity,
-          (p.color[i * 3 + 1] ?? 1) * intensity,
-          (p.color[i * 3 + 2] ?? 1) * intensity,
-        ),
-        intensity,
-        invRangeSquared: computeInvRangeSquared(range),
-      });
-      pointSnapshotEntities.push(entityId);
+    const hasTransform = row.get(Transform) !== undefined;
+    const intensity = p.intensity;
+    const range = p.range;
+    const entityId = row.entity;
+    // Position = world-space translation extracted from Transform.world.
+    // A point light archetype without a Transform column sits at the origin.
+    let worldMat: Float32Array | undefined;
+    if (hasTransform) {
+      const entity = entityId as EntityHandle;
+      const view = worldInternal._getArrayView(entity, Transform, 'world');
+      if (view !== undefined) worldMat = new Float32Array(view);
     }
-  });
+    const position =
+      worldMat !== undefined
+        ? mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like)
+        : vec3.create(0, 0, 0);
+    pointSnapshots.push({
+      kind: 'point',
+      position,
+      color: vec3.create(
+        (p.color[0] ?? 1) * intensity,
+        (p.color[1] ?? 1) * intensity,
+        (p.color[2] ?? 1) * intensity,
+      ),
+      intensity,
+      invRangeSquared: computeInvRangeSquared(range),
+    });
+    pointSnapshotEntities.push(entityId);
+  }
 
   const spotSnapshots: SpotLightSnapshot[] = [];
-  const spotLightQuery = createQueryState({
-    with: [SpotLight, Entity],
-    optional: [Transform],
-  });
+  const spotLightQuery = world
+    .query({
+      read: [SpotLight],
+      optional: [Transform],
+    })
+    .unwrap();
   // feat-20260625-spot-light-shadow-mapping M1 w5: tile allocation for castShadow spots.
   // Cap = 4 (OOS-5), sentinel -1 = unassigned (plan-strategy D-4).
   // Direction degeneration (near-zero) also skips shadow (requirements $112).
   let spotTileNext = 0;
-  queryRun(spotLightQuery, world, (bundle) => {
-    const s = bundle.SpotLight;
-    const entitySelf = bundle.Entity.self;
-    const hasTransform = bundle.Transform !== undefined;
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const intensity = s.intensity[i] ?? 1;
-      const range = s.range[i] ?? Number.POSITIVE_INFINITY;
-      const innerConeDeg = s.innerConeDeg[i] ?? 0;
-      const outerConeDeg = s.outerConeDeg[i] ?? 45;
-      let worldMat: Float32Array | undefined;
-      if (hasTransform) {
-        const entity = (entitySelf[i] ?? 0) as EntityHandle;
-        const view = worldInternal._getArrayView(entity, Transform, 'world');
-        if (view !== undefined) worldMat = new Float32Array(view);
-      }
-      const position =
-        worldMat !== undefined
-          ? mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like)
-          : vec3.create(0, 0, 0);
-      const dir = vec3.create(
-        s.direction[i * 3] ?? 0,
-        s.direction[i * 3 + 1] ?? -1,
-        s.direction[i * 3 + 2] ?? 0,
-      );
-
-      // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
-      const castShadow = (s.castShadow[i] ?? 1) !== 0;
-      const sMapSize = s.mapSize[i] ?? 2048;
-      const sNearPlane = s.nearPlane[i] ?? 0.1;
-      const sFarPlane = s.farPlane[i] ?? 50;
-
-      let lightViewProj: Float32Array | undefined;
-      let shadowAtlasTile = -1;
-
-      if (castShadow) {
-        // D-4 / requirements $112: normalize direction; skip shadow if degenerate.
-        const dirLen = Math.sqrt(
-          (dir[0] ?? 0) * (dir[0] ?? 0) +
-            (dir[1] ?? 0) * (dir[1] ?? 0) +
-            (dir[2] ?? 0) * (dir[2] ?? 0),
-        );
-        const EPSILON = 1e-6;
-        if (dirLen > EPSILON) {
-          const dirN = vec3.create(
-            (dir[0] ?? 0) / dirLen,
-            (dir[1] ?? 0) / dirLen,
-            (dir[2] ?? 0) / dirLen,
-          );
-          const target = vec3.create(
-            (position[0] ?? 0) + (dirN[0] ?? 0),
-            (position[1] ?? 0) + (dirN[1] ?? 0),
-            (position[2] ?? 0) + (dirN[2] ?? 0),
-          );
-          // D-1: perspective(outerConeDeg*2, aspect=1, near, far) x lookAt(pos, pos+dir).
-          // FOV = outerConeDeg * 2 in degrees; mat4.perspective takes fov in radians.
-          const fov = outerConeDeg * 2 * (Math.PI / 180);
-          const proj = mat4.create();
-          mat4.perspective(proj, fov, 1, sNearPlane, sFarPlane);
-          const view = mat4.create();
-          mat4.lookAt(view, position, target, vec3.create(0, 1, 0));
-          lightViewProj = new Float32Array(16);
-          // Reinterpret the Float32Array surface field as a Mat4 out-param; a
-          // factory would force a needless alloc+copy. brand-cast-ok
-          mat4.multiply(lightViewProj as Mat4, proj, view);
-
-          // D-4: allocate tile 0..3; 5th+ = -1 sentinel.
-          if (spotTileNext < 4) {
-            shadowAtlasTile = spotTileNext;
-            spotTileNext += 1;
-          }
-        }
-      }
-
-      spotSnapshots.push({
-        kind: 'spot',
-        // D-6: position reflects world transform; direction stays sourced
-        // from SpotLight.direction (NOT rotated by the parent).
-        position,
-        direction: dir,
-        color: vec3.create(
-          (s.color[i * 3] ?? 1) * intensity,
-          (s.color[i * 3 + 1] ?? 1) * intensity,
-          (s.color[i * 3 + 2] ?? 1) * intensity,
-        ),
-        intensity,
-        invRangeSquared: computeInvRangeSquared(range),
-        cosInner: degToCos(innerConeDeg),
-        cosOuter: degToCos(outerConeDeg),
-        // ── shadow fields ──
-        castShadow,
-        lightViewProj,
-        mapSize: sMapSize,
-        nearPlane: sNearPlane,
-        farPlane: sFarPlane,
-        shadowAtlasTile,
-      });
+  for (const row of spotLightQuery) {
+    const s = row.get(SpotLight);
+    const hasTransform = row.get(Transform) !== undefined;
+    const intensity = s.intensity;
+    const range = s.range;
+    const innerConeDeg = s.innerConeDeg;
+    const outerConeDeg = s.outerConeDeg;
+    let worldMat: Float32Array | undefined;
+    if (hasTransform) {
+      const entity = row.entity;
+      const view = worldInternal._getArrayView(entity, Transform, 'world');
+      if (view !== undefined) worldMat = new Float32Array(view);
     }
-  });
+    const position =
+      worldMat !== undefined
+        ? mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like)
+        : vec3.create(0, 0, 0);
+    const dir = vec3.create(s.direction[0] ?? 0, s.direction[1] ?? -1, s.direction[2] ?? 0);
+
+    // Extract is the single direction-normalization owner for direct-light
+    // snapshots. URP and HDRP preserve this value downstream.
+    const dirLen = Math.sqrt(
+      (dir[0] ?? 0) * (dir[0] ?? 0) + (dir[1] ?? 0) * (dir[1] ?? 0) + (dir[2] ?? 0) * (dir[2] ?? 0),
+    );
+    const EPSILON = 1e-6;
+    const hasValidDirection = dirLen > EPSILON;
+    if (!hasValidDirection) {
+      worldInternal._routeError(
+        new SpawnLightInvalidBoundsError('SpotLight', 'direction', [
+          dir[0] ?? 0,
+          dir[1] ?? 0,
+          dir[2] ?? 0,
+        ]),
+        {
+          severity: Severity.Error,
+          systemName: 'RenderSystem.extract (spot-direction)',
+        },
+      );
+    }
+    const dirN = vec3.create(
+      hasValidDirection ? (dir[0] ?? 0) / dirLen : (dir[0] ?? 0),
+      hasValidDirection ? (dir[1] ?? 0) / dirLen : (dir[1] ?? 0),
+      hasValidDirection ? (dir[2] ?? 0) / dirLen : (dir[2] ?? 0),
+    );
+
+    // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
+    const castShadow = s.castShadow;
+    const sMapSize = s.mapSize;
+    const sNearPlane = s.nearPlane;
+    const sFarPlane = s.farPlane;
+
+    let lightViewProj: Float32Array | undefined;
+    let shadowAtlasTile = -1;
+
+    if (castShadow && hasValidDirection) {
+      const target = vec3.create(
+        (position[0] ?? 0) + (dirN[0] ?? 0),
+        (position[1] ?? 0) + (dirN[1] ?? 0),
+        (position[2] ?? 0) + (dirN[2] ?? 0),
+      );
+      // D-1: perspective(outerConeDeg*2, aspect=1, near, far) x lookAt(pos, pos+dir).
+      // FOV = outerConeDeg * 2 in degrees; mat4.perspective takes fov in radians.
+      const fov = outerConeDeg * 2 * (Math.PI / 180);
+      const proj = mat4.create();
+      mat4.perspective(proj, fov, 1, sNearPlane, sFarPlane);
+      const view = mat4.create();
+      mat4.lookAt(view, position, target, vec3.create(0, 1, 0));
+      lightViewProj = new Float32Array(16);
+      // Reinterpret the Float32Array surface field as a Mat4 out-param; a
+      // factory would force a needless alloc+copy. brand-cast-ok
+      mat4.multiply(lightViewProj as Mat4, proj, view);
+
+      // D-4: allocate tile 0..3; 5th+ = -1 sentinel.
+      if (spotTileNext < 4) {
+        shadowAtlasTile = spotTileNext;
+        spotTileNext += 1;
+      }
+    }
+
+    spotSnapshots.push({
+      kind: 'spot',
+      // D-6: position reflects world transform; direction stays sourced
+      // from SpotLight.direction (NOT rotated by the parent).
+      position,
+      direction: dirN,
+      color: vec3.create(
+        (s.color[0] ?? 1) * intensity,
+        (s.color[1] ?? 1) * intensity,
+        (s.color[2] ?? 1) * intensity,
+      ),
+      intensity,
+      invRangeSquared: computeInvRangeSquared(range),
+      cosInner: degToCos(innerConeDeg),
+      cosOuter: degToCos(outerConeDeg),
+      // ── shadow fields ──
+      castShadow,
+      lightViewProj,
+      mapSize: sMapSize,
+      nearPlane: sNearPlane,
+      farPlane: sFarPlane,
+      shadowAtlasTile,
+    });
+  }
 
   // bug-20260710-editor-cross-world-shadow: CSM matrices are computed by the
   // shared pure {@link computeDirectionalCsm}, called here per-world with THIS
@@ -2822,57 +2844,52 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   // Cap of 4 is enforced by ECS cardinality on PointLightShadow.
   const pointShadowSnapshots: PointShadowSnapshot[] = [];
   {
-    const pointShadowQuery = createQueryState({
-      with: [Transform, PointLight, PointLightShadow, Entity],
-    });
-    queryRun(pointShadowQuery, world, (bundle) => {
-      const t = bundle.Transform;
-      const ps = bundle.PointLightShadow;
-      const ent = bundle.Entity.self;
-      const len = ent.length;
-      for (let i = 0; i < len; i++) {
-        // Read world-space position from Transform.world (mat4 column-major;
-        // translation lives at indices 12..14, mirroring CameraSnapshot.world
-        // semantics in this file).
-        // feat-20260614 M4 / w13: TypedArrayFor for `array<f32, 16>` now
-        // resolves to a concrete `Float32Array` (was `never` pre-w11), which
-        // surfaces the row-window slicing -- `t.world` is the stride-16 flat
-        // column view; row i lives at `[i*16, (i+1)*16)`. The prior
-        // `t.world?.[i]` form silently returned a single element under the
-        // `never`-typed bundle path and `wRow[12]` widened to `undefined ?? 0`
-        // so light positions clamped to the origin.
-        const wRow = t.world?.subarray(i * 16, i * 16 + 16);
-        if (wRow === undefined) continue;
-        const px = wRow[12] ?? 0;
-        const py = wRow[13] ?? 0;
-        const pz = wRow[14] ?? 0;
-        const lightPos = vec3.create(px, py, pz);
-        const mapSize = ps.mapSize?.[i] ?? 512;
-        const nearPlane = ps.nearPlane?.[i] ?? 0.1;
-        const farPlane = ps.farPlane?.[i] ?? 25;
-        const layer = pointShadowSnapshots.length; // 0, 1, 2, 3 in spawn order
+    const pointShadowQuery = world
+      .query({ read: [Transform, PointLightShadow], with: [PointLight] })
+      .unwrap();
+    for (const row of pointShadowQuery) {
+      const t = row.get(Transform);
+      const ps = row.get(PointLightShadow);
+      // Read world-space position from Transform.world (mat4 column-major;
+      // translation lives at indices 12..14, mirroring CameraSnapshot.world
+      // semantics in this file).
+      // feat-20260614 M4 / w13: TypedArrayFor for `array<f32, 16>` now
+      // resolves to a concrete `Float32Array` (was `never` pre-w11), which
+      // surfaces the row-window slicing -- `t.world` is the stride-16 flat
+      // column view; row i lives at `[i*16, (i+1)*16)`. The prior
+      // `t.world?.[i]` form silently returned a single element under the
+      // `never`-typed bundle path and `wRow[12]` widened to `undefined ?? 0`
+      // so light positions clamped to the origin.
+      const wRow = t.world;
+      if (wRow === undefined) continue;
+      const px = wRow[12] ?? 0;
+      const py = wRow[13] ?? 0;
+      const pz = wRow[14] ?? 0;
+      const lightPos = vec3.create(px, py, pz);
+      const mapSize = ps.mapSize;
+      const nearPlane = ps.nearPlane;
+      const farPlane = ps.farPlane;
+      const layer = pointShadowSnapshots.length; // 0, 1, 2, 3 in spawn order
 
-        const matrices = buildPointShadowMatrices(lightPos, nearPlane, farPlane);
-        const packed = new Float32Array(96);
-        for (let f = 0; f < 6; f++) {
-          const m = matrices[f];
-          if (m === undefined) continue;
-          for (let k = 0; k < 16; k++) {
-            packed[f * 16 + k] = m[k] ?? 0;
-          }
+      const matrices = buildPointShadowMatrices(lightPos, nearPlane, farPlane);
+      const packed = new Float32Array(96);
+      for (let f = 0; f < 6; f++) {
+        const m = matrices[f];
+        if (m === undefined) continue;
+        for (let k = 0; k < 16; k++) {
+          packed[f * 16 + k] = m[k] ?? 0;
         }
-        pointShadowSnapshots.push({
-          // biome-ignore lint/style/noNonNullAssertion: i within ent.length by loop bound
-          entity: ent[i]!,
-          position: lightPos,
-          mapSize,
-          nearPlane,
-          farPlane,
-          shadowAtlasLayer: layer,
-          shadowMatrices: packed,
-        });
       }
-    });
+      pointShadowSnapshots.push({
+        entity: row.entity,
+        position: lightPos,
+        mapSize,
+        nearPlane,
+        farPlane,
+        shadowAtlasLayer: layer,
+        shadowMatrices: packed,
+      });
+    }
   }
 
   // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
@@ -2921,73 +2938,67 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   // feat-20260520-skylight-ibl-cubemap M4 / t26+t27: query Skylight entities.
   // First archetype hit wins (mirrors DirectionalLight pattern); multi-Skylight
   // warn in record stage (t27) uses skylightCount.
-  const skylightQuery = createQueryState({ with: [Skylight, Entity] });
+  const skylightQuery = world.query({ read: [Skylight] }).unwrap();
   let skylight: SkylightSnapshot | undefined;
   let skylightCount = 0;
-  queryRun(skylightQuery, world, (bundle) => {
-    const s = bundle.Skylight;
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      // equirect is OPTIONAL: an omitted field zero-inits to handle 0, which
-      // record treats as "no equirect" -> solid-color ambient via the white
-      // fallback cube. A Skylight WITHOUT an equirect is still a valid snapshot
-      // (the prior `equirectRaw !== undefined` gate dropped color-only
-      // skylights, leaving the scene black -- the downstream gap #4).
-      const equirectRaw = s.equirect?.get(i);
-      const intensity = s.intensity?.[i] ?? 1.0;
-      const colorR = s.color?.[i * 3] ?? 1.0;
-      const colorG = s.color?.[i * 3 + 1] ?? 1.0;
-      const colorB = s.color?.[i * 3 + 2] ?? 1.0;
-      const rotationBase = i * 4;
-      const rotation: [number, number, number, number] = [
-        s.rotation?.[rotationBase] ?? 0,
-        s.rotation?.[rotationBase + 1] ?? 0,
-        s.rotation?.[rotationBase + 2] ?? 0,
-        s.rotation?.[rotationBase + 3] ?? 1,
-      ];
-      skylightCount += 1;
-      if (skylight === undefined) {
-        skylight = {
-          equirectHandle: equirectRaw !== undefined ? Math.round(equirectRaw) : 0,
-          color: [colorR, colorG, colorB],
-          intensity,
-          rotation,
-          // w19: winning entity handle for the multi-Skylight once-warn (F-8).
-          entityHandle: bundle.Entity.self[i] ?? 0,
-        };
-      }
+  for (const row of skylightQuery) {
+    const s = row.get(Skylight);
+    // equirect is OPTIONAL: an omitted field zero-inits to handle 0, which
+    // record treats as "no equirect" -> solid-color ambient via the white
+    // fallback cube. A Skylight WITHOUT an equirect is still a valid snapshot
+    // (the prior `equirectRaw !== undefined` gate dropped color-only
+    // skylights, leaving the scene black -- the downstream gap #4).
+    const equirectRaw = s.equirect;
+    const intensity = s.intensity;
+    const colorR = s.color[0] ?? 1.0;
+    const colorG = s.color[1] ?? 1.0;
+    const colorB = s.color[2] ?? 1.0;
+    const rotation: [number, number, number, number] = [
+      s.rotation[0] ?? 0,
+      s.rotation[1] ?? 0,
+      s.rotation[2] ?? 0,
+      s.rotation[3] ?? 1,
+    ];
+    skylightCount += 1;
+    if (skylight === undefined) {
+      skylight = {
+        equirectHandle: equirectRaw !== undefined ? Math.round(equirectRaw) : 0,
+        color: [colorR, colorG, colorB],
+        intensity,
+        rotation,
+        // w19: winning entity handle for the multi-Skylight once-warn (F-8).
+        entityHandle: row.entity,
+      };
     }
-  });
+  }
 
   // feat-20260531-skybox-env-background M2 / w5: query SkyboxBackground entities.
   // First archetype hit wins (mirrors Skylight pattern); multi-entity
   // once-warn in record stage uses skyboxCount.
-  const skyboxQuery = createQueryState({ with: [SkyboxBackground, Entity] });
+  const skyboxQuery = world.query({ read: [SkyboxBackground] }).unwrap();
   let skybox: SkyboxSnapshot | undefined;
   let skyboxCount = 0;
-  queryRun(skyboxQuery, world, (bundle) => {
-    const s = bundle.SkyboxBackground;
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const equirectRaw = s.equirect?.get(i);
-      const modeRaw = s.mode?.[i] ?? 0;
-      const rotationBase = i * 4;
-      const rotation: [number, number, number, number] = [
-        s.rotation?.[rotationBase] ?? 0,
-        s.rotation?.[rotationBase + 1] ?? 0,
-        s.rotation?.[rotationBase + 2] ?? 0,
-        s.rotation?.[rotationBase + 3] ?? 1,
-      ];
-      skyboxCount += 1;
-      if (skybox === undefined && equirectRaw !== undefined) {
-        skybox = {
-          equirectHandle: Math.round(equirectRaw),
-          mode: modeRaw,
-          rotation,
-          // w19: winning entity handle for the multi-SkyboxBackground warn (F-8).
-          entityHandle: bundle.Entity.self[i] ?? 0,
-        };
-      }
+  for (const row of skyboxQuery) {
+    const s = row.get(SkyboxBackground);
+    const equirectRaw = s.equirect;
+    const modeRaw = s.mode;
+    const rotation: [number, number, number, number] = [
+      s.rotation[0] ?? 0,
+      s.rotation[1] ?? 0,
+      s.rotation[2] ?? 0,
+      s.rotation[3] ?? 1,
+    ];
+    skyboxCount += 1;
+    if (skybox === undefined && equirectRaw !== undefined) {
+      skybox = {
+        equirectHandle: Math.round(equirectRaw),
+        mode: modeRaw,
+        rotation,
+        // w19: winning entity handle for the multi-SkyboxBackground warn (F-8).
+        entityHandle: row.entity,
+      };
     }
-  });
+  }
 
   // feat-20260528-frustum-culling M3 / w10: precompute per-camera frustum
   // planes so entities can be tested against all cameras in the inner loop.
@@ -3060,41 +3071,42 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   let dispatch: DispatchEntry[] = [];
 
   // tweak-20260611 M1: MeshRenderer renderable archetype walk routes
-  // through `createQueryState + queryRun`. K-2 sniffing scheme B
-  // (`bundle.X !== undefined` archetype-edge sniff) replaces the prior
+  // through one World-owned Query. K-2 sniffing scheme B
+  // (`row.get(X) !== undefined` edge sniff) replaces the prior
   // `arch.components.some` row-internal back-door. K-3 invariant: the
   // variable-length array reads (`MeshRenderer.materials`,
   // `Instances.transforms`) still flow through `_getArrayView` /
   // `world.get(e, Instances)` -- only the `entity` source switches to
-  // `bundle.Entity.self[i]`.
+  // `row.entity`.
   //
   // archVersion plumbing exception: the `RenderableSnapshot.instances
   // .archVersion` cache key is keyed off the live archetype's mutation
   // counter (record stage `instanceBuffers` cache invalidation). The
-  // queryRun bundle does not surface this number, so a single archetype
-  // graph access is retained inside the callback (one read per matched
-  // archetype, not per row) -- match the archetype by its first-entity
+  // QueryRow does not surface this number, so a single archetype
+  // graph access is retained for instance-bearing rows -- match by entity
   // packed handle. AC-01 grep ≤ current - 1 still holds: the stale
   // archetype-graph traversal commentary at the prior call site is gone.
   // feat-20260521-sprite-atlas-animation M3 / T-16: SpriteRegionOverride
   // column id for the sprite-bucket per-entity region override read
   void SpriteRegionOverride;
 
-  const meshRendererQuery = createQueryState({
-    with: [MeshRenderer, Entity],
-    optional: [
-      Transform,
-      MeshFilter,
-      Instances,
-      Skin,
-      Layer,
-      SortKey,
-      SpriteRegionOverride,
-      SpriteInstances,
-    ],
-  });
+  const meshRendererQuery = world
+    .query({
+      read: [MeshRenderer],
+      optional: [
+        Transform,
+        MeshFilter,
+        Instances,
+        Skin,
+        Layer,
+        SortKey,
+        SpriteRegionOverride,
+        SpriteInstances,
+      ],
+    })
+    .unwrap();
   const graph = worldInternal._getGraph();
-  // `queryRun` deliberately exposes only column views, not the matching
+  // QueryRow deliberately exposes component data, not the matching
   // archetype.  Instance snapshots need that archetype's version for the
   // record-stage GPU-buffer cache key, but ordinary renderables do not.  The
   // old path scanned every graph archetype for every matched query callback,
@@ -3106,33 +3118,37 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   const resolveArchVersion = (firstEntity: number): number => {
     if (archVersionByFirstEntity === undefined) {
       archVersionByFirstEntity = new Map<number, number>();
-      for (const arch of graph.archetypes) {
-        if (arch === undefined || arch.size === 0) continue;
-        const selfCol = arch.columns.get(Entity.id)?.get('self')?.view;
-        const first = selfCol?.[0];
-        if (first !== undefined) archVersionByFirstEntity.set(first, arch.version);
+      for (const table of graph.tables) {
+        if (table === undefined || table.size === 0) continue;
+        const selfCol = table.storage.get(Entity.id)?.fields.get('self')?.view;
+        for (let row = 0; row < table.size; row++) {
+          const entity = selfCol?.[row];
+          if (entity !== undefined) archVersionByFirstEntity.set(entity, table.version);
+        }
       }
     }
     return archVersionByFirstEntity.get(firstEntity) ?? 0;
   };
-  queryRun(meshRendererQuery, world, (bundle) => {
-    if (bundle.Entity.self.length === 0) return;
-    const mr = bundle.MeshRenderer;
-    const entitySelf = bundle.Entity.self;
+  for (const row of meshRendererQuery) {
+    const mr = row.get(MeshRenderer);
     // feat-20260608 M2 / w11: `materials` is the slot-id u32 column; the
     // actual handle list is resolved per-entity via `_getArrayView` below.
     // feat-20260614 M4 / D-4: bundle exposes ManagedColumnReader for the
     // variable `array<shared<MaterialAsset>>` column -- read slot ids via
     // .get(i); mutation flows through world.set / world.push.
     const mMaterials = mr.materials;
-    if (mMaterials === undefined) return;
+    if (mMaterials === undefined) continue;
 
     // K-2 archetype-edge sniff (scheme B): a missing optional component
     // surfaces as an absent bundle key, not a row-internal optional chain.
-    const hasTransform = bundle.Transform !== undefined;
-    const hasMeshFilter = bundle.MeshFilter !== undefined;
-    const hasInstances = bundle.Instances !== undefined;
-    const hasSkin = bundle.Skin !== undefined;
+    const transform = row.get(Transform);
+    const meshFilter = row.get(MeshFilter);
+    const instances = row.get(Instances);
+    const skin = row.get(Skin);
+    const hasTransform = transform !== undefined;
+    const hasMeshFilter = meshFilter !== undefined;
+    const hasInstances = instances !== undefined;
+    const hasSkin = skin !== undefined;
     // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10:
     // SpriteInstances optional component archetype-edge sniff. Three structured
     // EcsError codes fire at the row-loop entry (D-6 fail-fast at extract):
@@ -3142,7 +3158,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     //       (materialSnap.materialShaderId !== 'forgeax::sprite') — non-sprite material.
     //   - 'sprite-instances-count-mismatch'
     //       (transforms.length / 16 !== regions.length / 4) — stride pair desync.
-    const hasSpriteInstances = bundle.SpriteInstances !== undefined;
+    const hasSpriteInstances = row.get(SpriteInstances) !== undefined;
     const isRenderable = hasTransform && hasMeshFilter;
 
     // feat-20260601 D-3: the resolved world transform is read per-entity from
@@ -3151,13 +3167,13 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     // ChildOf-without-GlobalTransform misconfig signal are gone: the world
     // column always exists on a Transform-bearing entity, so the
     // "ChildOf but forgot GlobalTransform" misconfiguration cannot occur.
-    const fAssetHandle = bundle.MeshFilter?.assetHandle;
+    const fAssetHandle = meshFilter?.assetHandle;
     // feat-20260520-2d-sprite-layer-mvp M-3 / w22: Layer column read here;
     // value folded into each DispatchEntry so the render-system sort can use
     // it as the primary transparent-sort key without a second ECS round-trip.
     // SortKey acknowledged; per-entity override path is deferred.
-    const fLayerValue = bundle.Layer?.value as Int32Array | undefined;
-    void bundle.SortKey;
+    const fLayerValue = row.get(Layer)?.value;
+    void row.get(SortKey);
     // feat-20260608-tilemap-object-layer-rendering M3 / m3-t5: tilemap-spawned
     // per-cell render entities (the ones `tilemap-chunk-extract-system`
     // pushes via `spawnDerivedRenderEntities`) reach this loop via the same
@@ -3194,19 +3210,17 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     // measures slices against this effective region.zw, so a half-width sub-
     // sprite reduces the anchor budget to 0.5 rather than the asset's 1.0.
     //
-    // bug-20260612: `buildColumnBundle` is now arity-aware, so
-    // `bundle.SpriteRegionOverride?.region` is a full stride-4 flat
-    // `Float32Array` of length `entityCount * 4` (row i at `[i*4, i*4+4)`).
-    // Per-row reads still route through `_getArrayView` for the cleaner
+    // SpriteRegionOverride.region is a fixed stride-4 value. Per-row reads
+    // route through `_getArrayView` for the zero-copy row window
     // row-window slice (consistent with the variable-length array column
     // reads -- K-3 carve-out keeps `_getArrayView` as the row-accessor of
     // record for any non-scalar column).
-    const hasSpriteRegionOverride = bundle.SpriteRegionOverride !== undefined;
+    const hasSpriteRegionOverride = row.get(SpriteRegionOverride) !== undefined;
     // feat-20260523-skin-skeleton-animation M2 / T-21: Skin component
     // column views for coexistence check + joint despawn fail-fast.
     // `skeleton` holds the packed Handle<SkeletonAsset>; `joints` holds
     // the packed Entity u32 array (N x one u32 each).
-    const skinSkeletonView = bundle.Skin?.skeleton;
+    const skinSkeletonView = skin?.skeleton;
     // m2-6: per-entity Skin.joints[] is read via `world.get(entity, Skin)`
     // inside the row loop (D-6); the column-bundled view is no longer needed.
 
@@ -3214,7 +3228,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     if (hasInstances || hasSpriteInstances) {
       // All rows in this callback share one archetype.  Only these two
       // instance-bearing paths consume the version in their cache key.
-      archVersion = resolveArchVersion(entitySelf[0] ?? 0);
+      archVersion = resolveArchVersion(row.entity);
     }
 
     // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
@@ -3232,14 +3246,14 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
       }
     };
 
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
+    {
       // feat-20260608 M2 / w11: read materials array via _getArrayView
-      const entity = (entitySelf[i] ?? 0) as EntityHandle;
+      const entity = row.entity;
       if (isRenderable && visibility?.effective(entity) === 'hidden') {
         explicitlyHidden.add(entity);
         continue;
       }
-      const layerVal = (fLayerValue?.[i] ?? 0) as number;
+      const layerVal = fLayerValue ?? 0;
       // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
       // (carries PR #598 feat-20260703 D-7): dispatch entries for this entity
       // are staged locally and flushed into the shared `dispatch[]` array
@@ -3261,7 +3275,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
 
       // count-mismatch validation: materials.length must equal submeshes.length
       // (plan-strategy §2 D-3 read-side interception)
-      const fAssetHandleVal = fAssetHandle?.get(i);
+      const fAssetHandleVal = fAssetHandle;
       if (
         fAssetHandleVal !== undefined &&
         fAssetHandleVal !== 0 &&
@@ -3395,6 +3409,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
           const clearcoatPv = typeof pv.clearcoat === 'number' ? pv.clearcoat : 0;
           const clearcoatRoughnessPv =
             typeof pv.clearcoatRoughness === 'number' ? pv.clearcoatRoughness : 0.5;
+          const specularTintPv = pv.specularTint as readonly number[] | undefined;
           const normalScalePv = materialNormalScale(pv);
 
           const paramSnap: Record<string, number | number[] | string> = {};
@@ -3424,8 +3439,8 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             const hasSkinSkel =
               hasSkin &&
               skinSkeletonView !== undefined &&
-              skinSkeletonView.get(i) !== undefined &&
-              skinSkeletonView.get(i) !== 0;
+              skinSkeletonView !== undefined &&
+              skinSkeletonView !== 0;
             const isPbrSkinMaterial = firstPassShader === 'forgeax::pbr-skin';
             if (hasSkinSkel && !isPbrSkinMaterial) {
               worldInternal._routeError(
@@ -3612,7 +3627,9 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
           const baseColorTextureHandle = textureHandles.get('baseColorTexture');
           const metallicRoughnessTextureHandle = textureHandles.get('metallicRoughnessTexture');
           const normalTextureHandle = textureHandles.get('normalTexture');
-          const samplerHandle = resolveParamHandle(pv.sampler, 'SamplerAsset');
+          const samplerHandles = collectMaterialTextureSamplers(pv, (value) =>
+            resolveParamHandle(materialTextureRef(value), 'SamplerAsset'),
+          );
           const emissiveTextureHandle = validateTextureHandle(
             'emissiveTexture',
             pv.emissiveTexture,
@@ -3706,6 +3723,13 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             roughness: roughnessPv,
             clearcoat: clearcoatPv,
             clearcoatRoughness: clearcoatRoughnessPv,
+            ...(specularTintPv !== undefined && {
+              specularTint: [
+                specularTintPv[0] ?? 1,
+                specularTintPv[1] ?? 1,
+                specularTintPv[2] ?? 1,
+              ] as readonly [number, number, number],
+            }),
             normalScale: normalScalePv,
             materialShaderId: firstPassShader,
             materialHandle: handleRaw,
@@ -3713,6 +3737,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             paramSnapshot: paramSnap,
             ...(materialParamSchema.length > 0 && { materialParamSchema }),
             ...(textureCoordinates.size > 0 && { textureCoordinates }),
+            ...(samplerHandles.size > 0 && { samplerHandles }),
             ...(textureHandles.size > 0 && { textureHandles }),
             ...(videoTextureFields.size > 0 && { videoTextureFields }),
             ...(baseColorTextureHandle !== undefined && {
@@ -3722,7 +3747,6 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               metallicRoughnessTexture: metallicRoughnessTextureHandle,
             }),
             ...(normalTextureHandle !== undefined && { normalTexture: normalTextureHandle }),
-            ...(samplerHandle !== undefined && { sampler: samplerHandle }),
             ...(emissivePv !== undefined && {
               emissive: [emissivePv[0] ?? 0, emissivePv[1] ?? 0, emissivePv[2] ?? 0] as readonly [
                 number,
@@ -3762,7 +3786,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
                 readonly stencilReference?: number;
               };
               pendingDispatch.push({
-                entityIndex: i,
+                entityIndex: entity,
                 materialHandle: handleRaw,
                 renderableIndex: renderables.length,
                 passIndex: pIdx,
@@ -3813,7 +3837,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         // M2.5: stage into pendingDispatch; flushed at the renderable push
         // site below only when the entity survives cull.
         pendingDispatch.push({
-          entityIndex: i,
+          entityIndex: entity,
           materialHandle: 0,
           renderableIndex: nextRenderableIndex,
           passIndex: 0,
@@ -3831,7 +3855,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         // main scene pass (mirrors Materials.unlit default).
         const forwardTags: Record<string, string> = { LightMode: 'Forward' };
         pendingDispatch.push({
-          entityIndex: i,
+          entityIndex: entity,
           materialHandle: 0,
           renderableIndex: nextRenderableIndex,
           passIndex: 1,
@@ -3855,7 +3879,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         // extractFrame entry; per-entity allocate + writeJointPalette here).
         let skinSlice: SkinPaletteSlice | undefined;
         if (hasSkin) {
-          const skeletonHandleRaw = skinSkeletonView?.get(i);
+          const skeletonHandleRaw = skinSkeletonView;
           if (
             skeletonHandleRaw !== undefined &&
             skeletonHandleRaw !== 0 &&
@@ -4084,7 +4108,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         }
 
         const baseRenderable: RenderableSnapshot = {
-          assetHandle: Math.round(fAssetHandle?.get(i) ?? 0),
+          assetHandle: Math.round(fAssetHandle ?? 0),
           transform: transformSnap,
           material: materialSnap,
           materials: materialsArr,
@@ -4101,7 +4125,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         // producer-owned finite local-space AABBs. Culling is unconditional
         // engine behavior; there is no per-entity opt-out.
         {
-          const assetHandleRaw = Math.round(fAssetHandle?.get(i) ?? 0);
+          const assetHandleRaw = Math.round(fAssetHandle ?? 0);
           // feat-20260614 M8 (D-15/D-19): the mesh AABB resolves entirely
           // through `resolveAssetHandle(world, ...)` (builtin slots + world
           // sharedRefs); it no longer touches AssetRegistry, so the cull gate
@@ -4196,7 +4220,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
       // to the just-pushed slot which is correct because materialDispatch
       // already captures the dispatch position.
     }
-  });
+  }
 
   // M3 / w26: sort dispatch entries by queue (ascending, stable sort)
   // per plan-strategy D-3.
@@ -4206,15 +4230,13 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   // Last-one-wins when multiple entities bear the same shader id (mirrors
   // Camera.exposure -> CameraSnapshot pattern; extract stage only reads).
   const postProcessParams: Map<string, Uint8Array> = new Map();
-  const postProcessParamsQuery = createQueryState({ with: [PostProcessParams, Entity] });
-  queryRun(postProcessParamsQuery, world, (bundle) => {
-    for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const entity = bundle.Entity.self[i] as EntityHandle;
-      const read = world.get(entity, PostProcessParams);
-      if (!read.ok) continue;
-      postProcessParams.set(read.value.shader, read.value.data);
-    }
-  });
+  const postProcessParamsQuery = world.query({ with: [PostProcessParams] }).unwrap();
+  for (const row of postProcessParamsQuery) {
+    const entity = row.entity;
+    const read = world.get(entity, PostProcessParams);
+    if (!read.ok) continue;
+    postProcessParams.set(read.value.shader, read.value.data);
+  }
 
   // feat-20260621 M-A3 / w13 (D-5): engine built-in tonemap data-driven
   // provider. The engine bridges the active camera's `Camera.exposure /

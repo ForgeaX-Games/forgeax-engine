@@ -1,7 +1,7 @@
 // Shared scene and motion step for Bevy `move_sprite` reproduction.
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { createQueryState, defineComponent, Entity, queryRun, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Camera, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { Transform } from '@forgeax/engine-scene';
@@ -70,11 +70,9 @@ export function buildMoveSpriteWorld(world: World, texture: number): void {
 }
 
 export function stepMoveSprite(world: World, dt: number): void {
-  const state = createQueryState({ with: [Transform, SpriteMover, Entity] });
+  const query = world.query({ with: [Transform, SpriteMover] }).unwrap();
   const targets: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    for (const raw of bundle.Entity.self) targets.push(raw as EntityHandle);
-  });
+  for (const row of query) targets.push(row.entity);
   for (const entity of targets) {
     const transform = world.get(entity, Transform);
     const mover = world.get(entity, SpriteMover);
@@ -96,13 +94,14 @@ export function stepMoveSprite(world: World, dt: number): void {
 }
 
 export function readSpriteMotion(world: World): { x: number; velocity: number } {
-  const state = createQueryState({ with: [Transform, SpriteMover, Entity] });
+  const query = world.query({ with: [Transform, SpriteMover] }).unwrap();
   let result = { x: MIN_X, velocity: MOVE_SPEED };
-  queryRun(state, world, (bundle) => {
-    const entity = (bundle.Entity.self[0] ?? 0) as EntityHandle;
+  for (const row of query) {
+    const entity = row.entity;
     const transform = world.get(entity, Transform);
     const mover = world.get(entity, SpriteMover);
     if (transform.ok && mover.ok) result = { x: transform.value.pos[0] ?? MIN_X, velocity: mover.value.velocity ?? MOVE_SPEED };
-  });
+    break;
+  }
   return result;
 }

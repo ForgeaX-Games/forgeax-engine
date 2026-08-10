@@ -56,7 +56,7 @@ const standardPbrSchema: readonly ParamSchemaEntry[] = [
 ];
 
 describe('loader-extract graceful handoff (M4 w24)', () => {
-  it('(1) shader registered + valid texture refs[] index resolves to GUID string', () => {
+  it('(1) shader registered + valid texture refs[] index resolves to a structured texture value', () => {
     const textureFields = derive(standardPbrSchema).textureFieldNames;
     const ctx = makeCtx({
       shaderTextureFieldNames: (id) =>
@@ -72,8 +72,8 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     );
     expect(out).toMatchObject({ kind: 'material' });
     const pv = (out as { values: Record<string, unknown> }).values;
-    // D-19: texture field rewritten to the refs[] GUID string (not a handle).
-    expect(pv.baseColorTexture).toBe('tex-bc-guid');
+    // D-19: texture field rewritten to the structured asset value (not a handle).
+    expect(pv.baseColorTexture).toEqual({ texture: 'tex-bc-guid' });
     // Scalar field unchanged.
     expect(pv.metallic).toBe(0.5);
   });
@@ -138,8 +138,8 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     );
     expect(out).toMatchObject({ kind: 'material' });
     const pv = (out as { values: Record<string, unknown> }).values;
-    // Texture field still resolves to the refs[] GUID string.
-    expect(pv.baseColorTexture).toBe('tex-bc-guid');
+    // Texture field still resolves to the structured asset value.
+    expect(pv.baseColorTexture).toEqual({ texture: 'tex-bc-guid' });
     // Scalar field unchanged: metallic stays 0.
     expect(pv.metallic).toBe(0);
   });

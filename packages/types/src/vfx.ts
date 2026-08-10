@@ -9,6 +9,7 @@ export interface ParticleEmitterDefinition {
 /** Cooked particle effect payload shared by asset and ECS consumers. */
 export interface ParticleEffectAsset {
   readonly kind: 'particle-effect';
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
+  readonly programFingerprint: string;
   readonly emitters: readonly ParticleEmitterDefinition[];
 }

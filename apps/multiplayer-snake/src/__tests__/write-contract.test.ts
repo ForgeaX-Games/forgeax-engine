@@ -1,4 +1,4 @@
-import { createQueryState, queryRun, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import {
   createMemoryEndpointPair,
   createReplicaCoordinator,
@@ -108,8 +108,7 @@ function sendJoin(endpoint: { send(peerId: never, data: Uint8Array): { ok: boole
 
 function countRenderEntities(world: World): number {
   let count = 0;
-  queryRun(createQueryState({ with: [Transform, MeshFilter, MeshRenderer] }), world, () => {
-    count += 1;
-  });
+  const query = world.query({ with: [Transform, MeshFilter, MeshRenderer] }).unwrap();
+  for (const _row of query) count += 1;
   return count;
 }

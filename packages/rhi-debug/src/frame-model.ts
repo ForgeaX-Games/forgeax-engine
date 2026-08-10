@@ -49,6 +49,7 @@ export interface PassDrawItem {
     | 'draw'
     | 'drawIndexed'
     | 'dispatchWorkgroups'
+    | 'dispatchWorkgroupsIndirect'
     | 'drawIndirect'
     | 'drawIndexedIndirect';
 }

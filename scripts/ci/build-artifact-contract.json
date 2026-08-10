@@ -1,49 +1,100 @@
 {
-  "version": 2,
+  "version": 3,
   "extractionRoot": ".",
   "description": "Build artifact class and consumer contract for cross-job CI transfer. SSOT for file classes, consumer requirements, timing roster (AC-06), and provenance chain.",
   "artifactClasses": {
     "engine-dist": {
       "description": "Package dist outputs (engine runtime, types, ECS, math, all packages)",
       "fileClasses": ["packages/*/dist"],
+      "producer": "core-build",
       "transferArtifact": "core-build"
     },
     "wasm-runtime": {
       "description": "wgpu-wasm runtime package (Rust-to-WASM bridge)",
       "fileClasses": ["packages/wgpu-wasm/pkg"],
+      "producer": "core-build",
       "transferArtifact": "core-build"
     },
     "wasm-fbx": {
       "description": "FBX WASM parser package",
       "fileClasses": ["packages/fbx/pkg"],
+      "producer": "core-build",
       "transferArtifact": "core-build"
     },
     "wasm-codec": {
       "description": "Codec WASM package (KTX2/Basis transcode)",
       "fileClasses": ["packages/codec/pkg"],
+      "producer": "core-build",
       "transferArtifact": "core-build"
     },
     "shared-asset-pack": {
       "description": "App-neutral LearnOpenGL pack payload produced once by shared-app-inputs",
       "fileClasses": ["shared-app-inputs/assets/catalog.json"],
+      "producer": "shared-app-inputs",
       "transferArtifact": "shared-app-inputs"
     },
     "shared-engine-shaders": {
       "description": "Engine built-in shader payload produced once by shared-app-inputs",
       "fileClasses": ["shared-app-inputs/shaders/manifest.json"],
+      "producer": "shared-app-inputs",
       "transferArtifact": "shared-app-inputs"
     },
     "app-dist-0": {
       "description": "App shader manifests produced by app-shard-0; payload membership is proven by its artifact inventory.",
-      "fileClasses": ["apps/**/dist/shaders/manifest.json"]
+      "fileClasses": ["apps/**/dist/shaders/manifest.json"],
+      "producer": "app-shard-0",
+      "transferArtifact": "app-dist-0"
     },
     "app-dist-1": {
       "description": "App shader manifests produced by app-shard-1; payload membership is proven by its artifact inventory.",
-      "fileClasses": ["apps/**/dist/shaders/manifest.json"]
+      "fileClasses": ["apps/**/dist/shaders/manifest.json"],
+      "producer": "app-shard-1",
+      "transferArtifact": "app-dist-1"
     },
     "app-dist-2": {
       "description": "App shader manifests produced by app-shard-2; payload membership is proven by its artifact inventory.",
-      "fileClasses": ["apps/**/dist/shaders/manifest.json"]
+      "fileClasses": ["apps/**/dist/shaders/manifest.json"],
+      "producer": "app-shard-2",
+      "transferArtifact": "app-dist-2"
+    }
+  },
+  "returnEvidence": {
+    "schemaVersion": 1,
+    "cacheFamilies": [
+      {
+        "family": "merged-ddc",
+        "producer": "cache-warm",
+        "consumer": "cost-reporter"
+      }
+    ],
+    "fieldApplicability": {
+      "common": ["identity", "inputFingerprint", "producer", "consumer"],
+      "cache": ["classification", "requestedKey", "matchedKey", "restore", "save"],
+      "artifact": [
+        "artifactId",
+        "compressedArchiveBytes",
+        "expandedDiskBytes",
+        "upload",
+        "download",
+        "physicalScope"
+      ]
+    },
+    "invalidEvidence": {
+      "requiredFields": ["code", "expected", "hint", "detail"],
+      "codes": {
+        "identity-missing": ["field"],
+        "cross-run": ["observedRunId"],
+        "aggregate-attempt-mismatch": ["observedRunAttempt"],
+        "provenance-missing": ["producer"],
+        "foreign-producer-attempt": ["observedProducerAttempt"],
+        "fingerprint-missing": ["producer"],
+        "fingerprint-mismatch": ["observedFingerprint"],
+        "artifact-identity-mismatch": ["observedArtifactId"],
+        "owner-fact-missing": ["owner", "field"],
+        "cache-output-inconsistent": ["cacheHit", "requestedKey", "matchedKey"],
+        "family-roster-mismatch": ["observedFamilies"],
+        "schema-incompatible": ["observedSchemaVersion"]
+      }
     }
   },
   "consumers": {
@@ -261,7 +312,7 @@
     {
       "jobIdentity": "metrics-validate",
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "allowedNonArtifactPrerequisites": ["post-merge-gate", "webkit-fallback"],
       "consumer": "metrics-validate"
     },
     {

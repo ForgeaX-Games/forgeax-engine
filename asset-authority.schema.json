@@ -450,8 +450,8 @@
         "id": "vfx-compiler",
         "owner": "packages/vfx-compiler",
         "sourceFiles": [
-          "packages/vfx-compiler/src/importer.ts",
-          "packages/vfx-compiler/src/cook.ts"
+          "packages/vfx-compiler/src/code-program.ts",
+          "packages/vfx-compiler/src/index.ts"
         ],
         "categories": ["supporting-producer"],
         "outputs": [

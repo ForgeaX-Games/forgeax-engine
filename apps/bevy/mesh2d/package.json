@@ -19,6 +19,9 @@
       "category": "2D Rendering",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["geometry-scale"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-mesh2d smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },
@@ -37,6 +40,7 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",

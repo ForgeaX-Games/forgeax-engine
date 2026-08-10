@@ -1,6 +1,6 @@
 import { Transform } from '@forgeax/engine-scene';
 import { PointLight } from '@forgeax/engine-render';
-import { Entity, createQueryState, queryRun, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { installGameplayInput } from './gameplay-input';
@@ -31,6 +31,12 @@ import { createCameraController, type CameraController } from './camera-controll
 import { installAudioSettingsSystem } from './systems/audio-settings';
 import { installTargetStatusSystem } from './target-status';
 import { createHitStreak, type HitStreakHandle } from './hit-streak';
+import { createCounterattack, PLAYER_MAX_HEALTH, type CounterattackHandle } from './counterattack';
+import { createHealthPickups, type HealthPickupHandle } from './health-pickup';
+import { createRepairCache, type RepairCacheHandle } from './repair-cache';
+import { createEnergyCoreExtraction, type EnergyCoreExtractionHandle } from './energy-core-extraction';
+import { createRewardChoice, type RewardChoiceHandle } from './reward-choice';
+import { createBarrierRoute, type BarrierRouteHandle } from './barrier-route';
 
 export type GameplaySession = {
   readonly cameraController: CameraController;
@@ -49,6 +55,12 @@ export type GameplaySession = {
   readonly resetGameplay: () => void;
   readonly gameplayState: GameplayStateHandle;
   readonly hitStreak: HitStreakHandle | undefined;
+  readonly counterattack: CounterattackHandle | undefined;
+  readonly healthPickup: HealthPickupHandle | undefined;
+  readonly repairCache: RepairCacheHandle | undefined;
+  readonly extraction: EnergyCoreExtractionHandle | undefined;
+  readonly rewardChoice: RewardChoiceHandle | undefined;
+  readonly barrierRoute: BarrierRouteHandle | undefined;
 };
 
 /** Build the one gameplay session that systems consume; no feature state stays in bootstrap. */
@@ -83,11 +95,35 @@ export async function createGameplaySession(
   host?.registerCleanup?.(() => worldScoreText?.dispose());
   const changeDetection = installGameplayChangeDetection({ world, targetQuery: targets.targetQuery, hud });
   const hitStreak = createHitStreak(world, targets.player, hud);
+  const healthPickup = targets.player === undefined || targets.healthPickups.length === 0
+    ? undefined
+    : createHealthPickups(world, targets.player, targets.healthPickups);
+  host?.registerCleanup?.(() => healthPickup?.dispose());
+  const repairCache = healthPickup === undefined || targets.repairCache === undefined
+    ? undefined
+    : createRepairCache(world, targets.repairCache, healthPickup);
+  const extraction = targets.player === undefined || targets.extraction === undefined
+    ? undefined
+    : createEnergyCoreExtraction(world, targets.player, targets.extraction);
+  host?.registerCleanup?.(() => extraction?.dispose());
+  const barrierRoute = targets.barrierRoute === undefined
+    ? undefined
+    : createBarrierRoute(world, targets.barrierRoute);
+  host?.registerCleanup?.(() => barrierRoute?.dispose());
+  const counterattack = targets.player === undefined
+    ? undefined
+    : createCounterattack(world, targets.player, () => extraction?.snapshot().collected ?? 0);
+  const rewardChoice = targets.player === undefined || targets.rewardChoice === undefined
+    ? undefined
+    : createRewardChoice(world, targets.player, targets.rewardChoice);
+  if (extraction !== undefined) hud.setExtraction(extraction.snapshot());
+  if (rewardChoice !== undefined) hud.setRewardChoice(rewardChoice.snapshot());
   installTargetStatusSystem({
     world,
     hud,
     primaryTarget: targets.primaryTarget,
     targetProfile: targets.targetProfile,
+    targetRelay: targets.targetRelay,
   });
   const triggerScore = (): { readonly points: number | null } => {
     const target = targets.primaryTarget();
@@ -143,17 +179,8 @@ export async function createGameplaySession(
     bulletHalfHeight: projectilePresentation.bulletHalfHeight,
   });
 
-  const projectileQuery = createQueryState({ with: [Projectile, Transform, Entity] });
-  const projectileEntities = (): EntityHandle[] => {
-    const entities: EntityHandle[] = [];
-    queryRun(projectileQuery, world, (bundle) => {
-      for (let index = 0; index < bundle.Entity.self.length; index++) {
-        const entity = bundle.Entity.self[index];
-        if (entity !== undefined) entities.push(entity as EntityHandle);
-      }
-    });
-    return entities;
-  };
+  const projectileQuery = world.query({ with: [Projectile, Transform] }).unwrap();
+  const projectileEntities = (): EntityHandle[] => [...projectileQuery].map((row) => row.entity);
   installGameplayCommandCounters(world);
   for (const entity of targets.targetEntities()) {
     const transform = world.get(entity, Transform);
@@ -195,6 +222,12 @@ export async function createGameplaySession(
     visibilityLoop: targets.visibilityLoop,
     targetHealth: targets.targetHealth,
     hitStreak,
+    counterattack,
+    healthPickup,
+    repairCache,
+    extraction,
+    rewardChoice,
+    barrierRoute,
     changeDetection,
     depthOfField,
     chromaticAberration,
@@ -207,6 +240,7 @@ export async function createGameplaySession(
     jpegTextureSwap: targets.jpegTextureSwap,
     targetProfile: targets.targetProfile,
     fbxSkinnedTarget: targets.fbxSkinnedTarget,
+    targetRelay: targets.targetRelay,
     settingsState,
     setMode,
     multiWorldOverlay,
@@ -216,11 +250,20 @@ export async function createGameplaySession(
     vfxHitLoop,
     setProjectileVisual: projectilePresentation.setProjectileVisual,
     resetMission: () => {
+      cameraController.hud.resetTransientFeedback();
+      cameraController.hud.setHealth(PLAYER_MAX_HEALTH, PLAYER_MAX_HEALTH);
       cameraController.hud.setTargetProfileActive(false, 0);
+      cameraController.hud.setTargetRelay(targets.targetRelay.snapshot());
+      if (extraction !== undefined) cameraController.hud.setExtraction(extraction.snapshot());
+      if (rewardChoice !== undefined) cameraController.hud.setRewardChoice(rewardChoice.snapshot());
       cameraController.hud.setAssetLabStatus('Asset Lab reset · authored RedBox baseline', 'restored');
     },
   });
-  const gameplayState = installGameplayState({ world, reset: resetGameplay });
+  const gameplayState = installGameplayState({
+    world,
+    reset: resetGameplay,
+    onPhaseChange: cameraController.hud.setPhase,
+  });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
 
   return {
@@ -240,5 +283,11 @@ export async function createGameplaySession(
     resetGameplay,
     gameplayState,
     hitStreak,
+    counterattack,
+    healthPickup,
+    repairCache,
+    extraction,
+    rewardChoice,
+    barrierRoute,
   };
 }

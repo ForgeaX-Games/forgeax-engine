@@ -16,8 +16,16 @@ export {
 } from './mergeability';
 export { pixelDeltaAbsMean } from './pixel-diff';
 export {
+  type LiveLinearHdrReadback,
+  type LiveObservationDescriptor,
+  type LiveObservationLease,
+  type LiveObservationSource,
+  type NamedLinearHdrReadback,
+  type NamedLinearHdrReadbackMetadata,
   type ResolvedTextureDescriptor,
   readbackDrawRt,
+  readbackLiveLinearHdr,
+  readbackNamedLinearHdr,
   readbackTexturePixels,
   resolveAttachmentSize,
   resolveTextureDescriptor,

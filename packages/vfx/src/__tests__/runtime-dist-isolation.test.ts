@@ -57,7 +57,6 @@ const compilerForbiddenDependencies = [
   '@forgeax/engine-ecs',
   '@forgeax/engine-render',
   '@forgeax/engine-rhi',
-  '@forgeax/engine-shader-compiler',
   '@forgeax/engine-naga',
 ];
 
@@ -80,13 +79,13 @@ describe('VFX runtime/compiler physical boundary', () => {
     const compilerDist = readFileSync(resolve(compilerRoot, 'dist', 'index.mjs'), 'utf8');
 
     expect(runtimeDist).not.toMatch(/engine-vfx-compiler|shader-compiler|engine-naga/);
-    expect(runtimeDist).not.toMatch(/RenderFeature|Renderer|RenderGraph|GPUDevice|RhiDevice/);
-    expect(runtimeDeclarations).not.toMatch(/engine-vfx-compiler|shader-compiler|engine-naga/);
-    expect(compilerDist).not.toMatch(
-      /engine-ecs|engine-render|engine-rhi|shader-compiler|engine-naga/,
+    expect(runtimeDist).not.toMatch(
+      /\b(?:RenderFeature|Renderer|RenderGraph|GPUDevice|RhiDevice)\b/,
     );
+    expect(runtimeDeclarations).not.toMatch(/engine-vfx-compiler|shader-compiler|engine-naga/);
+    expect(compilerDist).not.toMatch(/engine-ecs|engine-render|engine-rhi|engine-naga/);
     expect(compilerDist).not.toMatch(
-      /World|RenderFeature|Renderer|RenderGraph|GPUDevice|RhiDevice/,
+      /\b(?:World|RenderFeature|Renderer|RenderGraph|GPUDevice|RhiDevice)\b/,
     );
   });
 

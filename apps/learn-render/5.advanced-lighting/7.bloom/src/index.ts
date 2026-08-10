@@ -37,7 +37,7 @@ import { PointLight } from '@forgeax/engine-render';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -45,6 +45,9 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 // 2. example-specific glue
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-7-bloom',
+);
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/
 //   wood.png       GUID 019e3969-1d48-7c3b-ac24-6d68f457065f
@@ -139,7 +142,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.7 bloom] createApp failed:', appRes.error);
@@ -160,6 +163,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const assets = renderer.assets;
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Load textures by GUID.

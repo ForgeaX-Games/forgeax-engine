@@ -1,6 +1,6 @@
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { EquirectAsset, TextureAsset } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, type EquirectAsset, type TextureAsset } from '@forgeax/engine-types';
 import { EngineEnvironmentError, createDevImportTransport } from '@forgeax/engine-runtime';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -8,6 +8,9 @@ import { buildSpecularTintWorld } from './specular-tint';
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const SPECULAR_TINT_GUID = '019e3969-1d46-79d1-9d22-ffd8c6859c64';
+const runtimeBinding = import.meta.env.DEV
+  ? createStandaloneRuntimeAssetBinding('bevy-specular-tint')
+  : undefined;
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-specular-tint: missing <canvas id="app">');
 
@@ -17,11 +20,17 @@ bootstrap(canvas).catch((error: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
+  const bundler = {
+    ...forgeaxBundlerAdapter(),
+    ...(runtimeBinding === undefined
+      ? {}
+      : { importTransport: createDevImportTransport(runtimeBinding) }),
+  };
   const result = await createApp(target, {}, bundler);
   if (!result.ok) { console.error('[bevy-specular-tint] createApp failed:', result.error); return; }
   const app = result.value;
-  app.renderer.assets.configurePackIndex('/pack-index.json');
+  if (runtimeBinding === undefined) app.renderer.assets.configurePackIndex('/pack-index.json');
+  else app.renderer.assets.configureRuntimeBinding(runtimeBinding);
   const hdrGuid = AssetGuid.parse(NEWPORT_LOFT_GUID);
   const tintGuid = AssetGuid.parse(SPECULAR_TINT_GUID);
   if (!hdrGuid.ok || !tintGuid.ok) { console.error('[bevy-specular-tint] asset GUID parse failed'); return; }

@@ -1,9 +1,6 @@
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -26,21 +23,15 @@ export const RotateToPlayer = defineComponent('RotationRotateToPlayer', {});
 type XY = readonly [number, number];
 
 function firstEntity(world: World, component: typeof Player | typeof Camera): EntityHandle | null {
-  const state = createQueryState({ with: [component, Transform, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    const first = bundle.Entity.self[0];
-    if (first !== undefined) handle = first as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [component, Transform] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 function trackingEntities(world: World, component: typeof SnapToPlayer | typeof RotateToPlayer): EntityHandle[] {
-  const state = createQueryState({ with: [component, Transform, Entity] });
+  const query = world.query({ with: [component, Transform] }).unwrap();
   const handles: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    for (const handle of bundle.Entity.self) handles.push(handle as EntityHandle);
-  });
+  for (const row of query) handles.push(row.entity);
   return handles;
 }
 

@@ -39,6 +39,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
+import { METRIC_KINDS } from '../run-all.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..');
@@ -99,6 +100,10 @@ function validFailPayload() {
 }
 
 describe('report/pixel-parity.json schema-as-contract (T-020 / D-P12)', () => {
+  it('keeps the MetricKind registry closed to the five declared members', () => {
+    expect(METRIC_KINDS).toEqual(['bundle-size', 'fps', 'bench', 'gate', 'spike-report']);
+  });
+
   it('(a) pass-verdict full report validates OK', () => {
     const validate = compileReportValidator();
     const ok = validate(validPassPayload());

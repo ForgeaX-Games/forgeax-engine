@@ -5,15 +5,7 @@
 // remains the typed facade and supplies one narrow per-World state capability.
 
 import { err, ok, type Result, unwrapHandle } from '@forgeax/engine-types';
-import { type Archetype, appendEntity } from './archetype';
-import {
-  type ArchetypeGraph,
-  getAddEdge,
-  getOrCreateArchetype,
-  getRemoveEdge,
-} from './archetype-graph';
 import type { BufferPool } from './buffer-pool';
-import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './column';
 import {
   bufferFieldByteLength,
   type Component,
@@ -53,6 +45,17 @@ import {
 import type { ErrorContext } from './schedule';
 import { Severity } from './schedule';
 import type { SharedRefStore } from './shared-ref-store';
+import { type Archetype, appendArchetypeRow } from './storage/archetype';
+import {
+  type ArchetypeGraph,
+  getAddEdge,
+  getOrCreateArchetype,
+  getRemoveEdge,
+  getTable,
+} from './storage/archetype-graph';
+import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './storage/column';
+import { removeSparseTag } from './storage/sparse-tag-set';
+import { appendTableRow, type Table } from './storage/table';
 import type { UniqueRefStore } from './unique-ref-store';
 import type {
   ArrayFieldElementValue,
@@ -71,6 +74,7 @@ export interface ComponentAccessState {
   readonly uniqueRefs: UniqueRefStore;
   readonly sharedRefs: SharedRefStore;
   readonly markComponentAdded: (entity: EntityHandle, componentId: number) => void;
+  readonly markComponentsAdded: (entity: EntityHandle, componentIds: readonly number[]) => void;
   readonly markComponentChanged: (entity: EntityHandle, componentId: number) => void;
   readonly removeComponentChange: (entity: EntityHandle, componentId: number) => void;
   readonly markStructureChanged: () => void;
@@ -90,6 +94,14 @@ export class WorldComponentAccess {
 
   private get records(): EntityRecord[] {
     return this.state.records;
+  }
+
+  private table(archetype: Archetype): Table {
+    return getTable(this.graph, archetype.tableId);
+  }
+
+  private tableRow(record: EntityRecord): number {
+    return this.graph.archetypes[record.archetypeId]?.rows[record.archetypeRow] ?? -1;
   }
 
   private get freeIndices(): number[] {
@@ -128,7 +140,7 @@ export class WorldComponentAccess {
     // Count existing entities carrying this component across all archetypes.
     let existingCount = 0;
     for (const arch of this.graph.archetypes) {
-      if (arch.columns.has(localId)) {
+      if (arch.components.some((component) => component.id === localId)) {
         existingCount += arch.size;
       }
     }
@@ -182,7 +194,8 @@ export class WorldComponentAccess {
     if (!this.recordIsLive(targetRec, entityGeneration(target))) return;
     const targetArch = this.graph.archetypes[targetRec.archetypeId];
     const mirrorLocalId = mirror.id;
-    const hasMirror = targetArch?.columns.has(mirrorLocalId) ?? false;
+    const hasMirror =
+      targetArch?.components.some((component) => component.id === mirrorLocalId) ?? false;
     if (!hasMirror) {
       this._addComponentCore(
         target,
@@ -286,12 +299,11 @@ export class WorldComponentAccess {
 
     // Check if this archetype has the component (using World-local ID).
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
-    if (!fieldCols) {
+    if (!arch.components.some((candidate) => candidate.id === localId)) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
 
-    return ok(this.storage.readRow(arch, component, rec.row));
+    return ok(this.storage.readRow(arch, component, this.tableRow(rec)));
   }
 
   /**
@@ -341,7 +353,7 @@ export class WorldComponentAccess {
     const rec = record.value;
     const arch = this.graph.archetypes[rec.archetypeId];
     if (!arch) return undefined;
-    return this.storage.readArrayView(arch, component, rec.row, fieldName);
+    return this.storage.readArrayView(arch, component, this.tableRow(rec), fieldName);
   }
 
   /**
@@ -367,6 +379,7 @@ export class WorldComponentAccess {
     entity: EntityHandle,
     component: Component<string, S>,
     value: Partial<InputShapeOf<S>>,
+    markChanged = true,
   ): Result<void, EcsError> {
     const record = this.lookupAlive(entity, 'set', component.name);
     if (!record.ok) return record;
@@ -385,8 +398,7 @@ export class WorldComponentAccess {
       );
     }
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
-    if (!fieldCols) {
+    if (!arch.components.some((candidate) => candidate.id === localId)) {
       // F-02: set on missing component returns err instead of silent ignore
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
@@ -397,7 +409,10 @@ export class WorldComponentAccess {
     if (sharedErr !== null) {
       return err(sharedErr as unknown as EcsError);
     }
-    const currentValue = this.storage.readRow(arch, component, rec.row) as Record<string, unknown>;
+    const currentValue = this.storage.readRow(arch, component, this.tableRow(rec)) as Record<
+      string,
+      unknown
+    >;
     const enumErr = validateEnumFieldValues(
       component,
       { ...currentValue, ...(value as Record<string, unknown>) },
@@ -406,11 +421,22 @@ export class WorldComponentAccess {
     if (enumErr !== null) {
       return err(enumErr as unknown as EcsError);
     }
+    if (component.storage === 'sparse') {
+      const empty = {} as ShapeOf<S>;
+      if (component.onDiscard) component.onDiscard(entity, empty);
+      if (component.onInsert) component.onInsert(entity, empty);
+      if (markChanged) this.markComponentChanged(entity, component);
+      return ok(undefined);
+    }
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
+    if (fieldCols === undefined) {
+      throw new Error(`Table storage for ${component.name} does not exist.`);
+    }
     const onDiscard = (component as Component).onDiscard;
     const onInsert = (component as Component).onInsert;
     const oldValue =
       onDiscard !== undefined
-        ? (this.storage.readRow(arch, component, rec.row) as Record<string, unknown>)
+        ? (this.storage.readRow(arch, component, this.tableRow(rec)) as Record<string, unknown>)
         : undefined;
     if (onDiscard && oldValue !== undefined) onDiscard(entity, oldValue);
     for (const fieldName of Object.keys(value)) {
@@ -426,15 +452,16 @@ export class WorldComponentAccess {
       // do not match `isManagedField` here, but for set-ref/string we already
       // gated on it so the call is hot. Zeroes the column when applicable.
       if (isManagedField(fieldType)) {
-        this.storage.releaseManagedFieldOnRow(arch, component, rec.row, fieldName);
+        this.storage.releaseManagedFieldOnRow(arch, component, this.tableRow(rec), fieldName);
       }
       const raw = (value as Record<string, unknown>)[fieldName];
       if (fieldType === 'bool') {
-        col.view[rec.row] = raw ? 1 : 0;
+        col.view[this.tableRow(rec)] = raw ? 1 : 0;
       } else if (isEntityField(fieldType)) {
         // M3 entity field overwrite: encode null as ENTITY_NULL_RAW;
         // otherwise store the Entity bit pattern (slot+gen).
-        col.view[rec.row] = raw === null || raw === undefined ? ENTITY_NULL_RAW : (raw as number);
+        col.view[this.tableRow(rec)] =
+          raw === null || raw === undefined ? ENTITY_NULL_RAW : (raw as number);
       } else if (isManagedBufferField(fieldType)) {
         // M2 set path: collapsed-vocab keyword family `'buffer'` (variable) +
         // `'buffer<N>'` (fixed). The two shapes diverge here:
@@ -462,13 +489,13 @@ export class WorldComponentAccess {
               return err(new FixedSizeMismatchError(fieldName, expected, bytes.byteLength));
             }
             const arity = col.arity;
-            (col.view as Uint8Array).set(bytes.subarray(0, arity), rec.row * arity);
+            (col.view as Uint8Array).set(bytes.subarray(0, arity), this.tableRow(rec) * arity);
           } else {
             // Variable `'buffer'` set: release prior slot via SSOT helper
             // (feat-20260614 D-2) then alloc fresh sized to the new payload
             // (verify round 1 B2 fix path). The helper zeroes the column on
             // release; sentinel slot id 0 is a no-op.
-            this.storage.releaseManagedFieldOnRow(arch, component, rec.row, fieldName);
+            this.storage.releaseManagedFieldOnRow(arch, component, this.tableRow(rec), fieldName);
             const allocR = this.bufferPool.alloc(bytes.byteLength);
             if (!allocR.ok) {
               const ctx: ErrorContext = {
@@ -476,12 +503,12 @@ export class WorldComponentAccess {
                 systemName: `World.set (${component.name}.${fieldName})`,
               };
               this.routeError(allocR.error, ctx);
-              col.view[rec.row] = 0;
+              col.view[this.tableRow(rec)] = 0;
               continue;
             }
             const slot = allocR.value;
             slot.view.set(bytes);
-            col.view[rec.row] = slot.id;
+            col.view[this.tableRow(rec)] = slot.id;
           }
         }
       } else if (fieldType === 'string') {
@@ -494,7 +521,7 @@ export class WorldComponentAccess {
         // (AC-06).
         const text = typeof raw === 'string' ? raw : '';
         const handle = this.uniqueRefs.alloc<'String'>('String', text);
-        col.view[rec.row] = unwrapHandle(handle);
+        col.view[this.tableRow(rec)] = unwrapHandle(handle);
       } else {
         const arrayMeta = component.fields[fieldName]?.arrayMeta;
         if (arrayMeta !== undefined) {
@@ -505,11 +532,11 @@ export class WorldComponentAccess {
           // variable). Fixed `array<T,N>` is inline — the helper short-
           // circuits and writeArrayField writes directly into the row's
           // stride window with no pool traffic.
-          this.storage.releaseManagedFieldOnRow(arch, component, rec.row, fieldName);
+          this.storage.releaseManagedFieldOnRow(arch, component, this.tableRow(rec), fieldName);
           this.storage.writeArrayField(
             arch,
             component,
-            rec.row,
+            this.tableRow(rec),
             fieldName,
             fieldType,
             arrayMeta,
@@ -520,7 +547,7 @@ export class WorldComponentAccess {
           // released the prior `'shared<T>'` rc via SharedRefStore.release;
           // here we retain the new value so net rc delta is +1 / 0 / -1 per
           // M4 invariant (set: -1+1=0; spawn: 0+1=+1; despawn: -1).
-          col.view[rec.row] = raw as number;
+          col.view[this.tableRow(rec)] = raw as number;
           if (fieldType.startsWith('shared<') && (raw as number) !== 0) {
             this.storage.retainSharedScalarHandle(raw as number, component.name, fieldName);
           }
@@ -528,9 +555,12 @@ export class WorldComponentAccess {
       }
     }
     if (onInsert) {
-      onInsert(entity, this.storage.readRow(arch, component, rec.row) as Record<string, unknown>);
+      onInsert(
+        entity,
+        this.storage.readRow(arch, component, this.tableRow(rec)) as Record<string, unknown>,
+      );
     }
-    this.markComponentChanged(entity, component);
+    if (markChanged) this.markComponentChanged(entity, component);
     return ok(undefined);
   }
 
@@ -601,7 +631,7 @@ export class WorldComponentAccess {
       );
     }
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
     if (!fieldCols) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
@@ -621,7 +651,7 @@ export class WorldComponentAccess {
     const elementBytes = meta.byteSize!;
 
     const isVariable = arrayMeta.length === undefined;
-    const slotId = col.view[rec.row] as number;
+    const slotId = col.view[this.tableRow(rec)] as number;
 
     if (!isVariable) {
       // Fixed-capacity array: count is anchored at the schema-declared N
@@ -639,7 +669,7 @@ export class WorldComponentAccess {
     if (countCol === undefined) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
-    const count = countCol.view[rec.row] as number;
+    const count = countCol.view[this.tableRow(rec)] as number;
     const newCount = count + 1;
     const newByteLength = newCount * elementBytes;
 
@@ -649,7 +679,7 @@ export class WorldComponentAccess {
       const allocR = this.bufferPool.alloc(newByteLength);
       if (!allocR.ok) return err(allocR.error);
       liveSlotId = allocR.value.id;
-      col.view[rec.row] = liveSlotId;
+      col.view[this.tableRow(rec)] = liveSlotId;
     } else {
       // A previously-allocated slot may have drained below its high-water
       // mark: swap-remove (`_removeArrayElementByValue`) and `pop` only lower
@@ -667,7 +697,7 @@ export class WorldComponentAccess {
     // Reinterpret the slot bytes as the element-typed view and write at the
     // tail index. Entity values are stored as their u32 bit pattern.
     this.storage.writeArrayElementAt(liveBytes, count, arrayMeta.elementType, value as number);
-    countCol.view[rec.row] = newCount;
+    countCol.view[this.tableRow(rec)] = newCount;
     this.markComponentChanged(entity, component);
     return ok(undefined);
   }
@@ -707,7 +737,7 @@ export class WorldComponentAccess {
       );
     }
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
     if (!fieldCols) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
@@ -730,12 +760,12 @@ export class WorldComponentAccess {
     if (countCol === undefined) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
-    const count = countCol.view[rec.row] as number;
+    const count = countCol.view[this.tableRow(rec)] as number;
     if (count === 0) return err(new ArrayPopEmptyError(fieldNameStr));
-    const slotId = col.view[rec.row] as number;
+    const slotId = col.view[this.tableRow(rec)] as number;
     const liveBytes = this.bufferPool.view(slotId);
     const value = this.storage.readArrayElementAt(liveBytes, count - 1, arrayMeta.elementType);
-    countCol.view[rec.row] = count - 1;
+    countCol.view[this.tableRow(rec)] = count - 1;
     this.markComponentChanged(entity, component);
     return ok(value as ArrayFieldElementValue<S, K>);
   }
@@ -773,7 +803,7 @@ export class WorldComponentAccess {
       );
     }
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
     if (!fieldCols) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
@@ -793,7 +823,7 @@ export class WorldComponentAccess {
     // biome-ignore lint/style/noNonNullAssertion: ManagedArrayElementType always scalar -> byteSize present
     const elementBytes = meta.byteSize!;
 
-    const slotId = col.view[rec.row] as number;
+    const slotId = col.view[this.tableRow(rec)] as number;
     if (slotId === 0) return ok(0);
     const liveBytes = this.bufferPool.view(slotId);
     return ok(Math.floor(liveBytes.byteLength / elementBytes));
@@ -819,7 +849,7 @@ export class WorldComponentAccess {
         }),
       );
     }
-    const fieldCols = arch.columns.get(component.id);
+    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
     if (!fieldCols) return err(new ComponentNotPresentError(entity as number, component.name));
     const fieldNameStr = fieldName as string;
     const col = fieldCols.get(fieldNameStr);
@@ -844,12 +874,12 @@ export class WorldComponentAccess {
     }
 
     const byteLength = minimum * meta.byteSize;
-    const slotId = col.view[rec.row] as number;
+    const slotId = col.view[this.tableRow(rec)] as number;
     if (slotId === 0) {
       if (minimum === 0) return ok(undefined);
       const allocated = this.bufferPool.alloc(byteLength);
       if (!allocated.ok) return allocated;
-      col.view[rec.row] = allocated.value.id;
+      col.view[this.tableRow(rec)] = allocated.value.id;
       return ok(undefined);
     }
     if (this.bufferPool.view(slotId).byteLength >= byteLength) return ok(undefined);
@@ -901,7 +931,7 @@ export class WorldComponentAccess {
       );
     }
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
     if (!fieldCols) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
@@ -921,9 +951,9 @@ export class WorldComponentAccess {
     if (countCol === undefined) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
-    const count = countCol.view[rec.row] as number;
+    const count = countCol.view[this.tableRow(rec)] as number;
     if (count === 0) return ok(undefined);
-    const slotId = col.view[rec.row] as number;
+    const slotId = col.view[this.tableRow(rec)] as number;
     if (slotId === 0) return ok(undefined);
     const liveBytes = this.bufferPool.view(slotId);
     const target = value as number;
@@ -934,7 +964,7 @@ export class WorldComponentAccess {
           const tail = this.storage.readArrayElementAt(liveBytes, last, arrayMeta.elementType);
           this.storage.writeArrayElementAt(liveBytes, i, arrayMeta.elementType, tail);
         }
-        countCol.view[rec.row] = last;
+        countCol.view[this.tableRow(rec)] = last;
         this.markComponentChanged(entity, component);
         return ok(undefined);
       }
@@ -1033,7 +1063,7 @@ export class WorldComponentAccess {
 
     // Check if entity already has this component (using World-local ID).
     const localId = componentData.component.id;
-    if (srcArch.columns.has(localId)) {
+    if (srcArch.components.some((candidate) => candidate.id === localId)) {
       // M2 exclusive relationship: re-adding the holder with a (possibly new)
       // target auto-reparents instead of failing (AC-12). Prune the old side
       // first (removeComponent fires the onRemove arm -> old mirror pruned),
@@ -1073,18 +1103,28 @@ export class WorldComponentAccess {
       componentData.component as Component,
     );
 
-    // Migrate entity: copy existing data + add new component data.
-    this.storage.migrateEntity(rec, srcArch, targetArch);
+    if (componentData.component.storage === 'sparse') {
+      this.storage.moveEntityArchetype(rec, srcArch, targetArch);
+    } else {
+      this.storage.migrateEntity(rec, srcArch, targetArch);
+    }
 
     // Write the new component's data. Apply layer-2 + layer-3 silent
     // fallback so addComponent shares the SAME default-resolution path
     // as spawn / SceneAsset.instantiate (feat-20260517 / M2 / AC-04
     // research §F4 auto-symmetry; ComponentData<S>['data'] is the
     // physical bridge).
-    this.storage.writeRow(targetArch, componentData.component, rec.row, filled as ShapeOf<S>);
+    if (componentData.component.storage === 'table') {
+      this.storage.writeRow(
+        targetArch,
+        componentData.component,
+        this.tableRow(rec),
+        filled as ShapeOf<S>,
+      );
+    }
+    this.markComponentAdded(entity, componentData.component as Component);
     const onAdd = (componentData.component as Component).onAdd;
     if (onAdd) onAdd(entity, filled as Record<string, unknown>);
-    this.markComponentAdded(entity, componentData.component as Component);
 
     // M1 hook framework: fire onInsert after writeRow completes (D-6).
     // onInsert fires with the entity and the written value as context.
@@ -1171,7 +1211,7 @@ export class WorldComponentAccess {
 
     // Check if entity has this component (using World-local ID).
     const localId = component.id;
-    if (!srcArch.columns.has(localId)) {
+    if (!srcArch.components.some((candidate) => candidate.id === localId)) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
 
@@ -1184,10 +1224,11 @@ export class WorldComponentAccess {
     const needsOldValue =
       onDiscard !== undefined || onRemove !== undefined || (rel !== undefined && !internal);
     if (needsOldValue) {
-      const oldValue = this.storage.readRow(srcArch, component as Component, rec.row) as Record<
-        string,
-        unknown
-      >;
+      const oldValue = this.storage.readRow(
+        srcArch,
+        component as Component,
+        this.tableRow(rec),
+      ) as Record<string, unknown>;
       if (onDiscard) {
         onDiscard(entity, oldValue);
       }
@@ -1202,13 +1243,20 @@ export class WorldComponentAccess {
 
     // M1 release loop (removeComponent path): release every `ref<T>` field
     // on the component being removed before migration drops the row.
-    this.storage.releaseManagedRefsOnRow(srcArch, component as Component, rec.row);
+    if (component.storage === 'table') {
+      this.storage.releaseManagedRefsOnRow(srcArch, component as Component, this.tableRow(rec));
+    }
 
     // Get target archetype via edge cache.
     const targetArch = getRemoveEdge(this.graph, srcArch, localId);
 
-    // Migrate entity: copy all data except the removed component.
-    this.storage.migrateEntity(rec, srcArch, targetArch);
+    if (component.storage === 'sparse') {
+      this.storage.moveEntityArchetype(rec, srcArch, targetArch);
+      const set = this.graph.sparseTags.get(component.id);
+      if (set !== undefined) removeSparseTag(set, entity);
+    } else {
+      this.storage.migrateEntity(rec, srcArch, targetArch);
+    }
     this.state.removeComponentChange(entity, component.id);
     this.markStructureChanged();
     return ok(undefined);
@@ -1244,32 +1292,36 @@ export class WorldComponentAccess {
     const arch = getOrCreateArchetype(this.graph, componentIds, components);
 
     // Append entity row.
-    const row = appendEntity(arch, slot);
+    const table = this.table(arch);
+    const tableRow = appendTableRow(table, entity);
+    const archetypeRow = appendArchetypeRow(arch, tableRow);
+    record.archetypeId = arch.id;
+    record.archetypeRow = archetypeRow;
 
     // Write initial data. Apply layer-2 + layer-3 silent fallback so
     // deferred-spawn (Commands.spawn) shares the SAME default-resolution
     // path as the synchronous `world.spawn` / `addComponent` /
     // SceneAsset.instantiate (feat-20260517 / M2 / AC-04 + AC-09).
+    this.state.markComponentsAdded(entity, [
+      EntityComponent.id,
+      ...componentDatas.map((cd) => cd.component.id),
+    ]);
     for (const cd of componentDatas) {
       const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
-      this.storage.writeRow(arch, cd.component, row, filled as ShapeOf<ComponentSchema>);
+      this.storage.writeRow(arch, cd.component, tableRow, filled as ShapeOf<ComponentSchema>);
     }
 
     // Essential id=0 `Entity` column write (feat-20260602 / plan-strategy D-3),
     // mirroring the synchronous `spawn` path: the deferred handle was minted at
     // `_allocatePendingEntity` time and is passed in here.
-    this.storage.writeEntitySelf(arch, row, entity);
+    this.storage.writeEntitySelf(arch, tableRow, entity);
     for (const cd of componentDatas) {
       const onAdd = (cd.component as Component).onAdd;
       if (onAdd) {
         const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
         onAdd(entity, filled as Record<string, unknown>);
       }
-      this.markComponentAdded(entity, cd.component);
     }
-
-    record.archetypeId = arch.id;
-    record.row = row;
 
     // M1 hook framework: fire onInsert + M2 relationship sync after all
     // rows are written (mirrors `_spawnCore` hook firing, internal=false
@@ -1305,7 +1357,7 @@ export class WorldComponentAccess {
     if (slot > ENTITY_MAX_INDEX) {
       throw new EntityIndexOverflowError(slot);
     }
-    this.records.push({ generation: 0, archetypeId: -1, row: -1 });
+    this.records.push({ generation: 0, archetypeId: -1, archetypeRow: -1 });
     return slot;
   }
 

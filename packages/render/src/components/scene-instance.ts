@@ -33,7 +33,7 @@
 //     `@forgeax/engine-render` next to Transform / Camera / DirectionalLight)
 //   - charter P3 (machine-readable schema: 3 closed fields)
 //   - charter P4 (consistent abstraction: instance == entity carrying
-//     SceneInstance — same `world.queryRun([SceneInstance], ...)` /
+//     SceneInstance — same `world.query({ read: [SceneInstance] })` /
 //     `world.get(root, SceneInstance)` path as any other component)
 
 import { defineComponent, type EntityHandle } from '@forgeax/engine-ecs';
@@ -156,9 +156,9 @@ export interface SceneInstanceState {
  *
  * ```ts
  * import { SceneInstance } from '@forgeax/engine-render';
- * world.queryRun([SceneInstance], (entity, instance) => {
- *   console.log(`root=${entity} source=${instance.source}`);
- * });
+ * for (const row of world.query({ read: [SceneInstance] }).unwrap()) {
+ *   console.log(`root=${row.entity} source=${row.get(SceneInstance).source}`);
+ * }
  *
  * const inst = world.get(root, SceneInstance).value;
  * const memberEntity = inst.mapping[localId]; // Uint32Array snapshot

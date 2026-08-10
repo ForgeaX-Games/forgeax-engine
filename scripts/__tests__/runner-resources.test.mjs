@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { runnerResources, workspaceConcurrency } from '../lib/runner-resources.mjs';
+import {
+  coverageVitestWorkers,
+  runnerResources,
+  workspaceConcurrency,
+} from '../lib/runner-resources.mjs';
 
 function probe(files, hostMemoryBytes = 64 * 1024 ** 3, availableParallelism = 32) {
   return runnerResources({
@@ -42,4 +46,10 @@ test('leaves one CPU free while fitting workers in nominal memory', () => {
     workspaceConcurrency({ cpus: 4, memoryBytes: 8_000_000_000, reserveGB: 2, workerGB: 2 }),
     3,
   );
+});
+
+test('derives a conservative coverage worker budget from CPU and memory', () => {
+  assert.equal(coverageVitestWorkers({ cpus: 4, memoryBytes: 8 * 1024 ** 3 }), 3);
+  assert.equal(coverageVitestWorkers({ cpus: 8, memoryBytes: 16 * 1024 ** 3 }), 6);
+  assert.equal(coverageVitestWorkers({ cpus: 32, memoryBytes: 64 * 1024 ** 3 }), 6);
 });

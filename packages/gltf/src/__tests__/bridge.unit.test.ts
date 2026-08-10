@@ -6,8 +6,8 @@
 //   - packages/gltf/src/__tests__/bridge-recursive.test.ts
 //   - packages/gltf/src/__tests__/bridge-register-integration.test.ts
 //   - packages/gltf/src/__tests__/bridge-snapshot.test.ts
-//   - packages/gltf/test/bridge-multi-prim.test.ts
-//   - packages/gltf/test/bridge-recurse-and-transform.test.ts
+//   - packages/gltf/src/__tests__/bridge-multi-prim.test.ts
+//   - packages/gltf/src/__tests__/bridge-recurse-and-transform.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
@@ -19,6 +19,53 @@ import type { GltfDoc, GltfMaterialIr, GltfMeshIr } from '../parse-gltf.js';
 
 function fakeMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
   return id as unknown as Handle<'MeshAsset', 'shared'>;
+}
+
+{
+  describe('KHR_lights_punctual bridge contract', () => {
+    it('projects imported light facts to existing light kinds without a peer component', () => {
+      const doc = {
+        meshes: [],
+        materials: [],
+        nodes: [],
+        scenes: [{ nodes: [] }],
+        textures: undefined,
+        images: undefined,
+        samplers: undefined,
+        skeletons: [],
+        animationClips: [],
+        defaultSceneIndex: 0,
+        diagnostics: {
+          nodeNames: [],
+          unsupportedExtensions: [],
+          matrixTrsCoexistNodes: [],
+        },
+        extensions: {
+          KHR_lights_punctual: {
+            lights: [
+              { type: 'directional', intensity: 2 },
+              { type: 'point', intensity: 3, range: 4 },
+              {
+                type: 'spot',
+                intensity: 5,
+                range: 6,
+                spot: { innerConeAngle: 0.2, outerConeAngle: 0.6 },
+              },
+            ],
+          },
+        },
+      } as unknown as GltfDoc;
+
+      const scene = gltfDocToSceneAsset(doc, {
+        meshHandles: new Map(),
+        materialHandles: new Map(),
+      });
+      const lights = (scene as unknown as { lights?: readonly Record<string, unknown>[] }).lights;
+      expect(lights?.map((light) => light.kind)).toEqual(['directional', 'point', 'spot']);
+      expect(lights?.map((light) => light.intensity)).toEqual([2, 3, 5]);
+      expect(lights?.[1]?.range).toBe(4);
+    });
+  });
 }
 
 function fakeMaterialHandle(id: number): Handle<'MaterialAsset', 'shared'> {

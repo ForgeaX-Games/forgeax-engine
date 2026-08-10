@@ -2085,6 +2085,8 @@ export interface RhiComputePassEncoder {
     dynamicOffsets?: readonly number[] | undefined,
   ): void;
   dispatchWorkgroups(x: number, y?: number | undefined, z?: number | undefined): void;
+  /** Dispatch dimensions read from three consecutive u32 values in an indirect buffer. */
+  dispatchWorkgroupsIndirect(indirectBuffer: Buffer, indirectOffset: number): void;
   end(): void;
 }
 

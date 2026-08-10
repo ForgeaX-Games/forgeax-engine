@@ -58,7 +58,7 @@ feature registry.
 
 Prepared graphics is still assembled by the runtime host. A producer imports
 the generic `RenderFeature` declaration from `@forgeax/engine-render`, keeps
-its frame data in `@forgeax/engine-vfx` (or another producer package), and
+its frame data in its owning producer package, and
 uses `context.graphics` for opaque preparation references. Generation and
 recording remain render-host facts.
 
@@ -66,12 +66,12 @@ recording remain render-host facts.
 import { ok } from '@forgeax/engine-types';
 import type { RenderFeature } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
-import type { ParticleRenderBatch } from '@forgeax/engine-vfx';
 
-const batch: ParticleRenderBatch = { batches: [] };
+type PreparedFrame = { readonly items: readonly unknown[] };
+const frame: PreparedFrame = { items: [] };
 const feature = {
   identity: 'package.prepared-feature',
-  extract: () => ok(batch),
+  extract: () => ok(frame),
   prepare: (_data, context) => {
     const pipeline = context.graphics.preparePipeline('package.pipeline', {
       shader: 'package.shader',
@@ -83,7 +83,7 @@ const feature = {
     return ok(undefined);
   },
   contribute: () => ok(undefined),
-} satisfies RenderFeature<ParticleRenderBatch>;
+} satisfies RenderFeature<PreparedFrame>;
 
 const renderer = await createRenderer(canvas, { features: [feature] });
 ```

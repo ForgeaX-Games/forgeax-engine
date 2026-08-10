@@ -10,6 +10,8 @@ describe('prepared graphics operation snapshots', () => {
       vertexLayout: string;
       colorFormats: string[];
       depthFormat: string;
+      topology: 'triangle-strip';
+      indexFormat: 'uint32';
       renderState: {
         depthWriteEnabled: boolean;
         blend: GPUBlendState;
@@ -19,6 +21,8 @@ describe('prepared graphics operation snapshots', () => {
       vertexLayout: 'position',
       colorFormats: ['rgba8unorm'],
       depthFormat: 'depth24plus-stencil8',
+      topology: 'triangle-strip',
+      indexFormat: 'uint32',
       renderState: {
         depthWriteEnabled: false,
         blend: {
@@ -68,6 +72,8 @@ describe('prepared graphics operation snapshots', () => {
       vertexLayout: 'position',
       colorFormats: ['rgba8unorm'],
       depthFormat: 'depth24plus-stencil8',
+      topology: 'triangle-strip',
+      indexFormat: 'uint32',
       renderState: {
         depthWriteEnabled: false,
         blend: {

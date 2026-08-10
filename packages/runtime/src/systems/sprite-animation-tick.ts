@@ -79,16 +79,19 @@ import {
 // through the `_xxx` `@internal` umbrella keeps these handles invisible to
 // IDE-autocomplete-driven AI users (they wire the tick system via the
 // barrel-exported `spriteAnimationTickSystem`).
-interface ArchetypeView {
+interface TableView {
   readonly size: number;
   readonly components: ReadonlyArray<{ readonly id: number }>;
-  readonly columns: ReadonlyMap<number, ReadonlyMap<string, { readonly view: ArrayLike<number> }>>;
+  readonly storage: ReadonlyMap<
+    number,
+    { readonly fields: ReadonlyMap<string, { readonly view: ArrayLike<number> }> }
+  >;
 }
 
 /** @internal */
 interface WorldInternalView {
   /** @internal */
-  _getGraph(): { readonly archetypes: ReadonlyArray<ArchetypeView | undefined> };
+  _getGraph(): { readonly tables: ReadonlyArray<TableView | undefined> };
 }
 
 /**
@@ -177,12 +180,12 @@ export function spriteAnimationTickSystem(world: World): Result<void, SpriteAnim
 function collectAnimEntities(worldInternal: WorldInternalView, saId: number): EntityHandle[] {
   const graph = worldInternal._getGraph();
   const entities: EntityHandle[] = [];
-  for (const arch of graph.archetypes) {
-    if (!arch || arch.size === 0) continue;
-    if (!arch.components.some((c) => c.id === saId)) continue;
-    const selfCol = arch.columns.get(Entity.id)?.get('self')?.view;
+  for (const table of graph.tables) {
+    if (!table || table.size === 0) continue;
+    if (!table.components.some((c) => c.id === saId)) continue;
+    const selfCol = table.storage.get(Entity.id)?.fields.get('self')?.view;
     if (selfCol === undefined) continue;
-    for (let i = 0; i < arch.size; i++) {
+    for (let i = 0; i < table.size; i++) {
       entities.push((selfCol[i] ?? 0) as EntityHandle);
     }
   }

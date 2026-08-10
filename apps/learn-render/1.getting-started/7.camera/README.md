@@ -145,8 +145,8 @@ let yaw = 0, pitch = 0;
 world.addSystem(Update, {
   name: 'learn-render-camera-first-person',
   after: ['input-frame-start-scan'],
-  queries: [{ with: [Transform, Camera] }],
-  fn: (queryResults) => {
+  queries: [{ write: [Transform], with: [Camera] }],
+  fn: (world, queries) => {
     const snap = renderer.input.snapshot(world);
     if (snap === undefined) return;
     const dt = world.getResource(Time).delta;
@@ -165,8 +165,15 @@ world.addSystem(Update, {
       a: snap.keyboard.down('KeyA'), d: snap.keyboard.down('KeyD'),
     } as const;
     const disp = computeWasdDisplacement(dt, { x: fwdX, y: fwdY, z: fwdZ }, { x: rightX, y: 0, z: rightZ }, held);
-    // for each camera entity: pos[i*3] += disp.x; pos[i*3+1] += disp.y; pos[i*3+2] += disp.z;
-    // Encode forward direction into Transform.quat (Tait-Bryan Y * X).
+    for (const row of queries[0]) {
+      const transform = row.mut(Transform);
+      transform.pos.set([
+        (transform.pos[0] ?? 0) + disp.x,
+        (transform.pos[1] ?? 0) + disp.y,
+        (transform.pos[2] ?? 0) + disp.z,
+      ]);
+      // Encode forward direction into transform.quat (Tait-Bryan Y * X).
+    }
   },
 });
 
@@ -175,12 +182,12 @@ const scrollAcc = createScrollFovAccumulator();
 world.addSystem(Update, {
   name: 'learn-render-camera-scroll-fov',
   after: ['input-frame-start-scan'],
-  queries: [{ with: [Camera] }],
-  fn: (queryResults) => {
+  queries: [{ write: [Camera] }],
+  fn: (world, queries) => {
     const snap = renderer.input.snapshot(world);
     if (snap === undefined) return;
     scrollAcc.apply(snap.mouse.wheelDelta);
-    // for each Camera entity: bundles.Camera.fov[i] = scrollAcc.fovRad;
+    for (const row of queries[0]) row.mut(Camera).fov = scrollAcc.fovRad;
   },
 });
 

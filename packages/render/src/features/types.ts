@@ -5,6 +5,7 @@ import type { Result } from '@forgeax/engine-types';
 import type { RenderError } from '../errors/render';
 import type { VisibilitySnapshot } from '../extract/visibility';
 import type { RenderFeatureContributionStaging } from './graph-contribution';
+import type { RenderFeatureGpuPrepare } from './prepared-gpu-work';
 import type {
   PreparedKind,
   RenderFeatureGraphicsContributionStaging,
@@ -238,6 +239,8 @@ export interface RenderFeaturePrepareContext {
   readonly reportError: RenderFeatureErrorSink;
   /** Controlled pipeline, bindings, vertex-data, and index-data preparation. */
   readonly graphics: RenderFeatureGraphicsPrepare;
+  /** Renderer-owned persistent compute/storage preparation, when compute is available. */
+  readonly gpu?: RenderFeatureGpuPrepare;
 }
 
 /** The narrow context visible to a feature-owned graph pass. */

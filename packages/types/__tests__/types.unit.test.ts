@@ -460,7 +460,7 @@ describe('Asset discriminated union - .kind discriminator', () => {
         case 'animation-clip':
           return `anim-clip duration=${asset.duration}`;
         case 'audio':
-          return `audio buffer=${asset.buffer.length}`;
+          return `audio source=${asset.sourceKey} bytes=${asset.bytes.byteLength}`;
         case 'shader':
           return `shader name=${asset.name}`;
         case 'font':

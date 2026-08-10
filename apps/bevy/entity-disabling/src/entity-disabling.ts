@@ -5,14 +5,12 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
-  createQueryState,
   Disabled,
-  Entity,
   Time,
   Update,
   World,
   defineComponent,
-  queryRun,
+  type Query,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
 import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
@@ -61,14 +59,9 @@ function spawnTarget(
     .unwrap();
 }
 
-function countEntities(
-  world: World,
-  state: ReturnType<typeof createQueryState>,
-): number {
+function countEntities(query: Query): number {
   let count = 0;
-  queryRun(state, world, (bundle) => {
-    count += bundle.Entity?.self?.length ?? 0;
-  });
+  for (const _row of query) count += 1;
   return count;
 }
 
@@ -82,8 +75,8 @@ export function buildEntityDisablingWorld(world: World): EntityDisablingState {
     },
   );
 
-  const activeQuery = createQueryState({ with: [DisableOnClick, Entity] });
-  const disabledQuery = createQueryState({ with: [DisableOnClick, Disabled, Entity] });
+  const activeQuery = world.query({ with: [DisableOnClick] }).unwrap();
+  const disabledQuery = world.query({ with: [DisableOnClick, Disabled] }).unwrap();
   const state: EntityDisablingState = {
     elapsed: 0,
     disabledAt: null,
@@ -96,33 +89,31 @@ export function buildEntityDisablingWorld(world: World): EntityDisablingState {
     .addSystem(Update, {
       name: 'entity-disabling-timeline',
       queries: [
-        { with: [DisableOnClick, Entity] },
-        { with: [DisableOnClick, Disabled, Entity] },
+        { with: [DisableOnClick] },
+        { with: [DisableOnClick, Disabled] },
       ],
       fn: (world, queryResults, commands) => {
         state.elapsed += world.getResource<typeof Time>(Time).delta;
         if (state.disabledAt === null && state.elapsed >= 0.5) {
-          const targets = queryResults[0] as unknown as Array<{ Entity: { self: EntityHandle[] } }>;
-          const first = targets[0]?.Entity.self[0];
+          let first: EntityHandle | undefined;
+          for (const row of queryResults[0]) {
+            first = row.entity;
+            break;
+          }
           if (first !== undefined) {
             commands.addComponent(first, { component: Disabled, data: {} });
             state.disabledAt = state.elapsed;
           }
         } else if (state.reenabledAt === null && state.elapsed >= 1.2) {
-          const disabled = queryResults[1] as unknown as Array<{ Entity: { self: EntityHandle[] } }>;
-          for (const bundle of disabled) {
-            for (const entity of bundle.Entity.self) {
-              commands.removeComponent(entity, Disabled);
-            }
-          }
+          for (const row of queryResults[1]) commands.removeComponent(row.entity, Disabled);
           state.reenabledAt = state.elapsed;
         }
       },
     })
     .unwrap();
 
-  state.activeCount = countEntities(world, activeQuery);
-  state.disabledCount = countEntities(world, disabledQuery);
+  state.activeCount = countEntities(activeQuery);
+  state.disabledCount = countEntities(disabledQuery);
   return state;
 }
 
@@ -130,10 +121,10 @@ export function readEntityDisablingState(
   world: World,
   state: EntityDisablingState,
 ): EntityDisablingSnapshot {
-  const activeQuery = createQueryState({ with: [DisableOnClick, Entity] });
-  const disabledQuery = createQueryState({ with: [DisableOnClick, Disabled, Entity] });
-  state.activeCount = countEntities(world, activeQuery);
-  state.disabledCount = countEntities(world, disabledQuery);
+  const activeQuery = world.query({ with: [DisableOnClick] }).unwrap();
+  const disabledQuery = world.query({ with: [DisableOnClick, Disabled] }).unwrap();
+  state.activeCount = countEntities(activeQuery);
+  state.disabledCount = countEntities(disabledQuery);
   return {
     ...state,
     transition:

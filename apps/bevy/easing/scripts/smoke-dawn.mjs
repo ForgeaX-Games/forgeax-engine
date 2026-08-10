@@ -109,7 +109,6 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { propagateTransforms, Transform } = await import('@forgeax/engine-scene');
-const { createQueryState, queryRun, Entity } = await import('@forgeax/engine-ecs');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildEasingWorld, stepEasing, linearX, easedX, Mover } = await import(
@@ -144,19 +143,13 @@ buildEasingWorld(world);
 
 // --- read the two movers' x by mode (0=linear, 1=eased) ---
 function moverXs() {
-  const state = createQueryState({ with: [Transform, Mover, Entity] });
+  const query = world.query({ read: [Transform, Mover] }).unwrap();
   const out = { linear: Number.NaN, eased: Number.NaN };
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    const modeCol = bundle.Mover.mode;
-    for (let i = 0; i < selfCol.length; i++) {
-      const h = selfCol[i] ?? 0;
-      const t = world.get(h, Transform);
-      if (!t.ok) continue;
-      if ((modeCol[i] ?? 0) === 1) out.eased = t.value.pos[0] ?? 0;
-      else out.linear = t.value.pos[0] ?? 0;
-    }
-  });
+  for (const row of query) {
+    const position = row.get(Transform).pos[0] ?? 0;
+    if (row.get(Mover).mode === 1) out.eased = position;
+    else out.linear = position;
+  }
   return out;
 }
 

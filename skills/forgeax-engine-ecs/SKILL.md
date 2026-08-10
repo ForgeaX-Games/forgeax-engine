@@ -4,7 +4,8 @@ description: >-
   ForgeaX archetype ECS: define SoA components and systems, attach systems to the
   Update or FixedUpdate schedule with token-first World APIs, and advance a World
   through world.update(deltaSeconds). Use when defining components, queries, systems,
-  schedule ordering, fixed-step simulation, resources, relationships, or reflection.
+  schedule ordering, fixed-step simulation, resources, relationships, reflection,
+  shared numeric storage, QuerySpan kernels, or poisoned-World handling.
 ---
 
 # forgeax-engine-ecs
@@ -22,13 +23,11 @@ const world = new World({ time: { fixedDeltaSeconds: 1 / 60, maxStepsPerUpdate: 
 
 world.addSystem(Update, {
   name: 'integrate-variable',
-  queries: [{ with: [Position, Velocity] }],
-  fn: (current, results) => {
+  queries: [{ write: [Position], read: [Velocity] }],
+  fn: (current, [moving]) => {
     const delta = current.getResource(Time).delta;
-    for (const bundle of results[0]) {
-      for (let index = 0; index < bundle.entityCount; index++) {
-        bundle.Position.x[index] += bundle.Velocity.x[index] * delta;
-      }
+    for (const row of moving) {
+      row.mut(Position).x += row.get(Velocity).x * delta;
     }
   },
 }).unwrap();
@@ -43,6 +42,24 @@ world.update(1 / 60).unwrap();
 ```
 
 `Time` and `FixedTime` are World-owned resources. Systems read them; hosts never write time resources directly.
+
+## Shared Kernel
+
+```ts
+import { Update, defineSharedKernel, type QuerySpan } from '@forgeax/engine-ecs';
+
+function integrate(spans: readonly QuerySpan[]): void {
+  for (const span of spans) span.mut(Position).x.fill(1);
+}
+
+world.addSystem(Update, defineSharedKernel(kernelModuleUrl, {
+  name: 'integrate-shared',
+  queries: [{ write: [Position] }],
+  run: integrate,
+})).unwrap();
+```
+
+Use `World({ storage: 'shared' })` only inside a selected shared Engine realm. A Kernel must be an independently loadable named module function with explicit read/write descriptors and numeric table fields. Optional, change-detection, sparse, object, DOM, GPU, and structural access is ineligible. Small work and pre-dispatch pool failure run inline; any failure after a possible shard write poisons the World and forbids retry. Recovery belongs to `app.execution.rebuild()`, not ECS mutation of the old identity.
 
 ## Schedule-scoped registration
 
@@ -125,9 +142,54 @@ if (!result.ok) {
 
 `'schedule-scope-mismatch'` means a target system, set, or fixed anchor belongs to the other schedule. Keep dependent systems and sets in the same scope; do not catch and ignore the failure or add a compatibility registration path.
 
-## System and query model
+## Query model
 
-Components are SoA columns. A system receives the owning `World`, typed query bundles, and a deferred `Commands` buffer. Perform structural changes through `commands` inside a system, then let the schedule flush them at its defined boundary.
+`world.query(descriptor)` is the only query constructor. It returns `Result<Query, QueryCreationError>`.
+
+| Role | Meaning | Row access |
+|:--|:--|:--|
+| `read` | required data, immutable intent | `row.get(Component)` |
+| `write` | required data, mutation intent | `row.mut(Component)` |
+| `optional` | data may be absent | `row.get(Component)` returns value or `undefined` |
+| `with` / `without` | presence-only filter | no data access |
+| `changed` / `added` | query-owned observation filter | no extra data permission |
+
+`for...of query` is canonical. A yielded `QueryRow` is transient; consume it in the loop and retain `row.entity` when later work needs identity. Structural mutation invalidates active iteration with a structured ECS error.
+
+```ts
+const query = world.query({ read: [Health], with: [Enemy] }).unwrap();
+for (const row of query) console.log(row.entity, row.get(Health).value);
+```
+
+Use `query.spans()` only for dense, table-only descriptors. It rejects optional data, row-level observation filters, and sparse components with `query-span-unavailable`. Span columns are zero-copy transient TypedArray views.
+
+```ts
+const query = world.query({ write: [Position], read: [Velocity] }).unwrap();
+for (const span of query.spans().unwrap()) {
+  const position = span.mut(Position).x;
+  const velocity = span.get(Velocity).x;
+  for (let i = 0; i < span.length; i++) position[i] = (position[i] ?? 0) + (velocity[i] ?? 0);
+}
+```
+
+`query.combinations(k)` derives K-way iteration from the same query.
+
+## Storage choice
+
+`defineComponent` uses table storage unless the token explicitly declares a zero-field sparse tag.
+
+```ts
+const Enemy = defineComponent('Enemy', {});
+const Selected = defineComponent('Selected', {}, { storage: 'sparse' });
+```
+
+Use table storage for every data component and for stable identity tags. Use sparse only for frequently flipped membership. Sparse tags still participate in Archetype identity, hooks, cardinality, scene round-trip, inspection, and ordinary row queries, but Archetypes that differ only by sparse membership share the same physical Table.
+
+Sparse tags have no fields, so they belong in `with`, `without`, `changed`, or `added`, never `read`, `write`, or `optional`. A sparse predicate makes `query.spans()` return `query-span-unavailable` with reason `sparse-component`; use row iteration for that query. `Disabled` is always a table tag.
+
+## Systems and structural mutation
+
+Systems receive the owning `World`, a tuple of persistent Query objects, and deferred `Commands`. Use `commands` for structural changes; the schedule flushes them at defined boundaries.
 
 ```ts
 import { Update, defineComponent } from '@forgeax/engine-ecs';
@@ -135,32 +197,29 @@ import { Update, defineComponent } from '@forgeax/engine-ecs';
 const Health = defineComponent('Health', { value: 'f32' });
 world.addSystem(Update, {
   name: 'remove-dead',
-  queries: [{ with: [Health] }],
-  fn: (_world, results, commands) => {
-    for (const bundle of results[0]) {
-      for (let index = 0; index < bundle.entityCount; index++) {
-        if (bundle.Health.value[index] <= 0) commands.despawn(bundle.Entity.self[index]);
-      }
+  queries: [{ read: [Health] }],
+  fn: (_world, [health], commands) => {
+    for (const row of health) {
+      if (row.get(Health).value <= 0) commands.despawn(row.entity);
     }
   },
 }).unwrap();
 ```
 
-For component schema, query, relationship, reflection, and scene APIs, read `packages/ecs/README.md` and the source contracts in `packages/ecs/src/`. The current scheduling surface is always token-first; no compatibility overload exists.
+For component schema, storage, relationship, reflection, and errors, read `packages/ecs/README.md` and `packages/ecs/src/`. Scheduling is token-first and query construction has one entry; no compatibility overload exists.
 
 ## Visibility inspection quick start
 
 ```ts
-const ecs = await _import('@forgeax/engine-ecs');
 const render = await _import('@forgeax/engine-render');
-const state = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
-ecs.queryRun(state, world, bundle => console.log(bundle.Visibility.state));
+const query = world.query({ read: [render.Visibility] }).unwrap();
+for (const row of query) console.log(row.get(render.Visibility).state);
 const effective = render.resolveVisibility(world).effective(entity);
 ```
 
 | Observation | Read from | Do not infer |
 |:--|:--|:--|
-| Current | `queryRun` and `Visibility.state` | Final render participation |
+| Current | `QueryRow.get` and `Visibility.state` | Final render participation |
 | Effective | `resolveVisibility(world)` | Camera or picking state |
 | Invalid write | `Result.error.code`, `.expected`, `.hint`, `.detail` | A message-only failure |
 

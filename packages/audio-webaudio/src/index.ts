@@ -22,9 +22,9 @@ export {
   syncListenerFromWorldMatrix,
 } from './audio-listener-sync-system';
 export { audioLoader } from './audio-loader';
-// M3: audio tick system (edge detection + node lifecycle + property sync)
-export { audioTickSystem, detectEdge } from './audio-tick-system';
-// M2 (feat-20260623-plugin-system-unify): audioPlugin factory (w9)
-export { AUDIO_TICK_SYSTEM_NAME, audioPlugin } from './plugin-factory';
-// Public factory + class (M2)
-export { createWebAudioBackend, WebAudioEngine } from './web-audio-engine';
+export {
+  createHostAudioConsumer,
+  createWebAudioBackend,
+  type HostAudioConsumer,
+} from './host-audio-consumer';
+export { WebAudioEngine } from './web-audio-engine';

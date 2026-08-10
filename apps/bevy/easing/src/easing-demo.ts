@@ -21,11 +21,8 @@
 // while the linear cube's x equals lerp(x0,x1,u) — proving the motion is genuinely eased.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -106,15 +103,9 @@ export function buildEasingWorld(world: World): void {
  * cube at easedX(u) (smoothstep-remapped). Pure function of (world, u).
  */
 export function stepEasing(world: World, u: number): void {
-  const state = createQueryState({ with: [Transform, Mover, Entity] });
+  const query = world.query({ read: [Mover], with: [Transform] }).unwrap();
   const rows: Array<{ handle: EntityHandle; mode: number; y: number }> = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    const modeCol = bundle.Mover.mode;
-    for (let i = 0; i < selfCol.length; i++) {
-      rows.push({ handle: (selfCol[i] ?? 0) as EntityHandle, mode: modeCol[i] ?? 0, y: 0 });
-    }
-  });
+  for (const row of query) rows.push({ handle: row.entity, mode: row.get(Mover).mode, y: 0 });
   for (const row of rows) {
     const t = world.get(row.handle, Transform);
     if (!t.ok) continue;

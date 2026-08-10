@@ -11,23 +11,6 @@
 
 import { err, type Result } from '@forgeax/engine-types';
 
-/**
- * Closed {@link DebugDrawErrorCode} union.
- * Exhaustive `switch (err.code)` needs no default fallback.
- *
- * | code | trigger |
- * |:--|:--|
- * | `'pipeline-create-failed'` | `device.createRenderPipeline(...)` rejected or threw |
- * | `'buffer-allocation-failed'` | `device.createBuffer(...)` for GPU vbo allocation failed |
- * | `'flushed-after-destroy'` | `flush()` called on an already-destroyed DebugDraw instance |
- * | `'viewProj-required'` | `flush()` called with `undefined` or missing `viewProj` |
- */
-export type DebugDrawErrorCode =
-  | 'pipeline-create-failed'
-  | 'buffer-allocation-failed'
-  | 'flushed-after-destroy'
-  | 'viewProj-required';
-
 /** {@link pipeline-create-failed} payload: carries the RHI-level error detail. */
 export interface PipelineCreateFailedDetail {
   readonly code: 'pipeline-create-failed';
@@ -50,16 +33,32 @@ export interface ViewProjRequiredDetail {
   readonly code: 'viewProj-required';
 }
 
+interface DebugDrawErrorDetailByCode {
+  'pipeline-create-failed': PipelineCreateFailedDetail;
+  'buffer-allocation-failed': BufferAllocationFailedDetail;
+  'flushed-after-destroy': FlushedAfterDestroyDetail;
+  'viewProj-required': ViewProjRequiredDetail;
+}
+
+/**
+ * Closed {@link DebugDrawErrorCode} union.
+ * Exhaustive `switch (err.code)` needs no default fallback.
+ *
+ * | code | trigger |
+ * |:--|:--|
+ * | `'pipeline-create-failed'` | `device.createRenderPipeline(...)` rejected or threw |
+ * | `'buffer-allocation-failed'` | `device.createBuffer(...)` for GPU vbo allocation failed |
+ * | `'flushed-after-destroy'` | `flush()` called on an already-destroyed DebugDraw instance |
+ * | `'viewProj-required'` | `flush()` called with `undefined` or missing `viewProj` |
+ */
+export type DebugDrawErrorCode = keyof DebugDrawErrorDetailByCode;
+
 /**
  * Discriminated detail union for {@link DebugDrawError}, narrowed per
  * `DebugDrawError.code`. AI users obtain the concrete shape via
  * `switch (err.code)` without a fallback `as` cast.
  */
-export type DebugDrawErrorDetail =
-  | PipelineCreateFailedDetail
-  | BufferAllocationFailedDetail
-  | FlushedAfterDestroyDetail
-  | ViewProjRequiredDetail;
+export type DebugDrawErrorDetail = DebugDrawErrorDetailByCode[DebugDrawErrorCode];
 
 /**
  * Structured debug-draw error -- four-field surface
@@ -67,20 +66,24 @@ export type DebugDrawErrorDetail =
  *
  * AI users consume the structured triple by fields, not by parsing `.message`.
  */
-export interface DebugDrawError {
-  readonly code: DebugDrawErrorCode;
+type DebugDrawErrorVariant<C extends DebugDrawErrorCode> = {
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: DebugDrawErrorDetail;
-}
+  readonly detail: DebugDrawErrorDetailByCode[C];
+};
 
-function makeError(
-  code: DebugDrawErrorCode,
+export type DebugDrawError = {
+  [C in DebugDrawErrorCode]: DebugDrawErrorVariant<C>;
+}[DebugDrawErrorCode];
+
+function makeError<C extends DebugDrawErrorCode>(
+  code: C,
   expected: string,
   hint: string,
-  detail: DebugDrawErrorDetail,
-): DebugDrawError {
-  return {
+  detail: DebugDrawErrorDetailByCode[C],
+): DebugDrawErrorVariant<C> {
+  const error = {
     code,
     expected,
     hint,
@@ -88,7 +91,8 @@ function makeError(
     get message(): string {
       return `[${code}] ${hint}`;
     },
-  } as DebugDrawError;
+  };
+  return error;
 }
 
 /** Result-returning helpers consuming engine-types `Result<T, E>` + `err()`. */

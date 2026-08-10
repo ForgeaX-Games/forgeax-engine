@@ -1,7 +1,6 @@
 // @forgeax/engine-rhi-debug/src/__tests__/guard-gates.test.ts
 //
-// Build-time codebase guard assertions using child_process.execSync and
-// fs.readFileSync. These act as canaries: any future change that adds a
+// Build-time codebase guard assertions using filesystem reads. These act as canaries: any future change that adds a
 // flag-drift point or an unexpected DebugErrorCode member turns this test red.
 //
 // AC-07: full-repo grep zero-hit for --runId / --ws-url (flag drift).
@@ -11,8 +10,7 @@
 //
 // t10; requirements AC-07/AC-08/AC-09; plan-strategy §2 D-8.
 
-import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -20,21 +18,36 @@ import { describe, expect, it } from 'vitest';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 
+function flagDriftHits(root: string): string[] {
+  const hits: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === 'dist' || entry.name === 'node_modules') continue;
+        visit(path.join(directory, entry.name));
+        continue;
+      }
+      if (!entry.isFile() || (!entry.name.endsWith('.ts') && !entry.name.endsWith('.mjs'))) {
+        continue;
+      }
+      if (entry.name === 'guard-gates.test.ts') continue;
+      const absolute = path.join(directory, entry.name);
+      const source = readFileSync(absolute, 'utf8');
+      if (source.includes('--runId') || source.includes('--ws-url')) {
+        hits.push(path.relative(ENGINE_ROOT, absolute));
+      }
+    }
+  };
+  visit(root);
+  return hits.sort();
+}
+
 describe('AC-07: flag drift grep gate', () => {
   it('zero hits for --runId / --ws-url across apps/ packages/ (excluding dist, node_modules, self)', () => {
-    // Use --exclude-dir rather than post-filter to avoid matches in dist
-    // bundles and node_modules. The test file itself contains these strings
-    // as test descriptions, so we exclude it explicitly.
-    const cmd =
-      "find apps/ packages/ -type f \\( -name '*.ts' -o -name '*.mjs' \\) " +
-      "| grep -v /dist/ | grep -v node_modules/ | grep -v 'guard-gates.test.ts' " +
-      "| xargs grep -ln '\\-\\-runId\\|\\-\\-ws-url' 2>/dev/null || true";
-    const stdout = execSync(cmd, { encoding: 'utf-8', cwd: ENGINE_ROOT });
-    const hits = stdout
-      .trim()
-      .split('\n')
-      .filter((l) => l.length > 0);
-    expect(hits).toEqual([]);
+    expect([
+      ...flagDriftHits(path.join(ENGINE_ROOT, 'apps')),
+      ...flagDriftHits(path.join(ENGINE_ROOT, 'packages')),
+    ]).toEqual([]);
   });
 });
 

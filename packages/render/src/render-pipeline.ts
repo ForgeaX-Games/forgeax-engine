@@ -23,17 +23,78 @@
 // to the per-frame snapshot `RenderPipelineData` (plan-strategy D-A / D-B). `internals` is
 // no longer reachable through the public pipeline ctx (AC-08 oracle).
 
-import type { RenderGraph } from '@forgeax/engine-render-graph';
+import type { ColorValueDomain, RenderGraph } from '@forgeax/engine-render-graph';
+import type { Tonemap } from './components/camera';
 import type { RenderFeatureTargetHandle } from './features/targets';
 import type { RenderPipelineContext, RenderPipelineData } from './render-pipeline-context';
 
 export type { RenderPipelineContext, RenderPipelineData } from './render-pipeline-context';
+
+export type RenderColorDomain = 'linearHdr' | 'linearLdr' | 'displayEncoded';
+
+export interface ToneOutputContract {
+  readonly input: RenderColorDomain;
+  readonly toneMapped: boolean;
+  readonly mapped: 'linearLdr';
+  readonly finalCapture: 'displayEncoded';
+  readonly exposureStage: 'linearHdr' | 'none';
+}
+
+export type RenderPostStageName = 'transparent-blend' | 'bloom' | 'tone' | 'fxaa' | 'output';
+export type RenderPostDomainStage = readonly [
+  RenderPostStageName,
+  ColorValueDomain,
+  ColorValueDomain,
+];
+
+/**
+ * Single post-stage domain contract shared by URP and HDRP.
+ * The pipeline selects the scene domain for transparent geometry; every later
+ * stage follows the same linear blend, tone, anti-alias, and output sequence.
+ */
+export function resolvePostColorDomainContract(
+  pipeline: 'urp' | 'hdrp',
+): readonly RenderPostDomainStage[] {
+  const sceneDomain: ColorValueDomain = pipeline === 'hdrp' ? 'linear-hdr' : 'linear-ldr';
+  return [
+    ['transparent-blend', sceneDomain, sceneDomain],
+    ['bloom', 'linear-hdr', 'linear-hdr'],
+    ['tone', 'linear-hdr', 'linear-ldr'],
+    ['fxaa', 'linear-ldr', 'linear-ldr'],
+    ['output', 'linear-ldr', 'display-encoded'],
+  ];
+}
+
+/**
+ * Describe the built-in output stages without moving color-domain policy into
+ * a mode name. Tone-enabled cameras render HDR, apply exposure and the
+ * selected curve in the fullscreen pass, then reach the encoded surface.
+ */
+export function resolveToneOutputContract(tonemap: Tonemap): ToneOutputContract {
+  if (tonemap === 'none') {
+    return {
+      input: 'linearLdr',
+      toneMapped: false,
+      mapped: 'linearLdr',
+      finalCapture: 'displayEncoded',
+      exposureStage: 'none',
+    };
+  }
+  return {
+    input: 'linearHdr',
+    toneMapped: true,
+    mapped: 'linearLdr',
+    finalCapture: 'displayEncoded',
+    exposureStage: 'linearHdr',
+  };
+}
 
 /** Narrow input used by a pipeline to publish logical feature attachments. */
 export interface RenderFeatureTargetContext {
   readonly camera: Pick<RenderPipelineData['camera'], 'tonemap' | 'antialias'>;
   readonly colorAttachmentFormat: string;
   readonly backendKind: string;
+  readonly storageBuffer: boolean;
 }
 
 /**

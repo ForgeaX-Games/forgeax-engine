@@ -1,5 +1,5 @@
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Entity, Time, Update, World, defineComponent, type EntityHandle } from '@forgeax/engine-ecs';
+import { Time, Update, World, defineComponent, type EntityHandle } from '@forgeax/engine-ecs';
 import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
@@ -58,17 +58,17 @@ export function buildChangeDetectionWorld(world: World): ChangeDetectionState {
 
   world.addSystem(Update, {
     name: 'change-detection-changed-query',
-    queries: [{ with: [ChangeMarker, Entity], changed: [ChangeMarker] }],
+    queries: [{ changed: [ChangeMarker] }],
     fn: (_world, queryResults) => {
-      for (const bundle of queryResults[0] ?? []) state.changedHits += bundle.Entity.self.length;
+      for (const _row of queryResults[0]) state.changedHits += 1;
     },
   }).unwrap();
 
   world.addSystem(Update, {
     name: 'change-detection-added-query',
-    queries: [{ with: [AddedMarker, Entity], added: [AddedMarker] }],
+    queries: [{ added: [AddedMarker] }],
     fn: (_world, queryResults) => {
-      for (const bundle of queryResults[0] ?? []) state.addedHits += bundle.Entity.self.length;
+      for (const _row of queryResults[0]) state.addedHits += 1;
     },
   }).unwrap();
 

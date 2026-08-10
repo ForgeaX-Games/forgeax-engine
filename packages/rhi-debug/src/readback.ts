@@ -43,6 +43,155 @@ export interface ResolvedTextureDescriptor {
   readonly arrayLayers: number;
 }
 
+export interface LiveObservationDescriptor {
+  readonly texture: unknown;
+  readonly format: string;
+  readonly size: { readonly width: number; readonly height: number };
+  readonly usage: number;
+  readonly frameId: number;
+}
+
+export interface LiveObservationSource {
+  readonly texture: unknown;
+  readonly descriptor: LiveObservationDescriptor;
+  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
+}
+
+type LiveObservationResult<T, E> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: E };
+
+export interface LiveObservationLease {
+  readonly descriptor: LiveObservationDescriptor;
+  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
+  readonly state: 'active' | 'retired';
+  beginReadback(): LiveObservationResult<
+    LiveObservationSource,
+    { readonly code: string; readonly hint: string }
+  >;
+  retire(): void;
+}
+
+export interface LiveLinearHdrReadback {
+  readonly bytes: Uint8Array;
+  readonly format: 'rgba16float';
+  readonly size: { readonly width: number; readonly height: number };
+  readonly rawHash: string;
+  readonly frameId: number;
+  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
+  readonly status: 'ready';
+}
+
+export interface NamedLinearHdrReadbackMetadata {
+  readonly attachmentName: string;
+  readonly layer: number;
+  readonly capabilitySnapshot: { readonly rgba16floatRenderable: boolean };
+  readonly fallbackArtifact: string | null;
+  readonly lastKnownGood: string;
+}
+
+export interface NamedLinearHdrReadback
+  extends LiveLinearHdrReadback,
+    NamedLinearHdrReadbackMetadata {}
+
+function hashRawBytes(bytes: Uint8Array): string {
+  let hash = 0x811c9dc5;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function liveReadbackFailure(stage: 'copy' | 'map', hint: string): Result<never, DebugError> {
+  return err(
+    new DebugError({
+      code: 'snapshot-readback-failed',
+      expected: 'live rgba16float observation readback to succeed',
+      hint,
+      detail: { handleId: 'live-linear-hdr', stage },
+    }),
+  );
+}
+
+/**
+ * Eagerly copy and map a producer-authorized live rgba16float observation.
+ * The producer owns the lease lifetime; this adapter never retires it.
+ */
+export async function readbackLiveLinearHdr(
+  device: RhiDevice,
+  lease: LiveObservationLease,
+): Promise<Result<LiveLinearHdrReadback, DebugError>> {
+  const descriptor = lease.descriptor;
+  if (descriptor.format !== 'rgba16float') {
+    return liveReadbackFailure('copy', 'live observation must retain rgba16float format');
+  }
+  if (
+    !Number.isInteger(descriptor.size.width) ||
+    !Number.isInteger(descriptor.size.height) ||
+    descriptor.size.width <= 0 ||
+    descriptor.size.height <= 0
+  ) {
+    return liveReadbackFailure('copy', 'live observation must have a positive integer size');
+  }
+  if ((descriptor.usage & 0x01) === 0) {
+    return liveReadbackFailure('copy', 'live observation texture must include COPY_SRC usage');
+  }
+
+  const sourceResult = lease.beginReadback();
+  if (!sourceResult.ok) {
+    return liveReadbackFailure(
+      'copy',
+      `live observation lease unavailable: ${sourceResult.error.hint}`,
+    );
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = await readbackTexturePixels(
+      device,
+      sourceResult.value.texture,
+      descriptor.size.width,
+      descriptor.size.height,
+      { bytesPerTexel: 8 },
+    );
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const stage = /mapAsync|getMappedRange|map/i.test(message) ? 'map' : 'copy';
+    return liveReadbackFailure(stage, `live observation readback failed: ${message}`);
+  }
+
+  return ok({
+    bytes,
+    format: 'rgba16float',
+    size: descriptor.size,
+    rawHash: hashRawBytes(bytes),
+    frameId: descriptor.frameId,
+    lifetime: sourceResult.value.lifetime,
+    status: 'ready',
+  });
+}
+
+/** Add producer-owned attachment metadata without duplicating the readback path. */
+export async function readbackNamedLinearHdr(
+  device: RhiDevice,
+  lease: LiveObservationLease,
+  metadata: NamedLinearHdrReadbackMetadata,
+): Promise<Result<NamedLinearHdrReadback, DebugError>> {
+  if (metadata.attachmentName.trim() === '') {
+    return liveReadbackFailure('copy', 'named linear HDR attachment must have a non-empty name');
+  }
+  if (!Number.isInteger(metadata.layer) || metadata.layer < 0) {
+    return liveReadbackFailure(
+      'copy',
+      'named linear HDR attachment layer must be a non-negative integer',
+    );
+  }
+  const result = await readbackLiveLinearHdr(device, lease);
+  if (!result.ok) return result;
+  return ok({ ...result.value, ...metadata });
+}
+
 /**
  * Walk the tape events to resolve a view-or-texture handleId to its source
  * GPUTexture descriptor (handleId, real dimensions, format, view dimension).

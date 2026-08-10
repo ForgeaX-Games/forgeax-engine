@@ -353,42 +353,48 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 {
   // ─── from errors.test.ts ───
 
-  const SIX_CODES: readonly AppErrorCode[] = [
+  const APP_CODES: readonly AppErrorCode[] = [
     'app-not-started',
     'app-already-running',
     'app-canvas-detached',
     'app-paused-while-stop',
     'app-system-update-failed',
     'app-pointer-lock-failed',
+    'app-execution-tier-unavailable',
+    'app-execution-bootstrap-failed',
+    'app-execution-deadline-exceeded',
+    'app-execution-kernel-failed',
+    'app-execution-stale-world',
+    'app-execution-rebuild-failed',
   ] as const;
 
   describe('errors.test.ts', () => {
-    describe('AppErrorCode -- 6-member closed union', () => {
-      it('exposes exactly 6 hints, one per code, each non-empty (bidirectional)', () => {
-        expect(Object.keys(APP_ERROR_HINTS).length).toBe(6);
+    describe('AppErrorCode closed union', () => {
+      it('exposes one hint per code, each non-empty (bidirectional)', () => {
+        expect(Object.keys(APP_ERROR_HINTS).length).toBe(APP_CODES.length);
 
-        for (const code of SIX_CODES) {
+        for (const code of APP_CODES) {
           const hint = APP_ERROR_HINTS[code];
           expect(typeof hint).toBe('string');
           expect(hint.length).toBeGreaterThan(0);
         }
 
         for (const key of Object.keys(APP_ERROR_HINTS)) {
-          expect(SIX_CODES).toContain(key as AppErrorCode);
+          expect(APP_CODES).toContain(key as AppErrorCode);
         }
       });
 
-      it('exposes exactly 6 expected entries, one per code, each non-empty (bidirectional)', () => {
-        expect(Object.keys(APP_EXPECTED).length).toBe(6);
+      it('exposes one expected entry per code, each non-empty (bidirectional)', () => {
+        expect(Object.keys(APP_EXPECTED).length).toBe(APP_CODES.length);
 
-        for (const code of SIX_CODES) {
+        for (const code of APP_CODES) {
           const expected = APP_EXPECTED[code];
           expect(typeof expected).toBe('string');
           expect(expected.length).toBeGreaterThan(0);
         }
 
         for (const key of Object.keys(APP_EXPECTED)) {
-          expect(SIX_CODES).toContain(key as AppErrorCode);
+          expect(APP_CODES).toContain(key as AppErrorCode);
         }
       });
     });
@@ -420,7 +426,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
       });
 
       it('builds via new AppError({...}) for every closed-union member', () => {
-        for (const code of SIX_CODES) {
+        for (const code of APP_CODES) {
           const detail =
             code === 'app-canvas-detached'
               ? { canvasId: 'main' }
@@ -428,7 +434,37 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
                 ? { cause: new Error('boom') }
                 : code === 'app-pointer-lock-failed'
                   ? { path: 'w3c' as const, cause: new Error('lock failed') }
-                  : {};
+                  : code === 'app-execution-tier-unavailable'
+                    ? {
+                        requestedTier: 'shared' as const,
+                        missingCapabilities: ['cross-origin-isolated'] as const,
+                        sharedEvidencePassed: false,
+                      }
+                    : code === 'app-execution-bootstrap-failed'
+                      ? {
+                          phase: 'bootstrap' as const,
+                          moduleUrl: '/bootstrap.js',
+                          cause: new Error('bootstrap failed'),
+                        }
+                      : code === 'app-execution-deadline-exceeded'
+                        ? { phase: 'frame' as const, timeoutMs: 100 }
+                        : code === 'app-execution-kernel-failed'
+                          ? {
+                              kernelName: 'movement',
+                              worldIdentity: 'world-1',
+                              cause: new Error('kernel failed'),
+                              partialWrite: true as const,
+                              retryable: false as const,
+                            }
+                          : code === 'app-execution-stale-world'
+                            ? {
+                                expectedIdentity: 'world-2',
+                                receivedIdentity: 'world-1',
+                                messageKind: 'frame-complete',
+                              }
+                            : code === 'app-execution-rebuild-failed'
+                              ? { worldIdentity: 'world-1', cause: new Error('rebuild failed') }
+                              : {};
           const err = new AppError({
             code,
             expected: APP_EXPECTED[code],
@@ -546,6 +582,20 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
               return 'd';
             case 'app-system-update-failed':
               return 'e';
+            case 'app-pointer-lock-failed':
+              return 'f';
+            case 'app-execution-tier-unavailable':
+              return 'g';
+            case 'app-execution-bootstrap-failed':
+              return 'h';
+            case 'app-execution-deadline-exceeded':
+              return 'i';
+            case 'app-execution-kernel-failed':
+              return 'j';
+            case 'app-execution-stale-world':
+              return 'k';
+            case 'app-execution-rebuild-failed':
+              return 'l';
             case 'adapter-unavailable':
             case 'feature-not-enabled':
             case 'limit-exceeded':
@@ -568,16 +618,50 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
           }
         }
         const seen = new Set<string>();
-        for (const code of SIX_CODES) {
+        for (const code of APP_CODES) {
+          const detail =
+            code === 'app-canvas-detached'
+              ? { canvasId: 'main' }
+              : code === 'app-system-update-failed'
+                ? { cause: 0 }
+                : code === 'app-pointer-lock-failed'
+                  ? { path: 'w3c' as const, cause: 0 }
+                  : code === 'app-execution-tier-unavailable'
+                    ? {
+                        requestedTier: 'shared' as const,
+                        missingCapabilities: ['cross-origin-isolated'] as const,
+                        sharedEvidencePassed: false,
+                      }
+                    : code === 'app-execution-bootstrap-failed'
+                      ? { phase: 'bootstrap' as const, moduleUrl: '/bootstrap.js', cause: 0 }
+                      : code === 'app-execution-deadline-exceeded'
+                        ? { phase: 'frame' as const, timeoutMs: 100 }
+                        : code === 'app-execution-kernel-failed'
+                          ? {
+                              kernelName: 'movement',
+                              worldIdentity: 'world-1',
+                              cause: 0,
+                              partialWrite: true as const,
+                              retryable: false as const,
+                            }
+                          : code === 'app-execution-stale-world'
+                            ? {
+                                expectedIdentity: 'world-2',
+                                receivedIdentity: 'world-1',
+                                messageKind: 'frame-complete',
+                              }
+                            : code === 'app-execution-rebuild-failed'
+                              ? { worldIdentity: 'world-1', cause: 0 }
+                              : {};
           const err = new AppError({
             code,
             expected: APP_EXPECTED[code],
             hint: APP_ERROR_HINTS[code],
-            detail: code === 'app-system-update-failed' ? { cause: 0 } : {},
+            detail,
           });
           seen.add(classify(err));
         }
-        expect(seen.size).toBe(6);
+        expect(seen.size).toBe(APP_CODES.length);
       });
     });
   });

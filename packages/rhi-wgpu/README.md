@@ -39,6 +39,8 @@ On failure returns `RhiError({ code: 'rhi-not-available' })` with `.hint` descri
 
 AI users call this through `pack.rhi.acquireCanvasContext(canvas)` inside the runtime -- the runtime auto-selects between `rhi-webgpu` (which uses `canvas.getContext('webgpu')`) and `rhi-wgpu` (this path).
 
+The command encoder forwards real render and compute passes into wgpu-wasm. Compute passes support pipeline/bind-group binding plus direct and indirect workgroup dispatch; they are not structural no-ops.
+
 ## `requestAdapter` and `compatibleSurface`
 
 ```

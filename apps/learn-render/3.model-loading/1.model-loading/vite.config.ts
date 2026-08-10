@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
@@ -14,11 +15,13 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-3-1-model-loading');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
+      runtimeBinding,
       refresh: reloadAssetHost(),
       roots: [
         resolve(

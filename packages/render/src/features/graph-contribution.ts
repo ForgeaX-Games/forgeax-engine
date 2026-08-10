@@ -7,10 +7,16 @@ import type {
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
   type RenderError,
+  RenderFeatureDrawRecordingFailedError,
   RenderFeaturePassOrderConflictError,
+  RenderFeaturePreparationFailedError,
   RenderFeatureStageFailedError,
 } from '../errors/render';
 import type { PreparedGraphicsResolvedSnapshot } from '../prepare/prepared-graphics-resolver';
+import type {
+  RenderFeatureGpuComputePassDescriptor,
+  RenderFeatureResolvedGpuComputePass,
+} from './prepared-gpu-work';
 import type {
   RenderFeatureGraphicsContributionStaging,
   RenderFeatureGraphicsPassDescriptor,
@@ -46,6 +52,8 @@ export interface RenderFeatureContributionPass<Ctx = RenderFeaturePassContext> {
   readonly graphics?: RenderFeatureGraphicsPassDescriptor;
   readonly graphicsState?: RenderFeaturePreparedGraphicsState;
   readonly resolvedGraphics?: PreparedGraphicsResolvedSnapshot;
+  readonly gpuCompute?: RenderFeatureGpuComputePassDescriptor;
+  readonly resolvedGpuCompute?: RenderFeatureResolvedGpuComputePass;
 }
 
 export interface RenderFeatureGraphContribution<Ctx = RenderFeaturePassContext> {
@@ -66,6 +74,11 @@ export interface RenderFeatureContributionStaging<Ctx = RenderFeaturePassContext
     descriptor: PassDescriptor<Ctx>,
     options?: RenderFeaturePassOptions,
   ): Result<void, RenderError>;
+  addComputePass(
+    name: string,
+    descriptor: RenderFeatureGpuComputePassDescriptor,
+    options?: RenderFeaturePassOptions,
+  ): Result<void, RenderError>;
   commit(): Result<RenderFeatureGraphContribution<Ctx>, RenderError>;
   abort(): void;
 }
@@ -78,6 +91,10 @@ export type RenderFeatureGraphicsValidator = (
 export type RenderFeatureGraphicsResolver = (
   descriptor: RenderFeatureGraphicsPassDescriptor,
 ) => Result<PreparedGraphicsResolvedSnapshot, RenderError>;
+
+export type RenderFeatureGpuComputeResolver = (
+  descriptor: RenderFeatureGpuComputePassDescriptor,
+) => Result<RenderFeatureResolvedGpuComputePass, RenderError>;
 
 function qualify(identity: string, name: string): string {
   return `${identity}::${name}`;
@@ -121,6 +138,7 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
     private readonly order: number,
     private readonly validateGraphics?: RenderFeatureGraphicsValidator,
     private readonly resolveGraphics?: RenderFeatureGraphicsResolver,
+    private readonly resolveGpuCompute?: RenderFeatureGpuComputeResolver,
   ) {}
 
   get resources(): readonly RenderFeatureContributionResource[] {
@@ -176,6 +194,7 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
   addGraphicsPass(
     name: string,
     descriptor: RenderFeatureGraphicsPassDescriptor,
+    options: RenderFeaturePassOptions = {},
   ): Result<void, RenderError> {
     const qualifiedName = qualify(this.identity, name);
     if (
@@ -196,6 +215,12 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
     }
     const resolvedGraphics = this.resolveGraphics?.(descriptor);
     if (resolvedGraphics !== undefined && !resolvedGraphics.ok) {
+      if (
+        resolvedGraphics.error instanceof RenderFeaturePreparationFailedError &&
+        resolvedGraphics.error.detail.reason === 'pipeline-pending'
+      ) {
+        return ok(undefined);
+      }
       return err(resolvedGraphics.error);
     }
     const qualifiedResources = descriptor.attachments.colors.map((attachment) =>
@@ -213,12 +238,46 @@ class ContributionStaging<Ctx> implements RenderFeatureContributionStaging<Ctx> 
         reads: qualifiedDepth === undefined ? [] : [qualifiedDepth],
         writes: qualifiedResources,
       },
-      dependsOn: [],
+      dependsOn: (options.dependsOn ?? []).map((dependency) =>
+        qualify(dependency.featureIdentity, dependency.passIdentity),
+      ),
       graphics: descriptor,
       ...(graphicsState?.ok === true ? { graphicsState: graphicsState.value } : {}),
       ...(resolvedGraphics?.ok === true ? { resolvedGraphics: resolvedGraphics.value } : {}),
     };
     this.passEntries.push(contributionPass);
+    return ok(undefined);
+  }
+
+  addComputePass(
+    name: string,
+    descriptor: RenderFeatureGpuComputePassDescriptor,
+    options: RenderFeaturePassOptions = {},
+  ): Result<void, RenderError> {
+    const qualifiedName = qualify(this.identity, name);
+    if (
+      this.aborted ||
+      this.committed ||
+      descriptor.dispatches.length === 0 ||
+      this.passEntries.some((entry) => entry.name === qualifiedName)
+    ) {
+      return err(failed(this.identity, this.order));
+    }
+    const resolved = this.resolveGpuCompute?.(descriptor);
+    if (resolved === undefined || !resolved.ok) {
+      return resolved === undefined ? err(failed(this.identity, this.order)) : resolved;
+    }
+    this.passEntries.push({
+      featureIdentity: this.identity,
+      order: this.order,
+      name: qualifiedName,
+      descriptor: { reads: [], writes: [] },
+      dependsOn: (options.dependsOn ?? []).map((dependency) =>
+        qualify(dependency.featureIdentity, dependency.passIdentity),
+      ),
+      gpuCompute: descriptor,
+      resolvedGpuCompute: resolved.value,
+    });
     return ok(undefined);
   }
 
@@ -247,8 +306,15 @@ export function createRenderFeatureContributionStaging<Ctx = RenderFeaturePassCo
   order: number,
   validateGraphics?: RenderFeatureGraphicsValidator,
   resolveGraphics?: RenderFeatureGraphicsResolver,
+  resolveGpuCompute?: RenderFeatureGpuComputeResolver,
 ): RenderFeatureContributionStaging<Ctx> {
-  return new ContributionStaging(featureIdentity, order, validateGraphics, resolveGraphics);
+  return new ContributionStaging(
+    featureIdentity,
+    order,
+    validateGraphics,
+    resolveGraphics,
+    resolveGpuCompute,
+  );
 }
 
 export function mergeRenderFeatureContributions<Ctx>(
@@ -370,7 +436,21 @@ export function composeRenderFeatureGraph<GraphCtx, FeatureCtx = RenderFeaturePa
             proxy.delegate?.(featureContext),
           );
         } catch (failure) {
-          reportError?.(pass.featureIdentity, pass.order, failure);
+          reportError?.(
+            pass.featureIdentity,
+            pass.order,
+            failure instanceof Error && typeof (failure as Partial<RenderError>).code === 'string'
+              ? failure
+              : new RenderFeatureDrawRecordingFailedError(
+                  pass.featureIdentity,
+                  pass.order,
+                  pass.name,
+                  proxy.pass.gpuCompute === undefined ? 'pipeline' : 'bindings',
+                  'backend-recording-failed',
+                  failure instanceof Error ? failure.message : String(failure),
+                  'renderer-recover',
+                ),
+          );
         }
       },
     });

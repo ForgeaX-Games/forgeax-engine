@@ -1,6 +1,6 @@
 # @forgeax/engine-state
 
-> Single-world typed-state machine: `defineState` + `setNextState` + state-scoped entity lifecycle (`despawnOnExit`/`despawnOnEnter`) + `OnEnter`/`OnExit` user schedule labels. Zero-intrusion on ECS -- consumes existing `defineComponent`/`addSystem`/Resource CRUD/`queryRun`/`despawn` primitives only.
+> Single-world typed-state machine: `defineState` + `setNextState` + state-scoped entity lifecycle (`despawnOnExit`/`despawnOnEnter`) + `OnEnter`/`OnExit` user schedule labels. Zero-intrusion on ECS -- consumes existing component, resource, Query, and despawn primitives only.
 
 ## API surface
 
@@ -81,6 +81,6 @@ The state package has zero custom ECS primitives. It consumes only:
 - `defineComponent` -- for `__scopedTo__<tokenName>` component schemas
 - `world.addSystem` -- for `transitionStates` system registration
 - `world.insertResource` / `world.getResource` / `world.hasResource` -- for per-token `State`/`NextState`/`PreviousState` Resource CRUD
-- `createQueryState` + `queryRun` -- for collecting scoped entities
+- `world.query` row iteration -- for collecting scoped entities
 - `resolveComponent` -- for looking up scoped component schemas
 - `world.despawn` -- for scoped entity teardown

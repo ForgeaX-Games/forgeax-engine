@@ -89,7 +89,7 @@ const mockCanvas = {
 };
 
 // --- build the camera-orbit World via the shared SSOT builder ---
-const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { Camera } = await import('@forgeax/engine-render');
 const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
@@ -150,7 +150,7 @@ async function capture(device) {
 // --- drive shared pan/zoom controller and capture early/late views ---
 const CAPTURE_EARLY = Math.max(1, Math.floor(SMOKE_MIN_FRAMES * 0.05));
 const CAPTURE_LATE = Math.max(CAPTURE_EARLY + 1, Math.floor(SMOKE_MIN_FRAMES * 0.65));
-const cameraState = createQueryState({ with: [Camera, Transform, PanCamera, Entity] });
+const cameraQuery = world.query({ read: [Camera, Transform], with: [PanCamera] }).unwrap();
 let framesObserved = 0;
 let earlyFrame;
 let lateFrame;
@@ -164,12 +164,10 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i === CAPTURE_EARLY) {
     earlyFrame = await capture(sharedDevice);
     earlyHalfHeight = cameraHalfHeight(world);
-    queryRun(cameraState, world, (bundle) => {
-      const handle = bundle.Entity.self[0];
-      if (handle === undefined) return;
-      const transform = world.get(handle, Transform);
-      if (transform.ok) earlyCameraPos = Array.from(transform.value.pos);
-    });
+    for (const row of cameraQuery) {
+      earlyCameraPos = Array.from(row.get(Transform).pos);
+      break;
+    }
   }
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   stepCameraPan(world, FIXED_DT, {
@@ -183,14 +181,13 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
 }
 const finalHalfHeight = cameraHalfHeight(world);
 let finalExtents;
-queryRun(cameraState, world, (bundle) => {
-  const handle = bundle.Entity.self[0];
-  if (handle === undefined) return;
-  const transform = world.get(handle, Transform);
-  const camera = world.get(handle, Camera);
-  if (transform.ok) finalCameraPos = Array.from(transform.value.pos);
-  if (camera.ok) finalExtents = [camera.value.left, camera.value.right, camera.value.bottom, camera.value.top];
-});
+for (const row of cameraQuery) {
+  const transform = row.get(Transform);
+  const camera = row.get(Camera);
+  finalCameraPos = Array.from(transform.pos);
+  finalExtents = [camera.left, camera.right, camera.bottom, camera.top];
+  break;
+}
 const device = sharedDevice;
 if (!device) {
   console.error('[smoke] FAIL - no shared device captured for readback');

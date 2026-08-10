@@ -6,7 +6,7 @@
 // binding to prove field-for-field parity before the SDK was deleted (M2). Once
 // the SDK left the repo that diff half became unrunnable, so it was removed; the
 // human-signed parity baseline it produced now lives frozen under
-// test/__snapshots__/ and parity-snapshot.test.ts asserts live ufbx output
+// __tests__/__snapshots__/ and parity-snapshot.test.ts asserts live ufbx output
 // against it (see that file's header). What remains here is the re-freeze tool:
 // it recomputes the compact structural digest from live ufbx and overwrites the
 // snapshots. Re-freezing changes the human-signed baseline, so run it only with
@@ -15,7 +15,7 @@
 // Usage:
 //   pnpm -F @forgeax/engine-fbx build          # dist/ must be current
 //   node scripts/parity-diff.mjs               # print each sample's digest
-//   node scripts/parity-diff.mjs --freeze      # overwrite test/__snapshots__/*.json
+//   node scripts/parity-diff.mjs --freeze      # overwrite __tests__/__snapshots__/*.json
 //
 // The digest() below MUST stay identical to parity-snapshot.test.ts's copy so
 // the freeze and the assertion agree (the .mjs script and the .ts test cannot
@@ -29,7 +29,7 @@ import { initFbxWasm, parseFbxToObject } from '../dist/index.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, '..');
 const VENDOR = join(PKG, '../../forgeax-engine-assets/vendor/fbx-test');
-const SNAP_DIR = join(PKG, 'test/__snapshots__');
+const SNAP_DIR = join(PKG, '__tests__/__snapshots__');
 
 const SAMPLES = ['cube', 'humanoid'];
 

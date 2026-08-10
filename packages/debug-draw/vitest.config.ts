@@ -4,7 +4,7 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/engine-debug-draw',
-    include: ['test/**/*.test.ts'],
+    include: ['__tests__/**/*.test.ts'],
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',
@@ -13,7 +13,7 @@ export default defineProject({
       exclude: [
         'dist/**',
         '**/*.config.ts',
-        'test/**',
+        '**/__tests__/**',
         'bench/**',
         '**/*.bench.ts',
       ],

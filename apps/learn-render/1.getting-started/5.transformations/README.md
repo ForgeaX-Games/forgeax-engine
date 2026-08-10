@@ -18,10 +18,10 @@ LO §1.5 的核心论点是「在 CPU 端用 `glm::mat4` 累乘 translate / rota
 
 1. **磁盘 GUID-寻址 cube** — `assets/cube-mesh.stub.meta.json` (`kind=external-asset-package`，`subAssets[0]={kind:'mesh', sourceIndex:0, guid:UUIDv7}`) 把磁盘端的 GUID 映射到引擎内置 `HANDLE_CUBE` 程序化 cube；运行时通过 `loadByGuid<MeshAsset>(CUBE_MESH_GUID)` 单入口寻址（charter P5 producer / consumer split + AC-15 (c)）
 2. **ECS 实体 + Transform 数组列** — `world.spawn({Transform, MeshFilter{cube}, MeshRenderer{material}})`；`Transform` 是 `pos`/`quat`/`scale` 三条 array<f32,N> 列，LO `glm::mat4(1.0f)` 的 identity 基线对应 `pos=[0,0,0], quat=[0,0,0,1], scale=[1,1,1]`
-3. **逐帧 system fn 写 flat 列** — `world.addSystem(Update, {queries: [{with: [Transform, MeshFilter]}], fn: (queryResults) => { bundles.Transform.quat[i*4+2] = sin(angle/2); bundles.Transform.scale[i*3] = pulse; ... }})`；rAF 循环里调用 `world.update(deltaSeconds)` 触发该 system；引擎 `RenderSystem` 在 `draw(world)` 里读取最新的列并组装 `mat4`
+3. **逐帧 system fn 写 row view** — `world.addSystem(Update, { queries: [{ write: [Transform], with: [MeshFilter] }], fn: (_world, queries) => { for (const row of queries[0]) row.mut(Transform).quat.set(...); } })`；rAF 循环里调用 `world.update(deltaSeconds)` 触发该 system；引擎 `RenderSystem` 在 `draw(world)` 里读取最新的列并组装 `mat4`
 
 > [!IMPORTANT]
-> **forgeax 不暴露 `glm::translate / glm::rotate / glm::scale` 这类 CPU 端 mat4 累乘 API**；AI 用户写「我要让 cube 绕 Z 轴旋转 + 缩放脉动」就是注册一个 `world.addSystem(Update, system)` 让 fn body 写 `bundles.Transform.quat[i*4+2] / scale[i*3]`，引擎在 `RenderSystem.draw()` 内部把 quaternion + scale 重组成 mat4 后上传 GPU（charter P4 一致抽象）。AI 用户不直接拼 mat4，也不学 glm vec3 / mat4 操作词汇——`Transform` 组件的 pos/quat/scale 数组列是唯一对外 surface。
+> **forgeax 不暴露 `glm::translate / glm::rotate / glm::scale` 这类 CPU 端 mat4 累乘 API**；AI 用户写「我要让 cube 绕 Z 轴旋转 + 缩放脉动」就是注册一个 `world.addSystem(Update, system)`，通过 `QueryRow.mut(Transform)` 更新 quaternion 与 scale。引擎在 `RenderSystem.draw()` 内部把 quaternion + scale 重组成 mat4 后上传 GPU（charter P4 一致抽象）。AI 用户不直接拼 mat4，也不学 glm vec3 / mat4 操作词汇。
 
 ## 渲染流程
 
@@ -84,22 +84,18 @@ world.spawn(
 // register per-frame Transform animation system (LO 1.5 GLM idiom -> forgeax ECS)
 world.addSystem(Update, {
   name: 'transformations-animate-cube',
-  queries: [{ with: [Transform, MeshFilter] }],
-  fn: (queryResults) => {
+  queries: [{ write: [Transform], with: [MeshFilter] }],
+  fn: (_world, queries) => {
     const t = (performance.now() - animationStartMs) * 0.001;
     const angle = t * ROTATION_RADIANS_PER_SECOND;
     const halfAngle = angle * 0.5;
     const sinH = Math.sin(halfAngle);
     const cosH = Math.cos(halfAngle);
     const pulse = SCALE_MIN + (SCALE_MAX - SCALE_MIN) * (Math.sin(t * SCALE_PULSE_RADIANS_PER_SECOND) * 0.5 + 0.5);
-    for (const bundles of queryResults[0]) {
-      for (let i = 0; i < bundles.entityCount; i++) {
-        bundles.Transform.quatZ[i]   = sinH;
-        bundles.Transform.quatW[i]   = cosH;
-        bundles.Transform.scale[i * 3] = pulse;
-        bundles.Transform.scaleY[i] = pulse;
-        bundles.Transform.scaleZ[i] = pulse;
-      }
+    for (const row of queries[0]) {
+      const transform = row.mut(Transform);
+      transform.quat.set([0, 0, sinH, cosH]);
+      transform.scale.set([pulse, pulse, pulse]);
     }
   },
 });
@@ -120,9 +116,9 @@ requestAnimationFrame(tick);
 | 维度 | LO 原版（C++ / GLSL 330） | forgeax 这里（TS / WGSL） |
 |:--|:--|:--|
 | Transform 数据结构 | `glm::mat4 trans = glm::mat4(1.0f)` 单个 4x4 矩阵；CPU 端调 `glm::translate / glm::rotate / glm::scale` 累乘 | `Transform` 组件的 `pos`/`quat`/`scale` array<f32,N> 列（quat 序 [x,y,z,w]）；引擎 `RenderSystem` 内部 compose 成 `worldFromLocal: mat4`（`@forgeax/engine-math` mat4.compose） |
-| 旋转表示 | `glm::rotate(trans, angle, glm::vec3(0,0,1))` 累积到 mat4 | `bundles.Transform.quatZ[i] = sin(angle/2); quatW[i] = cos(angle/2)` 直接写四元数标量列；mat4 由引擎按帧重建 |
-| 缩放表示 | `glm::scale(trans, glm::vec3(0.5, 0.5, 0.5))` 累积到 mat4 | `bundles.Transform.scale[i*3] = pulse` 直接写 scale flat 列 |
-| 平移表示 | `glm::translate(trans, glm::vec3(0.5, -0.5, 0.0))` 累积到 mat4 | `bundles.Transform.pos[i*3] = 0.5; pos[i*3+1] = -0.5` 直接写 position flat 列 |
+| 旋转表示 | `glm::rotate(trans, angle, glm::vec3(0,0,1))` 累积到 mat4 | `row.mut(Transform).quat.set([0, 0, sin(angle/2), cos(angle/2)])`；mat4 由引擎按帧重建 |
+| 缩放表示 | `glm::scale(trans, glm::vec3(0.5, 0.5, 0.5))` 累积到 mat4 | `row.mut(Transform).scale.set([pulse, pulse, pulse])` |
+| 平移表示 | `glm::translate(trans, glm::vec3(0.5, -0.5, 0.0))` 累积到 mat4 | `row.mut(Transform).pos.set([0.5, -0.5, 0])` |
 | Uniform 上传 | `unsigned int loc = glGetUniformLocation(prog, "transform"); glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(trans));` 每帧手动绑 + 上传 | `renderer.draw(world)` 内部从 `Transform` 列读出后调 `queue.writeBuffer` 上传到 storage buffer；AI 用户不写 `glUniform*` 词汇 |
 | 每帧更新点 | 主循环 `while (!glfwWindowShouldClose)` 内 `glm::rotate(trans, (float)glfwGetTime(), ...)` 直接改 mat4 | `world.addSystem(Update, { fn: ... })` 注册一次；rAF 里 `world.update(deltaSeconds)` 触发该 fn 写 SoA 列；引擎独立读列做 mat4 compose（charter P4 一致抽象） |
 | 错误处理 | `glm` 默认无错误返回；上传失败仅 `glGetError` 全局状态轮询 | forgeax 用结构化错误（`err.code` 闭族 `RhiErrorCode 18` 成员 + `EcsErrorCode 23` 成员 + `err.expected` / `err.hint` / `err.detail`）；AI 用户 `switch (err.code)` exhaustive narrow，不解析 `err.message`（charter P3） |

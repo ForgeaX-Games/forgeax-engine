@@ -163,6 +163,26 @@ describe('materialLoader', () => {
     expect((out as { kind?: string }).kind).toBe('material');
   });
 
+  it('preserves the authored parameter schema and color space', () => {
+    const parameters = [
+      { name: 'tint', type: 'color', colorSpace: 'linear' },
+      { name: 'flowTexture', type: 'texture' },
+    ] as const;
+    const out = materialLoader.load(
+      {
+        passes: [{ name: 'particle-billboard', program: { module: 'sample::flow' } }],
+        parameters,
+        values: { tint: [0.2, 0.6, 1, 1] },
+        colorSpace: 'linear',
+      },
+      undefined,
+      emptyCtx,
+    ) as MaterialAsset;
+
+    expect(out.parameters).toEqual(parameters);
+    expect(out.colorSpace).toBe('linear');
+  });
+
   it('resolves a numeric parent ref-index to a parentGuid string', () => {
     const out = materialLoader.load(
       { passes: [{ name: 'main', program: { module: 'x' } }], parent: 1 },
@@ -204,8 +224,40 @@ describe('materialLoader', () => {
       ['tex-guid'],
       ctx,
     ) as { values: Record<string, unknown> };
-    expect(out.values.baseColorTexture).toBe('tex-guid');
+    expect(out.values.baseColorTexture).toEqual({ texture: 'tex-guid' });
     expect(out.values.roughness).toBe(5); // non-texture int untouched
+  });
+
+  it('uses authored parameters to distinguish texture refs from zero-valued scalars', () => {
+    const out = materialLoader.load(
+      {
+        passes: [{ name: 'main', program: { module: 'late::standard' } }],
+        parameters: [
+          { name: 'metallic', type: 'f32' },
+          { name: 'baseColorTexture', type: 'texture', optional: true },
+        ],
+        values: { metallic: 0, baseColorTexture: 0 },
+      },
+      ['texture-guid'],
+      emptyCtx,
+    ) as MaterialAsset;
+
+    expect(out.values?.metallic).toBe(0);
+    expect(out.values?.baseColorTexture).toEqual({ texture: 'texture-guid' });
+  });
+
+  it('treats an authored all-scalar parameter schema as authoritative', () => {
+    const out = materialLoader.load(
+      {
+        passes: [{ name: 'main', program: { module: 'late::standard' } }],
+        parameters: [{ name: 'metallic', type: 'f32' }],
+        values: { metallic: 0 },
+      },
+      ['texture-guid'],
+      emptyCtx,
+    ) as MaterialAsset;
+
+    expect(out.values?.metallic).toBe(0);
   });
 
   it('resolves nested texture and sampler ref-indices while preserving authored fields', () => {
@@ -377,13 +429,19 @@ describe('animationClipLoader', () => {
 describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
   it('loads a serialised sampler descriptor', () => {
     expect(
-      samplerLoader.load({ addressModeU: 'repeat', magFilter: 'linear' }, undefined, emptyCtx),
+      samplerLoader.load(
+        { addressModeU: 'repeat', magFilter: 'linear', maxAnisotropy: 16 },
+        undefined,
+        emptyCtx,
+      ),
     ).toEqual({
       kind: 'sampler',
       addressModeU: 'repeat',
       magFilter: 'linear',
+      maxAnisotropy: 16,
     });
     expect(samplerLoader.load({ addressModeU: 'invalid' }, undefined, emptyCtx)).toBeUndefined();
+    expect(samplerLoader.load({ maxAnisotropy: '16' }, undefined, emptyCtx)).toBeUndefined();
   });
 
   it('keeps animation graph loader in assets-runtime', () => {

@@ -7,7 +7,7 @@
 // AC-A2: no imperative renderer.setParams mutator — this test only checks
 // component field shape and type assignability.
 
-import { createQueryState, Entity, queryRun, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { PostProcessParams } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
 
@@ -124,10 +124,8 @@ describe('PostProcessParams multi-entity parallelism', () => {
       },
     });
     let count = 0;
-    const query = createQueryState({ with: [PostProcessParams, Entity] });
-    queryRun(query, world, (bundle) => {
-      count += bundle.Entity.self.length;
-    });
+    const query = world.query({ with: [PostProcessParams] }).unwrap();
+    for (const _row of query) count += 1;
     expect(count).toBe(2);
   });
 });

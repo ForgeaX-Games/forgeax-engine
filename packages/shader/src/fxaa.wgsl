@@ -35,9 +35,12 @@
 // Bindings (group 0):
 //   @binding(0) screenTexture : texture_2d<f32>  -- sampled LDR input
 //   @binding(1) samp          : sampler           -- linear filterable sampler
+// linearLdrColorDomain: FXAA samples and writes linear LDR values; display
+// encoding happens only at the final output surface.
 
 #import forgeax_view::common::FullscreenOutput
 #import forgeax_view::common::fullscreen_triangle
+#import forgeax_view::common::linearToSrgbOetf
 
 const EDGE_THRESHOLD_MIN: f32 = 0.0312;
 const EDGE_THRESHOLD_MAX: f32 = 0.125;
@@ -103,7 +106,7 @@ fn fs_main(in: FullscreenOutput) -> @location(0) vec4<f32> {
 
   // Not on an edge (or in a near-uniform region): pass the centre through.
   if lumaRange < max(EDGE_THRESHOLD_MIN, lumaMax * EDGE_THRESHOLD_MAX) {
-    return vec4<f32>(centerColor, 1.0);
+    return vec4<f32>(linearToSrgbOetf(centerColor), 1.0);
   }
 
   // Lumas of the 4 corners.
@@ -252,5 +255,5 @@ fn fs_main(in: FullscreenOutput) -> @location(0) vec4<f32> {
   }
 
   let finalColor = sampleColor(finalUv);
-  return vec4<f32>(finalColor, 1.0);
+  return vec4<f32>(linearToSrgbOetf(finalColor), 1.0);
 }

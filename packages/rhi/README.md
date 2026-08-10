@@ -42,7 +42,7 @@
 | `RhiQueue` | submit: `submit(commandBuffers)`; copy: `writeBuffer(buffer, offset, data, dataOffset?, size?)` (real-path forwarding to `GPUQueue` w/ bounds guard, D-S3 #4) |
 | `RhiCommandEncoder` | pass open: `beginRenderPass` / `beginComputePass`; copy: `copyBufferToBuffer` (3-arg + 5-arg overloads) / `copyBufferToTexture` / `copyTextureToBuffer` / `copyTextureToTexture`; misc: `clearBuffer` / `resolveQuerySet` (placeholder) / `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`; lifecycle: `finish() -> Result<CommandBuffer, RhiError>` |
 | `RhiRenderPassEncoder` | bind: `setPipeline` / `setBindGroup` / `setVertexBuffer` / `setIndexBuffer`; draw: `draw` / `drawIndexed` / `drawIndirect` / `drawIndexedIndirect`; state: `setViewport` / `setScissorRect` / `setBlendConstant` / `setStencilReference`; debug: `pushDebugGroup` / `popDebugGroup` / `insertDebugMarker`; lifecycle: `end()`; placeholders: `executeBundles` / `beginOcclusionQuery` / `endOcclusionQuery` (return `'rhi-not-available'` until `feat-future-rhi-resource-creation`) |
-| `RhiComputePassEncoder` | `setPipeline` / `setBindGroup` / `dispatchWorkgroups` / `end` |
+| `RhiComputePassEncoder` | `setPipeline` / `setBindGroup` / direct `dispatchWorkgroups` / buffer-driven `dispatchWorkgroupsIndirect` / `end` |
 | `RhiRenderPipelineOps` | render-pipeline cache + dispatch helpers (op-set scoped to render path) |
 | `RhiComputePipelineOps` | compute-pipeline cache + dispatch helpers (op-set scoped to compute path) |
 

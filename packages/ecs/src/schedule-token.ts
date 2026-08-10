@@ -8,7 +8,9 @@ export interface ScheduleToken {
   readonly name: string;
 }
 
-function createScheduleToken(name: ScheduleToken['name']): ScheduleToken {
+export type ScheduleName = 'Update' | 'FixedUpdate' | 'FrameEnd';
+
+function createScheduleToken(name: ScheduleName): ScheduleToken {
   return Object.freeze({ name });
 }
 

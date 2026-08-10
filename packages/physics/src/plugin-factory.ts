@@ -33,6 +33,20 @@ import {
   type Plugin,
   PluginError,
 } from '@forgeax/engine-plugin';
+import { loadRapier2DBackend, loadRapier3DBackend } from './load-rapier-backend.mjs';
+import type { PhysicsWorld, PhysicsWorld2D } from './physics-world';
+
+interface Rapier3DBackendModule {
+  loadRapier3D(): Promise<unknown>;
+  createRapier3DPhysicsWorld(rapier: unknown): PhysicsWorld;
+  registerPhysicsSystems(world: Parameters<Plugin['build']>[0]): void;
+}
+
+interface Rapier2DBackendModule {
+  loadRapier2D(): Promise<unknown>;
+  createRapier2DPhysicsWorld(rapier: unknown): PhysicsWorld2D;
+  registerPhysicsSystems2D(world: Parameters<Plugin['build']>[0]): void;
+}
 
 /** Rapier backend selector (mirrors the old CreateAppOptions.physics literal). */
 export type PhysicsBackend = 'rapier-2d' | 'rapier-3d';
@@ -83,16 +97,15 @@ export function physicsPlugin(backend: PhysicsBackend): Plugin {
     async build(world) {
       try {
         if (backend === 'rapier-3d') {
-          const { loadRapier3D, createRapier3DPhysicsWorld, registerPhysicsSystems } = await import(
-            '@forgeax/engine-physics-rapier3d'
-          );
+          const { loadRapier3D, createRapier3DPhysicsWorld, registerPhysicsSystems } =
+            (await loadRapier3DBackend()) as Rapier3DBackendModule;
           const rapier = await loadRapier3D();
           const pw = createRapier3DPhysicsWorld(rapier);
           world.insertResource('PhysicsWorld', pw);
           registerPhysicsSystems(world);
         } else {
           const { loadRapier2D, createRapier2DPhysicsWorld, registerPhysicsSystems2D } =
-            await import('@forgeax/engine-physics-rapier2d');
+            (await loadRapier2DBackend()) as Rapier2DBackendModule;
           const rapier = await loadRapier2D();
           const pw = createRapier2DPhysicsWorld(rapier);
           world.insertResource('PhysicsWorld', pw);

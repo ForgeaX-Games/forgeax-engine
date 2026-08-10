@@ -16,10 +16,17 @@
 // .invert` (charter proposition 5: no math reinvention; render-system.test.ts
 // asserts `/@forgeax\/engine-math/` shows up in render-system.ts source).
 
-import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
+import {
+  type AssetRegistry,
+  HANDLE_CUBE,
+  HANDLE_TRIANGLE,
+  resolveAssetHandle,
+} from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import type { Profiler, RecorderSession } from '@forgeax/engine-profiler';
+import type { ResolvedColorTargetDescriptor } from '@forgeax/engine-render-graph';
 import type {
+  BindGroupEntry,
   BindGroupLayout,
   Buffer,
   ComputePipeline,
@@ -34,16 +41,24 @@ import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
 import type { MaterialRuntimeArtifact } from '@forgeax/engine-shader';
 import {
   derive,
+  type Handle,
+  type MaterialAsset,
   type MaterialRenderState,
+  type MaterialTextureValue,
   type ParamSchemaEntry,
   type PassKind,
   type PrimitiveTopology,
   type RenderPipelineAsset,
   RenderQueue,
+  type SamplerAsset,
 } from '@forgeax/engine-types';
 import { createClusterBinScratch } from './cluster-binner';
 import type { EngineMetrics } from './engine-metrics';
-import { HdrpCapsInsufficientError, type RenderError } from './errors/render';
+import {
+  HdrpCapsInsufficientError,
+  type ObservationUnavailableError,
+  type RenderError,
+} from './errors/render';
 import {
   createRenderFeatureContributionStaging,
   mergeRenderFeatureContributions,
@@ -56,6 +71,10 @@ import {
   runRenderFeatureFrame,
   settlePreparedGraphicsCompletion,
 } from './features/host';
+import {
+  createRenderFeatureGpuWorkResolver,
+  type RenderFeatureGpuWorkResolver,
+} from './features/prepared-gpu-work';
 import type { RenderFeaturePassContext } from './features/types';
 import {
   buildFullscreenPostProcessPass,
@@ -72,6 +91,7 @@ import {
 } from './gpu-texture-usage';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
 import { validateClusterGrid } from './hdrp-pipeline';
+import { assembleMaterialWithSkylightEntries } from './ibl/skylight-bind-group';
 import { disposeInstanceBuffers, disposeTransientInstanceBuffers } from './instance-buffer-cache';
 import type { RhiErrorListenerRegistry } from './lifecycle';
 import { PipelineError } from './pipeline-errors';
@@ -87,6 +107,13 @@ import {
   retirePerFrameGraph,
 } from './record';
 import { buildPerFrameBindGroups } from './record/frame-lighting';
+import {
+  type FrameObservation,
+  type FrameObservationOptions,
+  type FrameObservationSource,
+  observeCurrentFrame,
+} from './record/frame-observation';
+import { applyParamSnapshotToUbo, residentTextureView } from './record/main-pass-material';
 // The forgeax-concept RenderPipeline (registrable / installable unit) - aliased to avoid
 // the name collision with the RHI opaque `RenderPipeline` handle imported above. The RHI
 // handle stays internal (requirements line 155); this concept type is the public surface.
@@ -298,6 +325,27 @@ export const STANDARD_PBR_UBO_SIZE = Math.max(
   304,
 );
 
+function buildCurrentFrameObservationSource(
+  frameNumber: number,
+  perFrameGraph: {
+    getColorTargetDescriptor(name: string): ResolvedColorTargetDescriptor | undefined;
+  } | null,
+  isHdrpActive: boolean,
+  backendId: string,
+): FrameObservationSource | undefined {
+  const frameId = frameNumber - 1;
+  if (frameId < 0) return undefined;
+  const descriptor = perFrameGraph?.getColorTargetDescriptor('hdrColor');
+  if (descriptor === undefined) return undefined;
+  return {
+    texture: descriptor.texture,
+    descriptor,
+    frameId,
+    pipelineId: isHdrpActive ? 'forgeax::hdrp' : 'forgeax::urp',
+    backendId,
+  };
+}
+
 /**
  * Dynamic-offset stride for one material UBO slot. The 288-byte payload is
  * rounded to the next 256-byte dynamic-offset boundary.
@@ -322,6 +370,9 @@ export const MATERIAL_PER_ENTITY_STRIDE = 512;
  */
 export interface RenderSystem {
   draw(worlds: readonly World[], opts: DrawOwnerOptions): void;
+  observeCurrentFrame(
+    options: FrameObservationOptions,
+  ): Promise<Result<FrameObservation, ObservationUnavailableError>>;
   readonly pipelineDispatchCounts: {
     readonly unlit: number;
   };
@@ -530,7 +581,7 @@ export interface RenderSystemRuntime {
   ) => RenderPipeline | null;
   readonly getMaterialShaderBindingContract?: (
     materialShaderId: string,
-  ) => 'group-0' | 'render-material';
+  ) => 'group-0' | 'view-only' | 'render-material';
   /**
    * feat-20260527 M2 / w7: schema lookup for material param overlay.
    * Returns the paramSchema for a registered material shader, or
@@ -642,6 +693,7 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   /** Optional feature host supplied by the renderer assembly layer. */
   readonly featureHost?: RenderFeatureHost | undefined;
+  readonly shaderModuleFactory?: import('./pipeline-builder').PipelineBuilderShaderModuleFactory;
   /** Optional host profiler capability for the existing Render path. */
   readonly profiler?: Profiler | undefined;
   // M6 / w41 (feat-20260510-rhi-resource-creation): the canvas context is the
@@ -787,6 +839,21 @@ function reportRenderFeatureGraphError(internals: RenderSystemInternals, error: 
     }
   }
   internals.errorRegistry.fire(error);
+}
+
+function isPendingRenderFeaturePreparation(error: RenderError): boolean {
+  return (
+    error.code === 'render-feature-preparation-failed' &&
+    error.detail.reason.startsWith('rhi-not-available:')
+  );
+}
+
+function makePreparedPipelinePendingError(): RhiError {
+  return new RhiError({
+    code: 'rhi-not-available',
+    expected: 'prepared pipeline shader module warm-up to finish asynchronously',
+    hint: 'retry the prepared graphics pass on the next frame',
+  });
 }
 
 export interface PipelineState {
@@ -1147,12 +1214,12 @@ export interface PipelineState {
 
 /**
  * Configure a canvas surface from the two PipelineState format fields, applying
- * the WebGL2-fallback gate (storage-buffer cap == 0 proxy): full WebGPU surface
- * (sRGB view format + RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC usage) when
- * storage buffers are available. A low-capability WebGPU surface stays
- * single-format but retains COPY_SRC for capture; the wgpu WebGL2 surface must
- * remain COLOR_TARGET-only because its GLES surface rejects COPY_SRC. Single
- * SSOT for the configure descriptor consumed by both the
+ * the WebGL2-fallback gate: native WebGPU uses the storage format plus an sRGB
+ * view format, while the wgpu WebGL2 surface uses its direct sRGB format and
+ * COLOR_TARGET-only usage because its GLES surface rejects COPY_SRC. The
+ * storage-buffer capability still controls TEXTURE_BINDING usage, but it does
+ * not determine whether native WebGPU supports viewFormats. Single SSOT for
+ * the configure descriptor consumed by both the
  * lazy first-frame path (ensureContextConfigured in createRenderer.ts) and the
  * F2 surface-outdated reconfigure-and-retry branch (render-system-record.ts) so
  * the two cannot drift (architecture-principles #1 SSOT). Returns the configure
@@ -1165,21 +1232,17 @@ export function configureSurface(
   format: string,
   colorAttachmentFormat: string,
 ): Result<void, RhiError> {
-  const limitsHere = (device as { limits?: Readonly<Record<string, number>> }).limits;
-  const storageCap = limitsHere?.maxStorageBuffersPerShaderStage ?? 1;
-  const supportsViewFormats = storageCap > 0;
-  const supportsSurfaceCopy = device.caps?.backendKind !== 'wgpu-webgl2';
+  const isWebGl2 = device.caps?.backendKind === 'wgpu-webgl2';
+  const supportsTextureBinding = device.caps?.storageBuffer ?? true;
   return context.configure({
     device,
-    format: (supportsViewFormats ? format : colorAttachmentFormat) as unknown as GPUTextureFormat,
-    alphaMode: 'opaque',
+    format: (isWebGl2 ? colorAttachmentFormat : format) as unknown as GPUTextureFormat,
+    alphaMode: isWebGl2 ? 'opaque' : 'premultiplied',
     usage:
       GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
-      (supportsViewFormats ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
-      (supportsSurfaceCopy ? GPU_TEXTURE_USAGE_COPY_SRC : 0),
-    ...(supportsViewFormats
-      ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] }
-      : {}),
+      (supportsTextureBinding ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
+      (isWebGl2 ? 0 : GPU_TEXTURE_USAGE_COPY_SRC),
+    ...(!isWebGl2 ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] } : {}),
   });
 }
 
@@ -1537,6 +1600,37 @@ export interface MeshGpuHandles {
 
 export function createRenderSystem(internals: RenderSystemInternals): RenderSystem {
   internals.profiler?.registerPhaseCatalog('render', RENDER_PHASE_CATALOG);
+  const featureGpuWork = new Map<string, RenderFeatureGpuWorkResolver>();
+  const getFeatureGpuWork = (featureIdentity: string): RenderFeatureGpuWorkResolver => {
+    const existing = featureGpuWork.get(featureIdentity);
+    if (existing !== undefined) return existing;
+    const created = createRenderFeatureGpuWorkResolver({
+      device: internals.device,
+      shaderModuleFactory:
+        internals.shaderModuleFactory ??
+        ({
+          createShaderModule: () =>
+            err(
+              new RhiError({
+                code: 'rhi-not-available',
+                expected: 'the renderer backend exposes shader module creation',
+                hint: 'construct the renderer through the backend pack before installing GPU features',
+              }),
+            ),
+        } satisfies import('./pipeline-builder').PipelineBuilderShaderModuleFactory),
+      generation: 0,
+      featureIdentity,
+    });
+    featureGpuWork.set(featureIdentity, created);
+    return created;
+  };
+  const disposeFeatureGpuWork = (): void => {
+    for (const resolver of featureGpuWork.values()) {
+      const disposed = resolver.dispose();
+      if (!disposed.ok) internals.errorRegistry.fire(disposed.error);
+    }
+    featureGpuWork.clear();
+  };
   // Per-RenderSystem frame state: closure-internal frameNumber + the
   // per-entity instance GPU buffer cache (feat-20260514 M3 / w15: the
   // record stage owns GPU storage buffer allocation for Instances entities;
@@ -1765,10 +1859,190 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     keys: [],
   };
   let preparedViewBindGroup: import('@forgeax/engine-rhi').BindGroup | null = null;
+  let preparedWorlds: readonly World[] = [];
   const preparedPipelineIds = new WeakMap<object, string>();
   const preparedMaterialPipelineShaders = new WeakMap<object, string>();
   const preparedGroup0Pipelines = new WeakSet<object>();
+  const preparedViewOnlyPipelines = new WeakSet<object>();
+  const preparedRenderMaterialPipelines = new WeakSet<object>();
   const preparedColorOnlyPipelines = new WeakSet<object>();
+  const preparedAssetHandles = new WeakMap<World, Map<string, number>>();
+  const preparedHandle = <Brand extends string>(
+    world: World,
+    guid: string,
+    brand: Brand,
+  ): Handle<Brand, 'shared'> | undefined => {
+    let handles = preparedAssetHandles.get(world);
+    if (handles === undefined) {
+      handles = new Map();
+      preparedAssetHandles.set(world, handles);
+    }
+    const key = `${brand}:${guid.toLowerCase()}`;
+    const cached = handles.get(key);
+    if (cached !== undefined) return cached as Handle<Brand, 'shared'>;
+    const asset = internals.assets.lookup(guid);
+    if (asset === undefined) return undefined;
+    const handle = world.allocSharedRef(brand, asset);
+    handles.set(key, handle as number);
+    return handle;
+  };
+  const preparedMaterialBindings = (
+    materialShaderId: string,
+    worldIndex: number,
+    materialGuid: string,
+    layout: BindGroupLayout,
+  ) => {
+    const world = preparedWorlds[worldIndex];
+    const material = internals.assets.lookup(materialGuid) as MaterialAsset | undefined;
+    const pipelineState = internals.getPipelineState();
+    if (world === undefined || material?.kind !== 'material' || pipelineState === null) {
+      return err(new Error('prepared material asset is unavailable'));
+    }
+    const schema = internals.getParamSchema?.(materialShaderId) ?? [];
+    const values = material.values ?? {};
+    const derived = derive(schema);
+    const fields = [...derived.textureFieldNames];
+    let buffer: Buffer | undefined;
+    let payloadByteLength = 0;
+    if (derived.uboLayout.totalBytes > 0) {
+      const payload = new Uint8Array(Math.max(16, derived.uboLayout.totalBytes));
+      applyParamSnapshotToUbo(
+        payload,
+        schema,
+        values as Readonly<Record<string, number | readonly number[]>>,
+      );
+      const created = internals.device.createBuffer({
+        label: `prepared-material:${materialGuid}`,
+        size: payload.byteLength,
+        usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+      });
+      if (!created.ok) return created;
+      buffer = created.value;
+      payloadByteLength = payload.byteLength;
+      const written = internals.device.queue.writeBuffer(buffer, 0, payload);
+      if (!written.ok) {
+        internals.device.destroyBuffer(buffer);
+        return written;
+      }
+    }
+    const textureResources: Array<{
+      sampler: import('@forgeax/engine-rhi').Sampler;
+      view: import('@forgeax/engine-rhi').TextureView;
+    }> = [];
+    for (let index = 0; index < fields.length; index += 1) {
+      const field = fields[index];
+      const value = field === undefined ? undefined : values[field];
+      const textureValue =
+        typeof value === 'object' && value !== null && 'texture' in value
+          ? (value as MaterialTextureValue)
+          : undefined;
+      let sampler = pipelineState.defaultSampler;
+      if (textureValue?.sampler !== undefined) {
+        const handle = preparedHandle(world, String(textureValue.sampler), 'SamplerAsset');
+        if (handle !== undefined) {
+          const asset = resolveAssetHandle<SamplerAsset>(world, handle);
+          if (asset.ok) {
+            const resident = internals.gpuStore.ensureSamplerResident(
+              handle,
+              asset.value,
+              worldIndex,
+            );
+            if (resident.ok) sampler = resident.value;
+          }
+        }
+      }
+      let view = pipelineState.defaultWhiteTextureView;
+      if (textureValue !== undefined) {
+        const handle = preparedHandle(world, String(textureValue.texture), 'TextureAsset');
+        if (handle !== undefined) {
+          view =
+            residentTextureView(world, internals.gpuStore, internals, handle, worldIndex) ?? view;
+        }
+      }
+      textureResources.push({ sampler, view });
+    }
+    const entries: BindGroupEntry[] = [];
+    let textureIndex = 0;
+    for (let index = 0; index < derived.bglEntries.length; index += 1) {
+      const expected = derived.bglEntries[index];
+      if (expected?.buffer?.type === 'uniform' && buffer !== undefined) {
+        entries.push({
+          binding: expected.binding,
+          resource: { kind: 'buffer', value: { buffer, size: payloadByteLength } },
+        });
+        continue;
+      }
+      const textureResource = textureResources[textureIndex];
+      if (
+        expected?.sampler?.type === 'filtering' &&
+        derived.bglEntries[index + 1]?.texture !== undefined &&
+        textureResource !== undefined
+      ) {
+        entries.push({
+          binding: expected.binding,
+          resource: { kind: 'sampler', value: textureResource.sampler },
+        });
+        continue;
+      }
+      if (expected?.texture !== undefined && textureResource !== undefined) {
+        entries.push({
+          binding: expected.binding,
+          resource: { kind: 'textureView', value: textureResource.view },
+        });
+        textureIndex += 1;
+        continue;
+      }
+      if (buffer !== undefined) internals.device.destroyBuffer(buffer);
+      return err(new Error('prepared material schema contains unsupported binding kinds'));
+    }
+    for (let index = fields.length; index < 4; index += 1) {
+      const binding = derived.userRegionBindingEnd + (index - fields.length) * 2;
+      entries.push(
+        {
+          binding,
+          resource: { kind: 'sampler', value: pipelineState.defaultSampler },
+        },
+        {
+          binding: binding + 1,
+          resource: { kind: 'textureView', value: pipelineState.defaultWhiteTextureView },
+        },
+      );
+    }
+    const fallback = pipelineState.skylightFallback;
+    if (fallback === null) {
+      if (buffer !== undefined) internals.device.destroyBuffer(buffer);
+      return err(new Error('prepared material skylight fallback is unavailable'));
+    }
+    const completeEntries = assembleMaterialWithSkylightEntries(
+      entries,
+      {
+        irradianceView: fallback.irradianceView,
+        irradianceSampler: fallback.sampler,
+        prefilterView: fallback.prefilterView,
+        prefilterSampler: fallback.sampler,
+        brdfLutView: fallback.brdfLutView,
+        brdfLutSampler: fallback.sampler,
+        intensityBuffer: fallback.intensityBuffer,
+      },
+      {
+        emissiveSampler: pipelineState.defaultSampler,
+        emissiveView: pipelineState.defaultWhiteTextureView,
+        occlusionSampler: pipelineState.defaultSampler,
+        occlusionView: pipelineState.defaultWhiteTextureView,
+      },
+    );
+    const group = internals.device.createBindGroup({ layout, entries: completeEntries });
+    if (!group.ok) {
+      if (buffer !== undefined) internals.device.destroyBuffer(buffer);
+      return group;
+    }
+    if (buffer === undefined) return group;
+    return ok({
+      handle: group.value,
+      dynamicOffsets: [0],
+      release: () => internals.device.destroyBuffer(buffer),
+    });
+  };
   const lastFrustumStats: { culled: number; total: number } = { culled: 0, total: 0 };
   const lastVisibilityStats: { explicitlyHidden: number } = { explicitlyHidden: 0 };
   const preparedResolverFactory = (
@@ -1780,6 +2054,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       capabilityAvailable: true,
       featureOrder: input.order,
       lookup: input.lookup,
+      resolveGpuBuffer: (reference) =>
+        getFeatureGpuWork(input.featureIdentity).resolveBuffer(reference),
       resolvePipeline: (descriptor) => {
         const postProcessEntry = internals.lookupPostProcess?.(descriptor.shader);
         if (postProcessEntry !== undefined) {
@@ -1800,43 +2076,50 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             }
           }
           return pipeline === null || pipeline === undefined
-            ? err(new Error(`prepared pipeline '${descriptor.shader}' is not ready`))
+            ? err(makePreparedPipelinePendingError())
             : ok(pipeline);
         }
         const preparedPipeline = internals.getMaterialShaderPipeline?.(
           descriptor.shader,
           descriptor.colorFormats[0] === 'rgba16float',
           descriptor.renderState,
-          undefined,
-          undefined,
+          descriptor.topology,
+          descriptor.indexFormat,
           undefined,
           'forward',
           undefined,
           descriptor.sampleCount ?? 1,
-          undefined,
+          // Prepared graphics own their declared attachment format. Passing
+          // it through keeps the PSO compatible with feature-target views
+          // (the ordinary material path intentionally defaults to the
+          // swap-chain view format).
+          descriptor.colorFormats[0] as GPUTextureFormat,
           undefined,
           descriptor.depthFormat === undefined
             ? null
             : (descriptor.depthFormat as GPUTextureFormat),
           descriptor.vertexLayout,
         );
-        const pipeline =
-          preparedPipeline ??
-          (descriptor.depthFormat === undefined
-            ? null
-            : (internals.getPipelineState()?.unlitPipeline ?? null));
+        // A requested material shader is an exact pipeline contract. During
+        // async shader warmup, substituting the generic unlit pipeline can
+        // mismatch vertex layouts and HDR attachment formats, turning a
+        // retryable next-frame prepare into an invalid GPU command buffer.
+        const pipeline = preparedPipeline ?? null;
         if (pipeline !== null) {
           preparedMaterialPipelineShaders.set(pipeline as object, descriptor.shader);
+          const bindingContract = internals.getMaterialShaderBindingContract?.(descriptor.shader);
+          if (bindingContract === 'group-0') {
+            preparedGroup0Pipelines.add(pipeline as object);
+          } else if (bindingContract === 'view-only') {
+            preparedViewOnlyPipelines.add(pipeline as object);
+          } else {
+            preparedRenderMaterialPipelines.add(pipeline as object);
+          }
         }
         if (pipeline !== null && descriptor.depthFormat === undefined) {
           preparedColorOnlyPipelines.add(pipeline as object);
-          if (internals.getMaterialShaderBindingContract?.(descriptor.shader) === 'group-0') {
-            preparedGroup0Pipelines.add(pipeline as object);
-          }
         }
-        return pipeline === null
-          ? err(new Error(`prepared pipeline '${descriptor.shader}' is not ready`))
-          : ok(pipeline);
+        return pipeline === null ? err(makePreparedPipelinePendingError()) : ok(pipeline);
       },
       resolveBindings: (descriptor, pipeline) => {
         if (preparedGroup0Pipelines.has(pipeline as object)) {
@@ -1856,7 +2139,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
         if (
           preparedViewBindGroup !== null &&
-          (pipeline === internals.getPipelineState()?.unlitPipeline ||
+          (preparedViewOnlyPipelines.has(pipeline as object) ||
+            (preparedRenderMaterialPipelines.has(pipeline as object) &&
+              descriptor.values.group === 0) ||
+            pipeline === internals.getPipelineState()?.unlitPipeline ||
             preparedColorOnlyPipelines.has(pipeline as object))
         ) {
           return ok(preparedViewBindGroup);
@@ -1864,15 +2150,29 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         const group = descriptor.values.group;
         const materialShaderId = preparedMaterialPipelineShaders.get(pipeline as object);
         const layout =
-          (group === 0 && materialShaderId !== undefined
+          (materialShaderId !== undefined
             ? (internals.getMaterialBindGroupLayout?.(materialShaderId) ??
-              internals.getPipelineState()?.materialBindGroupLayout)
+              (group === 0 ? internals.getPipelineState()?.materialBindGroupLayout : undefined))
             : undefined) ??
           (
             pipeline as RenderPipeline & {
               getBindGroupLayout?: (index: number) => BindGroupLayout;
             }
           ).getBindGroupLayout?.(group === 1 ? 1 : 0);
+        const material = descriptor.values.material;
+        if (
+          group === 1 &&
+          layout !== undefined &&
+          materialShaderId !== undefined &&
+          typeof material === 'object' &&
+          material !== null &&
+          'world' in material &&
+          'guid' in material &&
+          typeof material.world === 'number' &&
+          typeof material.guid === 'string'
+        ) {
+          return preparedMaterialBindings(materialShaderId, material.world, material.guid, layout);
+        }
         return layout === undefined
           ? err(new Error('prepared pipeline bind group layout is unavailable'))
           : internals.device.createBindGroup({
@@ -1918,6 +2218,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     });
   return {
     draw(worlds: readonly World[], opts: DrawOwnerOptions): void {
+      preparedWorlds = worlds;
       const profileSession = internals.profiler?.activeSession();
       let ownsProfileFrame = false;
       if (profileSession !== undefined && opts.profileFrame === undefined) {
@@ -2033,6 +2334,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
                 camera: cameras[0],
                 colorAttachmentFormat: preparedPipelineState.colorAttachmentFormat,
                 backendKind: internals.device.caps.backendKind,
+                storageBuffer: internals.device.caps.storageBuffer,
               }) ?? []);
         const preparedResourceBatches = runProfiledRenderPhase(profileSession, 'features', () => {
           if (internals.featureHost === undefined) return [];
@@ -2045,18 +2347,28 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             targets: featureTargets,
             generation: 0,
             caps: internals.device.caps,
-            createContributionStaging: (identity, order, validateGraphics, resolveGraphics) =>
+            createContributionStaging: (
+              identity,
+              order,
+              validateGraphics,
+              resolveGraphics,
+              resolveGpuCompute,
+            ) =>
               createRenderFeatureContributionStaging<RenderFeaturePassContext>(
                 identity,
                 order,
                 validateGraphics,
                 resolveGraphics,
+                resolveGpuCompute,
               ),
             createPreparedGraphicsResolver: preparedResolverFactory,
+            getGpuWorkResolver: getFeatureGpuWork,
           });
           lastVisibilityStats.explicitlyHidden = featureFrame.hiddenEntityReports.length;
           for (const featureError of featureFrame.errors) {
-            internals.errorRegistry.fire(featureError);
+            if (!isPendingRenderFeaturePreparation(featureError)) {
+              internals.errorRegistry.fire(featureError);
+            }
           }
           const featureGraphState = getRenderFeatureGraphState(internals);
           const merged = mergeRenderFeatureContributions(featureFrame.contributions);
@@ -2175,6 +2487,16 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       }
     },
     pipelineDispatchCounts: dispatchCounts,
+    observeCurrentFrame(options: FrameObservationOptions) {
+      const currentFrameId = frameState.frameNumber - 1;
+      const source = buildCurrentFrameObservationSource(
+        frameState.frameNumber,
+        frameState.perFrameGraph,
+        frameState.isHdrpActive,
+        internals.device.caps.backendKind,
+      );
+      return observeCurrentFrame(options, source, currentFrameId);
+    },
     bindGroupCounts: bindGroupCounts,
     frustumStats: lastFrustumStats,
     visibilityStats: lastVisibilityStats,
@@ -2295,6 +2617,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       },
     },
     disposeFrameState(): void {
+      disposeFeatureGpuWork();
       // feat-20260612 M5 / w21 (plan-strategy D-2 steps 2 + 3): drain the
       // perFrameGraph's pooled textures and walk the instanceBuffers cache.
       // Both calls are idempotent + tolerate per-handle errors silently;
@@ -2330,6 +2653,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       }
     },
     resetForRecover(): void {
+      disposeFeatureGpuWork();
       // feat-20260622-s5 M3 / B-2 / w18: recover() rebuild drops device-bound
       // state minted by the lost device. The active graph and per-entity caches
       // must be discarded, not merely marked for destruction: their opaque

@@ -441,7 +441,13 @@ describe('prepared graphics browser contract', () => {
       expect.objectContaining({ featureIdentity: 'synthetic.browser.forged' }),
     ]);
     expect(probe.buffers).toEqual([]);
-    expect(probe.recordGroups.every((group) => group.handles.length === 0)).toBe(true);
+    expect(
+      probe.recordGroups.every(
+        (group) =>
+          !group.mutations.includes('setVertexBuffer') &&
+          !group.mutations.includes('setIndexBuffer'),
+      ),
+    ).toBe(true);
     expect(renderer.renderFeatureDiagnostics().map((entry) => entry.status)).toEqual([
       'failed',
       'failed',
@@ -453,7 +459,11 @@ describe('prepared graphics browser contract', () => {
   it.each([
     { failure: 'create' as const, code: 'render-feature-stage-failed', destroys: 0 },
     { failure: 'upload' as const, code: 'render-feature-preparation-failed', destroys: 1 },
-    { failure: 'record' as const, code: 'render-feature-stage-failed', destroys: 1 },
+    {
+      failure: 'record' as const,
+      code: 'render-feature-draw-recording-failed',
+      destroys: 1,
+    },
   ])('isolates a real backend $failure failure before feature completion', async ({
     failure,
     code,

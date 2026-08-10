@@ -14,15 +14,8 @@ import { Update } from '@forgeax/engine-ecs';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createApp } from '@forgeax/engine-app';
-import { AudioListener } from '@forgeax/engine-audio';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
-import {
-  createQueryState,
-  Entity,
-  type EntityHandle,
-  queryRun,
-  type World,
-} from '@forgeax/engine-ecs';
+import { AudioListener, audioPlugin } from '@forgeax/engine-audio';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import {
@@ -260,23 +253,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
  * Expose `globalThis.__collectathon` for the structural browser smoke: a
  * read-only view of the live entity count (entities carrying Transform) + camera
  * count (entities carrying Camera). The smoke polls these after the Play scene
- * settles to assert the level fully instantiated. queryRun is the same
+ * settles to assert the level fully instantiated. Query row counting is the same
  * count path apps/preview's browser test uses.
  */
 function installSmokeHook(world: World): void {
   const view = {
     entityCount(): number {
       let n = 0;
-      queryRun(createQueryState({ with: [Transform, Entity] }), world, (bundle) => {
-        n += bundle.Entity.self.length;
-      });
+      const query = world.query({ with: [Transform] }).unwrap();
+      for (const _row of query) n += 1;
       return n;
     },
     cameraCount(): number {
       let n = 0;
-      queryRun(createQueryState({ with: [Camera, Entity] }), world, (bundle) => {
-        n += bundle.Entity.self.length;
-      });
+      const query = world.query({ with: [Camera] }).unwrap();
+      for (const _row of query) n += 1;
       return n;
     },
   };

@@ -1,6 +1,5 @@
 import { Update } from '@forgeax/engine-ecs';
 // 1. engine usage
-import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import type { InputBackend } from '@forgeax/engine-input';
@@ -18,7 +17,7 @@ import type {
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container2.pack.json';
 import {
@@ -34,6 +33,9 @@ const CONTAINER2_SPECULAR_GUID = '019e3969-1d46-76ca-9a46-2168b746a292';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const CUBE_MATERIAL_GUID = '019e3969-2000-7000-8000-000000000003';
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-2-6-multiple-lights',
+);
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 100;
 const CAMERA_PROJECTION_PERSPECTIVE = 0;
@@ -103,7 +105,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
   const overrideBackend = winExt.__multipleLightsInputBackend?.();
 
-  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
+  const bundler = {
+    ...forgeaxBundlerAdapter(),
+    importTransport: createDevImportTransport(runtimeBinding),
+  };
   const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
     overrideBackend === undefined
       ? await createApp(target, {}, bundler)
@@ -123,6 +128,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const assets = renderer.assets;
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   const diffuseGuid = parseGuidOrAbort('container2 texture', CONTAINER2_TEXTURE_GUID);
@@ -363,18 +369,14 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
   world.addSystem(Update, {
     name: 'learn-render-multiple-lights-scroll-fov',
     after: ['input-frame-start-scan'],
-    queries: [{ with: [Camera, Entity] }],
+    queries: [{ write: [Camera] }],
     fn: (world, queryResults) => {
       const snapshot = renderer.input.snapshot(world);
       if (snapshot === undefined) {
         return;
       }
       scrollFov.apply(snapshot.mouse.wheelDelta);
-      for (const bundles of queryResults[0]) {
-        for (let i = 0; i < bundles.Entity.self.length; i++) {
-          bundles.Camera.fov[i] = scrollFov.fovRad;
-        }
-      }
+      for (const row of queryResults[0]) row.mut(Camera).fov = scrollFov.fovRad;
     },
   });
 }

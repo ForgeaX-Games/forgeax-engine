@@ -3,11 +3,8 @@
 // maintains a fixed radius around a static target while yaw and pitch evolve.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -55,12 +52,9 @@ export function orbitPosition(yaw: number, pitch: number, radius: number): [numb
 }
 
 function firstCamera(world: World): EntityHandle | null {
-  const state = createQueryState({ with: [Camera, Transform, OrbitCamera, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Camera, Transform, OrbitCamera] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 /** Build a cube-on-plane scene viewed by a fixed-radius orbit camera. */

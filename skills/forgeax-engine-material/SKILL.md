@@ -8,6 +8,43 @@ description: Build and debug visible ForgeaX materials through the single Materi
 > [!IMPORTANT]
 > The visible-object recipe is `MeshFilter` + `MeshRenderer` + `MaterialAsset`. Author one material payload, cook its effective contract, load it by GUID, and allocate the World handle. The recovery route is structured error inspection. Do not create an app-local shader artifact or bypass an engine resource defect in a demo.
 
+## Color-lighting parity handoff
+
+For a direct-light material issue, use the [color-lighting parity entry](../../apps/parity/color-lighting/README.md), then follow its [status recovery map](../../apps/parity/color-lighting/status-index.md). The `SceneCase` and `CaseReport` schemas are the report contract; repair the named material or producer owner and rerun the same case. Do not turn a missing producer capture into a material pass.
+
+## Direct-light parity entry
+
+When a visible material is used by a direct-light parity case, start with the
+revision-pinned
+[`three-r184-finite-range-authority.json`](../../apps/parity/color-lighting/cases/direct-light/calibration/three-r184-finite-range-authority.json)
+and its executable authority test. The entry is `ready` only with a matching
+Three revision/source hash, fixed config, and complete expected samples;
+missing fields mean `blocked` and require evidence recovery.
+
+The shared light vocabulary is:
+
+| Field | Public meaning |
+|:--|:--|
+| `DirectionalLight.intensity` | Lux in a one-world-unit-per-meter scene |
+| `PointLight.intensity` | Candela with positive meter range or no cutoff |
+| `SpotLight.intensity` | Candela with meter range and KHR cone mapping |
+| `color` | Linear RGB, without a global compensation factor |
+| `cosInner` / `cosOuter` | Snapshot fields derived from imported cone radians |
+| `direction` | Extract-normalized world direction consumed by both pipelines |
+
+The runtime range factor is the Three r184 squared window
+`clamp(1 - (d / c)^4, 0, 1)^2`; KHR's unsquared curve remains an import/reference
+falsification and must not be used as the Forge runtime curve. Exposure belongs
+to the camera tone/output stage after lighting, so material authoring and light
+intensity do not receive an exposure multiplier.
+
+For diagnosis, run the authority and light-snapshot tests, inspect the
+normalized snapshot and its buffer projection, then compare independent
+browser WebGPU and Dawn captures. Preserve the case `provenance`, named
+`captures`, raw hash, analytic/ROI metrics, and `CaseReport.verdict`. Do not
+replace a missing engine path with a custom mesh, fallback shader, or app-local
+light profile.
+
 ## Mental model
 
 The recovery route is structured error inspection followed by source or cook

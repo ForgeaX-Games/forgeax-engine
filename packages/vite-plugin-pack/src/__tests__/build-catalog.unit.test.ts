@@ -14,7 +14,7 @@
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-image-arm.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-name.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-import-hdr.test.ts
-//   - packages/vite-plugin-pack/test/plugin-build.test.ts
+//   - packages/vite-plugin-pack/src/__tests__/plugin-build.test.ts
 //
 // Paradigm: each block-scoped describe.skip('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.

@@ -410,7 +410,7 @@ describe('dawn-real-gpu - createQuerySet timestamp gate (w11)', () => {
 });
 
 describe('dawn-real-gpu - createComputePipeline happy path (w08)', () => {
-  it("device.createComputePipeline({layout:'auto', compute}) returns ok and the pipeline drives a compute pass dispatchWorkgroups", async () => {
+  it('an indirect compute dispatch writes the storage buffer and survives GPU readback', async () => {
     const { rhi: rhiInst, createShaderModule: createShaderMod } = await import('../index');
     // M6 fix-up [w51]: spec-aligned strict two-step path; legacy
     // `rhi.requestDevice` retired (AGENTS.md break-point list 2026-05-10 #2).
@@ -423,18 +423,76 @@ describe('dawn-real-gpu - createComputePipeline happy path (w08)', () => {
     const device = dr.value;
 
     const shaderResult = await createShaderMod(device, {
-      code: '@compute @workgroup_size(1) fn cs_main() {}',
+      code: `
+        @group(0) @binding(0) var<storage, read_write> values: array<u32>;
+        @compute @workgroup_size(1)
+        fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+          values[id.x] = id.x + 10u;
+        }
+      `,
     });
     expect(shaderResult.ok).toBe(true);
     if (!shaderResult.ok) return;
 
+    const layoutResult = device.createBindGroupLayout({
+      label: 'dawn-cs-layout',
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: 'storage' },
+        },
+      ],
+    });
+    expect(layoutResult.ok).toBe(true);
+    if (!layoutResult.ok) return;
+    const pipelineLayoutResult = device.createPipelineLayout({
+      label: 'dawn-cs-pipeline-layout',
+      bindGroupLayouts: [layoutResult.value],
+    });
+    expect(pipelineLayoutResult.ok).toBe(true);
+    if (!pipelineLayoutResult.ok) return;
+
     const pipelineResult = device.createComputePipeline({
       label: 'dawn-cs',
-      layout: 'auto',
+      layout: pipelineLayoutResult.value,
       compute: { module: shaderResult.value, entryPoint: 'cs_main' },
     });
     expect(pipelineResult.ok).toBe(true);
     if (!pipelineResult.ok) return;
+
+    const valuesResult = device.createBuffer({
+      label: 'dawn-cs-values',
+      size: 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    const indirectResult = device.createBuffer({
+      label: 'dawn-cs-indirect',
+      size: 12,
+      usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+    });
+    const readbackResult = device.createBuffer({
+      label: 'dawn-cs-readback',
+      size: 16,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    expect(valuesResult.ok && indirectResult.ok && readbackResult.ok).toBe(true);
+    if (!valuesResult.ok || !indirectResult.ok || !readbackResult.ok) return;
+    expect(device.queue.writeBuffer(indirectResult.value, 0, new Uint32Array([4, 1, 1])).ok).toBe(
+      true,
+    );
+    const bindingsResult = device.createBindGroup({
+      label: 'dawn-cs-bindings',
+      layout: layoutResult.value,
+      entries: [
+        {
+          binding: 0,
+          resource: { kind: 'buffer', value: { buffer: valuesResult.value } },
+        },
+      ],
+    });
+    expect(bindingsResult.ok).toBe(true);
+    if (!bindingsResult.ok) return;
 
     const encResult = device.createCommandEncoder({ label: 'dawn-cs-encoder' });
     expect(encResult.ok).toBe(true);
@@ -442,10 +500,23 @@ describe('dawn-real-gpu - createComputePipeline happy path (w08)', () => {
     const encoder = encResult.value;
     const pass = encoder.beginComputePass();
     pass.setPipeline(pipelineResult.value);
-    pass.dispatchWorkgroups(1);
+    pass.setBindGroup(0, bindingsResult.value);
+    pass.dispatchWorkgroupsIndirect(indirectResult.value, 0);
     pass.end();
+    encoder.copyBufferToBuffer(valuesResult.value, 0, readbackResult.value, 0, 16);
     const finishResult = encoder.finish();
     expect(finishResult.ok).toBe(true);
+    if (!finishResult.ok) return;
+    expect(device.queue.submit([finishResult.value]).ok).toBe(true);
+    await device.queue.onSubmittedWorkDone();
+    const mapped = await readbackResult.value.mapAsync(GPUMapMode.READ);
+    expect(mapped.ok).toBe(true);
+    if (!mapped.ok) return;
+    const range = mapped.value.getMappedRange();
+    expect(range.ok).toBe(true);
+    if (!range.ok) return;
+    expect(Array.from(new Uint32Array(range.value.slice(0)))).toEqual([10, 11, 12, 13]);
+    mapped.value.unmap();
   });
 });
 

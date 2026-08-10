@@ -46,6 +46,7 @@ import {
   type RhiCaps,
   type RhiDevice,
   RhiError,
+  type Sampler,
   type Texture,
   type TextureView,
 } from '@forgeax/engine-rhi';
@@ -63,6 +64,7 @@ import {
   type ImageErrorDetailFor,
   type ImageErrorFor,
   type PrimitiveTopology,
+  type SamplerAsset,
   type Submesh,
   type TextureAsset,
   type MeshAsset as TypesMeshAsset,
@@ -286,6 +288,7 @@ export class GpuResourceStore {
   private caps: RhiCaps | undefined = undefined;
 
   private readonly textureGpuHandles: Map<number, TextureGpuEntry> = new Map();
+  private readonly samplerGpuHandles: Map<number, Sampler> = new Map();
   private readonly cubemapGpuHandles: Map<number, CubemapGpuEntry> = new Map();
   // Maps source EquirectAsset handle id -> minted cubemap handle so the same
   // equirect source always resolves to the same cubemap (idempotent, A2).
@@ -374,6 +377,7 @@ export class GpuResourceStore {
       destroyTex(entry.texture);
     }
     this.textureGpuHandles.clear();
+    this.samplerGpuHandles.clear();
 
     for (const entry of this.cubemapGpuHandles.values()) {
       if (entry.texture !== null) destroyTex(entry.texture);
@@ -516,6 +520,10 @@ export class GpuResourceStore {
       }
     }
 
+    for (const key of this.samplerGpuHandles.keys()) {
+      if (!liveSet.has(key)) this.samplerGpuHandles.delete(key);
+    }
+
     for (const key of this.cubemapGpuHandles.keys()) {
       if (!liveSet.has(key)) {
         const entry = this.cubemapGpuHandles.get(key);
@@ -626,6 +634,36 @@ export class GpuResourceStore {
     worldId: number = 0,
   ): TextureView | undefined {
     return this.textureGpuHandles.get(this.worldKey(handleSlot(handle), worldId))?.view;
+  }
+
+  /**
+   * Lazily materialise and cache a sampler descriptor for a material texture.
+   * Samplers are opaque, non-destroyable RHI handles, so disposal only drops
+   * this store's cache and lets the device own their lifetime.
+   */
+  ensureSamplerResident(
+    handle: Handle<'SamplerAsset', 'shared'>,
+    pod: SamplerAsset,
+    worldId: number = 0,
+  ): Result<Sampler, RhiError> {
+    const key = this.worldKey(handleSlot(handle), worldId);
+    const existing = this.samplerGpuHandles.get(key);
+    if (existing !== undefined) return ok(existing);
+    const device = this.gpuDevice as (MipmapBlitDevice & RhiDevice) | undefined;
+    if (device === undefined) {
+      return err(
+        new RhiError({
+          code: 'rhi-not-available',
+          expected: 'GPU device configured before SamplerAsset residency',
+          hint: 'call gpuStore.configureGpuDevice before drawing a material with a sampler',
+        }),
+      );
+    }
+    const { kind: _kind, ...descriptor } = pod;
+    const created = device.createSampler(descriptor);
+    if (!created.ok) return created;
+    this.samplerGpuHandles.set(key, created.value);
+    return created;
   }
 
   /**

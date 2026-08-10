@@ -12,8 +12,7 @@ import {
   type SystemSetNotRegisteredError,
   systemSetNotRegistered,
 } from './errors';
-import type { ColumnBundle, NestedColumnBundle, QueryDescriptor, QueryState } from './query';
-import { createQueryState, queryRun } from './query';
+import type { Query, QueryDescriptor } from './query/query';
 // type-only import: erases at build time, carries no runtime edge (same
 // criterion as scripts/check-ecs-no-runtime-import.mjs). `world.ts` already
 // value-imports `schedule.ts`; this back-reference is type-space only so no
@@ -112,9 +111,13 @@ export type ParamValidation =
 export type SystemParamQueryResults<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
 > = {
-  [K in keyof Qs]: Qs[K] extends QueryDescriptor<infer Cs extends ReadonlyArray<Component>>
-    ? NestedColumnBundle<NoInfer<Cs>>[]
-    : ColumnBundle[];
+  [K in keyof Qs]: Qs[K] extends QueryDescriptor<
+    infer R extends ReadonlyArray<Component>,
+    infer W extends ReadonlyArray<Component>,
+    infer O extends ReadonlyArray<Component>
+  >
+    ? Query<NoInfer<R>, NoInfer<W>, NoInfer<O>>
+    : Query;
 };
 
 /** Reusable resource/query bundle resolved immediately before a system runs. */
@@ -145,19 +148,17 @@ export function defineSystemParam<const Qs extends ReadonlyArray<QueryDescriptor
 }
 
 /**
- * System descriptor passed to `world.addSystem` — `fn` recovers per-query
- * bundle shapes mapped over `Qs`, no `as` casts required.
+ * System descriptor passed to `world.addSystem` — `fn` receives one persistent
+ * executable Query per descriptor, mapped over `Qs` without casts.
  *
  * `Qs` is the tuple of query descriptors; defaults to
  * `readonly QueryDescriptor[]` so non-generic call sites stay zero-modification
  * (KD-5). The `fn` first parameter is mapped over `Qs` so each
- * `queryResults[i]` recovers its own `NestedColumnBundle<Qs[i]['with']>` shape
- * (S-5, KD-2). `NoInfer<Qs[K]['with']>` blocks the callback body from feeding
- * back into `Qs` inference.
+ * `queryResults[i]` recovers its own row access roles (S-5, KD-2).
  *
  * @example
  * ```ts
- * // Single-query system — bundle fields recover per-component schema.
+ * // Single-query system — row access recovers each component schema.
  * import { defineComponent, World } from '@forgeax/engine-ecs';
  *
  * const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
@@ -166,16 +167,10 @@ export function defineSystemParam<const Qs extends ReadonlyArray<QueryDescriptor
  * const world = new World();
  * world.addSystem(Update, {
  *   name: 'movement',
- *   queries: [{ with: [Position, Velocity] }],
+ *   queries: [{ write: [Position], read: [Velocity] }],
  *   fn: (_world, queryResults, _commands) => {
- *     for (const bundles of queryResults[0]) {
- *       // bundles.Position.x: Float32Array — directly usable, no `as` cast.
- *       const xs = bundles.Position.x;
- *       const dxs = bundles.Velocity.dx;
- *       for (let i = 0; i < bundles.Entity.self.length; i++) {
- *         // strict `noUncheckedIndexedAccess`: TypedArray index returns number | undefined
- *         xs[i] = (xs[i] ?? 0) + (dxs[i] ?? 0);
- *       }
+ *     for (const row of queryResults[0]) {
+ *       row.mut(Position).x += row.get(Velocity).dx;
  *     }
  *   },
  * });
@@ -183,16 +178,14 @@ export function defineSystemParam<const Qs extends ReadonlyArray<QueryDescriptor
  *
  * @example
  * ```ts
- * // Multi-query system — each queryResults[i] keeps its own bundle shape.
+ * // Multi-query system — each queryResults[i] keeps its own row shape.
  * const Health = defineComponent('Health', { hp: 'f32' });
  * world.addSystem(Update, {
  *   name: 'multi',
- *   queries: [{ with: [Position] }, { with: [Health] }],
+ *   queries: [{ read: [Position] }, { read: [Health] }],
  *   fn: (_world, queryResults) => {
- *     // queryResults[0]: NestedColumnBundle<readonly [typeof Position]>[]
- *     // queryResults[1]: NestedColumnBundle<readonly [typeof Health]>[]
- *     for (const b of queryResults[0]) void b.Position.x;
- *     for (const b of queryResults[1]) void b.Health.hp;
+ *     for (const row of queryResults[0]) void row.get(Position).x;
+ *     for (const row of queryResults[1]) void row.get(Health).hp;
  *   },
  * });
  * ```
@@ -222,9 +215,7 @@ export interface SystemDescriptor<
    *
    * @param world The owning World — read resources (`world.getResource(KEY)`),
    * resolve components by name, etc. without closure capture.
-   * @param queryResults Mapped over `Qs`: `queryResults[i][j]` is a
-   * `NestedColumnBundle<Qs[i]['with']>` with per-component TypedArray fields.
-   * Direct access (`bundles.Position.x`) compiles without `as` casts.
+   * @param queryResults Mapped over `Qs`: each entry is a persistent Query.
    * @param commands Deferred-mutation buffer (flushed after the system).
    * @param params Resolved values for the reusable definitions in `params`.
    */
@@ -234,7 +225,7 @@ export interface SystemDescriptor<
     commands: CommandBuffer,
     params: SystemParamValues<Ps>,
   ) => void | unknown;
-  /** Reusable query/resource bundles resolved as the fourth fn argument. */
+  /** Reusable query/resource parameters resolved as the fourth fn argument. */
   readonly params?: Ps;
   /** Run this system after named systems or the FixedUpdate anchor. */
   readonly after?: ReadonlyArray<string | ScheduleToken>;
@@ -244,7 +235,7 @@ export interface SystemDescriptor<
   readonly resources?: ReadonlyArray<string>;
   /**
    * Run condition. Evaluated each frame after ParamValidation passes (tag
-   * 'ok') and before queryRun. Returning `false` skips the system silently —
+   * 'ok') and before query iteration. Returning `false` skips the system silently —
    * no query runs, no fn call, no state added (plan-strategy D-8). Omitting it
    * (undefined) always runs the system.
    */
@@ -255,7 +246,7 @@ export interface SystemDescriptor<
  * A registered system token returned by {@link defineSystem}. Structurally the
  * frozen {@link SystemDescriptor} itself (plan-strategy D-6 — "define ==
  * register"). `world.addSystem(handle)` consumes it directly; the generic `Qs`
- * flows through so the `fn` first-query bundle shapes survive (S-5).
+ * flows through so the `fn` per-query row access shapes survive (S-5).
  */
 export type SystemHandle<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
@@ -267,10 +258,10 @@ interface SystemRecord {
   descriptor: SystemDescriptor;
   /** Registration order index (for tie-breaking). */
   registrationIndex: number;
-  /** Cached QueryStates, one per query descriptor. Lazily initialized on first runSchedule. */
-  queryStates: QueryState[] | null;
-  /** Cached QueryStates owned by each declared system parameter. */
-  paramQueryStates: QueryState[][] | null;
+  /** Cached executable Queries, one per descriptor. */
+  queries: Query[] | null;
+  /** Cached executable Queries owned by each declared system parameter. */
+  paramQueries: Query[][] | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -327,10 +318,10 @@ export function createSchedule(token: ScheduleToken): Schedule {
 
 /**
  * Register a system. Marks schedule as dirty.
- * Query states are lazily initialized on first runSchedule (needs World for O-3 per-World ID).
+ * Queries are lazily initialized on first runSchedule.
  *
  * `const Qs` locks the `queries` tuple at the call site so `fn`'s first
- * parameter recovers per-query bundle shapes without `as const` annotations
+ * parameter recovers per-query row shapes without `as const` annotations
  * (S-5, KD-2). `SystemRecord` itself is intentionally non-generic — the
  * heterogeneous `Qs` cannot be expressed inside the systems Map (KD-3).
  */
@@ -341,8 +332,8 @@ export function addSystem<
   const record: SystemRecord = {
     descriptor: descriptor as unknown as SystemDescriptor,
     registrationIndex: schedule.nextIndex++,
-    queryStates: null, // Deferred: created in runSchedule when World is available
-    paramQueryStates: null,
+    queries: null,
+    paramQueries: null,
   };
   schedule.systems.set(descriptor.name, record);
   schedule.dirty = true;
@@ -369,7 +360,7 @@ const SYSTEM_REGISTRY = new Map<string, SystemHandle>();
  * matching `defineComponent` (OOS-3).
  *
  * `const Qs` locks the `queries` tuple so `fn`'s query-results parameter
- * recovers per-query bundle shapes without `as const` (S-5).
+ * recovers per-query row access shapes without `as const` (S-5).
  *
  * @example
  * ```ts
@@ -567,8 +558,8 @@ export function replaceSystem<
   }
   record.descriptor = descriptor as unknown as SystemDescriptor;
   // Reset cached query states — descriptor.queries may have changed shape.
-  record.queryStates = null;
-  record.paramQueryStates = null;
+  record.queries = null;
+  record.paramQueries = null;
   schedule.dirty = true;
   return ok(undefined);
 }
@@ -1004,13 +995,21 @@ export function runSchedule(
       if (producerCommands) flushCommands(producerCommands, world);
     }
 
-    // Lazily initialize query states on first run (O-3: needs World for ID resolution).
-    if (record.queryStates === null) {
-      record.queryStates = record.descriptor.queries.map((q) => createQueryState(q));
+    // Lazily initialize the persistent executable queries on first run.
+    if (record.queries === null) {
+      record.queries = record.descriptor.queries.map((descriptor) => {
+        const result = world.query(descriptor);
+        if (!result.ok) throw result.error;
+        return result.value;
+      });
     }
-    if (record.paramQueryStates === null) {
-      record.paramQueryStates = (record.descriptor.params ?? []).map((param) =>
-        (param as SystemParamDefinition<unknown>).queries.map((q) => createQueryState(q)),
+    if (record.paramQueries === null) {
+      record.paramQueries = (record.descriptor.params ?? []).map((param) =>
+        (param as SystemParamDefinition<unknown>).queries.map((descriptor) => {
+          const result = world.query(descriptor);
+          if (!result.ok) throw result.error;
+          return result.value;
+        }),
       );
     }
 
@@ -1053,41 +1052,27 @@ export function runSchedule(
       }
     }
     if (!allSetConditionsPass) {
-      continue; // skip system: no system runIf, no queryRun, no fn
+      continue; // skip system: no system runIf, query iteration, or fn
     }
 
     // ── Run condition (runIf) — evaluated after ParamValidation 'ok', before
-    // queryRun. false → skip silently (no query, no fn, no state) (D-8). ──
+    // query iteration. false -> skip silently (no query, no fn, no cursor advance). ──
     if (record.descriptor.runIf && !record.descriptor.runIf(world)) {
       continue;
     }
 
-    // Run each query and collect results
-    const queryResults: ColumnBundle[][] = [];
-    for (const qs of record.queryStates) {
-      const bundles: ColumnBundle[] = [];
-      queryRun(qs, world, (bundle) => bundles.push(bundle));
-      queryResults.push(bundles);
-    }
-
     const values = (record.descriptor.params ?? []).map((param, index) => {
-      const paramResults: ColumnBundle[][] = [];
-      for (const qs of record.paramQueryStates?.[index] ?? []) {
-        const bundles: ColumnBundle[] = [];
-        queryRun(qs, world, (bundle) => bundles.push(bundle));
-        paramResults.push(bundles);
-      }
       const resolver = (param as unknown as SystemParamDefinition<unknown>).resolve;
-      return resolver(world, paramResults as never);
+      return resolver(world, (record.paramQueries?.[index] ?? []) as never);
     });
 
     // ── Layer 3: system execution + Result collection ──
-    // trusted-cast: F-R2 single-direction; runtime correctness guaranteed by buildColumnBundle
+    // trusted-cast: the descriptor tuple constructed the matching Query tuple above.
     const commands = createCommandBuffer(world);
     commandsBySystem.set(name, commands);
     const returnValue = record.descriptor.fn(
       world,
-      queryResults as Parameters<typeof record.descriptor.fn>[1],
+      record.queries as Parameters<typeof record.descriptor.fn>[1],
       commands,
       values as unknown as Parameters<typeof record.descriptor.fn>[3],
     );

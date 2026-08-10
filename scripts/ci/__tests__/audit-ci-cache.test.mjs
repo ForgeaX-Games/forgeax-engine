@@ -10,6 +10,7 @@ const directory = fileURLToPath(new URL('.', import.meta.url));
 const root = join(directory, '..', '..', '..');
 const script = join(root, 'scripts', 'ci', 'audit-ci-cache.mjs');
 const workflow = join(root, '.github', 'workflows', 'ci.yml');
+const uploadAction = join(root, '.github', 'actions', 'upload-artifact-with-retry', 'action.yml');
 
 function run(input) {
   const temp = mkdtempSync(join(tmpdir(), 'ci-cache-audit-'));
@@ -24,6 +25,14 @@ function run(input) {
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+}
+
+function classifyCacheOwnerFixture({ cacheHit, requestedKey, matchedKey, save }) {
+  if (cacheHit === 'true' && requestedKey === matchedKey && save.outcome === 'notApplicable')
+    return 'exact-hit';
+  if (cacheHit === 'false' && matchedKey && requestedKey !== matchedKey) return 'prefix-hit';
+  if (cacheHit === '' && matchedKey === '' && save.outcome === 'success') return 'miss+save';
+  return 'invalidEvidence';
 }
 
 function runLiveWithoutActionsEnvironment() {
@@ -290,9 +299,9 @@ test('repair: cache-warm measures restore time and cost-reporter collects its cu
   );
   assert.match(
     cacheWarm,
-    /warmRestoreSeconds":\$\{\{ steps\.ddc-restore-finish\.outputs\.seconds \}\}/,
+    /RESTORE_SECONDS: \$\{\{ steps\.ddc-restore-finish\.outputs\.seconds \}\}/,
   );
-  assert.doesNotMatch(cacheWarm, /"warmRestoreSeconds":0/);
+  assert.doesNotMatch(cacheWarm, /"(?:elapsedSeconds|warmRestoreSeconds)":\s*0/);
   assert.match(
     reporter,
     /name: Decode cost inputs[\s\S]*needs\.cache-warm\.outputs\.timing_payload[\s\S]*needs\.cache-warm\.outputs\.audit_payload/,
@@ -312,6 +321,109 @@ test('repair: cache-warm measures restore time and cost-reporter collects its cu
     'the monitor must preserve its summary after a strict budget violation',
   );
   assert.doesNotMatch(reporter, /continue-on-error/);
+});
+
+test('M2-T2: structured owner facts uniquely classify exact, prefix, miss-save, and contradictions', () => {
+  const requestedKey = 'self-hosted-linux-x64-forgeax-shard-ddc-assets';
+  assert.equal(
+    classifyCacheOwnerFixture({
+      cacheHit: 'true',
+      requestedKey,
+      matchedKey: requestedKey,
+      save: { outcome: 'notApplicable' },
+    }),
+    'exact-hit',
+  );
+  assert.equal(
+    classifyCacheOwnerFixture({
+      cacheHit: 'false',
+      requestedKey,
+      matchedKey: 'self-hosted-linux-x64-forgeax-shard-ddc-',
+      save: { outcome: 'notApplicable' },
+    }),
+    'prefix-hit',
+  );
+  assert.equal(
+    classifyCacheOwnerFixture({
+      cacheHit: '',
+      requestedKey,
+      matchedKey: '',
+      save: { outcome: 'success', elapsedSeconds: 3 },
+    }),
+    'miss+save',
+  );
+  assert.equal(
+    classifyCacheOwnerFixture({
+      cacheHit: 'true',
+      requestedKey,
+      matchedKey: '',
+      save: { outcome: 'success', elapsedSeconds: 0 },
+    }),
+    'invalidEvidence',
+  );
+});
+
+test('M2-T2: cache-warm emits requested and matched keys with direct restore-save observations', () => {
+  const source = readFileSync(workflow, 'utf8');
+  const jobStart = source.indexOf('  cache-warm:');
+  const jobEnd = source.indexOf('\n  # `primary-pnpm`', jobStart);
+  const job = source.slice(jobStart, jobEnd);
+
+  const restore = job.indexOf('name: Restore merged DDC cache');
+  const saveStart = job.indexOf('name: Start merged DDC save timer');
+  const save = job.indexOf('name: Save merged DDC cache on miss');
+  const saveFinish = job.indexOf('name: Finish merged DDC save observation');
+  const write = job.indexOf('name: Write cache timing facts');
+  const encode = job.indexOf('name: Encode cache cost outputs');
+  assert.ok(restore >= 0 && restore < saveStart);
+  assert.ok(saveStart < save && save < saveFinish && saveFinish < write && write < encode);
+
+  assert.match(job, /"requestedKey":\s*process\.env\.REQUESTED_KEY/);
+  assert.match(job, /"matchedKey":\s*process\.env\.MATCHED_KEY/);
+  assert.match(job, /"cacheHit":\s*process\.env\.CACHE_HIT/);
+  assert.match(job, /"elapsedSeconds":\s*Number\(process\.env\.RESTORE_SECONDS\)/);
+  assert.match(job, /"outcome":\s*process\.env\.SAVE_OUTCOME/);
+  assert.match(job, /producerRunAttempt:\s*Number\(process\.env\.GITHUB_RUN_ATTEMPT\)/);
+  assert.match(job, /inputFingerprint:\s*process\.env\.INPUT_FINGERPRINT/);
+  assert.doesNotMatch(job, /"(?:elapsedSeconds|warmRestoreSeconds)":\s*0/);
+
+  assert.equal(
+    job.match(
+      /key: \$\{\{ env\.CACHE_RUNNER_SCOPE \}\}-forgeax-shard-ddc-\$\{\{ steps\.assets-sha\.outputs\.value \}\}/g,
+    )?.length,
+    2,
+  );
+  assert.match(job, /if: steps\.cache-ddc\.outputs\.cache-hit != 'true'/);
+  assert.doesNotMatch(job, /restore-keys:/);
+});
+
+test('M4-T1: cache lifecycle and artifact retry envelope stay unchanged', () => {
+  const source = readFileSync(workflow, 'utf8');
+  const action = readFileSync(uploadAction, 'utf8');
+  const cacheStart = source.indexOf('  cache-warm:');
+  const cacheEnd = source.indexOf('\n  # `primary-pnpm`', cacheStart);
+  const cacheWarm = source.slice(cacheStart, cacheEnd);
+
+  assert.equal(
+    cacheWarm.match(
+      /key: \$\{\{ env\.CACHE_RUNNER_SCOPE \}\}-forgeax-shard-ddc-\$\{\{ steps\.assets-sha\.outputs\.value \}\}/g,
+    )?.length,
+    2,
+  );
+  assert.equal(cacheWarm.match(/uses: actions\/cache\/restore@v5/g)?.length, 1);
+  assert.equal(cacheWarm.match(/uses: actions\/cache\/save@v5/g)?.length, 1);
+  assert.match(
+    cacheWarm,
+    /name: Save merged DDC cache on miss[\s\S]*if: steps\.cache-ddc\.outputs\.cache-hit != 'true'/,
+  );
+  assert.doesNotMatch(cacheWarm, /restore-keys:/);
+
+  assert.equal(action.match(/uses: actions\/upload-artifact@v6/g)?.length, 3);
+  assert.equal(action.match(/ACTIONS_ARTIFACT_UPLOAD_TIMEOUT_MS: '60000'/g)?.length, 3);
+  assert.equal(action.match(/continue-on-error: true/g)?.length, 2);
+  assert.match(action, /sleep \$\(\(2 \+ RANDOM % 3\)\)/);
+  assert.match(action, /sleep \$\(\(5 \+ RANDOM % 4\)\)/);
+  assert.match(action, /retention-days:[\s\S]*default: 1/);
 });
 
 test('core build: package JavaScript is produced once without per-package transfer actions', () => {

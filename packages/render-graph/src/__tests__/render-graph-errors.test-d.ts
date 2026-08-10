@@ -1,10 +1,12 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import {
   type CapMissingDetail,
+  type ColorDomainDetail,
   type CyclicDependencyDetail,
   type DanglingReadDetail,
   type DuplicateResourceDetail,
   type InvalidFormatDetail,
+  type ObservationDetail,
   RenderGraphError,
   type RenderGraphErrorCode,
   type RenderGraphErrorDetail,
@@ -63,6 +65,33 @@ describe('RenderGraphError code/detail correlation', () => {
         expected: ['rgba16float'],
       } satisfies InvalidFormatDetail,
     });
+    for (const code of [
+      'observation-absent',
+      'observation-invalid-format',
+      'observation-invalid-size',
+      'observation-missing-copy-src',
+      'observation-stale',
+      'observation-retired',
+    ] as const) {
+      new RenderGraphError({
+        code,
+        expected: '',
+        hint: '',
+        detail: { frameId: 1, expected: 'frame' } satisfies ObservationDetail,
+      });
+    }
+    for (const code of [
+      'invalid-color-domain',
+      'missing-color-domain',
+      'color-domain-mismatch',
+    ] as const) {
+      new RenderGraphError({
+        code,
+        expected: '',
+        hint: '',
+        detail: { value: 'linear' } satisfies ColorDomainDetail,
+      });
+    }
   });
 
   it('keeps detail optional, including explicit undefined', () => {
@@ -80,7 +109,7 @@ describe('RenderGraphError code/detail correlation', () => {
     });
   });
 
-  it('preserves the closed seven-code and six-shape public unions', () => {
+  it('preserves the closed sixteen-code and eight-shape public unions', () => {
     expectTypeOf<RenderGraphErrorCode>().toEqualTypeOf<
       | 'dangling-read'
       | 'cap-missing'
@@ -89,6 +118,15 @@ describe('RenderGraphError code/detail correlation', () => {
       | 'unknown-resource'
       | 'resource-alloc-failed'
       | 'invalid-format'
+      | 'observation-absent'
+      | 'observation-invalid-format'
+      | 'observation-invalid-size'
+      | 'observation-missing-copy-src'
+      | 'observation-stale'
+      | 'observation-retired'
+      | 'invalid-color-domain'
+      | 'missing-color-domain'
+      | 'color-domain-mismatch'
     >();
     expectTypeOf<RenderGraphErrorDetail>().toEqualTypeOf<
       | DanglingReadDetail
@@ -97,6 +135,8 @@ describe('RenderGraphError code/detail correlation', () => {
       | DuplicateResourceDetail
       | ResourceAllocFailedDetail
       | InvalidFormatDetail
+      | ObservationDetail
+      | ColorDomainDetail
     >();
   });
 });

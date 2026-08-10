@@ -15,8 +15,8 @@
 //                                   delta (world-space axis, Bevy rotate order)
 //                                   and re-normalizes, so the per-frame loop does
 //                                   NOT accumulate float drift into a skewed quat.
-//   - Query<(&mut Transform, &Rotatable)> -> createQueryState + queryRun over the
-//                                   two components, entity handle from bundle.Entity
+//   - Query<(&mut Transform, &Rotatable)> -> one row iterator over the
+//                                   two components, entity handle from row.entity
 //   - Res<Time>                  -> world.getResource(Time).delta (auto-provided
 //                                   each frame by createApp's frame-loop)
 //
@@ -26,11 +26,8 @@
 // frames at different times differ (motion, not a frozen render).
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -115,17 +112,9 @@ export function buildRotationWorld(world: World): void {
  * so the per-frame accumulation stays drift-free.
  */
 export function stepSpin(world: World, dt: number): void {
-  const state = createQueryState({ with: [Transform, Rotatable, Entity] });
+  const query = world.query({ read: [Rotatable], with: [Transform] }).unwrap();
   const targets: Array<{ handle: EntityHandle; angle: number }> = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    const speedCol = bundle.Rotatable.speed;
-    for (let i = 0; i < selfCol.length; i++) {
-      const handle = (selfCol[i] ?? 0) as EntityHandle;
-      const speed = speedCol[i] ?? 0;
-      targets.push({ handle, angle: speed * TAU * dt });
-    }
-  });
+  for (const row of query) targets.push({ handle: row.entity, angle: row.get(Rotatable).speed * TAU * dt });
   // Read-modify-write Transform per entity (mut Transform in the Bevy query).
   for (const { handle, angle } of targets) {
     const cur = world.get(handle, Transform);

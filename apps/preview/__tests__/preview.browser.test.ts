@@ -25,9 +25,7 @@
 import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
 import { createApp } from '@forgeax/engine-app';
 import type { BootstrapContext } from '@forgeax/engine-app';
-import { AudioSource } from '@forgeax/engine-audio';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
-import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
+import { AudioSource, audioPlugin } from '@forgeax/engine-audio';
 import type { InputBackend, InputSnapshot } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { Camera, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
@@ -150,9 +148,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     expect(settingsShadow?.querySelector('[data-ui-setting="high-contrast"]')).not.toBeNull();
     expect(settingsShadow?.querySelector('[data-ui-setting="antialias"]')).not.toBeNull();
     const audioEntities: number[] = [];
-    queryRun(createQueryState({ with: [AudioSource, Entity] }), app.world, (bundle) => {
-      audioEntities.push(...bundle.Entity.self);
-    });
+    for (const row of app.world.query({ with: [AudioSource] }).unwrap()) audioEntities.push(row.entity);
     expect(audioEntities.length, 'bootstrap must attach a player-owned AudioSource').toBeGreaterThan(0);
     expect(
       [...app.renderer.shader.materialShaderIdentifiers()],
@@ -171,12 +167,11 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
 
     const readCameraX = (): number => {
       let x = 0;
-      queryRun(createQueryState({ with: [Camera, Entity] }), app.world, (bundle) => {
-        for (const entity of bundle.Entity.self) {
+      for (const row of app.world.query({ with: [Camera] }).unwrap()) {
+          const entity = row.entity;
           const tr = app.world.get(entity, Transform);
           if (tr.ok) x = tr.value.pos[0] ?? 0;
-        }
-      });
+      }
       return x;
     };
     const tickWorld = (): void => {
@@ -227,9 +222,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
 
     // Camera => the dynamic layer (camera + gameplay) executed.
     let cameraCount = 0;
-    queryRun(createQueryState({ with: [Camera, Entity] }), app.world, (bundle) => {
-      cameraCount += bundle.Entity.self.length;
-    });
+    for (const _row of app.world.query({ with: [Camera] }).unwrap()) cameraCount += 1;
     expect(cameraCount).toBeGreaterThan(0);
 
     // Entity count => the authored scene pack instantiated rather than the
@@ -251,9 +244,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     // localId 24. Verify the mount window and its field override survived the
     // public loadByGuid -> instantiate path, rather than only counting entities.
     const sceneRoots: number[] = [];
-    queryRun(createQueryState({ with: [SceneInstance, Entity] }), app.world, (bundle) => {
-      sceneRoots.push(...bundle.Entity.self);
-    });
+    for (const row of app.world.query({ with: [SceneInstance] }).unwrap()) sceneRoots.push(row.entity);
     expect(sceneRoots.length, 'default scene must expose a SceneInstance root').toBeGreaterThan(0);
     const sceneInstance = app.world.get(sceneRoots[0]!, SceneInstance);
     expect(sceneInstance.ok).toBe(true);

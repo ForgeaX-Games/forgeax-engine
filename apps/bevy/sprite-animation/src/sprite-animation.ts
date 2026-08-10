@@ -1,7 +1,7 @@
 // Shared scene and time-driven atlas animation for Bevy `sprite_animation`.
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { createQueryState, defineComponent, Entity, queryRun, Time, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { defineComponent, Time, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Camera, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import {
   SpriteAnimation,
@@ -100,11 +100,9 @@ export function tickSpriteAnimation(world: World, dt: number): void {
 }
 
 export function readAnimationFrames(world: World): number[] {
-  const state = createQueryState({ with: [SpriteAnimation, SpriteAnimationMarker, Entity] });
+  const query = world.query({ with: [SpriteAnimation, SpriteAnimationMarker] }).unwrap();
   const handles: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    for (const raw of bundle.Entity.self) handles.push(raw as EntityHandle);
-  });
+  for (const row of query) handles.push(row.entity);
   return handles.map((entity) => {
     const result = world.get(entity, SpriteAnimation);
     return result.ok ? result.value.currentFrame : -1;

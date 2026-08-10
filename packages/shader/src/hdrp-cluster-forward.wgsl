@@ -181,11 +181,11 @@ fn evaluate_point_light(
   let L = normalize(L_vec);
   let H = normalize(V + L);
 
-  // KHR_lights_punctual quartic range attenuation (lighting-punctual.wgsl:63-64).
-  //   atten = max(min(1 - (d^2 * invR^2)^2, 1), 0) / max(d^2, 1e-4)
+  // Three r184 squared finite-range attenuation shared with URP.
+  //   atten = clamp(1 - (d^2 * invR^2)^2, 0, 1)^2 / max(d^2, 1e-4)
   // When invRangeSquared=0 (infinite range), factor=1, atten=1/d^2.
-  let factor = 1.0 - (dist_sq * light.position.w) * (dist_sq * light.position.w);
-  let atten = max(min(factor, 1.0), 0.0) / max(dist_sq, 1e-4);
+  let factor = max(min(1.0 - (dist_sq * light.position.w) * (dist_sq * light.position.w), 1.0), 0.0);
+  let atten = factor * factor / max(dist_sq, 1e-4);
 
   // GGX BRDF evaluation (simplified single-sample; full PBR integration
   // in the calling fragment shader reuses brdf.wgsl helpers).
@@ -268,12 +268,12 @@ fn evaluate_spot_light(
   let L = normalize(L_vec);
   let H = normalize(V + L);
 
-  // KHR_lights_punctual quartic range attenuation (lighting-punctual.wgsl:63-64).
-  let atten_dist_factor = 1.0 - (dist_sq * light.position.w) * (dist_sq * light.position.w);
-  let atten_dist = max(min(atten_dist_factor, 1.0), 0.0) / max(dist_sq, 1e-4);
+  // Three r184 squared finite-range attenuation shared with URP.
+  let factor = max(min(1.0 - (dist_sq * light.position.w) * (dist_sq * light.position.w), 1.0), 0.0);
+  let atten_dist = factor * factor / max(dist_sq, 1e-4);
 
   // Cone attenuation: smoothstep between cosOuter and cosInner
-  let spot_dir = normalize(light.direction.xyz);
+  let spot_dir = light.direction.xyz;
   let cos_angle = dot(-L, spot_dir);
   let spot_atten = smoothstep(light.direction.w, light.color.w, cos_angle);
 

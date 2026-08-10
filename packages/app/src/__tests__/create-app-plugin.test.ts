@@ -25,12 +25,12 @@
 //       PluginError code + detail.
 
 import { animationPlugin } from '@forgeax/engine-animation';
-import { AUDIO_ENGINE_RESOURCE_KEY } from '@forgeax/engine-audio';
 import {
+  AUDIO_ENGINE_RESOURCE_KEY,
   AUDIO_TICK_SYSTEM_NAME,
   audioPlugin,
-  WebAudioEngine,
-} from '@forgeax/engine-audio-webaudio';
+} from '@forgeax/engine-audio';
+import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { err, type Result, World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';

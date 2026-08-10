@@ -20,7 +20,7 @@
 // smoke can drive it deterministically (feeding a synthetic elapsed) and assert the
 // cube's position matches the closed-form sin curve — proving the motion is elapsed-keyed.
 
-import { createQueryState, defineComponent, Entity, type EntityHandle, queryRun, type World } from '@forgeax/engine-ecs';
+import { defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
@@ -99,12 +99,9 @@ export function buildTimeElapsedWorld(world: World): void {
  * (world, elapsed) — no per-frame dt accumulation.
  */
 export function stepByElapsed(world: World, elapsed: number): void {
-  const state = createQueryState({ with: [Transform, Oscillator, Entity] });
+  const query = world.query({ with: [Transform, Oscillator] }).unwrap();
   const handles: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    for (let i = 0; i < selfCol.length; i++) handles.push((selfCol[i] ?? 0) as EntityHandle);
-  });
+  for (const row of query) handles.push(row.entity);
   const y = oscillatorY(elapsed);
   const s = BASE_SCALE + PULSE * Math.sin(elapsed * OMEGA);
   for (const handle of handles) {

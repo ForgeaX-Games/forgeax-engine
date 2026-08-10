@@ -1,33 +1,23 @@
-# forgeax-engine-vfx
+---
+name: forgeax-engine-vfx
+description: ForgeaX code-first GPU particles: author two WGSL hooks, cook Pack v2, play through ECS, and render persistent compute state with billboard or mesh output. Use when creating, loading, debugging, or extending VFX effects.
+---
 
-Use this skill for the public VFX path: load a cooked effect by GUID, attach
-`ParticleEffectPlayer`, install the CPU simulation plugin, and connect its
-validated billboard/mesh observations to `@forgeax/engine-vfx-render`.
+# ForgeaX VFX
 
-`@forgeax/engine-vfx` owns source validation, Pack v2 loading, author intent,
-FixedUpdate lifecycle, stock CPU operators, telemetry, and `ParticleRenderBatch`.
-`@forgeax/engine-vfx-render` owns scene-space resolution, GPU preparation,
-RenderFeature contribution, draw recording, and readiness diagnostics.
+Use one path:
 
-Switch on closed error codes and read `detail` plus `hint`. For renderer warm-up,
-accept only bounded `render-feature-preparation-failed` events whose detail says
-`stage: 'prepare'` and `recovery: 'next-frame'`. A later or persistent event is
-a failure. `empty` is valid no-live-output state; it is not `unavailable` or
-`failed`.
+1. Author schema-v2 emitter metadata with `program: { module }`, required fixed bounds, schedule, and renderer GUIDs.
+2. Author `vfx_spawn` and `vfx_update` in WGSL; import `forgeax_vfx::prelude` and shared shader modules with `#import`.
+3. Cook with `createParticleCodeNativeCooker(modules)`; publish payload and `particle-effect/program.json` atomically.
+4. Create one `createVfxRuntimeHost({ camera })`, attach each `{ world, assets }`, and register `host.feature` with the Renderer.
+5. Load by GUID with `loadVfxGpuEffect`, allocate a shared `ParticleEffectAsset` ref, and spawn `ParticleEffectPlayer`.
 
-The Boss Lightning probes are the concrete verification path: Dawn runs 300
-frames and checks billboard/mesh buckets, draw count, particle count, pixel
-energy, and persistent errors; Browser checks the dev Pack/import path, camera
-readiness, render readiness, and both falsifiers. Visual evidence is
-supplementary and does not replace API, recovery, or smoke assertions.
+Read [`packages/vfx/README.md`](../../packages/vfx/README.md) for the author ABI and lifecycle, [`packages/vfx-compiler/README.md`](../../packages/vfx-compiler/README.md) for cook errors, and [`packages/vfx-render/README.md`](../../packages/vfx-render/README.md) for GPU/render ownership.
 
-First-read recipe: build with
-`particleEffectImporter(createStockParticleOperatorRegistry())`, then load
-effect GUID `019e9c00-0000-7000-8000-000000000000` through `/pack-index.json`
-and `particleEffectPackLoader`. Allocate the shared effect handle only after
-the load Result is ready; `createStockParticleCpuExecutorRegistry()` is the
-matching runtime registry. The scene owner supplies a real `ChildOf` joint to
-`particleSceneSpaceResolver({ world, resolveJoint })`. The feature's
-`diagnostics().error` keeps the material or mesh handle identity in
-`detail.assetGuid` during retryable preparation; retry the next valid frame and
-surface persistent validation errors unchanged.
+> [!IMPORTANT]
+> Behavior belongs in WGSL code, not a node/operator graph. Do not add CPU mirrors, runtime compilation, backend-name checks, direct RHI access, particle readback, or demo-side render workarounds.
+
+Switch on structured error codes and use `detail` plus `hint`. Unknown source fields fail closed. Batch A does not accept CPU fallback, parent/value variants, live parameters, texture sheets, particle sorting, ribbons, beams, or events.
+
+Verify engine/RHI changes with all required smoke gates. For VFX specifically, run Boss Lightning `smoke:browser`, `smoke`, and `smoke:falsify`; Browser and Dawn are required because Null structural success cannot prove compute validation or pixels.

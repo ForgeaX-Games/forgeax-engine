@@ -63,6 +63,7 @@ import type {
   RhiCallEventCreateTexture,
   RhiCallEventCreateTextureView,
   RhiCallEventDispatchWorkgroups,
+  RhiCallEventDispatchWorkgroupsIndirect,
   RhiCallEventDraw,
   RhiCallEventDrawIndexed,
   RhiCallEventDrawIndexedIndirect,
@@ -982,6 +983,10 @@ async function replayEvent(
       replayDispatchWorkgroups(event, passEncoderMap);
       break;
 
+    case 'dispatchWorkgroupsIndirect':
+      replayDispatchWorkgroupsIndirect(event, handleMap, passEncoderMap);
+      break;
+
     case 'endComputePass':
       replayEndComputePass(event, passEncoderMap);
       break;
@@ -1854,6 +1859,20 @@ function replayDispatchWorkgroups(
   const pass = passEncoderMap.get(event.passHandleId);
   if (pass === undefined) return;
   (pass as RhiComputePassEncoder).dispatchWorkgroups(event.x, event.y, event.z);
+}
+
+function replayDispatchWorkgroupsIndirect(
+  event: RhiCallEventDispatchWorkgroupsIndirect,
+  handleMap: Map<HandleId, unknown>,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  const pass = passEncoderMap.get(event.passHandleId);
+  const buffer = handleMap.get(event.indirectBufferHandleId);
+  if (pass === undefined || buffer === undefined) return;
+  (pass as RhiComputePassEncoder).dispatchWorkgroupsIndirect(
+    buffer as import('@forgeax/engine-rhi').Buffer,
+    event.indirectOffset,
+  );
 }
 
 function replayEndComputePass(

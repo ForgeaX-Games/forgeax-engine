@@ -1,106 +1,101 @@
-# `@forgeax/engine-vfx-render`
+# @forgeax/engine-vfx-render
 
-This package is the downstream production bridge from CPU-owned
-`ParticleRenderBatch` data to the engine RenderFeature seam. `@forgeax/engine-vfx`
-owns effect loading, FixedUpdate simulation, lifecycle, telemetry, and batch
-validation.
+Production RenderFeature and host for persistent GPU particle simulation and indirect billboard/mesh drawing.
 
-## GUID to pixels
-
-`ParticleRuntimeHost` is the public assembly owner for a production VFX path.
-It creates one renderer feature, installs the existing Pack loader once per
-host-provided `AssetRegistry`, and attaches the existing particle simulation
-once per host-provided `World`. It creates neither a World nor a registry.
+## Host recipe
 
 ```ts
-import { World } from '@forgeax/engine-ecs';
-import { createApp, type BundlerOptions } from '@forgeax/engine-app';
-import { createParticleRuntimeHost } from '@forgeax/engine-vfx-render';
+import { createVfxRuntimeHost } from '@forgeax/engine-vfx-render';
+import { createRenderer } from '@forgeax/engine-runtime';
 
-declare const assets: import('@forgeax/engine-assets-runtime').AssetRegistry;
-declare const canvas: HTMLCanvasElement;
-declare const bundler: BundlerOptions;
-declare const camera: import('@forgeax/engine-vfx-render').ParticleRenderFeatureOptions['camera'];
+const vfx = createVfxRuntimeHost({
+  camera: {
+    read: world => readActiveParticleCamera(world),
+  },
+  maxQueuedTicks: 8,
+});
 
-const world = new World();
-const host = createParticleRuntimeHost({ camera });
-const attached = await host.attachWorld({ world, assets });
-if (!attached.ok) {
-  console.error(attached.error.code, attached.error.expected, attached.error.hint);
-  throw attached.error;
-}
+const attached = await vfx.attachWorld({ world, assets });
+if (!attached.ok) return attached;
 
-const app = await createApp(canvas, { features: [host.feature] }, bundler);
-if (!app.ok) throw app.error;
-app.value.start().unwrap();
-
-// Stop this World before releasing the host-owned registry.
-const detached = host.detachWorld({ world });
-if (!detached.ok) console.error(detached.error.code, detached.error.hint);
+const renderer = await createRenderer(canvas, { features: [vfx.feature] });
 ```
 
-`attachWorld` is idempotent for the same World and returns
-`{ state: 'already-attached' }` on a repeated call. Two Worlds get separate
-transient simulations even when they share one registry. `detachWorld` removes
-only the World system and simulation resource; it never disposes the shared
-registry. Host errors are structured with `code`, `expected`, `actual`, `hint`,
-and `retryable`, so a caller can repair the named boundary and retry without
-parsing a message.
+Create the host before the Renderer and pass `host.feature` at Renderer
+construction. `attachWorld` installs the schema-v2 Pack loader and one
+FixedUpdate producer. `detachWorld` removes both the system and runtime
+resource. Material and mesh GUIDs resolve through the attached World's
+`AssetRegistry`.
 
-After attachment, the host consumes the validated `billboard` and `mesh`
-buckets produced by `ParticleSimulation.readAll()`. The authored material GUID
-used by a mesh output is still loaded from the Pack v2 package through the same
-pack-index route. The host never reads raw source JSON, infers output kind from
-filenames, or creates a second GUID registry.
+## Frame path
 
-## Readiness and recovery
+| Stage | Work |
+|:--|:--|
+| Extract | Read camera and ordered GPU tick intents from each attached World |
+| Prepare | Reuse/create program, particle, scan, indirect, per-tick uniform, per-renderer projection, mesh, and graphics resources |
+| Contribute | Record spawn/update/scan/compact, one projection dispatch per renderer, then dependent indirect draws |
+| Recover | Drop generation-owned GPU state and restart affected runtime players |
+| Dispose | Release feature-owned state; the Renderer resolver destroys RHI resources exactly once |
 
-`diagnostics()` exposes `empty`, `preparing`, `ready`, `disabled`, and
-`unavailable`. Pipeline preparation may be asynchronous. During warm-up, a
-material or mesh preparation miss retains the encoded asset identity in
-`diagnostics().error.detail.assetGuid`, with the closed error `code`, `expected`,
-and `hint` intact. Keep the feature retryable and call the normal frame path
-again; a successful preparation clears the error and reaches `ready`. A
-`render-feature-preparation-failed` event with `stage: 'prepare'` and
-`recovery: 'next-frame'` is recoverable only during the bounded warm-up window;
-the smoke gate records it as warm-up and fails on any post-readiness or
-persistent error. Never hide a persistent shader validation error behind a
-placeholder asset or a demo-side fallback.
+The generic render seam accepts persistent compute programs/buffers/bindings, external GPU vertex buffers, and indirect draw commands. Renderer code does not enumerate VFX kinds.
 
-Scene-space resolution is explicit: local emitters use
-`particleSceneSpaceResolver({ world, resolveJoint })`, while world emitters
-retain world coordinates. The resolver owner decides whether a local effect
-uses its player, parent, or authored joint pose.
-Pause, replay, seed changes, despawn cleanup, and output readiness remain in
-`ParticleSimulation`.
+## GPU state
 
-## Public surface
-
-| Symbol | Contract |
-| --- | --- |
-| `particleRenderFeature` | RenderFeature producer for validated billboard/mesh batches |
-| `createParticleRuntimeHost` | Idempotent World attach/detach owner and feature bundle |
-| `particleSceneSpaceResolver` | Resolves local particle positions against the host World |
-| `ParticleRenderDiagnostics` | Readiness, bucket, and structured error observation |
-| `ParticleRenderError` | Closed particle-render failure vocabulary |
-| `PARTICLE_SHADER_IDENTIFIERS` | Stable shader identities for the two output kinds |
-
-This package is not a VFX authoring frontend, editor, transport, compatibility
-feature, or alternate simulation owner.
-
-## Visibility boundary
-
-Quick start: keep VFX simulation and `ParticleRenderBatch` production in
-`@forgeax/engine-vfx`; register this feature as a render producer. The render
-host applies effective entity visibility before a particle draw contributes.
-
-| Observation | Owner | Recovery |
+| Buffer | Lifetime | CPU traffic |
 |:--|:--|:--|
-| Author intent | ECS `Visibility` | Correct the component through `world.set` |
-| Parent-derived effective state | `@forgeax/engine-render` + scene hierarchy | Repair `snapshot.diagnostics`, then resolve again |
-| Particle readiness | `diagnostics()` in this package | Follow the structured error hint and retry the next frame |
+| Particle state | Emitter instance | Initial clear only |
+| Alive flags, scan scratch, stable indices | Emitter instance | Initial clear only |
+| Indirect commands | Emitter instance | Static geometry fields at creation; instance count on GPU |
+| Tick uniforms | Bounded ring | One small write per fixed tick |
+| Renderer projection instances | Renderer instance | None after allocation |
+| Mesh geometry/index data | Prepared graphics cache | Initial upload |
 
-`visibilityStats` is a renderer observation, not a VFX simulation counter.
-There is no VFX-specific visibility component, shadow, camera, picking,
-lifecycle, or asset fallback in this package. A failed particle draw must route
-to the owning engine boundary rather than a demo-side stand-in.
+There is no steady-state particle readback or CPU particle upload.
+Bindings retained by an attached player keep their transitive buffers alive. When a player,
+emitter, or World disappears, untouched GPU resources leave the live cache immediately and their
+buffers are destroyed only after the submitted queue work completes. Renderer recovery and dispose
+use the same owner path.
+
+## Rendering
+
+- Billboard projection uses camera right/up, particle width/height, and `size_rotation.z`; color and HDR material values are packed per renderer on GPU.
+- Mesh renderers consume the explicitly selected `MeshAsset` submesh geometry/index data and one independent projected instance stream per renderer.
+- Multiple renderers on one emitter receive independent material values and indirect command offsets.
+- A material pass named `particle-billboard` or `particle-mesh` selects that renderer's authored
+  shader module and render state. Ordinary `Forward` passes are ignored because their vertex layout
+  is not a particle projection contract; absence of a matching particle pass uses the package-owned
+  built-in shader.
+- A custom particle material with a non-empty `parameters` schema receives the standard material
+  bind group at group 1. Numeric parameters are uploaded through the shader-schema UBO layout;
+  texture parameters resolve their authored TextureAsset and optional SamplerAsset through the
+  attached World and the renderer's shared GPU residency store. Materials with no parameters keep
+  the original group-0-only contract.
+- The renderer owns bind-group resource leases. Per-preparation material UBOs are destroyed exactly
+  once when the prepared graphics generation retires or recovers; texture and sampler residency
+  remains owned by the shared GPU resource store.
+- Billboard blend is explicit: `additive`, premultiplied `alpha`, or `opaque-cutout`.
+- Scene color/depth target formats and sample counts derive from RenderFeature targets.
+- Fixed bounds cull projection/draw before graph contribution; simulation follows the source culling policy.
+
+Texture sheets, soft-particle depth sampling, parent variants, live parameter mutation, particle
+sorting, ribbons, beams, and CPU counterparts remain Batch B work. Material texture/sampler binding
+is executable; animation-specific sheet fields remain intentionally absent until their own runtime
+and verification exist.
+
+## Capabilities and recovery
+
+The feature requires RHI `compute` and `indirectDrawing`. Capability absence disables registration through the standard RenderFeature capability error; it never guesses a backend by package name and never silently falls back to CPU.
+
+Expected first-use pipeline preparation may report bounded `render-feature-preparation-failed` warm-up. Persistent preparation errors, WebGPU validation errors, or any later `render-feature-stage-failed` are failures. Renderer recovery creates a fresh resource generation and invokes the feature recovery hook before rendering resumes.
+
+## Verification oracle
+
+`apps/hello/boss-lightning` is the production path:
+
+| Gate | Proof |
+|:--|:--|
+| `smoke:browser` | Dev Pack/import transport, Browser WebGPU validation, loader, runtime, camera readiness |
+| `smoke` | Dawn 300 frames, billboard and mesh pixel energy, readiness deadline, explicit recovery |
+| `smoke:falsify` | Disable-VFX, zero-emitter, and missing-material modes produce explicit zero output |
+
+Null/backend unit tests prove graph and resource structure; they do not replace Browser or Dawn execution.

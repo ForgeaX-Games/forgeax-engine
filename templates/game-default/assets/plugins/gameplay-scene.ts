@@ -8,10 +8,20 @@ import {
   attachScenePhysics, expandLoadedScene, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
   spawnFallbackScene, spawnGroundCollider, type LoadedScene,
 } from './scene-runtime';
+import type { AuthoredHealthPickupIdentity } from './health-pickup';
+import type { AuthoredRepairCacheIdentity } from './repair-cache';
+import type { AuthoredExtractionIdentity } from './energy-core-extraction';
+import type { AuthoredRewardChoiceIdentity, RewardKind } from './reward-choice';
+import type { AuthoredBarrierRouteIdentity } from './barrier-route';
 
 export type GameplaySceneAssembly = {
   readonly loaded: LoadedScene | null;
   readonly player: EntityHandle | undefined;
+  readonly healthPickups: readonly AuthoredHealthPickupIdentity[];
+  readonly repairCache: AuthoredRepairCacheIdentity | undefined;
+  readonly extraction: AuthoredExtractionIdentity | undefined;
+  readonly rewardChoice: AuthoredRewardChoiceIdentity | undefined;
+  readonly barrierRoute: AuthoredBarrierRouteIdentity | undefined;
   readonly initX: number;
   readonly initZ: number;
   readonly animatedMaterial: AnimatedMaterialTarget | undefined;
@@ -30,10 +40,15 @@ export async function assembleGameplayScene(world: World, host: BootstrapContext
   spawnGroundCollider({ world });
 
   let player: EntityHandle | undefined;
+  let healthPickups: AuthoredHealthPickupIdentity[] = [];
+  let repairCache: AuthoredRepairCacheIdentity | undefined;
+  let extraction: AuthoredExtractionIdentity | undefined;
+  let rewardChoice: AuthoredRewardChoiceIdentity | undefined;
+  let barrierRoute: AuthoredBarrierRouteIdentity | undefined;
   let initX = 0;
   let initZ = 0;
   let animatedMaterial: AnimatedMaterialTarget | undefined;
-  const targetQuery = createScoringTargetQuery();
+  const targetQuery = createScoringTargetQuery(world);
   if (loaded) {
     const physics = attachScenePhysics({ world }, loaded);
     for (const [slot, prop] of physics.props.entries()) {
@@ -60,6 +75,76 @@ export async function assembleGameplayScene(world: World, host: BootstrapContext
         world.addComponent(player, { component: ProjectilePolicy, data: {} });
       }
     }
+    const pickupNodes = (['HealthPickup', 'NestedRepairPickup'] as const).flatMap((name) => {
+      const node = loaded?.nodes.find(
+        (candidate) => (candidate.components.Name as { value?: string } | undefined)?.value === name,
+      );
+      if (node === undefined) return [];
+      const entity = loaded.mapping.get(node.localId);
+      return entity === undefined ? [] : [{ entity, localId: node.localId, initiallyActive: name === 'HealthPickup' }];
+    });
+    if (pickupNodes.length === 2) healthPickups = pickupNodes;
+    const repairTargetNode = loaded.nodes.find(
+      (node) => (node.components.Name as { value?: string } | undefined)?.value === 'NestedTarget',
+    );
+    const repairPickup = pickupNodes.find((pickup) => !pickup.initiallyActive);
+    if (repairTargetNode !== undefined && repairPickup !== undefined) {
+      const target = loaded.mapping.get(repairTargetNode.localId);
+      if (target !== undefined) repairCache = {
+        target,
+        targetLocalId: repairTargetNode.localId,
+        pickupLocalId: repairPickup.localId,
+      };
+    }
+    const coreNodes = ['EnergyCoreAlpha', 'EnergyCoreBeta', 'EnergyCoreGamma']
+      .map((name) => loaded?.nodes.find(
+        (node) => (node.components.Name as { value?: string } | undefined)?.value === name,
+      ))
+      .filter((node): node is NonNullable<typeof node> => node !== undefined);
+    const beaconNode = loaded.nodes.find(
+      (node) => (node.components.Name as { value?: string } | undefined)?.value === 'ExtractionBeacon',
+    );
+    if (coreNodes.length === 3 && beaconNode !== undefined) {
+      const cores = coreNodes.flatMap((node) => {
+        const entity = loaded?.mapping.get(node.localId);
+        return entity === undefined ? [] : [{ entity, localId: node.localId }];
+      });
+      const beacon = loaded.mapping.get(beaconNode.localId);
+      if (cores.length === 3 && beacon !== undefined) extraction = {
+        cores,
+        beacon: { entity: beacon, localId: beaconNode.localId },
+      };
+    }
+    const rewardNodes = ([
+      ['ShieldPedestal', 'shield'],
+      ['OverchargePedestal', 'overcharge'],
+    ] as const).flatMap(([name, kind]) => {
+      const node = loaded?.nodes.find(
+        (candidate) => (candidate.components.Name as { value?: string } | undefined)?.value === name,
+      );
+      if (node === undefined) return [];
+      const entity = loaded?.mapping.get(node.localId);
+      return entity === undefined ? [] : [{ entity, localId: node.localId, kind: kind as RewardKind }];
+    });
+    if (rewardNodes.length === 2) rewardChoice = { pedestals: rewardNodes };
+    const emitterNode = loaded.nodes.find(
+      (node) => (node.components.Name as { value?: string } | undefined)?.value === 'BarrierEmitter',
+    );
+    const barrierNode = loaded.nodes.find(
+      (node) => (node.components.Name as { value?: string } | undefined)?.value === 'EnergyBarrier',
+    );
+    if (emitterNode !== undefined && barrierNode !== undefined) {
+      const emitter = loaded.mapping.get(emitterNode.localId);
+      const barrier = loaded.mapping.get(barrierNode.localId);
+      if (emitter !== undefined && barrier !== undefined) {
+        barrierRoute = {
+          emitter,
+          emitterLocalId: emitterNode.localId,
+          barrier,
+          barrierLocalId: barrierNode.localId,
+        };
+      }
+    }
   }
-  return { loaded, player, initX, initZ, animatedMaterial, targetQuery };
+  return { loaded, player, healthPickups, repairCache, extraction, rewardChoice, barrierRoute, initX, initZ, animatedMaterial, targetQuery };
 }

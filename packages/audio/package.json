@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Pure-interface audio surface for forgeax-engine — ECS components (AudioSource / AudioListener), AudioBackend protocol, AudioError type family.",
+  "description": "Realm-neutral ForgeaX audio: ECS components, tick/plugin, backend protocol, POD clips, and closed Host intent transport.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -29,21 +29,23 @@
   "dependencies": {
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
-    "@forgeax/engine-math": "workspace:*"
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*"
   },
   "forgeax": {
     "metrics": {
       "bundle-size": {
         "enabled": false,
-        "reason": "MVP audio interface package (ECS component schemas + AudioBackend protocol only); bundle-size lock deferred to a future feat once the tick system and Web Audio backend stabilise"
+        "reason": "runtime tick and intent producer are covered by package build/tests; no standalone player bundle is emitted"
       },
       "fps": {
         "enabled": false,
-        "reason": "pure-interface package, no runtime canvas; fps is reported by apps that consume the audio tick system"
+        "reason": "realm-neutral package has no canvas; frame impact is measured by consuming apps"
       },
       "bench": {
         "enabled": false,
-        "reason": "interface-only package with no hot path; bench focus stays on @forgeax/engine-audio-webaudio backend"
+        "reason": "intent production is linear in changed sources; end-to-end cost is measured by the multithreaded execution app"
       },
       "gate": {
         "enabled": false,

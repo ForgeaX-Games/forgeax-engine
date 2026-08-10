@@ -80,6 +80,8 @@ export type { GlbChunks } from './parse-glb-chunks.js';
 export { parseGlbChunks, parseGltfHeader } from './parse-glb-chunks.js';
 export type {
   ExternalLoader,
+  GltfAssetPack,
+  GltfAssetPackResult,
   GltfDiagnosticsIr,
   GltfDoc,
   GltfImageIr,
@@ -113,6 +115,7 @@ export type {
   GltfMetaJson,
   GltfSubAssetEntry,
   ReimportReuseResult,
+  ReimportReuseValue,
   SubAssetKey,
 } from './reimport-reuse-meta.js';
 // Sub-asset key + reimport-reuse algorithm (w13).

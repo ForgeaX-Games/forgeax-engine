@@ -93,7 +93,7 @@ const mockCanvas = {
 };
 
 // --- build the Transform World via the shared SSOT builder ---
-const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 
@@ -153,8 +153,8 @@ async function capture(device) {
 // --- drive the shared Transform step and capture motion ---
 const CAPTURE_EARLY = Math.max(1, Math.floor(SMOKE_MIN_FRAMES * 0.05));
 const CAPTURE_LATE = Math.max(CAPTURE_EARLY + 1, Math.floor(SMOKE_MIN_FRAMES * 0.65));
-const centerState = createQueryState({ with: [Transform, CenterSphere, Entity] });
-const orbitState = createQueryState({ with: [Transform, Orbiting, Entity] });
+const centerQuery = world.query({ read: [Transform], with: [CenterSphere] }).unwrap();
+const orbitQuery = world.query({ read: [Transform], with: [Orbiting] }).unwrap();
 let framesObserved = 0;
 let earlyFrame;
 let lateFrame;
@@ -168,31 +168,25 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i === CAPTURE_EARLY) {
     earlyFrame = await capture(sharedDevice);
     earlyDistance = orbitDistance(world);
-    queryRun(orbitState, world, (bundle) => {
-      const handle = bundle.Entity.self[0];
-      if (handle === undefined) return;
-      const transform = world.get(handle, Transform);
-      if (transform.ok) earlyQuat = Array.from(transform.value.quat);
-    });
+    for (const row of orbitQuery) {
+      earlyQuat = Array.from(row.get(Transform).quat);
+      break;
+    }
   }
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   stepTransform(world, FIXED_DT);
   propagateTransforms(world);
 }
 let finalCenterScale;
-queryRun(centerState, world, (bundle) => {
-  const handle = bundle.Entity.self[0];
-  if (handle === undefined) return;
-  const transform = world.get(handle, Transform);
-  if (transform.ok) finalCenterScale = Array.from(transform.value.scale);
-});
+for (const row of centerQuery) {
+  finalCenterScale = Array.from(row.get(Transform).scale);
+  break;
+}
 const finalDistance = orbitDistance(world);
-queryRun(orbitState, world, (bundle) => {
-  const handle = bundle.Entity.self[0];
-  if (handle === undefined) return;
-  const transform = world.get(handle, Transform);
-  if (transform.ok) finalQuat = Array.from(transform.value.quat);
-});
+for (const row of orbitQuery) {
+  finalQuat = Array.from(row.get(Transform).quat);
+  break;
+}
 const device = sharedDevice;
 if (!device) {
   console.error('[smoke] FAIL - no shared device captured for readback');

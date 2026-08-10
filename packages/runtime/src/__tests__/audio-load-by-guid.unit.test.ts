@@ -47,12 +47,7 @@ describe('audio loadByGuid', () => {
 
   it('loads and catalogues an audio GUID through its Pack v2 artifact', async () => {
     const audioData = new ArrayBuffer(16);
-    const buffer = { length: 4, sampleRate: 48_000 } as AudioBuffer;
-    const decodeAudioData = vi.fn().mockResolvedValue(buffer);
-    const close = vi.fn().mockResolvedValue(undefined);
-    const audioContext = vi.fn().mockImplementation(function AudioContextMock() {
-      return { decodeAudioData, close } as unknown as AudioContext;
-    });
+    const audioContext = vi.fn();
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url === PACK_INDEX_URL) {
         return Promise.resolve({
@@ -83,15 +78,18 @@ describe('audio loadByGuid', () => {
     expect(second.ok).toBe(true);
     if (!first.ok) throw first.error;
     if (!second.ok) throw second.error;
-    expect(first.value).toEqual({ kind: 'audio', buffer });
+    expect(first.value).toEqual({
+      kind: 'audio',
+      sourceKey: AUDIO_GUID,
+      bytes: new Uint8Array(audioData),
+    });
     expect(second.value).toBe(first.value);
     expect(registry.lookup(parsed.value)).toBe(first.value);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(decodeAudioData).toHaveBeenCalledWith(audioData);
-    expect(close).toHaveBeenCalledOnce();
+    expect(audioContext).not.toHaveBeenCalled();
   });
 
-  it('maps Web Audio decode failures to an asset parse failure', async () => {
+  it('defers malformed-byte rejection to the Host audio consumer', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url === PACK_INDEX_URL) {
         return Promise.resolve({
@@ -119,10 +117,9 @@ describe('audio loadByGuid', () => {
 
     const result = await registry.loadByGuid<AudioClipAsset>(parsed.value);
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('decode-failed');
-      expect(result.error.hint).toContain('audio artifact mediaType');
-    }
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw result.error;
+    expect(result.value.sourceKey).toBe(AUDIO_GUID);
+    expect(result.value.bytes).toEqual(new Uint8Array(8));
   });
 });

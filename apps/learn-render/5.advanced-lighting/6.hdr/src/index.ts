@@ -32,7 +32,7 @@ import { PointLight, PostProcessParams } from '@forgeax/engine-render';
 
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import {
@@ -49,6 +49,9 @@ import {
 // 2. example-specific glue
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-6-hdr',
+);
 
 // LO exposure default value (LearnOpenGL section 5.6, default exposure=1.0).
 // Grep-able constant so AI users land on the per-pixel exposure scalar.
@@ -332,7 +335,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.6 hdr] createApp failed:', appRes.error);
@@ -353,6 +356,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const assets = renderer.assets;
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Wood texture for the tunnel walls + floor (inward-facing box interior;

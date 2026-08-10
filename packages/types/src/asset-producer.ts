@@ -546,11 +546,8 @@ export interface CatalogDiagnostic {
 
 /** Closed set of contract failures returned by producer validation. */
 export type ProducerContractErrorCode =
+  | SourceOverrideErrorCode
   | 'missing-source-key'
-  | 'duplicate-source-key'
-  | 'unknown-source-key'
-  | 'invalid-source-overrides'
-  | 'invalid-source-override-payload'
   | 'source-index-ambiguous'
   | 'invalid-source-key'
   | 'invalid-source-index'

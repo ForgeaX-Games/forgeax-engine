@@ -37,6 +37,70 @@ function buildBase64Buffer(floats: number[]): string {
   return `data:application/octet-stream;base64,${btoa(String.fromCharCode(...bytes))}`;
 }
 
+{
+  describe('KHR_lights_punctual import contract', () => {
+    it('accepts directional, point, and spot author facts with numeric fields', async () => {
+      const result = await parseGltf(
+        {
+          asset: { version: '2.0' },
+          extensionsUsed: ['KHR_lights_punctual'],
+          extensionsRequired: ['KHR_lights_punctual'],
+          extensions: {
+            KHR_lights_punctual: {
+              lights: [
+                { type: 'directional', color: [0.1, 0.2, 0.3], intensity: 4 },
+                { type: 'point', color: [0.4, 0.5, 0.6], intensity: 8, range: 3 },
+                {
+                  type: 'spot',
+                  color: [0.7, 0.8, 0.9],
+                  intensity: 16,
+                  range: 5,
+                  spot: { innerConeAngle: 0.1, outerConeAngle: 0.5 },
+                },
+              ],
+            },
+          },
+          scenes: [{ nodes: [] }],
+          scene: 0,
+          nodes: [],
+          meshes: [],
+          materials: [],
+        },
+        async () => new ArrayBuffer(0),
+        '/direct-light.gltf',
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const lights = (result.value as unknown as { lights?: readonly Record<string, unknown>[] })
+        .lights;
+      expect(lights?.map((light) => light.type)).toEqual(['directional', 'point', 'spot']);
+      expect(lights?.[1]?.intensity).toBe(8);
+      expect(lights?.[1]?.range).toBe(3);
+      expect((lights?.[2]?.spot as { innerConeAngle: number }).innerConeAngle).toBe(0.1);
+    });
+
+    it('rejects unsupported required extensions instead of creating an implicit light', async () => {
+      const result = await parseGltf(
+        {
+          asset: { version: '2.0' },
+          extensionsRequired: ['KHR_unknown_light'],
+          scenes: [{ nodes: [] }],
+          scene: 0,
+          nodes: [],
+          meshes: [],
+          materials: [],
+        },
+        async () => new ArrayBuffer(0),
+        '/invalid-light.gltf',
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('gltf-extension-unsupported');
+    });
+  });
+}
+
 // Shared loader stub (used by multi-primitive, pbr-material)
 const noopLoader = async (_: string) => new ArrayBuffer(0);
 
@@ -79,6 +143,16 @@ import {
   reimportReuseMeta,
   subAssetKey,
 } from '../reimport-reuse-meta.js';
+
+function unwrapAssetPack(result: ReturnType<typeof toAssetPack>) {
+  if (!result.ok) throw new Error(`toAssetPack failed: ${result.error.code}`);
+  return result.value;
+}
+
+function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
+  if (!result.ok) throw new Error(`reimportReuseMeta failed: ${result.error.code}`);
+  return result.value;
+}
 
 {
   // ─── from cli-gltf.test.ts ───
@@ -857,7 +931,7 @@ import {
         );
         expect(docResult.ok).toBe(true);
         if (!docResult.ok) return;
-        const pack = toAssetPack(docResult.value, undefined, 'box.gltf');
+        const pack = unwrapAssetPack(toAssetPack(docResult.value, undefined, 'box.gltf'));
         expect(pack.meta.kind).toBe('external-asset-package');
         expect(pack.meta.subAssets.length).toBe(3);
         const kinds = pack.meta.subAssets.map((s) => s.kind).sort();
@@ -876,14 +950,14 @@ import {
           '/fixture/box.gltf',
         );
         if (!doc1.ok) throw new Error('doc1 failed');
-        const pack1 = toAssetPack(doc1.value, undefined, 'box.gltf');
+        const pack1 = unwrapAssetPack(toAssetPack(doc1.value, undefined, 'box.gltf'));
         const doc2 = await parseGltf(
           json,
           async () => bytesToArrayBuffer(bin),
           '/fixture/box.gltf',
         );
         if (!doc2.ok) throw new Error('doc2 failed');
-        const pack2 = toAssetPack(doc2.value, pack1.meta, 'box.gltf');
+        const pack2 = unwrapAssetPack(toAssetPack(doc2.value, pack1.meta, 'box.gltf'));
         expect(pack2.meta.subAssets.map((s) => s.guid)).toEqual(
           pack1.meta.subAssets.map((s) => s.guid),
         );
@@ -1057,7 +1131,7 @@ import {
 
       it('the fixture meta GUIDs round-trip through toAssetPack stably (reimport-stable)', async () => {
         const doc = await parseFixture(importerBuildSelfContainedGltfBytes());
-        const { subAssets } = toAssetPack(doc, undefined, 'fixture.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'fixture.gltf'));
         const kinds = subAssets.map((s) => s.kind);
         expect(kinds).toContain('mesh');
         expect(kinds).toContain('material');
@@ -2214,13 +2288,12 @@ import {
           { kind: 'material', sourceIndex: 0, guid: '01928000-7c00-7000-8000-000000000002' },
           { kind: 'scene', sourceIndex: 0, guid: '01928000-7c00-7000-8000-000000000003' },
         ]);
-        const result = reimportReuseMeta(items, meta);
+        const result = unwrapReimport(reimportReuseMeta(items, meta));
         expect(result.subAssets.map((s) => s.guid)).toEqual([
           '01928000-7c00-7000-8000-000000000001',
           '01928000-7c00-7000-8000-000000000002',
           '01928000-7c00-7000-8000-000000000003',
         ]);
-        expect(result.warnings).toEqual([]);
       });
 
       it('(b) double-name conflict routes every mesh through indexFallback + warns once per conflict', () => {
@@ -2233,13 +2306,11 @@ import {
           { kind: 'mesh', sourceIndex: 1, guid: '01928000-7c00-7000-8000-00000000000b' },
         ]);
         const result = reimportReuseMeta(items, meta);
-        expect(result.subAssets.map((s) => s.guid)).toEqual([
-          '01928000-7c00-7000-8000-00000000000a',
-          '01928000-7c00-7000-8000-00000000000b',
-        ]);
-        expect(result.warnings.length).toBeGreaterThan(0);
-        expect(result.warnings.some((w) => w.includes("'foo'"))).toBe(true);
-        expect(stderrSpy).toHaveBeenCalled();
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.code).toBe('duplicate-source-key');
+        expect(result.error.sourceIndices).toEqual([0, 1]);
+        expect(stderrSpy).not.toHaveBeenCalled();
       });
 
       it('(c) deleted mesh is dropped, surviving mesh reused, new mesh gets fresh v7', () => {
@@ -2251,7 +2322,7 @@ import {
           { kind: 'mesh', sourceIndex: 0, guid: '01928000-7c00-7000-8000-00000000aaaa' },
           { kind: 'mesh', sourceIndex: 1, guid: '01928000-7c00-7000-8000-00000000bbbb' },
         ]);
-        const result = reimportReuseMeta(items, meta);
+        const result = unwrapReimport(reimportReuseMeta(items, meta));
         expect(result.subAssets[0]?.guid).toBe('01928000-7c00-7000-8000-00000000bbbb');
         const fresh = result.subAssets[1]?.guid ?? '';
         expect(fresh).not.toBe('01928000-7c00-7000-8000-00000000aaaa');
@@ -2266,7 +2337,7 @@ import {
         const meta = existingMeta([
           { kind: 'mesh', sourceIndex: 0, guid: '01928000-7c00-7000-8000-0000000000aa' },
         ]);
-        const result = reimportReuseMeta(items, meta);
+        const result = unwrapReimport(reimportReuseMeta(items, meta));
         expect(result.subAssets[0]?.guid).toBe('01928000-7c00-7000-8000-0000000000aa');
       });
 
@@ -2275,7 +2346,7 @@ import {
           { kind: 'mesh', sourceIndex: 0, name: 'Box' },
           { kind: 'scene', sourceIndex: 0, name: 'Scene0' },
         ];
-        const result = reimportReuseMeta(items, undefined);
+        const result = unwrapReimport(reimportReuseMeta(items, undefined));
         expect(result.subAssets.length).toBe(2);
         for (const sa of result.subAssets) {
           expect(AssetGuid.parse(sa.guid).ok).toBe(true);
@@ -2354,7 +2425,7 @@ import {
     describe('toAssetPack with skin + animation (M0 integration)', () => {
       it('produces 6 sub-asset kind types (mesh, material, scene, skeleton, skin, animation-clip)', () => {
         const doc = makeFixtureDoc();
-        const { subAssets } = toAssetPack(doc, undefined, 'test.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'test.gltf'));
         const kinds = new Set(subAssets.map((s) => s.kind));
         expect(kinds.has('mesh')).toBe(true);
         expect(kinds.has('material')).toBe(true);
@@ -2367,7 +2438,7 @@ import {
 
       it('sub-asset GUIDs are non-empty strings', () => {
         const doc = makeFixtureDoc();
-        const { subAssets } = toAssetPack(doc, undefined, 'test.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'test.gltf'));
         for (const sa of subAssets) {
           expect(typeof sa.guid).toBe('string');
           expect(sa.guid.length).toBe(36);
@@ -2376,7 +2447,7 @@ import {
 
       it('skeleton sub-asset keeps sourceIndex aligned with GltfDoc.skeletons', () => {
         const doc = makeFixtureDoc();
-        const { subAssets } = toAssetPack(doc, undefined, 'test.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'test.gltf'));
         const skeletonEntries = subAssets.filter((s) => s.kind === 'skeleton');
         expect(skeletonEntries.length).toBe(1);
         expect(skeletonEntries[0]?.sourceIndex).toBe(0);
@@ -2384,7 +2455,7 @@ import {
 
       it('animation-clip sub-asset keeps sourceIndex aligned', () => {
         const doc = makeFixtureDoc();
-        const { subAssets } = toAssetPack(doc, undefined, 'test.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'test.gltf'));
         const animEntries = subAssets.filter((s) => s.kind === 'animation-clip');
         expect(animEntries.length).toBe(1);
         expect(animEntries[0]?.sourceIndex).toBe(0);
@@ -2402,7 +2473,7 @@ import {
             { ...clip, name: 'Run' },
           ],
         };
-        const { subAssets } = toAssetPack(named, undefined, 'test.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(named, undefined, 'test.gltf'));
         expect(
           subAssets.filter((s) => s.kind === 'animation-clip').map((s) => s.sourceKey),
         ).toEqual(['animation-clip:Walk', 'animation-clip:Run']);
@@ -2410,21 +2481,27 @@ import {
 
       it('reimport with same content produces identical GUIDs', () => {
         const doc = makeFixtureDoc();
-        const first = toAssetPack(doc, undefined, 'test.gltf');
-        const second = toAssetPack(
-          doc,
-          {
-            schemaVersion: 1,
-            kind: 'external-asset-package',
-            importer: 'gltf',
-            source: 'test.gltf',
-            subAssets: first.subAssets,
-            importSettings: {
-              defaultSceneIndex: 0,
-              diagnostics: { nodeNames: [], unsupportedExtensions: [], matrixTrsCoexistNodes: [] },
+        const first = unwrapAssetPack(toAssetPack(doc, undefined, 'test.gltf'));
+        const second = unwrapAssetPack(
+          toAssetPack(
+            doc,
+            {
+              schemaVersion: 1,
+              kind: 'external-asset-package',
+              importer: 'gltf',
+              source: 'test.gltf',
+              subAssets: first.subAssets,
+              importSettings: {
+                defaultSceneIndex: 0,
+                diagnostics: {
+                  nodeNames: [],
+                  unsupportedExtensions: [],
+                  matrixTrsCoexistNodes: [],
+                },
+              },
             },
-          },
-          'test.gltf',
+            'test.gltf',
+          ),
         );
         expect(second.subAssets.length).toBe(first.subAssets.length);
         for (let i = 0; i < first.subAssets.length; i++) {
@@ -2566,7 +2643,7 @@ import {
     describe('toAssetPack emits texture sub-assets (G-2 fix / AC-13)', () => {
       it('emits one kind:"texture" sub-asset per glTF images[] row', () => {
         const doc = makeDoc([{ name: 'logo' }, { name: 'normal' }]);
-        const { subAssets } = toAssetPack(doc, undefined, 'box.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'box.gltf'));
         const textureSubs = subAssets.filter((s) => s.kind === 'texture');
         expect(textureSubs.length).toBe(2);
         expect(textureSubs.map((s) => s.sourceIndex).sort()).toEqual([0, 1]);
@@ -2574,20 +2651,20 @@ import {
 
       it('orphan images (no textures[] reference) still produce texture sub-assets (AC-13)', () => {
         const doc = makeDoc([{ name: 'orphan-a' }, { name: 'orphan-b' }]);
-        const { subAssets } = toAssetPack(doc, undefined, 'orphans.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'orphans.gltf'));
         const textureSubs = subAssets.filter((s) => s.kind === 'texture');
         expect(textureSubs.length).toBe(2);
       });
 
       it('no images[] -> no texture sub-assets emitted', () => {
         const doc = makeDoc([]);
-        const { subAssets } = toAssetPack(doc, undefined, 'no-tex.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'no-tex.gltf'));
         expect(subAssets.filter((s) => s.kind === 'texture')).toEqual([]);
       });
 
       it('image without a name produces a texture sub-asset (indexFallback path)', () => {
         const doc = makeDoc([{}]);
-        const { subAssets } = toAssetPack(doc, undefined, 'unnamed.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'unnamed.gltf'));
         const tex = subAssets.find((s) => s.kind === 'texture');
         expect(tex).toBeDefined();
         expect(tex?.sourceIndex).toBe(0);
@@ -2595,7 +2672,7 @@ import {
 
       it('texture sub-assets get freshly-minted UUIDv7 GUIDs on first import', () => {
         const doc = makeDoc([{ name: 'a' }]);
-        const { subAssets } = toAssetPack(doc, undefined, 'fresh.gltf');
+        const { subAssets } = unwrapAssetPack(toAssetPack(doc, undefined, 'fresh.gltf'));
         const tex = subAssets.find((s) => s.kind === 'texture');
         expect(tex?.guid).toMatch(
           /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/,

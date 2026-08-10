@@ -1,7 +1,6 @@
 import {
   type Component,
   defineComponent,
-  Entity,
   type EntityHandle,
   ok,
   type Result,
@@ -110,22 +109,20 @@ export function npcPlugin(options: NpcPluginOptions): Plugin {
       let previous = '';
       world.addSystem(Update, {
         name: options.systemName ?? 'npc-brain-sync',
-        queries: [{ with: [NpcBrain, Entity] }],
+        queries: [{ with: [NpcBrain] }],
         fn: (_world, queryResults) => {
           const bindings: NpcBrainBinding[] = [];
-          for (const bundle of queryResults[0]) {
-            for (const rawEntity of bundle.Entity.self) {
-              const entity = rawEntity as EntityHandle;
-              const value = world.get(entity, NpcBrain);
-              if (!value.ok) continue;
-              bindings.push({
-                entity,
-                soulId: value.value.soulId,
-                affordanceRef: value.value.affordanceRef,
-                enabled: value.value.enabled,
-                lod: value.value.lod as NpcCognitiveLod,
-              });
-            }
+          for (const row of queryResults[0]) {
+            const entity = row.entity;
+            const value = world.get(entity, NpcBrain);
+            if (!value.ok) continue;
+            bindings.push({
+              entity,
+              soulId: value.value.soulId,
+              affordanceRef: value.value.affordanceRef,
+              enabled: value.value.enabled,
+              lod: value.value.lod as NpcCognitiveLod,
+            });
           }
           const signature = JSON.stringify(bindings);
           if (signature !== previous) {

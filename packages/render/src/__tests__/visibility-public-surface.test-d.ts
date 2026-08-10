@@ -1,4 +1,4 @@
-import { createQueryState, Entity, queryRun, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import {
   Visibility,
   type VisibilityState,
@@ -18,9 +18,9 @@ expectTypeOf(visibilityStateFromU32(99)).toEqualTypeOf<VisibilityState | undefin
 
 world.set(entity, Visibility, { state: VisibilityStateValue.visible });
 
-const query = createQueryState({ with: [Visibility, Entity] });
-queryRun(query, world, (bundle) => {
-  const rawState = bundle.Visibility.state[0];
+const query = world.query({ read: [Visibility] }).unwrap();
+for (const row of query) {
+  const rawState = row.get(Visibility).state;
   const decodedState = visibilityStateFromU32(rawState ?? VisibilityStateValue.inherited);
   expectTypeOf(decodedState).toEqualTypeOf<VisibilityState | undefined>();
-});
+}

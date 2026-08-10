@@ -50,6 +50,46 @@ export async function runWithRetry(attemptFn, { maxAttempts = 3, label }) {
   return last;
 }
 
+export async function evaluateWithDeadline(page, pageFunction, arg, timeoutMs, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      page.evaluate(pageFunction, arg),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function closeBrowserWithDeadline(
+  browser,
+  timeoutMs = 10000,
+  label = 'WebKit browser close',
+) {
+  let timer;
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    console.error(`[webkit] ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Fatal WebKit-wasm crash signatures, shared by both probes for log diagnosis
 // (NOT the gate — each probe keeps its own pass criteria). Presence of any of
 // these in a probe's console log identifies a wasm cold-start crash vs a clean

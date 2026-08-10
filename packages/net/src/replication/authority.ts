@@ -1,11 +1,4 @@
-import {
-  createQueryState,
-  Entity,
-  type EntityHandle,
-  projectComponentData,
-  queryRun,
-  type World,
-} from '@forgeax/engine-ecs';
+import { type EntityHandle, projectComponentData, type World } from '@forgeax/engine-ecs';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
   encodeReplicationBatch,
@@ -55,40 +48,32 @@ export class AuthorityCoordinator {
       EntityHandle,
       { id: number; components: ReplicationComponentRecord[] }
     >();
-    const state = createQueryState({
-      ...this.#profile.entities,
-      with: [...(this.#profile.entities.with ?? []), Entity],
-    });
+    const query = this.#world.query(this.#profile.entities).unwrap();
     // Allocate every visible entity id before projecting any component data.
-    // queryRun visits archetype chunks independently, so projecting while
+    // Query iteration visits storage groups independently, so projecting while
     // discovering ids can encode references to a later chunk as zero.
-    queryRun(state, this.#world, (bundle) => {
-      const entities = bundle.Entity.self as unknown as readonly EntityHandle[];
-      for (const entity of entities) {
-        if (!candidateIds.has(entity)) candidateIds.set(entity, candidateNextId++);
-      }
-    });
-    queryRun(state, this.#world, (bundle) => {
-      const entities = bundle.Entity.self as unknown as readonly EntityHandle[];
-      for (const entity of entities) {
-        const components: ReplicationComponentRecord[] = [];
-        for (const component of this.#profile.components) {
-          const raw = this.#world.get(entity, component);
-          if (raw.ok) {
-            components.push({
-              name: component.name,
-              data: projectComponentData(
-                component,
-                raw.value as Record<string, unknown>,
-                (reference) => candidateIds.get(reference as EntityHandle) ?? 0,
-              ),
-            });
-          }
+    for (const row of query) {
+      if (!candidateIds.has(row.entity)) candidateIds.set(row.entity, candidateNextId++);
+    }
+    for (const row of query) {
+      const entity = row.entity;
+      const components: ReplicationComponentRecord[] = [];
+      for (const component of this.#profile.components) {
+        const raw = this.#world.get(entity, component);
+        if (raw.ok) {
+          components.push({
+            name: component.name,
+            data: projectComponentData(
+              component,
+              raw.value as Record<string, unknown>,
+              (reference) => candidateIds.get(reference as EntityHandle) ?? 0,
+            ),
+          });
         }
-        const id = candidateIds.get(entity);
-        if (id !== undefined) current.set(entity, { id, components });
       }
-    });
+      const id = candidateIds.get(entity);
+      if (id !== undefined) current.set(entity, { id, components });
+    }
 
     const full = forceFull || this.#tick === 0;
     const entities: ReplicationEntityRecord[] = [];

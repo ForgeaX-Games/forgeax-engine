@@ -39,9 +39,9 @@ import { Update } from '@forgeax/engine-ecs';
 //     accepts an optional anchor system name; when omitted, the system
 //     runs unconstrained and its ordering vs RenderSystem is enforced by
 //     the Renderer driver (which calls `world.update()` before `draw`).
-//   - Archetype iteration reads `world._getGraph()` (engine-internal access;
+//   - Table iteration reads `world._getGraph()` (engine-internal access;
 //     not public API). The row's full packed Entity u32 is read directly from
-//     the essential id=0 `Entity` column (`arch.columns.get(Entity.id)
+//     the essential id=0 `Entity` column (`table.storage.get(Entity.id)
 //     .get('self')`); the prior index-slot + generation-lookup + encodeEntity
 //     rebuild is retired (feat-20260602 M2).
 //   - Each entity's resolved world mat4 is read/written through
@@ -57,7 +57,6 @@ import { Update } from '@forgeax/engine-ecs';
 // derive path) + architecture-principles #2 Derive Don't Duplicate.
 
 import {
-  type Archetype,
   type Component,
   type ComponentId,
   defineSystem,
@@ -69,6 +68,7 @@ import {
   ok,
   type Result,
   type SystemHandle,
+  type Table,
   type World,
 } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
@@ -86,7 +86,7 @@ export const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
 export const TransformSet = defineSystemSet({ name: 'transform' });
 
 interface GraphLike {
-  readonly archetypes: ReadonlyArray<Archetype | undefined>;
+  readonly tables: ReadonlyArray<Table | undefined>;
 }
 
 interface InternalWorldSurface {
@@ -112,8 +112,8 @@ interface InternalWorldSurface {
  * Read the full packed `Entity` handle for archetype `row` from the essential
  * id=0 `Entity` column (`self` field), present on every archetype.
  */
-function readEntityAt(arch: Archetype, row: number): EntityHandle {
-  const selfCol = arch.columns.get(Entity.id)?.get('self')?.view as Uint32Array | undefined;
+function readEntityAt(table: Table, row: number): EntityHandle {
+  const selfCol = table.storage.get(Entity.id)?.fields.get('self')?.view as Uint32Array | undefined;
   return (selfCol?.[row] ?? 0) as EntityHandle;
 }
 
@@ -121,16 +121,15 @@ function asInternal(world: World): InternalWorldSurface {
   return world as unknown as InternalWorldSurface;
 }
 
-function componentPresent(arch: Archetype, id: ComponentId): boolean {
-  const fieldCols = arch.columns.get(id);
-  return fieldCols !== undefined && fieldCols.size > 0;
+function componentPresent(table: Table, id: ComponentId): boolean {
+  return table.storage.has(id);
 }
 
-function getField(arch: Archetype, compId: ComponentId, fieldName: string): Float32Array {
-  const fieldCols = arch.columns.get(compId);
+function getField(table: Table, compId: ComponentId, fieldName: string): Float32Array {
+  const fieldCols = table.storage.get(compId)?.fields;
   if (!fieldCols) {
     throw new Error(
-      `[propagateTransforms] internal: component ${compId} missing on archetype ${arch.id}`,
+      `[propagateTransforms] internal: component ${compId} missing on table ${table.id}`,
     );
   }
   const col = fieldCols.get(fieldName);
@@ -143,7 +142,7 @@ function getField(arch: Archetype, compId: ComponentId, fieldName: string): Floa
 }
 
 interface RowLocator {
-  arch: Archetype;
+  table: Table;
   row: number;
   entity: EntityHandle;
   /**
@@ -174,10 +173,10 @@ const scratchScale = new Float32Array(3);
  * `quat[row*4+a]` / `scale[row*3+a]` -- one indexed read per component lane,
  * zero per-call allocation (AC-08, research Finding 5 adjudication table).
  */
-function composeLocalInto(out: FieldView, arch: Archetype, row: number): void {
-  const pos = getField(arch, Transform.id, 'pos');
-  const quat = getField(arch, Transform.id, 'quat');
-  const scale = getField(arch, Transform.id, 'scale');
+function composeLocalInto(out: FieldView, table: Table, row: number): void {
+  const pos = getField(table, Transform.id, 'pos');
+  const quat = getField(table, Transform.id, 'quat');
+  const scale = getField(table, Transform.id, 'scale');
   const p = row * 3;
   const q = row * 4;
   scratchPos[0] = pos[p] as number;
@@ -225,33 +224,25 @@ export function propagateTransforms(
   // in-memory slot directly (no world.get materialisation). Building the map
   // doubles as the live-set membership check (liveMap.has(entity)).
   const liveMap = new Map<EntityHandle, RowLocator>();
-  const transformArchetypes: Archetype[] = [];
+  for (const table of graph.tables) {
+    if (!table) continue;
+    if (!componentPresent(table, Transform.id)) continue;
 
-  for (const arch of graph.archetypes) {
-    if (!arch) continue;
-    if (!componentPresent(arch, Transform.id)) continue;
-    transformArchetypes.push(arch);
-
-    for (let row = 0; row < arch.size; row++) {
-      const entity = readEntityAt(arch, row);
+    for (let row = 0; row < table.size; row++) {
+      const entity = readEntityAt(table, row);
       const worldView = internal._getArrayView(entity, Transform, 'world');
       if (worldView === undefined) continue; // defensive: missing world slot
-      liveMap.set(entity, { arch, row, entity, worldView });
+      liveMap.set(entity, { table, row, entity, worldView });
     }
   }
 
   // Pass 1 -- roots: world = compose(local.TRS). The projection, rather than
   // component presence, decides whether a malformed edge was cut.
   const processed = new Set<EntityHandle>();
-  for (const arch of transformArchetypes) {
-    for (let row = 0; row < arch.size; row++) {
-      const entity = readEntityAt(arch, row);
-      const loc = liveMap.get(entity);
-      if (loc === undefined) continue;
-      if (hierarchy.getParent(entity) !== undefined) continue;
-      composeLocalInto(loc.worldView, arch, row);
-      processed.add(entity);
-    }
+  for (const loc of liveMap.values()) {
+    if (hierarchy.getParent(loc.entity) !== undefined) continue;
+    composeLocalInto(loc.worldView, loc.table, loc.row);
+    processed.add(loc.entity);
   }
 
   // Pass 2 -- children: DFS through the same valid parent edges used by the
@@ -259,14 +250,10 @@ export function propagateTransforms(
   // traversal always terminates and the affected entity is evaluated as root.
   const localMat = mat4.create() as unknown as Float32Array;
 
-  for (const arch of transformArchetypes) {
-    for (let row = 0; row < arch.size; row++) {
-      const selfEntity = readEntityAt(arch, row);
-      const selfLoc = liveMap.get(selfEntity);
-      if (selfLoc === undefined) continue;
-      const r = resolveEntity(selfLoc, hierarchy, liveMap, processed, localMat);
-      if (!r.ok) return r;
-    }
+  for (const selfLoc of liveMap.values()) {
+    if (processed.has(selfLoc.entity)) continue;
+    const r = resolveEntity(selfLoc, hierarchy, liveMap, processed, localMat);
+    if (!r.ok) return r;
   }
 
   const firstDiagnostic = hierarchy.diagnostics[0];
@@ -303,14 +290,14 @@ function resolveEntity(
 
   const parentEntity = hierarchy.getParent(selfLoc.entity);
   if (parentEntity === undefined) {
-    composeLocalInto(selfLoc.worldView, selfLoc.arch, selfLoc.row);
+    composeLocalInto(selfLoc.worldView, selfLoc.table, selfLoc.row);
     processed.add(selfLoc.entity);
     return ok(undefined);
   }
 
   const parentLoc = liveMap.get(parentEntity);
   if (parentLoc === undefined) {
-    composeLocalInto(selfLoc.worldView, selfLoc.arch, selfLoc.row);
+    composeLocalInto(selfLoc.worldView, selfLoc.table, selfLoc.row);
     processed.add(selfLoc.entity);
     return ok(undefined);
   }
@@ -322,7 +309,7 @@ function resolveEntity(
   // world(self) = parent.world x compose(self.local). Compose into a scratch
   // mat4 then multiply into the live self.worldView slot (parent and self are
   // distinct slots, so the multiply destination does not alias either source).
-  composeLocalInto(localMat, selfLoc.arch, selfLoc.row);
+  composeLocalInto(localMat, selfLoc.table, selfLoc.row);
   mat4.multiply(
     selfLoc.worldView as unknown as Parameters<typeof mat4.multiply>[0],
     parentLoc.worldView as unknown as Parameters<typeof mat4.multiply>[1],

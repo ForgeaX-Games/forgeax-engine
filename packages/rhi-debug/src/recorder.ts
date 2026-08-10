@@ -613,6 +613,12 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
         refs.add(we.passHandleId);
         break;
       }
+      case 'dispatchWorkgroupsIndirect': {
+        const we = e as { passHandleId: HandleId; indirectBufferHandleId: HandleId };
+        refs.add(we.passHandleId);
+        refs.add(we.indirectBufferHandleId);
+        break;
+      }
       case 'endComputePass': {
         const we = e as { passHandleId: HandleId };
         refs.add(we.passHandleId);
@@ -2115,6 +2121,16 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           z: z ?? 1,
         });
         realPass.dispatchWorkgroups(x, y, z);
+      },
+      dispatchWorkgroupsIndirect(indirectBuffer, indirectOffset) {
+        const bufferHandleId = getHandleId(s, indirectBuffer as unknown as object, 'buffer');
+        pushEvent(s, {
+          kind: 'dispatchWorkgroupsIndirect',
+          passHandleId: passHId,
+          indirectBufferHandleId: bufferHandleId,
+          indirectOffset,
+        });
+        realPass.dispatchWorkgroupsIndirect(indirectBuffer, indirectOffset);
       },
       end() {
         pushEvent(s, { kind: 'endComputePass', passHandleId: passHId });

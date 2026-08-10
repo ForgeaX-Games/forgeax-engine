@@ -1,9 +1,6 @@
 import {
-  createQueryState,
-  Entity,
   type EntityHandle,
   projectComponentData,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import type { AuthorityCoordinator } from '../../src/replication/authority';
@@ -36,13 +33,9 @@ function snapshot(
   identityFor: (entity: EntityHandle) => number | undefined,
 ): readonly SemanticEntitySnapshot[] {
   const entities: SemanticEntitySnapshot[] = [];
-  const state = createQueryState({
-    ...profile.entities,
-    with: [...(profile.entities.with ?? []), Entity],
-  });
-  queryRun(state, world, (bundle) => {
-    const handles = bundle.Entity.self as unknown as readonly EntityHandle[];
-    for (const entity of handles) {
+  const query = world.query(profile.entities).unwrap();
+  for (const row of query) {
+      const entity = row.entity;
       const id = identityFor(entity);
       if (id === undefined) continue;
       const components = profile.components.flatMap((component) => {
@@ -62,8 +55,7 @@ function snapshot(
         ];
       });
       entities.push({ id, components });
-    }
-  });
+  }
   return entities.sort((left, right) => left.id - right.id);
 }
 

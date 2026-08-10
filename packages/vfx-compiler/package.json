@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Build-time VFX source validation and deterministic asset cooking.",
+  "description": "Build-time composition, validation, reflection, and deterministic cooking for authored VFX WGSL hooks.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -26,16 +26,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*"
   },
-  "devDependencies": {
-    "@forgeax/engine-assets-runtime": "workspace:*",
-    "@forgeax/engine-ecs": "workspace:*",
-    "@forgeax/engine-plugin": "workspace:*"
-  },
+  "devDependencies": {},
   "forgeax": {
     "metrics": {
       "bundle-size": {

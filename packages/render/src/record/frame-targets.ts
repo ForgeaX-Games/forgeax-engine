@@ -42,7 +42,6 @@ import {
   getRenderFeatureGraphState,
   type PipelineState,
   type RenderSystemInternals,
-  type RenderSystemRuntime,
 } from '../render-system';
 import type {
   CameraSnapshot,
@@ -101,35 +100,21 @@ function graphExecutionPhase(passName: string): RenderGraphExecutionPhase {
 
 /**
  * Resolve a graph color target in the format required by a render attachment.
- * The native swap-chain path stores LDR targets in the storage format and
- * attaches an sRGB view; WebGL2 uses the target's default sRGB view because
+ * The native swap-chain path stores final LDR output in the storage format and
+ * attaches an sRGB view; linear-LDR scenes retain an rgba16float graph target
+ * until the output pass. WebGL2 uses the target's default sRGB view because
  * it cannot reinterpret the texture format.
  *
  * @internal
  */
 export function resolveGraphColorAttachmentView(
-  runtime: Pick<RenderSystemRuntime, 'device' | 'errorRegistry'>,
   frameState: RenderFrameState,
-  pipelineState: PipelineState,
   key: string,
   fallback: TextureView | null,
 ): TextureView | null {
   const graph = frameState.perFrameGraph;
   const graphView = (graph?.getColorTargetView(key) as TextureView | undefined) ?? fallback;
-  if (graphView === null || graphView === undefined) return null;
-  if (key !== 'ldrColor' || !runtime.device.caps.storageBuffer) {
-    return graphView;
-  }
-  const graphTexture = graph?.getColorTargetTexture(key);
-  if (graphTexture === undefined) return graphView;
-  const srgbViewRes = runtime.device.createTextureView(graphTexture as never, {
-    format: pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat,
-  });
-  if (!srgbViewRes.ok) {
-    runtime.errorRegistry.fire(srgbViewRes.error);
-    return null;
-  }
-  return srgbViewRes.value;
+  return graphView ?? null;
 }
 
 /**
@@ -225,21 +210,23 @@ export function resolveGeometryTargetViews(
         pipelineState.perPassResources.msaaTextureHeight = targetH;
       }
     }
-    geometryColorView = srgbReinterpretSupported
-      ? pipelineState.perPassResources.msaaColorView
-      : msaaColorView;
+    const linearLdrMsaa =
+      internals.device.caps.storageBuffer &&
+      frameState.perFrameGraph?.getColorTargetTexture('ldrColor') !== undefined;
+    geometryColorView =
+      linearLdrMsaa || !srgbReinterpretSupported
+        ? msaaColorView
+        : pipelineState.perPassResources.msaaColorView;
     geometryDepthView = frameState.perFrameGraph?.getColorTargetView('msaaDepth') as TextureView;
     geometryDepthKey = 'msaaDepth';
-    geometryColorResolveView = view;
+    geometryColorResolveView =
+      (frameState.perFrameGraph?.getColorTargetView('ldrColor') as TextureView | undefined) ?? view;
     ldrSpriteColorView = msaaColorView;
-  } else if (camera.antialias === 'fxaa') {
-    geometryColorView = resolveGraphColorAttachmentView(
-      internals,
-      frameState,
-      pipelineState,
-      'ldrColor',
-      view,
-    );
+  } else if (
+    camera.antialias === 'fxaa' ||
+    frameState.perFrameGraph?.getColorTargetTexture('ldrColor') !== undefined
+  ) {
+    geometryColorView = resolveGraphColorAttachmentView(frameState, 'ldrColor', view);
   }
 
   // M1 / w7: write back MSAA-dependent graph-resolved views to perPassResources.
@@ -694,6 +681,18 @@ function executeGraphOwnedRenderFeaturePass(
   resolveContext: ResolveContext,
   execute: (context: RenderFeaturePassContext) => void,
 ): void {
+  if (contributionPass.gpuCompute !== undefined) {
+    const recorded = contributionPass.resolvedGpuCompute?.record(context.encoder);
+    if (recorded === undefined || !recorded.ok) {
+      throw new RenderFeatureStageFailedError(
+        contributionPass.featureIdentity,
+        contributionPass.order,
+        'record',
+        'renderer-recover',
+      );
+    }
+    return;
+  }
   const internalContext = context as _InternalRenderPipelineContext;
   const targetColorAttachment = contributionPass.graphics?.attachments.colors.find(
     (attachment) =>
@@ -830,7 +829,8 @@ function executeGraphOwnedRenderFeaturePass(
         index: 0,
         draw: 0,
         setPipeline: (handle) => activePass.setPipeline(handle as RenderPipeline),
-        setBindGroupAt: (index, handle) => activePass.setBindGroup(index, handle as BindGroup),
+        setBindGroupAt: (index, handle, dynamicOffsets) =>
+          activePass.setBindGroup(index, handle as BindGroup, dynamicOffsets),
         setVertexBuffer: (slot, handle) => activePass.setVertexBuffer(slot, handle as Buffer),
         setIndexBuffer: (handle, format) => activePass.setIndexBuffer(handle as Buffer, format),
         recordDraw: (command) =>
@@ -848,6 +848,9 @@ function executeGraphOwnedRenderFeaturePass(
             command.baseVertex,
             command.firstInstance,
           ),
+        recordDrawIndirect: (buffer, offset) => activePass.drawIndirect(buffer as Buffer, offset),
+        recordDrawIndexedIndirect: (buffer, offset) =>
+          activePass.drawIndexedIndirect(buffer as Buffer, offset),
       };
       const recorded = recordResolvedRenderFeatureGraphicsPass(
         contributionPass.featureIdentity,
@@ -880,7 +883,7 @@ export interface RenderFeatureGraphicsRecordingLedger {
   draw: number;
   setPipeline?: (handle: unknown) => void;
   setBindGroup?: (handle: unknown) => void;
-  setBindGroupAt?: (index: number, handle: unknown) => void;
+  setBindGroupAt?: (index: number, handle: unknown, dynamicOffsets?: readonly number[]) => void;
   setVertexBuffer?: (slot: number, handle: unknown) => void;
   setIndexBuffer?: (handle: unknown, format: 'uint16' | 'uint32') => void;
   recordDraw?: (
@@ -895,6 +898,8 @@ export interface RenderFeatureGraphicsRecordingLedger {
       { kind: 'draw-indexed' }
     >['command'],
   ) => void;
+  recordDrawIndirect?: (buffer: unknown, offset: number) => void;
+  recordDrawIndexedIndirect?: (buffer: unknown, offset: number) => void;
 }
 
 function resolvedResource(
@@ -917,7 +922,7 @@ export function recordResolvedRenderFeatureGraphicsPass(
   if (!validated.ok) return validated;
   const resolvedDraws: Array<{
     readonly pipeline: PreparedGraphicsResolvedResource;
-    readonly bindings: readonly PreparedGraphicsResolvedResource[];
+    readonly bindings: readonly Extract<PreparedGraphicsResolvedResource, { kind: 'bindings' }>[];
     readonly vertexData: readonly {
       readonly slot: number;
       readonly resource: PreparedGraphicsResolvedResource;
@@ -948,7 +953,7 @@ export function recordResolvedRenderFeatureGraphicsPass(
     }
     resolvedDraws.push({
       pipeline,
-      bindings: bindings as PreparedGraphicsResolvedResource[],
+      bindings: bindings as Extract<PreparedGraphicsResolvedResource, { kind: 'bindings' }>[],
       vertexData: vertexData as {
         readonly slot: number;
         readonly resource: PreparedGraphicsResolvedResource;
@@ -963,7 +968,7 @@ export function recordResolvedRenderFeatureGraphicsPass(
     for (const [index, binding] of resolvedDraw.bindings.entries()) {
       ledger.binding += 1;
       if (ledger.setBindGroupAt !== undefined) {
-        ledger.setBindGroupAt(index, binding.handle);
+        ledger.setBindGroupAt(index, binding.handle, binding.dynamicOffsets);
       } else {
         ledger.setBindGroup?.(binding.handle);
       }
@@ -972,7 +977,10 @@ export function recordResolvedRenderFeatureGraphicsPass(
       ledger.vertex += 1;
       ledger.setVertexBuffer?.(vertex.slot, vertex.resource.handle);
     }
-    if (resolvedDraw.draw.kind === 'draw-indexed') {
+    if (
+      resolvedDraw.draw.kind === 'draw-indexed' ||
+      resolvedDraw.draw.kind === 'draw-indexed-indirect'
+    ) {
       const indexData = resolvedDraw.draw.indexData;
       const indexHandle = resolvedDraw.indexData?.handle;
       if (indexData === undefined || indexHandle === undefined) {
@@ -981,10 +989,30 @@ export function recordResolvedRenderFeatureGraphicsPass(
       ledger.index += 1;
       ledger.setIndexBuffer?.(indexHandle, indexData.format);
       ledger.draw += 1;
-      ledger.recordDrawIndexed?.(resolvedDraw.draw.command);
+      if (resolvedDraw.draw.kind === 'draw-indexed-indirect') {
+        const indirect = resolved.resolveGpuBuffer?.(resolvedDraw.draw.command.buffer);
+        if (indirect === undefined) {
+          return err(
+            new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'renderer-recover'),
+          );
+        }
+        ledger.recordDrawIndexedIndirect?.(indirect, resolvedDraw.draw.command.offset ?? 0);
+      } else {
+        ledger.recordDrawIndexed?.(resolvedDraw.draw.command);
+      }
     } else {
       ledger.draw += 1;
-      ledger.recordDraw?.(resolvedDraw.draw.command);
+      if (resolvedDraw.draw.kind === 'draw-indirect') {
+        const indirect = resolved.resolveGpuBuffer?.(resolvedDraw.draw.command.buffer);
+        if (indirect === undefined) {
+          return err(
+            new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'renderer-recover'),
+          );
+        }
+        ledger.recordDrawIndirect?.(indirect, resolvedDraw.draw.command.offset ?? 0);
+      } else {
+        ledger.recordDraw?.(resolvedDraw.draw.command);
+      }
     }
   }
   return ok(validated.value);
@@ -1009,17 +1037,25 @@ export function recordRenderFeatureGraphicsPass(
       ledger.vertex += 1;
       ledger.setVertexBuffer?.(vertex.slot, vertex.resource);
     }
-    if (draw.kind === 'draw-indexed') {
+    if (draw.kind === 'draw-indexed' || draw.kind === 'draw-indexed-indirect') {
       if (draw.indexData === undefined) {
         return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
       }
       ledger.index += 1;
       ledger.setIndexBuffer?.(draw.indexData.resource, draw.indexData.format);
       ledger.draw += 1;
-      ledger.recordDrawIndexed?.(draw.command);
+      if (draw.kind === 'draw-indexed-indirect') {
+        ledger.recordDrawIndexedIndirect?.(draw.command.buffer, draw.command.offset ?? 0);
+      } else {
+        ledger.recordDrawIndexed?.(draw.command);
+      }
     } else {
       ledger.draw += 1;
-      ledger.recordDraw?.(draw.command);
+      if (draw.kind === 'draw-indirect') {
+        ledger.recordDrawIndirect?.(draw.command.buffer, draw.command.offset ?? 0);
+      } else {
+        ledger.recordDraw?.(draw.command);
+      }
     }
   }
   return ok(validated.value);

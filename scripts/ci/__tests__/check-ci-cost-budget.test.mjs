@@ -15,6 +15,40 @@ function facts() {
   return {
     runId: 42,
     runAttempt: 1,
+    returnEvidence: {
+      schemaVersion: 1,
+      contractVersion: 3,
+      families: [
+        {
+          family: 'engine-dist',
+          status: 'valid',
+          identity: { runId: 42, runAttempt: 1 },
+          producer: { owner: 'core-build', producerRunAttempt: 1 },
+          consumer: { owner: 'cost-reporter', runAttempt: 1 },
+          inputFingerprint: 'sha256:engine-dist',
+          artifactId: 'one',
+          compressedArchiveBytes: 10,
+          expandedDiskBytes: 20,
+          upload: { elapsedSeconds: 1 },
+          download: { elapsedSeconds: 1 },
+          physicalScope: 'artifact',
+        },
+        {
+          family: 'merged-ddc',
+          status: 'valid',
+          identity: { runId: 42, runAttempt: 1 },
+          producer: { owner: 'cache-warm', producerRunAttempt: 1 },
+          consumer: { owner: 'cost-reporter', runAttempt: 1 },
+          inputFingerprint: 'sha256:merged-ddc',
+          classification: 'exact-hit',
+          requestedKey: 'key',
+          matchedKey: 'key',
+          restore: { elapsedSeconds: 1 },
+          save: { outcome: 'notApplicable' },
+          activeBytes: 10,
+        },
+      ],
+    },
     artifacts: [
       {
         name: 'engine-dist',
@@ -98,6 +132,32 @@ test('repair: cost summary renders Markdown with actual newline separators', () 
   }
 });
 
+test('summary exposes invalid owner recovery fields without effect claims', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'ci-cost-summary-invalid-'));
+  const factsPath = join(temp, 'facts.json');
+  const summaryPath = join(temp, 'summary.md');
+  try {
+    const value = facts();
+    value.returnEvidence.families[0] = {
+      family: 'engine-dist',
+      status: 'invalidEvidence',
+      identity: { runId: 42, runAttempt: 1 },
+      code: 'owner-fact-missing',
+      expected: { owner: 'cost-reporter', field: 'download' },
+      hint: 'Collect direct download timing from cost-reporter.',
+      detail: { owner: 'cost-reporter', field: 'download' },
+    };
+    writeFileSync(factsPath, JSON.stringify(value));
+    execFileSync(process.execPath, [summaryScript, '--facts', factsPath, '--output', summaryPath]);
+    const output = readFileSync(summaryPath, 'utf8');
+    assert.match(output, /engine-dist.*invalidEvidence.*owner-fact-missing/);
+    assert.match(output, /Collect direct download timing from cost-reporter\./);
+    assert.doesNotMatch(output, /speedup|critical.path effect|runner.cost effect/i);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('t20: passes immediate structural budgets without ten-sample calculations', () => {
   const result = run(facts());
   assert.equal(result.exitCode, 0, result.stdout);
@@ -105,10 +165,28 @@ test('t20: passes immediate structural budgets without ten-sample calculations',
   assert.doesNotMatch(result.stdout, /median|wallClockRatio/);
 });
 
+test('derives budgets only from valid family rows', () => {
+  const value = facts();
+  value.artifacts[0].compressedBytes = 900_000_000;
+  value.returnEvidence.families.push({
+    family: 'app-dist-1',
+    status: 'invalidEvidence',
+    identity: { runId: 42, runAttempt: 1 },
+    code: 'owner-fact-missing',
+    expected: { owner: 'cost-reporter', field: 'download' },
+    hint: 'Collect direct owner evidence.',
+    detail: { owner: 'cost-reporter', field: 'download' },
+    compressedArchiveBytes: 900_000_000,
+  });
+  const result = run(value);
+  assert.equal(result.exitCode, 0, result.stdout);
+  assert.match(result.stdout, /"totalCompressedBytes":10/);
+});
+
 test('t20: rejects artifact, consumer, cache, and missing immediate facts', () => {
   for (const mutate of [
     (value) => {
-      value.artifacts[0].compressedBytes = 69_224_540;
+      value.returnEvidence.families[0].compressedArchiveBytes = 69_224_540;
     },
     (value) => {
       value.consumers[0].downloadedBytes = 41_534_724;
@@ -117,10 +195,12 @@ test('t20: rejects artifact, consumer, cache, and missing immediate facts', () =
       value.cache.activeBytes = 7_918_954_216;
     },
     (value) => {
-      value.cache.warmRestoreSeconds = 181;
+      value.returnEvidence.families.find(
+        ({ family }) => family === 'merged-ddc',
+      ).restore.elapsedSeconds = 181;
     },
     (value) => {
-      value.artifacts[0].compressedBytes = null;
+      value.returnEvidence.families[0].compressedArchiveBytes = null;
     },
   ]) {
     const value = facts();
@@ -220,6 +300,30 @@ function sampleRun(runId, runAttempt, overrides = {}) {
   const base = {
     runId,
     runAttempt,
+    returnEvidence: {
+      schemaVersion: 1,
+      contractVersion: 3,
+      families: [
+        {
+          family: 'engine-dist',
+          status: 'valid',
+          identity: { runId, runAttempt },
+          inputFingerprint: 'sha256:engine-dist',
+          artifactId: 'artifact-one',
+          compressedArchiveBytes: 10_000_000,
+          expandedDiskBytes: 20_000_000,
+        },
+        {
+          family: 'merged-ddc',
+          status: 'valid',
+          identity: { runId, runAttempt },
+          inputFingerprint: 'sha256:merged-ddc',
+          classification: 'exact-hit',
+          restore: { elapsedSeconds: 30 },
+          activeBytes: 1_000_000_000,
+        },
+      ],
+    },
     artifacts: [
       {
         name: 'engine-dist',
@@ -365,6 +469,26 @@ test('t26: fewer than ten comparable samples produce insufficientEvidence with e
   assert.ok(parsed.comparableCount < 10);
 });
 
+test('excludes invalid family samples from multi-run comparison inputs', () => {
+  const entries = [];
+  for (let i = 0; i < 10; i++) entries.push(sampleRun(100 + i, 1));
+  entries[4].returnEvidence.families[0] = {
+    family: 'engine-dist',
+    status: 'invalidEvidence',
+    identity: { runId: 104, runAttempt: 1 },
+    code: 'fingerprint-mismatch',
+    expected: { inputFingerprint: 'sha256:engine-dist' },
+    hint: 'Collect the selected producer fingerprint.',
+    detail: { observedFingerprint: 'sha256:stale' },
+  };
+  const result = multiRun(entries);
+  assert.equal(result.exitCode, 0, result.stdout);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, 'insufficientEvidence');
+  assert.equal(parsed.comparableCount, 9);
+  assert.doesNotMatch(result.stdout, /speedup|criticalPathEffect|runnerCostEffect/);
+});
+
 test('t26: zero samples produce insufficientEvidence with exit 0', () => {
   const result = multiRun([]);
   assert.equal(result.exitCode, 0, result.stdout);
@@ -415,7 +539,7 @@ test('t26: missing artifact ID rejects from comparable set', () => {
   const entries = [];
   for (let i = 0; i < 10; i++) {
     const entry = sampleRun(100 + i, 1);
-    if (i === 3) entry.artifacts[0].id = undefined;
+    if (i === 3) entry.returnEvidence.families[0].artifactId = undefined;
     entries.push(entry);
   }
   const result = multiRun(entries);
@@ -425,7 +549,7 @@ test('t26: missing artifact ID rejects from comparable set', () => {
   assert.ok(parsed.comparableCount < 10);
 });
 
-test('t26: missing artifact readyAt rejects from comparable set', () => {
+test('t26: REST artifact creation time is not a comparison authority', () => {
   const entries = [];
   for (let i = 0; i < 10; i++) {
     const entry = sampleRun(100 + i, 1);
@@ -435,8 +559,8 @@ test('t26: missing artifact readyAt rejects from comparable set', () => {
   const result = multiRun(entries);
   assert.equal(result.exitCode, 0, result.stdout);
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.status, 'insufficientEvidence');
-  assert.ok(parsed.comparableCount < 10);
+  assert.equal(parsed.status, 'comparable');
+  assert.equal(parsed.comparableCount, 10);
 });
 
 test('t26: cancelled run rejects from comparable set', () => {
@@ -582,13 +706,8 @@ test('t26: 4-6 shard candidate generated only when median improves >=15% and no 
   const result = multiRun(entries);
   assert.equal(result.exitCode, 0, result.stdout);
   const parsed = JSON.parse(result.stdout);
-  if (parsed.shardExpansionCandidate) {
-    assert.ok(parsed.shardExpansionCandidate.medianImprovementPercent >= 15);
-    assert.ok(
-      parsed.shardExpansionCandidate.maxRegressionPercent === undefined ||
-        parsed.shardExpansionCandidate.maxRegressionPercent <= 10,
-    );
-  }
+  assert.equal(parsed.shardExpansionCandidate, undefined);
+  assert.doesNotMatch(result.stdout, /improvement|speedup|recommendation/i);
 });
 
 test('t26: 4-6 shard candidate not generated when thresholds not met', () => {

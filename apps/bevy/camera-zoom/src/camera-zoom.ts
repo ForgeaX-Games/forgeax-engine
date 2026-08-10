@@ -3,11 +3,8 @@
 // extents or perspective FOV, and Space switches the active projection.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -47,12 +44,9 @@ export const ZoomCamera = defineComponent('ZoomCamera', {
 });
 
 function firstCamera(world: World): EntityHandle | null {
-  const state = createQueryState({ with: [Camera, Transform, ZoomCamera, Entity] });
-  let handle: EntityHandle | null = null;
-  queryRun(state, world, (bundle) => {
-    if (bundle.Entity.self.length > 0) handle = (bundle.Entity.self[0] ?? 0) as EntityHandle;
-  });
-  return handle;
+  const query = world.query({ with: [Camera, Transform, ZoomCamera] }).unwrap();
+  for (const row of query) return row.entity;
+  return null;
 }
 
 function material(world: World, color: readonly [number, number, number, number]) {

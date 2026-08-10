@@ -9,7 +9,7 @@
 //
 //   mode='pixel'      (static demos): capture a frame, replay it on a fresh
 //                     dawn-node device, read back BOTH the live canvas pixels and
-//                     the replayed RT pixels, and assert pixelDeltaAbsMean <= eps.
+//                     the replayed RT pixels, and assert RGB pixel delta <= eps.
 //                     This is the only check that proves "replay == demo effect".
 //
 //   mode='structural' (animated demos): capture -> replay -> stepTo -> inspect,
@@ -46,10 +46,12 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  *                                  (pixel mode only). e.g. '__captureColors'.
  * @property {number} [drawIdx]     draw to inspect in structural mode (default last color pass)
  * @property {number} [rtIdx]       RT index for readbackRt (pixel mode, default 0)
- * @property {number} [epsilon]     max whole-frame pixelDeltaAbsMean (default 0.02)
+ * @property {number} [epsilon]     max whole-frame RGB pixel delta (default 0.02)
  * @property {number} [maxChannelEpsilon] max RGB-channel abs delta over any pixel (default 0.10)
  * @property {number} [coveredEpsilon]    max mean RGB delta over non-background pixels (default 0.03)
  * @property {(report: object) => void} [assertCapture] extra report-level contract gate
+ * @property {(input: {tape: object}) => void} [assertTape] extra contract over the
+ *                                  deserialized self-contained capture tape
  * @property {string} [appDir]      the demo's own dir (dirname of its smoke script's parent);
  *                                  the dev endpoint writes .forgeax-debug relative to vite cwd
  *                                  (= the package dir), so artifacts are resolved against this.
@@ -70,6 +72,7 @@ export async function verifyDemoCapture(opts) {
     maxChannelEpsilon = 0.1,
     coveredEpsilon = 0.03,
     assertCapture,
+    assertTape,
     appDir = REPO_ROOT,
     warmupMs = 3000,
     urlSuffix = '',
@@ -246,7 +249,6 @@ export async function verifyDemoCapture(opts) {
   const { deserializeTape, createReplay } = await import('@forgeax/engine-rhi-debug');
   const deserRes = deserializeTape(tapeJson, tapeBlob);
   if (!deserRes.ok) {
-    freshDevice.destroy?.();
     fail(
       1,
       `[${label}] RED -- deserializeTape failed: ${deserRes.error.code} ` +
@@ -254,6 +256,13 @@ export async function verifyDemoCapture(opts) {
     );
   }
   const tape = deserRes.value;
+  if (assertTape !== undefined) {
+    try {
+      assertTape({ tape });
+    } catch (e) {
+      fail(1, `[${label}] RED -- tape contract failed: ${e?.message ?? e}`);
+    }
+  }
   const { freshDevice, rhiWebgpu } = await bootstrapDawn(label);
   console.log(`[${label}] tape: ${tape.events.length} events, ${tape.blobPool.size} blobs`);
 
@@ -316,8 +325,7 @@ export async function verifyDemoCapture(opts) {
     );
   }
 
-  const { pixelDeltaAbsMean } = await import('@forgeax/engine-rhi-debug');
-  const best = bestAlignmentDelta(livePixels, replayPixels, rw, rh, pixelDeltaAbsMean);
+  const best = bestAlignmentDelta(livePixels, replayPixels, rw, rh, pixelDeltaAbsMeanRgb);
 
   // Whole-frame mean alone is too lenient: a demo whose subject covers a small
   // fraction of a mostly-black frame can hide a large per-pixel error in the
@@ -481,9 +489,11 @@ function bgraSwap(px) {
 }
 
 /**
- * Measure pixelDeltaAbsMean(live, replay) under 4 candidate alignments of the
- * replay buffer and return the minimum. Reports all four so a non-identity
- * winner is visible (= a normalization quirk, not a fidelity failure).
+ * Measure whole-frame RGB delta under 4 candidate alignments of the replay
+ * buffer and return the minimum. Alpha is transport metadata for these visual
+ * captures, so it is intentionally excluded from this visual parity metric.
+ * Reports all four so a non-identity winner is visible (= a normalization
+ * quirk, not a fidelity failure).
  */
 function bestAlignmentDelta(live, replay, w, h, delta) {
   const flipped = yflip(replay, w, h);
@@ -508,6 +518,20 @@ function bestAlignmentDelta(live, replay, w, h, delta) {
     }
   }
   return { delta: min, name, all, applied: buffers[name] };
+}
+
+/** Compute mean absolute RGB delta while preserving the RGBA buffer contract. */
+function pixelDeltaAbsMeanRgb(orig, replay) {
+  if (orig.length !== replay.length || orig.length % 4 !== 0) {
+    throw new Error('pixel buffers must have equal RGBA length');
+  }
+  let sum = 0;
+  for (let i = 0; i < orig.length; i += 4) {
+    sum += Math.abs((orig[i] ?? 0) - (replay[i] ?? 0));
+    sum += Math.abs((orig[i + 1] ?? 0) - (replay[i + 1] ?? 0));
+    sum += Math.abs((orig[i + 2] ?? 0) - (replay[i + 2] ?? 0));
+  }
+  return sum / ((orig.length / 4) * 3) / 255;
 }
 
 /**

@@ -103,33 +103,31 @@ canonical result; they are not a second source of truth.
 ```ts
 interface ParticleEffectAsset {
   readonly kind: 'particle-effect';
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
+  readonly programFingerprint: string;
   readonly emitters: readonly { readonly id: string; readonly capacity: number }[];
 }
 ```
 
-The source, operator registry, and deterministic cook live in
-`@forgeax/engine-vfx-compiler`. The runtime package consumes the cooked payload
-through Pack v2 and `AssetRegistry`; this types package owns only the POD and
-handle vocabulary, not the runtime simulation class. `AssetTagMap['particle-effect']` is
-`'ParticleEffectAsset'`, so `world.allocSharedRef('ParticleEffectAsset', asset)`
-and `ParticleEffectPlayer.effect` use one branded shared-handle identity.
+The asset-local GPU program remains in `@forgeax/engine-vfx`; this shared type
+contains only the cross-package identity and fingerprint. `AssetTagMap['particle-effect']`
+is `'ParticleEffectAsset'`, so loading, shared ECS handles, and
+`ParticleEffectPlayer.effect` use one identity.
 
 | Need | Public owner | Recovery signal |
 |:--|:--|:--|
 | Author and validate source | `@forgeax/engine-vfx` | `vfx-source-invalid` with `detail.path` |
-| Register operators and cook | `@forgeax/engine-vfx-compiler` | `vfx-operator-*` or `vfx-program-invalid` |
+| Compose WGSL and cook | `@forgeax/engine-vfx-compiler` | `vfx-hook-*`, `vfx-module-missing`, or `vfx-shader-invalid` |
 | Locate a package by GUID | Pack v2 catalog / `AssetRegistry` | catalog and package errors with `packageUrl` |
-| Load a ready payload | `loadParticleEffect` | `vfx-asset-load-failed` with package/artifact/reference stage |
+| Load a ready payload | `loadVfxGpuEffect` | v2 artifact/fingerprint errors |
 | Hand off author intent | `ParticleEffectPlayer` from `@forgeax/engine-vfx` | ECS `Result` and schema reflection |
-| Enable simulation | `particleSimulationPlugin` from `@forgeax/engine-vfx` | `runPlugins(world, defaultSet, userPlugins)` and the ECS `FixedUpdate` clock |
-| Observe and replay | `ParticleSimulation` from `@forgeax/engine-vfx` | `read(player)` returns the last committed batch/diagnostics; `replay(player)` requests a fixed-boundary reset |
+| Simulate and render | `createVfxRuntimeHost` from `@forgeax/engine-vfx-render` | RenderFeature capability/readiness errors and runtime diagnostics |
 
 See [`packages/vfx/README.md`](../vfx/README.md) for the short consumer path and
 [`packages/pack/README.md`](../pack/README.md) for the Pack v2 envelope and
 asset-local artifact contract.
 
-### Particle simulation boundary
+### Particle runtime boundary
 
 `@forgeax/engine-types` keeps the shared identity stable while the focused VFX
 package owns runtime behavior:
@@ -138,32 +136,13 @@ package owns runtime behavior:
 |:--|:--|:--|
 | Asset readiness | `AssetRegistry` | Resolve GUIDs and expose validated payloads before the World receives a shared handle. |
 | Clock | ECS `World` | `FixedUpdate` and `FixedTime` decide which particle ticks execute; Simulation does not privately replay dropped time. |
-| Live state and recovery | `ParticleSimulation` | Own transient emitter state, lifecycle, CPU capability status, and structured `VfxError` diagnostics. |
-| Output | `ParticleRenderBatch` | Publish validated typed-array data and World shared handles for a downstream consumer. |
+| Live intent | `@forgeax/engine-vfx` | Produce bounded ordered fixed-tick intents; never own RHI resources. |
+| GPU state and output | `@forgeax/engine-vfx-render` | Persist simulation buffers and project directly into indirect billboard/mesh draws without readback. |
 | Compiler boundary | `@forgeax/engine-vfx-compiler` | Produce the asset-local program at build time; never become a runtime dependency. |
-| Rendering boundary | Wave 2 Rendering loop | Consume the public batch through its own lane; no RenderFeature, Renderer, RHI, Device, or RenderGraph type enters this contract. |
+| Rendering boundary | `@forgeax/engine-render` | Provide a kind-free compute/external-buffer/indirect RenderFeature seam. |
 
-The public simulation resource is intentionally not a new type union in this
-package. `ParticleEffectAsset` and `Handle<'ParticleEffectAsset', 'shared'>`
-remain the cross-package SSOT; `ParticleEffectPlayer` remains author intent;
-the VFX package derives transient observations from those inputs.
-
-### Host and renderer handoff
-
-The shared asset identity crosses the runtime boundary through the same
-`AssetRegistry` and World supplied to
-`createParticleRuntimeHost` from
-`@forgeax/engine-vfx-render`. The host consumes the public
-`ParticleSimulation.readAll()` snapshot and forwards its feature through
-`CreateAppOptions.features` from `@forgeax/engine-app`. This package still owns
-only POD identity and schema types: it does not define a second particle
-handle, simulation resource, renderer feature, or registry.
-
-For an AI consumer, the recovery order is explicit: resolve a cooked
-`ParticleEffectAsset` by GUID, allocate one shared handle, attach the host to
-the active World, inspect simulation and render diagnostics, then retry the
-same World after readiness repair. A missing or stale asset is not equivalent
-to an empty observation.
+This package does not define a second particle program, player, runtime
+resource, renderer feature, or registry.
 
 ## Handle
 

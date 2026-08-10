@@ -83,6 +83,7 @@ fn irradianceConvolve_fs(in0: CubemapVsOut) -> @location(0) vec4<f32> {
     phi += IRRADIANCE_SAMPLE_DELTA;
   }
 
+  // IRRADIANCE_PAYLOAD_E_TIMES_PI: the stored payload is E * pi.
   irradiance = PI * irradiance / max(nrSamples, 1.0);
   return vec4<f32>(irradiance, 1.0);
 }

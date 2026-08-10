@@ -4,17 +4,8 @@
 // array/buffer byte storage, and archetype migration. WorldComponentAccess owns
 // the typed public component operations and composes this state capability.
 
-import {
-  BUILTIN_BASE,
-  type Handle,
-  toShared,
-  toUnique,
-  unpackSlot,
-  unwrapHandle,
-} from '@forgeax/engine-types';
-import { type Archetype, appendEntity, removeEntity } from './archetype';
+import { BUILTIN_BASE, type Handle, toShared, toUnique, unwrapHandle } from '@forgeax/engine-types';
 import type { BufferPool } from './buffer-pool';
-import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './column';
 import {
   type ArrayMeta,
   type Component,
@@ -30,15 +21,21 @@ import {
   TYPE_METADATA,
 } from './component';
 import { Entity as EntityComponent } from './entity';
-import { ENTITY_NULL_RAW, type EntityHandle } from './entity-handle';
+import { ENTITY_NULL_RAW, type EntityHandle, entityGeneration, entityIndex } from './entity-handle';
 import type { ManagedArrayErrorEnvelope } from './errors';
 import type { ErrorContext } from './schedule';
 import { Severity } from './schedule';
 import type { SharedRefStore } from './shared-ref-store';
+import { type Archetype, appendArchetypeRow, removeArchetypeRow } from './storage/archetype';
+import { type ArchetypeGraph, getTable } from './storage/archetype-graph';
+import { copyComponentEpoch } from './storage/change-epoch';
+import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './storage/column';
+import { appendTableRow, removeTableRow, type Table } from './storage/table';
 import type { UniqueRefStore } from './unique-ref-store';
 import type { ComponentData, EntityRecord } from './world';
 
 export interface ComponentStorageState {
+  readonly graph: ArchetypeGraph;
   readonly records: EntityRecord[];
   readonly bufferPool: BufferPool;
   readonly uniqueRefs: UniqueRefStore;
@@ -51,6 +48,10 @@ export class ComponentStorage {
 
   private get records(): EntityRecord[] {
     return this.state.records;
+  }
+
+  private table(archetype: Archetype): Table {
+    return getTable(this.state.graph, archetype.tableId);
   }
 
   private get bufferPool(): BufferPool {
@@ -75,7 +76,7 @@ export class ComponentStorage {
     row: number,
     fieldName: string,
   ): FieldView | undefined {
-    const fieldCols = arch.columns.get(component.id);
+    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
     if (!fieldCols) return undefined;
 
     const fieldType = component.schema[fieldName];
@@ -111,7 +112,7 @@ export class ComponentStorage {
     row: number,
   ): ShapeOf<S> {
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
     const out = {} as ShapeOf<S>;
     /* istanbul ignore next -- defensive: component is registered and arch has it */
     if (!fieldCols) {
@@ -191,7 +192,7 @@ export class ComponentStorage {
    * archetype -- so this is a direct u32 store, no readRow/writeRow walk.
    */
   writeEntitySelf(arch: Archetype, row: number, handle: EntityHandle): void {
-    const col = arch.columns.get(EntityComponent.id)?.get('self');
+    const col = this.table(arch).storage.get(EntityComponent.id)?.fields.get('self');
     /* istanbul ignore next -- defensive: Entity column is folded into every archetype */
     if (!col) return;
     col.view[row] = handle as unknown as number;
@@ -204,7 +205,7 @@ export class ComponentStorage {
     value: ShapeOf<S>,
   ): void {
     const localId = component.id;
-    const fieldCols = arch.columns.get(localId);
+    const fieldCols = this.table(arch).storage.get(localId)?.fields;
     /* istanbul ignore next -- defensive: component is registered and arch has it */
     if (!fieldCols) {
       return;
@@ -341,7 +342,7 @@ export class ComponentStorage {
    * `__tests__/world-managed-roundtrip.unit.test.ts` (w3 net-zero matrix).
    */
   releaseManagedRefsOnRow(arch: Archetype, component: Component, row: number): void {
-    const fieldCols = arch.columns.get(component.id);
+    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
     if (!fieldCols) return;
     for (const fieldName of Object.keys(component.schema)) {
       this.releaseManagedFieldOnRow(arch, component, row, fieldName);
@@ -388,7 +389,7 @@ export class ComponentStorage {
     row: number,
     fieldName: string,
   ): void {
-    const fieldCols = arch.columns.get(component.id);
+    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
     if (!fieldCols) return;
     const col = fieldCols.get(fieldName);
     if (!col) return;
@@ -605,7 +606,7 @@ export class ComponentStorage {
     arrayMeta: ArrayMeta,
     raw: unknown,
   ): void {
-    const fieldCols = arch.columns.get(component.id);
+    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
     /* istanbul ignore next -- writeArrayField caller validated the column map */
     if (!fieldCols) return;
     const col = fieldCols.get(fieldName);
@@ -840,7 +841,7 @@ export class ComponentStorage {
     | Uint16Array
     | Int8Array
     | Uint8Array {
-    const fieldCols = arch.columns.get(component.id);
+    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
     if (fixedLength !== undefined) {
       // Fixed `array<T,N>` (feat-20260602): the elements live INLINE in the
       // stride-N column. Reinterpret the row's byte window directly — no
@@ -914,17 +915,21 @@ export class ComponentStorage {
    * `__tests__/managed-array-carry-over.test.ts` (w8).
    */
   migrateEntity(record: EntityRecord, srcArch: Archetype, targetArch: Archetype): void {
-    const oldRow = record.row;
-    // Read entity slot from id=0 self column (not a separate entities array).
-    const selfCol = srcArch.columns.get(EntityComponent.id)?.get('self');
-    const entitySlot = unpackSlot(selfCol?.view[oldRow] ?? 0);
-
-    // Append a new row in the target archetype.
-    const newRow = appendEntity(targetArch, entitySlot);
+    const oldArchetypeRow = record.archetypeRow;
+    const oldTableRow = srcArch.rows[oldArchetypeRow] ?? 0;
+    const srcTable = this.table(srcArch);
+    const targetTable = this.table(targetArch);
+    const entity = (srcTable.storage.get(EntityComponent.id)?.fields.get('self')?.view[
+      oldTableRow
+    ] ?? 0) as EntityHandle;
+    const newTableRow = appendTableRow(targetTable, entity);
+    const newArchetypeRow = appendArchetypeRow(targetArch, newTableRow);
 
     // Copy shared component data.
-    for (const [compId, srcFieldCols] of srcArch.columns) {
-      const targetFieldCols = targetArch.columns.get(compId);
+    for (const [compId, srcComponentStorage] of srcTable.storage) {
+      const srcFieldCols = srcComponentStorage.fields;
+      const targetComponentStorage = targetTable.storage.get(compId);
+      const targetFieldCols = targetComponentStorage?.fields;
       if (!targetFieldCols) {
         continue; // Component was removed — skip.
       }
@@ -940,25 +945,64 @@ export class ComponentStorage {
         // must migrate the entire block (feat-20260602).
         const arity = srcCol.arity;
         targetCol.view.set(
-          srcCol.view.subarray(oldRow * arity, oldRow * arity + arity),
-          newRow * arity,
+          srcCol.view.subarray(oldTableRow * arity, oldTableRow * arity + arity),
+          newTableRow * arity,
+        );
+      }
+      if (targetComponentStorage !== undefined) {
+        copyComponentEpoch(
+          srcComponentStorage.epochs,
+          oldTableRow,
+          targetComponentStorage.epochs,
+          newTableRow,
         );
       }
     }
 
-    // Remove entity from source archetype via swap-pop.
-    const swapResult = removeEntity(srcArch, oldRow);
-    if (swapResult) {
-      // Update the swapped entity's record.
-      const swappedRecord = this.records[swapResult.movedEntity];
-      if (swappedRecord) {
-        swappedRecord.row = swapResult.newRow;
+    const archetypeSwap = removeArchetypeRow(srcArch, oldArchetypeRow);
+    if (archetypeSwap !== null) {
+      const movedEntity = (srcTable.storage.get(EntityComponent.id)?.fields.get('self')?.view[
+        archetypeSwap.movedTableRow
+      ] ?? 0) as EntityHandle;
+      const movedRecord = this.records[entityIndex(movedEntity)];
+      if (movedRecord?.generation === entityGeneration(movedEntity)) {
+        movedRecord.archetypeRow = archetypeSwap.newRow;
+      }
+    }
+    const tableSwap = removeTableRow(srcTable, oldTableRow);
+    if (tableSwap !== null) {
+      const movedRecord = this.records[entityIndex(tableSwap.movedEntity)];
+      if (movedRecord?.generation === entityGeneration(tableSwap.movedEntity)) {
+        const movedArchetype = this.state.graph.archetypes[movedRecord.archetypeId];
+        if (movedArchetype !== undefined) {
+          movedArchetype.rows[movedRecord.archetypeRow] = tableSwap.newRow;
+        }
       }
     }
 
-    // Update record to point to new archetype and row.
     record.archetypeId = targetArch.id;
-    record.row = newRow;
+    record.archetypeRow = newArchetypeRow;
+  }
+
+  moveEntityArchetype(record: EntityRecord, srcArch: Archetype, targetArch: Archetype): void {
+    const table = this.table(srcArch);
+    if (srcArch.tableId !== targetArch.tableId) {
+      throw new Error('Logical archetype move requires a shared Table.');
+    }
+    const oldArchetypeRow = record.archetypeRow;
+    const tableRow = srcArch.rows[oldArchetypeRow] ?? 0;
+    const archetypeSwap = removeArchetypeRow(srcArch, oldArchetypeRow);
+    if (archetypeSwap !== null) {
+      const movedEntity = (table.storage.get(EntityComponent.id)?.fields.get('self')?.view[
+        archetypeSwap.movedTableRow
+      ] ?? 0) as EntityHandle;
+      const movedRecord = this.records[entityIndex(movedEntity)];
+      if (movedRecord?.generation === entityGeneration(movedEntity)) {
+        movedRecord.archetypeRow = archetypeSwap.newRow;
+      }
+    }
+    record.archetypeId = targetArch.id;
+    record.archetypeRow = appendArchetypeRow(targetArch, tableRow);
   }
 
   expandCoAttach(componentDatas: ComponentData[]): ComponentData[] {

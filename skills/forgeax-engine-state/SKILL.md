@@ -13,7 +13,7 @@ description: >-
 
 > Baseline: feat-20260616-engine-state-and-state-scoped-entities (2026-06-16)
 >
-> Single-world typed-state machine: `defineState` + `setNextState` + state-scoped entity lifecycle (`despawnOnExit`/`despawnOnEnter`) + `OnEnter`/`OnExit` user schedule labels. Zero-intrusion on ECS -- consumes existing `defineComponent`/`addSystem`/Resource CRUD/`queryRun`/`despawn` primitives only. Aggregates `@forgeax/engine-state`.
+> Single-world typed-state machine: `defineState` + `setNextState` + state-scoped entity lifecycle (`despawnOnExit`/`despawnOnEnter`) + `OnEnter`/`OnExit` user schedule labels. It consumes existing component, resource, Query, and despawn primitives. Aggregates `@forgeax/engine-state`.
 
 ## Mental model
 

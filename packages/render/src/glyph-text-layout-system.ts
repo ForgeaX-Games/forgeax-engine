@@ -108,13 +108,13 @@ interface GlyphTextData {
 interface WorldInternalView {
   /** @internal */
   _getGraph(): {
-    readonly archetypes: ReadonlyArray<
+    readonly tables: ReadonlyArray<
       | {
           readonly size: number;
           readonly components: ReadonlyArray<{ readonly id: number }>;
-          readonly columns: ReadonlyMap<
+          readonly storage: ReadonlyMap<
             number,
-            ReadonlyMap<string, { readonly view: ArrayLike<number> }>
+            { readonly fields: ReadonlyMap<string, { readonly view: ArrayLike<number> }> }
           >;
         }
       | undefined
@@ -161,12 +161,12 @@ export function glyphTextLayoutSystem(
 function collectGlyphEntities(worldInternal: WorldInternalView, gtId: number): EntityHandle[] {
   const graph = worldInternal._getGraph();
   const entities: EntityHandle[] = [];
-  for (const arch of graph.archetypes) {
-    if (!arch || arch.size === 0) continue;
-    if (!arch.components.some((c) => c.id === gtId)) continue;
-    const selfCol = arch.columns.get(Entity.id)?.get('self')?.view;
+  for (const table of graph.tables) {
+    if (!table || table.size === 0) continue;
+    if (!table.components.some((c) => c.id === gtId)) continue;
+    const selfCol = table.storage.get(Entity.id)?.fields.get('self')?.view;
     if (selfCol === undefined) continue;
-    for (let i = 0; i < arch.size; i++) {
+    for (let i = 0; i < table.size; i++) {
       entities.push((selfCol[i] ?? 0) as EntityHandle);
     }
   }

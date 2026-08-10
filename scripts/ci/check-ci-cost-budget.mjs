@@ -28,6 +28,27 @@ function readJson(path) {
 function hasNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
+function familyRows(facts) {
+  return Array.isArray(facts.returnEvidence?.families) ? facts.returnEvidence.families : null;
+}
+function validFamilyRows(facts) {
+  return familyRows(facts)?.filter(({ status }) => status === 'valid') ?? null;
+}
+function validArtifactRows(facts) {
+  return validFamilyRows(facts)?.filter((row) => typeof row.artifactId === 'string') ?? null;
+}
+function validCacheRow(facts) {
+  return validFamilyRows(facts)?.find(({ family }) => family === 'merged-ddc') ?? null;
+}
+function artifactBytesTotal(facts) {
+  const rows = validArtifactRows(facts);
+  if (!rows) return null;
+  if (rows.some((row) => !hasNumber(row.compressedArchiveBytes))) return null;
+  return [...new Map(rows.map((row) => [row.artifactId, row])).values()].reduce(
+    (sum, row) => sum + (hasNumber(row.compressedArchiveBytes) ? row.compressedArchiveBytes : 0),
+    0,
+  );
+}
 function requiredNumber(errors, value, field) {
   if (!hasNumber(value)) errors.push(error('ci-cost-required-field-missing', { field }));
   return value;
@@ -130,10 +151,6 @@ function medianOf(values) {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-function sumOf(values) {
-  return values.reduce((s, v) => s + (hasNumber(v) ? v : 0), 0);
-}
-
 function worstOf(values) {
   if (values.length === 0) return null;
   return Math.max(...values);
@@ -141,10 +158,19 @@ function worstOf(values) {
 
 function isComparable(entry, reference) {
   if (entry.cancelled === true) return false;
-  if (!entry.artifacts || !Array.isArray(entry.artifacts) || entry.artifacts.length === 0)
-    return false;
-  if (entry.artifacts.some((a) => !a || typeof a.id !== 'string' || !a.readyAt)) return false;
+  const rows = familyRows(entry);
+  if (!rows || rows.length === 0 || rows.some(({ status }) => status !== 'valid')) return false;
+  const artifactRows = validArtifactRows(entry);
+  if (!artifactRows || artifactRows.length === 0) return false;
   if (reference) {
+    const referenceFingerprints = new Map(
+      validFamilyRows(reference).map((row) => [row.family, row.inputFingerprint]),
+    );
+    if (
+      rows.length !== referenceFingerprints.size ||
+      rows.some((row) => referenceFingerprints.get(row.family) !== row.inputFingerprint)
+    )
+      return false;
     if (entry.runnerType !== reference.runnerType) return false;
     if (entry.runAttempt !== reference.runAttempt) return false;
     if (
@@ -220,11 +246,19 @@ if (mode === 'multi-run') {
     comparable.map((e) => e.wallClock?.worstWallClockSeconds).filter(hasNumber),
   );
   const medianArtifactBytes = medianOf(
-    comparable.map((e) => sumOf((e.artifacts ?? []).map((a) => a.compressedBytes ?? 0))),
+    comparable.map((entry) => artifactBytesTotal(entry)).filter(hasNumber),
   );
-  const medianCacheBytes = medianOf(comparable.map((e) => e.cache?.activeBytes).filter(hasNumber));
+  const medianCacheBytes = medianOf(
+    comparable
+      .map((entry) => validCacheRow(entry)?.activeBytes ?? entry.cache?.activeBytes)
+      .filter(hasNumber),
+  );
   const medianDdcRestore = medianOf(
-    comparable.map((e) => e.cache?.warmRestoreSeconds).filter(hasNumber),
+    comparable
+      .map(
+        (entry) => validCacheRow(entry)?.restore?.elapsedSeconds ?? entry.cache?.warmRestoreSeconds,
+      )
+      .filter(hasNumber),
   );
   const wallClockRatio =
     hasNumber(medianWallClock) && baselineRef.medianWallClockSeconds > 0
@@ -252,29 +286,6 @@ if (mode === 'multi-run') {
     runnerType: reference?.runnerType ?? null,
     runAttempt: reference?.runAttempt ?? null,
   };
-  const medianImprovement =
-    hasNumber(medianWallClock) && baselineRef.medianWallClockSeconds > 0
-      ? (1 - medianWallClock / baselineRef.medianWallClockSeconds) * 100
-      : null;
-  const maxRegression =
-    wallClockRatio !== null && worstWallClockRatio !== null
-      ? Math.max(
-          wallClockRatio > 1 ? (wallClockRatio - 1) * 100 : 0,
-          worstWallClockRatio > 1 ? (worstWallClockRatio - 1) * 100 : 0,
-        )
-      : null;
-  if (
-    medianImprovement !== null &&
-    medianImprovement >= 15 &&
-    maxRegression !== null &&
-    maxRegression <= 10
-  ) {
-    result.shardExpansionCandidate = {
-      medianImprovementPercent: Math.round(medianImprovement * 100) / 100,
-      maxRegressionPercent: maxRegression,
-      recommendation: 'Candidate for 4-6 shard evaluation. Requires human approval before rollout.',
-    };
-  }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exit(0);
 }
@@ -290,13 +301,24 @@ if (!facts) {
   process.exit(1);
 }
 const errors = [];
-const artifacts = Array.isArray(facts.artifacts) ? facts.artifacts : null;
-if (!artifacts) errors.push(error('ci-cost-required-field-missing', { field: 'artifacts' }));
-const total = (artifacts ?? []).reduce(
-  (sum, artifact, index) =>
-    sum + requiredNumber(errors, artifact?.compressedBytes, `artifacts[${index}].compressedBytes`),
-  0,
-);
+const evidenceRows = familyRows(facts);
+const artifacts = evidenceRows ? validArtifactRows(facts) : facts.artifacts;
+if (!Array.isArray(artifacts))
+  errors.push(error('ci-cost-required-field-missing', { field: 'returnEvidence.families' }));
+const total = evidenceRows
+  ? artifactBytesTotal(facts)
+  : (artifacts ?? []).reduce(
+      (sum, artifact, index) =>
+        sum +
+        requiredNumber(errors, artifact?.compressedBytes, `artifacts[${index}].compressedBytes`),
+      0,
+    );
+if (!hasNumber(total))
+  errors.push(
+    error('ci-cost-required-field-missing', {
+      field: 'returnEvidence.families[].compressedArchiveBytes',
+    }),
+  );
 validateBudget(
   errors,
   total,
@@ -318,10 +340,11 @@ for (const [index, consumer] of (Array.isArray(facts.consumers) ? facts.consumer
   );
 }
 const activeBytes = requiredNumber(errors, facts.cache?.activeBytes, 'cache.activeBytes');
+const cacheRow = validCacheRow(facts);
 const restoreSeconds = requiredNumber(
   errors,
-  facts.cache?.warmRestoreSeconds,
-  'cache.warmRestoreSeconds',
+  cacheRow?.restore?.elapsedSeconds ?? facts.cache?.warmRestoreSeconds,
+  'returnEvidence.merged-ddc.restore.elapsedSeconds',
 );
 validateBudget(
   errors,

@@ -148,6 +148,18 @@ export function makeCanvasContext(
   let pendingSurfaceTexture: { present: () => void } | null = null;
   let surfaceDescriptor: { format?: unknown; usage?: unknown } = {};
 
+  function presentPendingSurfaceTexture(): void {
+    const pending = pendingSurfaceTexture;
+    pendingSurfaceTexture = null;
+    if (pending === null || typeof pending.present !== 'function') return;
+    try {
+      pending.present();
+    } catch {
+      // Detach the wrapper even when present fails so it cannot outlive the
+      // surface and be dropped against a dead wgpu surface.
+    }
+  }
+
   // wasm-bindgen texture handles are intentionally opaque, so their browser
   // runtime properties (width/height/format/usage) are not readable by the
   // RHI-debug recorder. Preserve the facts already known at the surface seam
@@ -183,6 +195,9 @@ export function makeCanvasContext(
   return {
     configure(desc: CanvasConfiguration): Result<void, RhiError> {
       try {
+        // Reconfiguration invalidates the old surface image. Release it
+        // before handing the surface back to wgpu.
+        presentPendingSurfaceTexture();
         // M4 w25 integration: the forgeax CanvasConfiguration has
         // `device: RhiDevice` (D-S5); the raw context expects
         // `device: GPUDevice`. Walk the rhi-wgpu device wrapper's
@@ -227,6 +242,11 @@ export function makeCanvasContext(
     },
     unconfigure(): void {
       try {
+        // The final frame has no subsequent getCurrentTexture() call to drive
+        // the normal auto-present path. Release it before wgpu destroys the
+        // surface, or wasm-bindgen can drop a SurfaceTexture against a dead
+        // Surface during renderer/page teardown.
+        presentPendingSurfaceTexture();
         rawContext.unconfigure();
       } catch {
         // Spec-aligned silent return — unconfigure is idempotent.
@@ -253,16 +273,7 @@ export function makeCanvasContext(
         // wrapper, the spec contract stays single-method `getCurrentTexture`,
         // and wgpu_core no longer panics with "Surface image is already
         // acquired" on frame 2 onward.
-        const prev = pendingSurfaceTexture;
-        pendingSurfaceTexture = null;
-        if (prev !== null && typeof prev.present === 'function') {
-          try {
-            prev.present();
-          } catch {
-            // Spec-aligned silent — present is best-effort idempotent;
-            // any failure surfaces in the next acquire's error path.
-          }
-        }
+        presentPendingSurfaceTexture();
         const raw = rawContext.getCurrentTexture() as
           | { getTexture?: () => unknown; present?: () => void }
           | undefined;

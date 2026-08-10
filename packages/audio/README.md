@@ -1,11 +1,11 @@
 # @forgeax/engine-audio
 
-> **Declarative ECS audio subsystem for forgeax-engine.** Pure-interface package -- provides `AudioSource` / `AudioListener` ECS components, `AudioBackend` protocol contract, `AudioError` structured error surface, and `AudioClipAsset` POD type. Browser implementation lives in `@forgeax/engine-audio-webaudio`.
+> **Realm-neutral declarative audio subsystem.** Owns `AudioSource`, `AudioListener`, the ECS tick/plugin, the `AudioBackend` protocol, POD clip bytes, and the closed intent vocabulary. Browser playback lives in `@forgeax/engine-audio-webaudio` and always remains Host-owned.
 
-## 3-symbol core surface (charter P1 progressive disclosure)
+## Core surface
 
 ```ts
-import { AudioSource, AudioListener, AudioClipAsset } from '@forgeax/engine-audio';
+import { AudioSource, AudioListener, audioPlugin, type AudioClipAsset } from '@forgeax/engine-audio';
 ```
 
 Layer 1 (play now): spawn `AudioSource` with `playing: true`. Layer 2 (mix): bus volume/mute via `AudioEngine` Resource. Layer 3 (3D): `spatialBlend: 1` + `AudioListener`.
@@ -13,29 +13,39 @@ Layer 1 (play now): spawn `AudioSource` with `playing: true`. Layer 2 (mix): bus
 ## Minimal BGM playback
 
 ```ts
-import { AudioSource, AudioListener, AudioClipAsset, type AudioBackend } from '@forgeax/engine-audio';
-import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
-
-// Setup: enable audio via the audioPlugin
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
-const app = await createApp(canvas, { plugins: [audioPlugin()] });
+import { AudioSource, AudioListener, audioPlugin, type AudioClipAsset, type AudioBackend } from '@forgeax/engine-audio';
+const created = await createApp(canvas, { plugins: [audioPlugin()] });
+if (!created.ok) throw created.error;
+const app = created.value;
 
 // Load clip via asset system
-const clip = await app.world.getResource('AssetRegistry').loadByGuid<AudioClipAsset>(bgmGuid);
-if (!clip.ok) { /* handle AudioError or AssetError */ }
+const loaded = await app.renderer.assets.loadByGuid<AudioClipAsset>(bgmGuid);
+if (!loaded.ok) throw loaded.error;
+const clip = app.world.allocSharedRef('AudioClipAsset', loaded.value);
 
 // Spawn BGM source
-app.world.spawn(AudioSource({
-  clip: clip.value,
-  playing: true,
-  loop: true,
-  volume: 0.8,
-  bus: 'music',
-}));
+app.world.spawn({
+  component: AudioSource,
+  data: { clip, playing: true, loop: true, volume: 0.8, spatialBlend: 0, bus: 'music' },
+}).unwrap();
 
 // Spawn listener on camera entity
-app.world.spawn(Transform({}), Camera({}), AudioListener({}));
+app.world.spawn(
+  { component: Transform, data: {} },
+  { component: Camera, data: {} },
+  { component: AudioListener, data: {} },
+).unwrap();
 ```
+
+## Realm boundary
+
+| Tier | Engine-side backend | Host-side owner |
+|:--|:--|:--|
+| `main-serial` | Direct intent adapter | `WebAudioEngine` in the Host realm |
+| `engine-worker` | `createAudioIntentBackend` batches POD intents with frame completion | `createHostAudioConsumer` owns decode, cache, nodes, and `AudioContext` |
+| `shared` | Same Engine Worker intent path | Same Host consumer; Kernel Workers never receive audio state |
+
+`AudioClipAsset` is `{ kind: 'audio', sourceKey, bytes }`. The first play intent for a `sourceKey` carries bytes; later plays reuse the Host decode cache. Intents cover play, stop, per-source volume, bus volume/mute, listener pose, and destroy. Stale async decode completion is fenced by the entity play epoch, so it cannot resurrect a stopped or replaced source.
 
 ## ECS component schema
 
@@ -43,7 +53,7 @@ app.world.spawn(Transform({}), Camera({}), AudioListener({}));
 
 | Field | Type | Default | Description |
 |:--|:--|:--|:--|
-| `clip` | `Handle<'AudioClipAsset', 'unmanaged'>` | required | Audio clip handle registered in AssetRegistry |
+| `clip` | `Handle<'AudioClipAsset', 'shared'>` | required | World shared-ref handle for the loaded POD clip |
 | `playing` | `boolean` | `false` | Edge-detected: false->true starts playback, true->false stops |
 | `loop` | `boolean` | `false` | When true, AudioBufferSourceNode.loop is set; one-shot otherwise |
 | `volume` | `number` | `1.0` | Per-source GainNode gain.value; range 0..+Inf (amplification allowed) |
@@ -85,11 +95,11 @@ Each error carries 4-field structured surface: `.code` / `.expected` / `.hint` /
 - **gain.value direct assignment produces audible click** -- `setBusVolume` and `setVolume` directly assign `GainNode.gain.value`, which may produce an audible pop. Smooth ramp (e.g. `setTargetAtTime`) is deferred to a future feat (OOS-8).
 - **No nested bus routing** -- fixed two-bus topology only (OOS-2).
 - **No playback speed control** -- deferred (OOS-7).
-- **No Inspector plugin** -- health check via `AudioEngine` Resource only (OOS-3).
+- **No audio-specific Inspector method** -- use `app.execution.report().audio` or the existing Remote execution root.
 
 ## Related packages
 
-- [`@forgeax/engine-audio-webaudio`](../audio-webaudio) -- browser implementation (`createWebAudioBackend`, tick systems)
+- [`@forgeax/engine-audio-webaudio`](../audio-webaudio) -- Host implementation (`createWebAudioBackend`, `createHostAudioConsumer`)
 - [`@forgeax/engine-ecs`](../ecs) -- `defineComponent`, World, Entity, System, Resource
 - [`@forgeax/engine-app`](../app) -- `createApp({ plugins: [audioPlugin()] })` injection
 - [`@forgeax/engine-types`](../types) -- `AudioErrorCode`, `AudioError`, `AudioClipAsset` type definitions SSOT

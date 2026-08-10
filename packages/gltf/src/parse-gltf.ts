@@ -25,6 +25,7 @@ import {
   type GltfSubAssetEntry,
   reimportReuseMeta,
 } from './reimport-reuse-meta.js';
+import type { GltfSourceKeyError } from './source-key.js';
 import { type DecomposedTransform, decomposeNodeTransform } from './transform.js';
 
 export interface MeshPrimitiveJson {
@@ -327,6 +328,19 @@ export interface NodeInstancingIr {
   readonly transforms: Float32Array;
 }
 
+export type GltfPunctualLightType = 'directional' | 'point' | 'spot';
+
+export interface GltfPunctualLightIr {
+  readonly type: GltfPunctualLightType;
+  readonly color: readonly [number, number, number];
+  readonly intensity: number;
+  readonly range?: number;
+  readonly spot?: {
+    readonly innerConeAngle: number;
+    readonly outerConeAngle: number;
+  };
+}
+
 export interface GltfNodeIr {
   readonly name?: string;
   readonly transform: DecomposedTransform;
@@ -338,6 +352,8 @@ export interface GltfNodeIr {
   readonly instancing?: NodeInstancingIr;
   /** glTF camera index. Null when the node does not reference a camera. */
   readonly camera: number | null;
+  /** KHR_lights_punctual light index. Null when the node has no light. */
+  readonly lightIndex?: number | null;
 }
 
 export interface GltfSceneIr {
@@ -363,6 +379,14 @@ export interface GltfDoc {
   readonly animationClips: readonly GltfAnimationClipRecord[];
   readonly defaultSceneIndex: number;
   readonly diagnostics: GltfDiagnosticsIr;
+  /** KHR_lights_punctual author facts, kept in source units for the bridge. */
+  readonly lights?: readonly GltfPunctualLightIr[];
+  /** Raw extension projection retained for bridge-only hand-constructed docs. */
+  readonly extensions?: {
+    readonly KHR_lights_punctual?: {
+      readonly lights?: readonly GltfPunctualLightIr[];
+    };
+  };
   /**
    * Original glTF-mesh-index -> number of primitives that mesh expanded into
    * (feat-20260608 round-2). parseGltf flattens N glTF meshes with M_i
@@ -420,6 +444,9 @@ interface RootGltfJson extends GltfExtensionsJson {
     readonly rotation?: readonly number[];
     readonly scale?: readonly number[];
     readonly extensions?: {
+      readonly KHR_lights_punctual?: {
+        readonly light?: number;
+      };
       readonly EXT_mesh_gpu_instancing?: {
         readonly attributes?: {
           readonly TRANSLATION?: number;
@@ -429,6 +456,20 @@ interface RootGltfJson extends GltfExtensionsJson {
       };
     };
   }>;
+  readonly extensions?: {
+    readonly KHR_lights_punctual?: {
+      readonly lights?: ReadonlyArray<{
+        readonly type?: string;
+        readonly color?: readonly number[];
+        readonly intensity?: number;
+        readonly range?: number;
+        readonly spot?: {
+          readonly innerConeAngle?: number;
+          readonly outerConeAngle?: number;
+        };
+      }>;
+    };
+  };
   readonly skins?: ReadonlyArray<{
     readonly name?: string;
     readonly joints: readonly number[];
@@ -549,6 +590,65 @@ interface ParseGltfInternalsContext {
   readonly filePath: string;
 }
 
+function parsePunctualLights(
+  json: RootGltfJson,
+  filePath: string,
+): Result<readonly GltfPunctualLightIr[], GltfError> {
+  const source = json.extensions?.KHR_lights_punctual?.lights ?? [];
+  const lights: GltfPunctualLightIr[] = [];
+  for (const light of source) {
+    const type = light?.type;
+    if (type !== 'directional' && type !== 'point' && type !== 'spot') {
+      return err(gltfErr('gltf-malformed-header', { filePath, byteOffset: 0 }));
+    }
+    const color = light.color ?? [1, 1, 1];
+    if (
+      color.length < 3 ||
+      color
+        .slice(0, 3)
+        .some(
+          (value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1,
+        )
+    ) {
+      return err(gltfErr('gltf-malformed-header', { filePath, byteOffset: 0 }));
+    }
+    const intensity = light.intensity ?? 1;
+    if (typeof intensity !== 'number' || !Number.isFinite(intensity) || intensity < 0) {
+      return err(gltfErr('gltf-malformed-header', { filePath, byteOffset: 0 }));
+    }
+    const range = light.range;
+    if (
+      range !== undefined &&
+      (typeof range !== 'number' || !Number.isFinite(range) || range < 0)
+    ) {
+      return err(gltfErr('gltf-malformed-header', { filePath, byteOffset: 0 }));
+    }
+    let spot: GltfPunctualLightIr['spot'];
+    if (type === 'spot') {
+      const innerConeAngle = light.spot?.innerConeAngle ?? 0;
+      const outerConeAngle = light.spot?.outerConeAngle ?? Math.PI / 4;
+      if (
+        !Number.isFinite(innerConeAngle) ||
+        !Number.isFinite(outerConeAngle) ||
+        innerConeAngle < 0 ||
+        innerConeAngle >= outerConeAngle ||
+        outerConeAngle > Math.PI / 2
+      ) {
+        return err(gltfErr('gltf-malformed-header', { filePath, byteOffset: 0 }));
+      }
+      spot = { innerConeAngle, outerConeAngle };
+    }
+    lights.push({
+      type,
+      color: [color[0] ?? 1, color[1] ?? 1, color[2] ?? 1],
+      intensity,
+      ...(range === undefined || range === 0 ? {} : { range }),
+      ...(spot === undefined ? {} : { spot }),
+    });
+  }
+  return ok(lights);
+}
+
 async function parseGltfWithBin(
   json: RootGltfJson,
   ctx: ParseGltfInternalsContext,
@@ -559,6 +659,8 @@ async function parseGltfWithBin(
   const extResult = checkExtensions(json);
   if (!extResult.ok) return err(extResult.error);
   const unsupportedExtensions = extResult.value.unsupportedUsed;
+  const lightsResult = parsePunctualLights(json, ctx.filePath);
+  if (!lightsResult.ok) return err(lightsResult.error);
 
   const meshesJson = json.meshes ?? [];
 
@@ -973,6 +1075,7 @@ async function parseGltfWithBin(
 
     const alphaMode =
       matJson.alphaMode === 'MASK' || matJson.alphaMode === 'BLEND' ? matJson.alphaMode : undefined;
+    const alphaCutoff = alphaMode === 'MASK' ? (matJson.alphaCutoff ?? 0.5) : undefined;
     const emissiveFactor = matJson.emissiveFactor;
     const emissiveFactor3: readonly [number, number, number] = [
       emissiveFactor?.[0] ?? 0,
@@ -1015,7 +1118,7 @@ async function parseGltfWithBin(
         ? {}
         : { emissiveTexture: parseTextureInfo(matJson.emissiveTexture, textures) }),
       ...(alphaMode === undefined ? {} : { alphaMode }),
-      ...(matJson.alphaCutoff === undefined ? {} : { alphaCutoff: matJson.alphaCutoff }),
+      ...(alphaCutoff === undefined ? {} : { alphaCutoff }),
       ...(matJson.doubleSided === true ? { doubleSided: true } : {}),
       ...(pbr?.baseColorTexture?.texCoord === undefined || pbr.baseColorTexture.texCoord === 0
         ? {}
@@ -1056,6 +1159,7 @@ async function parseGltfWithBin(
       skinIndex: nodeJson.skin ?? null,
       children: nodeJson.children ?? [],
       camera: nodeJson.camera ?? null,
+      lightIndex: nodeJson.extensions?.KHR_lights_punctual?.light ?? null,
       ...(instancing === undefined ? {} : { instancing }),
     });
   }
@@ -1097,6 +1201,7 @@ async function parseGltfWithBin(
       matrixTrsCoexistNodes: diagnostics.matrixTrsCoexistNodes,
     },
     meshPrimitiveCount,
+    lights: lightsResult.value,
   });
 }
 
@@ -1167,10 +1272,18 @@ export async function parseGlb(
   });
 }
 
+export interface GltfAssetPack {
+  readonly meta: GltfMetaJson;
+  readonly subAssets: readonly GltfSubAssetEntry[];
+}
+
+export type GltfAssetPackResult = Result<GltfAssetPack, GltfSourceKeyError>;
+
 /**
  * Project a parsed `GltfDoc` into the disk-shape `<source>.meta.json` plus
  * the freshly minted `subAssets[]` list (UUIDv7 + reimport-reuse-meta
- * two-stage match per plan-strategy section 2.4).
+ * two-stage match per plan-strategy section 2.4). Source-key conflicts are
+ * returned before GUID minting or serialization.
  *
  * `existingMeta` is the previously-written `<source>.meta.json` parsed back
  * into memory (callers typically read + JSON.parse it before invoking).
@@ -1185,7 +1298,7 @@ export function toAssetPack(
   doc: GltfDoc,
   existingMeta: GltfMetaJson | undefined,
   source: string,
-): { readonly meta: GltfMetaJson; readonly subAssets: readonly GltfSubAssetEntry[] } {
+): GltfAssetPackResult {
   const items: GltfDocItem[] = [];
   // Mesh sub-assets are keyed on the *original glTF mesh-index*, not on the
   // flat GltfMeshIr index. parseGltf flattens N glTF meshes with M_i primitives
@@ -1271,12 +1384,13 @@ export function toAssetPack(
   }
 
   const reuse = reimportReuseMeta(items, existingMeta);
+  if (!reuse.ok) return reuse;
   const meta: GltfMetaJson = {
     schemaVersion: 1,
     kind: 'external-asset-package',
     importer: 'gltf',
     source,
-    subAssets: reuse.subAssets,
+    subAssets: reuse.value.subAssets,
     importSettings: {
       defaultSceneIndex: doc.defaultSceneIndex,
       ...(typeof existingMeta?.importSettings.standardMaterialGuid === 'string'
@@ -1292,7 +1406,7 @@ export function toAssetPack(
       },
     },
   };
-  return { meta, subAssets: reuse.subAssets };
+  return ok({ meta, subAssets: reuse.value.subAssets });
 }
 
 // Suppress unused-import warning; COMPONENT_TYPE is re-exported so

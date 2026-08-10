@@ -284,12 +284,7 @@ export class SceneCollectAssetGuidUnresolvedError extends Error {
  * Closed union of asset-cluster error codes. AI users perform exhaustive
  * `switch (err.code)` without default; TS guards completeness.
  */
-export type AssetRuntimeErrorCode =
-  | 'material-resolved-empty-passes'
-  | 'mesh-ssbo-capacity-exceeded'
-  | 'mesh-ssbo-ceiling-reached'
-  | 'scene-collect-entity-ref-out-of-closure'
-  | 'scene-collect-asset-guid-unresolved';
+export type AssetRuntimeErrorCode = AssetRuntimeError['code'];
 
 /**
  * Closed union of the asset-cluster structured error classes, each carrying

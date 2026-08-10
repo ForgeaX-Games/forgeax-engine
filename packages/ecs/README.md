@@ -2,7 +2,7 @@
 
 Archetype ECS for forgeax-engine — `World` / `Entity` / `Component` / `Query` / `System` / `Schedule` / `Commands` / `Resource`. Position in the package family: see [AGENTS.md §Packages](../../AGENTS.md#packages).
 
-This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS.md keeps doc-brevity (the bare reference to "演进契约 / Per-feat breaking changes" lives there); concrete shape supersedes are logged here so AI users can `grep -rn '2026-05-11' packages/*/README.md` and locate every breaking change row in one pass.
+This README is the **per-package evolution-contract anchor** for `Result<T, E>`. AGENTS.md keeps the cross-package rule brief; concrete shape supersedes are logged here so AI users can locate each breaking change from its dated row.
 
 ## Time and scheduling
 
@@ -18,28 +18,55 @@ const Velocity = defineComponent('Velocity', { dx: 'f32', dy: 'f32' });
 
 const Move = defineSystem({
   name: 'move',
-  queries: [{ with: [Position, Velocity] }],
-  fn: (world, queryResults) => {
-    for (const bundle of queryResults[0]) {
-      for (let i = 0; i < bundle.entityCount; i++) {
-        const h = bundle.Entity.self[i];
-        world.set(h, Position, {
-          x: bundle.Position.x[i] + bundle.Velocity.dx[i],
-          y: bundle.Position.y[i] + bundle.Velocity.dy[i],
-        });
-      }
+  queries: [{ write: [Position], read: [Velocity] }],
+  fn: (_world, [moving]) => {
+    for (const row of moving) {
+      const position = row.mut(Position);
+      const velocity = row.get(Velocity);
+      position.x += velocity.dx;
+      position.y += velocity.dy;
     }
   },
 });
 
 const world = new World();
-world.spawn({ component: Position, data: { x: 0, y: 0 } }).unwrap();
-world.spawn({ component: Velocity, data: { dx: 1, dy: 0.5 } }).unwrap();
+world.spawn(
+  { component: Position, data: { x: 0, y: 0 } },
+  { component: Velocity, data: { dx: 1, dy: 0.5 } },
+).unwrap();
 world.addSystem(Update, Move).unwrap();
 
 const r = world.update(0.016); // ~60fps delta
 if (!r.ok) console.error(r.error.code, r.error.hint);
 ```
+
+## Shared numeric kernels
+
+`World({ storage: 'shared' })` allocates numeric table columns in `SharedArrayBuffer`. Ordinary row queries keep their normal semantics; `query.spans()` exposes contiguous zero-copy `QuerySpan` views for numeric table data. Shared execution is opt-in per independently loadable Kernel module.
+
+```ts
+import { Update, defineSharedKernel, type QuerySpan } from '@forgeax/engine-ecs';
+
+function integrate(spans: readonly QuerySpan[]): void {
+  for (const span of spans) {
+    const position = span.mut(Position);
+    for (let index = 0; index < span.length; index += 1) position.x[index] += 1;
+  }
+}
+
+world.addSystem(Update, defineSharedKernel(
+  new URL('./integrate-kernel.mjs', import.meta.url).href,
+  {
+    name: 'integrate-shared',
+    queries: [{ write: [Position] }],
+    run: integrate,
+  },
+)).unwrap();
+```
+
+The Kernel is eligible only when its callback is a named module function, every access is declared, all projected fields are numeric table fields, and no optional/change/sparse projection requires row semantics. Small spans and Worlds without a shared executor run the same Kernel inline. A dispatch failure before any shard writes also runs inline safely.
+
+Once any shard may have written, failure is terminal for that World: `world.execution.health` becomes `poisoned`, future updates return `world-poisoned`, and the Kernel is never retried inline. Structural mutation, resources, relation mirrors, and command application remain serial barriers. App-level realm selection, reports, and explicit rebuild are documented by [`@forgeax/engine-app`](../app#execution-tiers).
 
 ### Reusable system parameters
 
@@ -48,10 +75,10 @@ if (!r.ok) console.error(r.error.code, r.error.hint);
 ```ts
 const PlayerCounter = defineSystemParam({
   name: 'player-counter',
-  queries: [{ with: [Player, Entity] }],
+  queries: [{ with: [Player] }],
   resources: ['player-count'],
-  resolve: (world, results) => ({
-    players: results[0]?.reduce((n, bundle) => n + bundle.Entity.self.length, 0) ?? 0,
+  resolve: (world, [players]) => ({
+    players: Array.from(players).length,
     count: world.getResource<{ value: number }>('player-count'),
   }),
 });
@@ -131,11 +158,9 @@ world.addComponent(entity, { component: Disabled, data: {} }).unwrap();
 
 world.addSystem(Update, {
   name: 'reenable-targets',
-  queries: [{ with: [Target, Disabled, Entity] }],
-  fn: (_world, queryResults, commands) => {
-    for (const bundle of queryResults[0]) {
-      for (const entity of bundle.Entity.self) commands.removeComponent(entity, Disabled);
-    }
+  queries: [{ with: [Target, Disabled] }],
+  fn: (_world, [targets], commands) => {
+    for (const row of targets) commands.removeComponent(row.entity, Disabled);
   },
 }).unwrap();
 ```
@@ -345,7 +370,7 @@ Import built-in set tokens from the package that owns their registration contrac
 
 **Supersedes**: `feat-20260507-ecs-refactor` KD-1 (`packages/ecs/src/result.ts` plain-union `Result<T, E>` with method-getter surface).
 
-**Loop anchor**: `.forgeax-harness/forgeax-loop/feat-20260511-tetris-retro-followups/` (requirements §6.3 AC-14 / plan-decisions D-P8 方向 B / research §F-12).
+**Loop anchor**: `.forgeax-harness/forgeax-loop/feat-20260511-tetris-retro-followups/` (requirements §6.3 AC-14 / plan-decisions D-P8 direction B / research §F-12).
 
 **Shape diff**:
 
@@ -356,7 +381,7 @@ Import built-in set tokens from the package that owns their registration contrac
 | Error accessor | `_error: E` on err branch | `readonly error: E` on err branch |
 | Method surface | `.isOk()` / `.isErr()` / `.map(fn)` / `.mapErr(fn)` getters | `.unwrap()` / `.unwrapOr(default)` only (`.isOk` / `.isErr` / `.map` / `.mapErr` **removed**) |
 | Narrow idiom | `if (r.isOk()) { r._value }` | `if (r.ok) { r.value }` |
-| Alignment | ecs-private union (rhi unchanged) | byte-for-byte aligned with `packages/rhi/src/errors.ts` Result (charter proposition 5 一致抽象) |
+| Alignment | ecs-private union (rhi unchanged) | byte-for-byte aligned with `packages/rhi/src/errors.ts` Result (charter proposition 5, consistent abstraction) |
 
 **Call-site upgrade diff** (minimum 1 example, charter proposition 4 text-over-image):
 
@@ -394,7 +419,7 @@ Import built-in set tokens from the package that owns their registration contrac
 | Aspect | Before | After |
 |:--|:--|:--|
 | Entity identity storage | `arch.entities[row]` (24-bit index slot only, side-array) | id=0 `Entity` component column `self: 'entity'` (full packed 32-bit handle) |
-| Rebuilding a handle from a row | `arch.entities[i]` + `_getEntityGenerationForIndexSlot` + `encodeEntity` (three-step) | `bundle.Entity.self[i]` (query) or `arch.columns.get(Entity.id).get('self')` (hand-written loops) |
+| Rebuilding a handle from a row | `arch.entities[i]` + `_getEntityGenerationForIndexSlot` + `encodeEntity` (three-step) | `row.entity` from a public Query; internal Table code reads `Entity.self` |
 | Liveness probe | `world.isAlive(e)` (public method) | `world.get(e, Entity)` (returns `err(STALE_ENTITY)` for despawned handles; works on any entity ref field via `'entity'` vocab) |
 | `EntityRecord.alive` field | present (boolean, dual-judgement with generation) | **deleted** — liveness is pure `record.generation === handle.gen` |
 | `despawn` | sets `alive = false`, pushes index to `freeIndices` | `generation += 1` unconditionally; pushes index to `freeIndices` only when new gen <= 255 |
@@ -416,7 +441,7 @@ Import built-in set tokens from the package that owns their registration contrac
 -const inst = world.get(handle, Instances);
 
  // after — single column read (query path)
-+const handle = bundle.Entity.self[i];
++const handle = row.entity;
 +const inst = world.get(handle, Instances);
 
  // before — liveness check
@@ -440,7 +465,7 @@ Import built-in set tokens from the package that owns their registration contrac
 > [!WARNING]
 > **Forgeax uses unbounded JS-number generation + packed handle taking the low 8 bits, with gen>255 slots permanently retiring as tombstones.** No native ECS (Bevy NonMaxU32 / EnTT tombstone / flecs tag bits / UECS swap-back) lets generation cross the packing bit-width to serve as a tombstone — this is a forgeax-unique idiom driven by JavaScript's lack of a native 8-bit integer type. **Do not extrapolate gen-wrap mentality from Bevy or EnTT experience:** forgeax generation never wraps, and a handle with generation=256 is a real, usable handle whose index slot will never be reissued. If you design a system that assumes "generation wraps modulo 256," it will be wrong on forgeax.
 
-**Why this row exists** (charter P4 consistent abstraction + P3 explicit failure): AI users porting code written against the three-step entity rebuild pattern must replace `arch.entities[i]` with `bundle.Entity.self[i]` and `world.isAlive(e)` with `world.get(e, Entity)`. The Entity component column unifies the read path — entity handles are read like any other component column — and the error code `remove-essential-component` makes the structural invariant (Entity column is required) surface as a structured error rather than a silent corruption. Grepping `2026-06-02` in `packages/*/README.md` lands on this row. The loop anchor above carries the full requirements / plan / verify trail.
+**Why this row exists** (charter P4 consistent abstraction + P3 explicit failure): AI users porting code written against the three-step entity rebuild pattern read `row.entity` from a public Query and use `world.get(e, Entity)` for liveness. Internally, the Entity component column remains the packed-handle authority. The error code `remove-essential-component` makes the structural invariant explicit rather than permitting silent corruption.
 
 ### 2026-06-11 — ECS storage naming SSOT (major)
 
@@ -470,21 +495,16 @@ Import built-in set tokens from the package that owns their registration contrac
 
 ## Remote eval
 
-ECS inspection and mutation route through `@forgeax/engine-remote`'s single `eval` channel. The `createApp` entry point wires `app.remote` by default in dev mode (port 5732); the eval scope carries `world`, `renderer`, `assets`, and `debugAdapter` as live roots. Discovery of ECS entities and component data is through `queryRun` — no Registry, no pre-built commands, no read-only proxy:
+ECS inspection and mutation route through `@forgeax/engine-remote`'s single `eval` channel. The `createApp` entry point wires `app.remote` by default in dev mode (port 5732); the eval scope carries `world`, `renderer`, `assets`, and `debugAdapter` as live roots. Entity discovery uses the World-owned Query iterator:
 
 ```ts
 // Inside eval scope (via in-process client.eval or WS JSON-RPC 2.0):
-const ecs = await _import('@forgeax/engine-ecs');
-const scene = await _import('@forgeax/engine-scene');
-const { createQueryState, queryRun, Entity } = ecs;
-const state = createQueryState({ with: [Entity, scene.Transform] });
-queryRun(state, world, (bundle) => {
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
-    const h = bundle.Entity.self[i];
-    const pos = bundle.Transform.pos;
-    const px = pos[i * 3]; // non-optional read
-  }
-});
+const { Transform } = await _import('@forgeax/engine-scene');
+const query = world.query({ read: [Transform] }).unwrap();
+for (const row of query) {
+  const handle = row.entity;
+  const x = row.get(Transform).pos[0];
+}
 ```
 
 Fixed-array fields are exposed as flat typed-array columns: row `i` starts at
@@ -653,93 +673,74 @@ export const Transform = defineComponent('Transform', {
 
 The flag is programmatically self-inspectable: `Transform.fields.world.transient === true` (Layer-2 reflection, see [§reflection](#layer-2-componentfieldsfieldname--per-field-pre-parsed-reflection)) — an AI user can confirm whether a field is serialized without reading source or trial-serializing.
 
-## Query — `optional` per-archetype column-level exposure (feat-20260531)
+## Table components and sparse tags
 
-**`optional` = per-archetype column-level data exposure; does not participate in matching/filtering.** The `with` set determines **which archetypes match** (`with ∩ ¬without`); `optional` only decides **which extra columns the bundle carries** on each matched archetype. A component in `optional` that is absent from an archetype simply omits its key from `bundle` (overall absent — no `undefined` value, no empty object). This is the data/filter separation (wiki/bevy-ecs AP-3): optional lives in the data dimension, not the filter dimension.
-
-**Constructor shape** — `optional` is a peer of `with` / `without` on `QueryDescriptor`, same `readonly Component[]` shape:
+Components use table storage by default. Table components own SoA columns and are appropriate for data and stable marker identity. A zero-field marker that changes frequently can opt into sparse storage:
 
 ```ts
-const state = createQueryState({
-  with: [Camera],
-  optional: [GlobalTransform, Transform],
-}, world);
+const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
+const Enemy = defineComponent('Enemy', {}); // table tag
+const Selected = defineComponent('Selected', {}, { storage: 'sparse' });
 ```
 
-**Bundle type mapping** — `NestedColumnBundle<Cs, Os>` maps optional components to an overall-`?:` intersection via `Partial<...>` (charter P4). The `exactOptionalPropertyTypes` compiler flag means `?:` signals "key may be absent", matching the AC-02 per-archetype absent semantic exactly:
+`storage` is a frozen fact on the Component token. Sparse storage accepts only an empty schema and no relationship metadata; invalid declarations throw `SparseStorageRequiresTagError` with code `sparse-storage-requires-tag`. `Disabled` intentionally remains a table tag so the default `without Disabled` query predicate can reject whole Tables and preserve span capability.
 
-| Component source | Bundle key type | Example |
+An Archetype owns the complete logical component set and maps each logical row to a physical Table row. Archetypes that differ only by sparse tags share one Table. Adding or removing a sparse tag moves only that logical mapping and its generation-safe sparse membership; it does not copy table data or change Table size, capacity, version, buffers, or table-component epochs.
+
+Use sparse tags for high-frequency membership such as selection or damage markers. Keep stable identity tags in table storage. Do not choose sparse merely because a schema is empty: it trades whole-Table filtering for cheaper membership flips.
+
+`world.inspect()` reports these owners separately: `archetypes[].componentNames` includes table and sparse identity, while `tables[].componentNames` includes physical table storage only.
+
+## Query
+
+`world.query(descriptor)` is the only constructor. It compiles component access, filters, span capability, and independent change-observation cursor into one persistent Query.
+
+| Descriptor role | Matching | Data permission |
 |:--|:--|:--|
-| `with` (Cs) | Non-optional intersection | `bundle.Camera.fovY` is `number // not undefined` |
-| `optional` (Os) | Overall `?:` intersection | `bundle.GlobalTransform` is `{ pos: Float32Array, ... } \| undefined` |
-
-**Callback consumption** — AI users read optional columns with standard TS optional chaining, no cast needed:
+| `read` | component required | `row.get(Component)` |
+| `write` | component required | `row.mut(Component)` |
+| `optional` | does not filter | `row.get(Component)` may be `undefined` |
+| `with` / `without` | presence filter | none |
+| `changed` / `added` | row observation filter, AND across entries | none |
 
 ```ts
-queryRun(state, world, (bundle) => {
-  const count = bundle.entityCount;
-  const cam = bundle.Camera;                    // always present (with)
-  const gtf = bundle.GlobalTransform;           // { pos, ... } | undefined
-  for (let i = 0; i < count; i++) {
-    const fovY = cam.fovY;                      // non-optional read
-    const px = gtf?.pos[i * 3];                 // optional chaining — safe when absent
-  }
-});
+const query = world.query({
+  read: [Camera],
+  write: [Transform],
+  optional: [Velocity],
+  with: [Visible],
+  changed: [Transform],
+}).unwrap();
+
+for (const row of query) {
+  const camera = row.get(Camera);
+  const transform = row.mut(Transform);
+  const velocity = row.get(Velocity);
+  transform.pos[0] += velocity?.x ?? camera.fov;
+}
 ```
 
-Real-world consumer: `packages/runtime/src/render-system-extract.ts` Camera / PointLight / SpotLight extract segments (feat-20260531 M2 migration).
+> [!IMPORTANT]
+> Query rows and spans are transient facades. Retain `row.entity`, not the row object or a span view. Structural mutation during iteration throws `query-iteration-invalidated`; re-entering the same Query throws `query-iteration-active`.
 
-**Boundaries**:
+Mutation evidence is owned by mutation. `row.mut(Component)` and `span.mut(Component)` mark the component through the same epoch owner used by `world.set`, `push`, and `pop`. Each Query advances its own observation cursor only after iteration completes.
 
-| Scenario | Behaviour |
-|:--|:--|
-| Optional component absent from **all** matched archetypes | `bundle.X === undefined` on every callback — no error, optional means "may be absent" |
-| Optional component present on **some** archetypes | Present archetypes get the key; absent archetypes omit it. Per-archetype granularity, matches archetype ECS model. |
-| Same token in both `with` and `optional` | **Fail-fast** at `createQueryState` construction time: `EcsError(code='query-descriptor-with-optional-conflict')` with `.hint` property-accessible (charter P3). `with` implies "always present + filter", `optional` means "may be absent, no filter" — they contradict for the same component. This is a descriptor self-consistency check, O(descriptor) one-time, zero per-frame / per-archetype overhead. |
-| Optional component not registered in World | Treated as absent from all archetypes — `optionalIds` omits unresolved tokens; no crash, predictable behaviour (<https://github.com/bevyengine/bevy/issues/17578>) |
-| Empty `optional: []` | Equivalent to pure `with` query — no optional keys in bundle. `DirectionalLight` query keeps this form (OOS-5). |
+### Dense zero-copy spans
 
-## Query — change detection (`changed` / `added`)
-
-`changed` and `added` are query descriptor filters for Bevy-style per-component change detection. A filtered query only visits rows whose component changed or was added after that query state's previous run; the first run sees entities already present in the world. Multiple entries in either list use AND semantics.
+`query.spans()` returns `Result<Iterable<QuerySpan>, QuerySpanUnavailableError>`. It exposes transient TypedArray views without gather or copy when every accessed component is dense and the descriptor has no `optional`, `changed`, or `added` role.
 
 ```ts
-const changed = createQueryState({
-  with: [Position, Entity],
-  changed: [Position],
-}, world);
-
-queryRun(changed, world, (bundle) => {
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
-    const x = bundle.Position.x[i] ?? 0;
-    // Process only Position rows changed since this query last ran.
-    console.log(x);
-  }
-});
-```
-
-The World records component changes made through `spawn`, `addComponent`, `set`, `push`, and `pop`. `insertResource` records resource insertion/overwrite ticks, available through `world.getResourceChange(name)`. A query's change cursor belongs to its `QueryState`, so two states with the same descriptor observe changes independently. Raw writes through an unfiltered query's typed-array view cannot be tracked automatically; use `world.set` or another World mutation boundary when change evidence is required.
-
-When matching rows are interleaved inside one archetype, `queryRun` invokes the callback for contiguous live row windows. The returned typed-array views remain writable and are scoped to the callback segment, preserving the existing zero-copy column contract.
-
-`added` is distinct from `changed`: a newly spawned component satisfies both filters on its first observation, while a later `set` satisfies only `changed`.
-
-## Query — contiguous archetype slices (`queryRunContiguous`)
-
-`queryRunContiguous` is the dense-column counterpart to Bevy's `contiguous_iter_mut`. It returns `true` and routes the callback through every non-empty matching archetype when the descriptor has one dense shape. The callback receives the same writable, zero-copy column views as `queryRun`, so a system can process a whole archetype column without collecting entity handles or copying rows:
-
-```ts
-const state = createQueryState({ with: [Health, HealthDecay, Entity] });
-const supported = queryRunContiguous(state, world, (bundle) => {
-  const health = bundle.Health.value;
-  const decay = bundle.HealthDecay.factor;
-  for (let i = 0; i < bundle.Entity.self.length; i++) {
+const query = world.query({ write: [Health], read: [HealthDecay] }).unwrap();
+for (const span of query.spans().unwrap()) {
+  const health = span.mut(Health).value;
+  const decay = span.get(HealthDecay).factor;
+  for (let i = 0; i < span.length; i++) {
     health[i] = (health[i] ?? 0) * (decay[i] ?? 0);
   }
-});
+}
 ```
 
-`without` filters remain dense because they exclude whole archetypes. `optional`, `changed`, and `added` descriptors return `false` without invoking the callback: optional data can be absent per archetype, while row-level change filters can fragment one archetype into multiple windows. The API shares `queryRun`'s archetype matching, cache, and column slicing implementation; it adds a truthful capability check rather than a second iteration path.
+Capability rejection is structured: `query-span-unavailable` carries the reason instead of returning a boolean or silently falling back to copied rows.
 
 ## Component lifecycle hooks (`onAdd` / `onInsert` / `onDiscard` / `onRemove`)
 
@@ -757,36 +758,16 @@ const Marker = defineComponent('Marker', { key: 'u32' }, {
 
 `onAdd` fires only when the entity did not already carry the component. `onInsert` fires after spawn, add, and set writes. `onDiscard` receives the old value before a set replacement, component removal, or despawn; `onRemove` follows it while the component is still logically present. The same ordering applies to deferred `Commands` materialization. Hooks are synchronous and intentionally receive snapshots rather than a World handle; use systems or events when a callback needs broader world mutation.
 
-## Query — pairwise / K-combination iteration (`queryCombinations`)
+## Query combinations
 
-**`queryCombinations(state, world, k, callback)` visits every unordered K-combination of the matched entities**, invoking `callback` once per combination with a K-tuple of `EntityHandle`s. It is the combinatorial counterpart of `queryRun` (single entities) — the canonical use is **pairwise interaction**: N-body gravity, collision broadphase, flocking, where each unordered PAIR is processed exactly once.
+`query.combinations(k)` visits each unordered K-combination through the same descriptor, cursor, row facade, and invalidation rules. `k` defaults to 2; `k > N` yields nothing.
 
 ```ts
-const ecs = await _import('@forgeax/engine-ecs');
-const scene = await _import('@forgeax/engine-scene');
-const { createQueryState, queryCombinations, Entity } = ecs;
-const Body = defineComponent('Body', { mass: 'f32' });
-const state = createQueryState({ with: [Body, scene.Transform, Entity] });
-
-// Apply each pair's mutual gravitational force once (Bevy's interact_bodies):
-queryCombinations(state, world, 2, (pair) => {
-  const ta = world.get(pair[0], scene.Transform);
-  const tb = world.get(pair[1], scene.Transform);
-  if (!ta.ok || !tb.ok) return;
-  // ... compute force from (tb.pos - ta.pos), accumulate into both via world.set
-});
+const bodies = world.query({ write: [Body, Transform] }).unwrap();
+for (const [left, right] of bodies.combinations(2)) {
+  applyPair(left.mut(Body), left.get(Transform), right.mut(Body), right.get(Transform));
+}
 ```
-
-**Why it maps Bevy `Query::iter_combinations` but is simpler.** Bevy needs a special `iter_combinations_mut()` cursor because Rust's borrow checker forbids two `&mut` into the same query at once. forgeax reads/writes component data through handle-keyed `world.get` / `world.set`, so the helper only yields entity-handle *pairs* — no mutable-aliasing ceremony, no cursor type. The two entities in a pair are freely readable and writable via their handles.
-
-| Property | Behaviour |
-|:--|:--|
-| Ordering | Lexicographic over the matched-entity order (`i0 < i1 < ... < i(k-1)`): no self-pairs, no ordered duplicates. `C(N, k)` combinations for `N` matched entities. |
-| `k` default | `2` (the pair case) is the common call; a general `k` covers triple-wise interactions (`C(N, 3)` etc.). |
-| `k > N` or `N === 0` | Yields zero combinations (no callback). |
-| Filter | Respects the query's `with` / `without` — combinations are drawn only from matched entities. |
-| Tuple reuse | The handle tuple passed to `callback` is REUSED across invocations (no per-combination allocation). Destructure it or copy if you must retain it past the callback. |
-| `Entity` absent from `with` | **Fail-fast**: throws `EcsError(code='query-combinations-entity-required')` with `.hint` — the yielded unit is the entity handle (read from `bundle.Entity.self`), so `Entity` must be in `with`. |
 
 ## Name component
 
@@ -1023,7 +1004,7 @@ SceneInstance)` and address members through `mapping[localId]`.
 | `getSceneAssetForInstance` | `(root: EntityHandle) => Handle<SceneAsset> \| undefined` | Read the originating handle. Equivalent to `world.get(root, SceneInstance).value.source`. |
 
 Read paths use the standard ECS query surface:
-`world.queryRun([SceneInstance], rows => ...)` for active-instance scans;
+`world.query({ read: [SceneInstance] })` for active-instance scans;
 `world.get(root, SceneInstance).value` for one-instance reads;
 `world.getSceneInstanceState(root)` for the full state ref payload
 (`overrides`, `detachedLocalIds`, `rootEntities`, `totalSlots`,
@@ -1173,7 +1154,7 @@ Self-help affordances for stale refs:
 **Consequences AI users must internalise:**
 
 - **Prefer reading through `world.get(e, C).<refField>`** at the point of use rather than stashing a handle in a long-lived JS variable. A stashed handle is now *safe* (it fails structurally instead of mis-resolving) but re-reading is still the simplest correct pattern.
-- **Stale resolve fails fast.** If the handle's slot has been released and re-allocated, `resolve` returns `err(code)` with `code === 'unique-ref-stale'` / `'shared-ref-stale'` — distinct from `'…-ref-released'` (slot currently free, nothing re-allocated). The stale error carries `.detail = { slot, expectedGeneration, actualGeneration }` so an AI user can tell **stale-by-reuse** (re-acquire the handle) from **released** (re-load the asset). See `forgeax-engine-assets` SKILL §"Handle 代际语义" for the `switch (err.code)` recovery pattern.
+- **Stale resolve fails fast.** If the handle's slot has been released and re-allocated, `resolve` returns `err(code)` with `code === 'unique-ref-stale'` / `'shared-ref-stale'` — distinct from `'…-ref-released'` (slot currently free, nothing re-allocated). The stale error carries `.detail = { slot, expectedGeneration, actualGeneration }` so an AI user can tell **stale-by-reuse** (re-acquire the handle) from **released** (re-load the asset). See the `forgeax-engine-assets` skill section "Handle generation semantics" for the `switch (err.code)` recovery pattern.
 - **Double-release** stays detected by payload-presence (`'unique-ref-double-release'` / `'shared-ref-double-release'`) for a handle whose generation still matches; the generation check catches the orthogonal stale-by-reuse case first.
 - **Generation retires when it would exceed MAX_GEN (255), it does not wrap** — gen 255 is a usable handle; a re-used slot retires only after its bumped generation reaches 256 (retire-when-gen-exceeds-255; mirrors `EntityHandle`). The 24-bit slot index leaves 8 bits of generation.
 - **Throwing `onRelease` is throw-safe.** When a release-edge fires the `onRelease` callback, the slot's bookkeeping (callback table + payload map + freelist + generation bump) is cleared **before** the callback runs. A throwing `onRelease` re-propagates from the first `release` cleanly — the store is already consistent, and a second `release` returns the double-release error (plan-strategy D-1; AC-01/02).
@@ -1189,15 +1170,14 @@ Because of that, `BufferPool` carries no generation tag and `BufferPool.prototyp
 Quick start from an eval script:
 
 ```ts
-const ecs = await _import('@forgeax/engine-ecs');
 const render = await _import('@forgeax/engine-render');
-const query = ecs.createQueryState({ with: [ecs.Entity, render.Visibility] });
-ecs.queryRun(query, world, bundle => console.log(bundle.Visibility.state));
+const query = world.query({ read: [render.Visibility] }).unwrap();
+for (const row of query) console.log(row.get(render.Visibility).state);
 ```
 
 | Fact | ECS authority | Not implied |
 |:--|:--|:--|
-| Current intent | `queryRun` reads the registered `Visibility` field | It is not the final render decision |
+| Current intent | `QueryRow.get` reads the registered `Visibility` field | It is not the final render decision |
 | Effective state | `resolveVisibility(world).effective(entity)` | ECS does not own cameras or picking |
 | Recovery | `world.set` returns a structured `Result` with `code`, `expected`, `hint`, and `detail` | Do not patch a demo with a replacement component |
 

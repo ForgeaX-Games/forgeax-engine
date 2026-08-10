@@ -20,7 +20,7 @@
 
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { createQueryState, Entity, type EntityHandle, queryRun, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { SceneInstance } from '@forgeax/engine-render/internal';
 import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
@@ -114,11 +114,9 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
 
     // After collect, query including Children should still match the parent entity.
     // Include Entity in the `with` list to count matched rows.
-    const qs = createQueryState({ with: [Children, Entity] });
+    const query = world.query({ with: [Children] }).unwrap();
     let matchedCount = 0;
-    queryRun(qs, world, (bundle) => {
-      matchedCount += bundle.Entity.self.length;
-    });
+    for (const _row of query) matchedCount += 1;
     expect(matchedCount).toBeGreaterThanOrEqual(1);
   });
 

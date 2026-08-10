@@ -117,6 +117,7 @@ const DRAW_KINDS = new Set([
   'drawIndirect',
   'drawIndexedIndirect',
   'dispatchWorkgroups',
+  'dispatchWorkgroupsIndirect',
 ]);
 
 function stableMapEntries<T>(map: ReadonlyMap<number, T>): readonly (readonly [number, T])[] {

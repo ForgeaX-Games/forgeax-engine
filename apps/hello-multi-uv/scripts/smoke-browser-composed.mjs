@@ -40,6 +40,7 @@ const inheritanceFalsifierKind = process.env.FORGEAX_M3_INHERITANCE_FALSIFIER_KI
 if (
   inheritanceLiveMaterialScenario &&
   inheritanceFalsifierKind !== 'texture' &&
+  inheritanceFalsifierKind !== 'param' &&
   inheritanceFalsifierKind !== 'pipeline' &&
   inheritanceFalsifierKind !== 'pipeline-texture' &&
   inheritanceFalsifierKind !== 'reverse-pipeline' &&
@@ -55,6 +56,7 @@ const textureSlotFalsifier =
   inheritanceFalsifierKind === 'texture' ||
   inheritanceFalsifierKind === 'pipeline-texture' ||
   inheritanceFalsifierKind === 'reverse-pipeline-texture';
+const parameterFalsifier = inheritanceFalsifierKind === 'param';
 const liveMaterialScenario = process.env.FORGEAX_M3_LIVE_MATERIAL === '1' || inheritanceLiveMaterialScenario;
 const startVariant = process.env.FORGEAX_M3_START_VARIANT ?? 'true';
 if (startVariant !== 'true' && startVariant !== 'false') {
@@ -388,7 +390,9 @@ async function runLiveMaterialScenario(baseUrl, page) {
         : '&falsify-live-material'
       : '';
     const liveMaterialQuery = inheritanceLiveMaterialScenario
-      ? 'inheritance-two-slot-swap-resize'
+      ? parameterFalsifier
+        ? 'inheritance-parameter-mutation-resize'
+        : 'inheritance-two-slot-swap-resize'
       : 'two-slot-swap-resize';
     await page.setViewportSize({ width: 800, height: 600 });
     await page.goto(
@@ -474,7 +478,11 @@ async function runLiveMaterialScenario(baseUrl, page) {
   const normalLive = normal.afterEvidence;
   const falsifiedLive = falsifier.afterEvidence;
   if (normal.delta === null || normal.delta.changed < 1000) throw new Error(`two-slot rebind did not change normal pixels: ${JSON.stringify(normal.delta)}`);
-  if (normalLive?.baseColorSlotChanged !== true || normalLive.detailSlotChanged !== true) {
+  if (
+    parameterFalsifier
+      ? normalLive?.baseColorParameterChanged !== true || normalLive.baseColorUvTransformChanged !== true
+      : normalLive?.baseColorSlotChanged !== true || normalLive.detailSlotChanged !== true
+  ) {
     throw new Error(`normal two-slot evidence did not change both slots: ${JSON.stringify(normalLive)}`);
   }
   if (normalLive.afterComponentMaterialHandle !== normalLive.afterMaterialHandle) {
@@ -489,9 +497,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
   }
   if (
     inheritanceLiveMaterialScenario &&
-    (inheritanceFalsifierKind === 'texture' ||
-      inheritanceFalsifierKind === 'pipeline-texture' ||
-      inheritanceFalsifierKind === 'reverse-pipeline-texture')
+    (textureSlotFalsifier || parameterFalsifier)
   ) {
     if (falsifier.delta === null || falsifier.delta.changed !== 0) {
       throw new Error(`inheritance live-material falsifier changed pixels: ${JSON.stringify(falsifier.delta)}`);
@@ -518,10 +524,23 @@ async function runLiveMaterialScenario(baseUrl, page) {
     const falsifierMaterialCausality =
       falsifiedLive.beforeTextureHandles[0] !== falsifiedLive.afterTextureHandles[0] &&
       falsifiedLive.beforeTextureHandles[1] !== falsifiedLive.afterTextureHandles[1];
-    if (!inheritanceMaterialCausality) {
+    const inheritanceParameterCausality =
+      normalLive.baseColorParameterChanged === true &&
+      normalLive.baseColorUvTransformChanged === true &&
+      falsifiedLive.baseColorParameterChanged === false &&
+      falsifiedLive.baseColorUvTransformChanged === false;
+    if (!parameterFalsifier && !inheritanceMaterialCausality) {
       throw new Error(`inheritance live material texture causality failed: ${JSON.stringify({ normalLive, falsifiedLive })}`);
     }
-    if (textureSlotFalsifier) {
+    if (parameterFalsifier) {
+      if (
+        !inheritanceParameterCausality ||
+        falsifiedLive.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-parameters' ||
+        falsifier.rhi.draws !== normal.rhi.draws
+      ) {
+        throw new Error(`inheritance live material parameter falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
+      }
+    } else if (textureSlotFalsifier) {
       if (
         falsifierMaterialCausality ||
         falsifiedLive.falsifierMarker !== 'FALSIFY_EXPECTED_FAILURE:live-inheritance-rebind'
@@ -567,7 +586,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
       throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
     }
   }
-  console.log(`[m3-live-material] PASS pipeline=${expectedPipeline.replace('M3_PIPELINE=', '')} post=${expectedPost} msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} falsifier=${inheritanceLiveMaterialScenario ? inheritanceFalsifierKind : 'texture'} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} resizeHistory=${expectedHistory} draws=${normal.rhi.draws}/${falsifier.rhi.draws} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
+  console.log(`[m3-live-material] PASS pipeline=${expectedPipeline.replace('M3_PIPELINE=', '')} post=${expectedPost} msaa=${useMsaa} startVariant=${startVariant} variantSwitch=${liveVariantSwitch} falsifier=${inheritanceLiveMaterialScenario ? inheritanceFalsifierKind : 'texture'} normalChanged=${normal.delta.changed} falsifierChanged=${falsifier.delta.changed} normalSlots=${normalLive.baseColorSlotChanged}/${normalLive.detailSlotChanged} falsifierSlots=${falsifiedLive?.baseColorSlotChanged}/${falsifiedLive?.detailSlotChanged} normalParams=${normalLive.baseColorParameterChanged}/${normalLive.baseColorUvTransformChanged} falsifierParams=${falsifiedLive?.baseColorParameterChanged}/${falsifiedLive?.baseColorUvTransformChanged} resizeHistory=${expectedHistory} draws=${normal.rhi.draws}/${falsifier.rhi.draws} dawnSha=${normal.rhi.dawnReadback.sha256}/${falsifier.rhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
 }
 
 async function runDepthPostScenario(baseUrl, page) {

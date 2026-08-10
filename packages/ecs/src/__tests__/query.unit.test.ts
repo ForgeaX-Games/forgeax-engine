@@ -1,343 +1,158 @@
-import { Update } from '../schedule-token';
-// feat-20260614-ecs-managed-lifecycle-ssot M4 / w10 (AC-08, AC-09):
-// Query bundle exposes ManagedColumnReader<T> for the 4 managed-vocab
-// keywords ('string' / `ref<T>` / variable 'buffer' / variable `array<T>`)
-// and a writable TypedArray for POD / fixed buffer / fixed array fields.
-//
-// AC-08 (negative): direct index assignment on a managed column emits a
-// TypeScript compile error. The `@ts-expect-error` directive must be
-// CONSUMED (removing it would make typecheck fail) -- positive proof
-// that the type system, not narrative docs, gates the misuse.
-//
-// AC-09 (positive): same callback context POD writes (Position.x[i] = ...)
-// and fixed-buffer / fixed-array writes still compile and execute.
-//
-// requirements section 5 callout: assertion MUST sit inside an actual
-// consumer path -- a queryRun callback or addSystem fn callback -- not a
-// standalone .test-d.ts. That is why this is `.unit.test.ts`.
-
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { ManagedColumnReader } from '../column';
 import { defineComponent } from '../component';
-import { Entity } from '../entity';
-import { createQueryState, queryRun, queryRunContiguous } from '../query';
+import type { EntityHandle } from '../entity-handle';
+import {
+  QueryDataRequiresFieldsError,
+  QueryDescriptorConflictError,
+  QueryIterationActiveError,
+  QueryIterationInvalidatedError,
+} from '../errors';
+import type { QueryRow } from '../query/query';
 import { World } from '../world';
 
-// One component per managed vocab keyword + one POD reference + one
-// fixed-buffer + one fixed-array. Each managed-bearing component carries
-// one POD companion so AC-09 positive writes share the same archetype.
+const Position = defineComponent('QueryPosition', { x: 'f32', y: 'f32' });
+const Velocity = defineComponent('QueryVelocity', { x: 'f32', y: 'f32' });
+const Selected = defineComponent('QuerySelected', {});
 
-const PositionM4 = defineComponent('PositionM4', {
-  x: 'f32',
-  y: 'f32',
-});
+function createWorld(): { world: World; first: EntityHandle; second: EntityHandle } {
+  const world = new World();
+  const first = world
+    .spawn(
+      { component: Position, data: { x: 1, y: 2 } },
+      { component: Velocity, data: { x: 3, y: 4 } },
+      { component: Selected, data: {} },
+    )
+    .unwrap();
+  const second = world.spawn({ component: Position, data: { x: 5, y: 6 } }).unwrap();
+  return { world, first, second };
+}
 
-// 'string' managed-vocab keyword.
-const GlyphTextM4 = defineComponent('GlyphTextM4', {
-  text: { type: 'string' },
-  size: 'f32',
-});
-
-// `ref<T>` managed-vocab keyword (target tag is the same component name --
-// only the type-level shape matters for AC-08; runtime alloc is exercised
-// in hierarchy.unit.test.ts).
-const NodeRefM4 = defineComponent('NodeRefM4', {
-  link: { type: 'unique<NodeRefM4>' },
-  weight: 'f32',
-});
-
-// variable 'buffer' managed-vocab keyword.
-const BlobM4 = defineComponent('BlobM4', {
-  bytes: { type: 'buffer' },
-  flag: 'u8',
-});
-
-// variable `array<T>` managed-vocab keyword.
-const HitListM4 = defineComponent('HitListM4', {
-  hits: { type: 'array<f32>' },
-  active: 'u8',
-});
-
-// fixed `buffer<N>` (NOT managed -- inline TypedArray).
-const FixedBlobM4 = defineComponent('FixedBlobM4', {
-  fixed: { type: 'buffer<8>' },
-});
-
-// fixed `array<T,N>` (NOT managed -- inline TypedArray).
-const FixedListM4 = defineComponent('FixedListM4', {
-  values: { type: 'array<f32, 4>' },
-});
-
-const ContiguousHealth = defineComponent('ContiguousHealth', { value: 'f32' });
-const ContiguousDecay = defineComponent('ContiguousDecay', { factor: 'f32' });
-
-describe('w10 --- AC-08 negative: managed columns reject direct index write', () => {
-  // Each test runs the queryRun callback so the consumer-path requirement
-  // (requirements section 5 callout) is satisfied; the index-write line is
-  // gated behind `if (NEVER_RUN)` so the @ts-expect-error directive is
-  // *typechecked* (and thus consumed) without executing the runtime
-  // assignment that the now-frozen ManagedColumnReader would also reject.
-  //
-  // The runtime safety net is verified separately in the
-  // "managed reader is frozen" test below.
-  const NEVER_RUN: boolean = false;
-
-  it('@ts-expect-error directive consumed in queryRun callback for string', () => {
+describe('executable Query', () => {
+  it('validates access roles and tag data at creation', () => {
     const world = new World();
-    world.spawn({ component: GlyphTextM4, data: { text: 'hello', size: 12 } });
-
-    const state = createQueryState({ with: [GlyphTextM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.GlyphTextM4.text).toEqualTypeOf<ManagedColumnReader<'string'>>();
-
-      if (NEVER_RUN) {
-        for (let i = 0; i < bundle.Entity.self.length; i++) {
-          // Direct index assignment is a type system error -- ManagedColumnReader
-          // exposes no numeric index signature. Remove the directive and
-          // typecheck must fail.
-          // @ts-expect-error AC-08: managed column is read-only via .get(i); use world.set(e, GlyphTextM4, { text }) instead
-          bundle.GlyphTextM4.text[i] = 0;
-        }
-      }
-      expect(typeof bundle.GlyphTextM4.text.get).toBe('function');
-    });
-  });
-
-  it('@ts-expect-error directive consumed for ref<T> managed column', () => {
-    const world = new World();
-    world.spawn({ component: NodeRefM4, data: { weight: 0 } });
-
-    const state = createQueryState({ with: [NodeRefM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.NodeRefM4.link).toEqualTypeOf<ManagedColumnReader<'unique<NodeRefM4>'>>();
-
-      if (NEVER_RUN) {
-        for (let i = 0; i < bundle.Entity.self.length; i++) {
-          // @ts-expect-error AC-08: managed `ref<T>` column rejects direct index write
-          bundle.NodeRefM4.link[i] = 0;
-        }
-      }
-      expect(bundle.NodeRefM4.link.__managed).toBe('unique<NodeRefM4>');
-    });
-  });
-
-  it('@ts-expect-error directive consumed for variable buffer managed column', () => {
-    const world = new World();
-    world.spawn({ component: BlobM4, data: { bytes: new Uint8Array([1, 2, 3]), flag: 0 } });
-
-    const state = createQueryState({ with: [BlobM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.BlobM4.bytes).toEqualTypeOf<ManagedColumnReader<'buffer'>>();
-
-      if (NEVER_RUN) {
-        for (let i = 0; i < bundle.Entity.self.length; i++) {
-          // @ts-expect-error AC-08: managed variable 'buffer' column rejects direct index write
-          bundle.BlobM4.bytes[i] = 0;
-        }
-      }
-      expect(bundle.BlobM4.bytes.__managed).toBe('buffer');
-    });
-  });
-
-  it('@ts-expect-error directive consumed for variable array<T> managed column', () => {
-    const world = new World();
-    world.spawn({
-      component: HitListM4,
-      data: { hits: new Float32Array([0.5, 0.25]), active: 1 },
-    });
-
-    const state = createQueryState({ with: [HitListM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.HitListM4.hits).toEqualTypeOf<ManagedColumnReader<'array<f32>'>>();
-
-      if (NEVER_RUN) {
-        for (let i = 0; i < bundle.Entity.self.length; i++) {
-          // @ts-expect-error AC-08: managed variable `array<T>` column rejects direct index write
-          bundle.HitListM4.hits[i] = 0;
-        }
-      }
-      expect(bundle.HitListM4.hits.__managed).toBe('array<f32>');
-    });
-  });
-
-  it('addSystem fn callback shares the same managed-column reader shape', () => {
-    const world = new World();
-    world.spawn({ component: GlyphTextM4, data: { text: 'system', size: 8 } });
-
-    let saw = false;
-    world.addSystem(Update, {
-      name: 'm4-managed-reader',
-      queries: [{ with: [GlyphTextM4, Entity] }],
-      fn: (_world, results) => {
-        for (const result of results) {
-          for (const bundle of result) {
-            const reader: ManagedColumnReader<'string'> = bundle.GlyphTextM4.text;
-            if (NEVER_RUN) {
-              // @ts-expect-error AC-08: addSystem fn path also rejects index write
-              bundle.GlyphTextM4.text[0] = 0;
-            }
-            expect(reader.length).toBeGreaterThanOrEqual(0);
-            saw = true;
-          }
-        }
-      },
-    });
-    world.update();
-    expect(saw).toBe(true);
-  });
-
-  it('managed reader is frozen at runtime: index assignment throws', () => {
-    const world = new World();
-    world.spawn({ component: GlyphTextM4, data: { text: 'frozen-check', size: 1 } });
-    const state = createQueryState({ with: [GlyphTextM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      const reader = bundle.GlyphTextM4.text;
-      expect(Object.isFrozen(reader)).toBe(true);
-      expect(() => {
-        // Bypass TS to verify the runtime safety net independently of
-        // the type-level gate.
-        (reader as unknown as Record<number, number>)[0] = 99;
-      }).toThrow(TypeError);
-    });
-  });
-});
-
-describe('w10 --- AC-09 positive: POD / fixed columns still write through', () => {
-  it('POD f32 column accepts direct index write', () => {
-    const world = new World();
-    world.spawn({ component: PositionM4, data: { x: 1, y: 2 } });
-
-    const state = createQueryState({ with: [PositionM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.PositionM4.x).toEqualTypeOf<Float32Array>();
-      for (let i = 0; i < bundle.Entity.self.length; i++) {
-        // POD path: direct write compiles and runs.
-        bundle.PositionM4.x[i] = 1.5;
-        bundle.PositionM4.y[i] = -2.5;
-      }
-    });
-
-    queryRun(state, world, (bundle) => {
-      for (let i = 0; i < bundle.Entity.self.length; i++) {
-        expect(bundle.PositionM4.x[i]).toBeCloseTo(1.5);
-        expect(bundle.PositionM4.y[i]).toBeCloseTo(-2.5);
-      }
-    });
-  });
-
-  it('POD u8 companion column on managed-bearing component accepts direct index write', () => {
-    const world = new World();
-    world.spawn({
-      component: HitListM4,
-      data: { hits: new Float32Array([0.1]), active: 1 },
-    });
-    const state = createQueryState({ with: [HitListM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.HitListM4.active).toEqualTypeOf<Uint8Array>();
-      for (let i = 0; i < bundle.Entity.self.length; i++) {
-        bundle.HitListM4.active[i] = 0;
-      }
-    });
-  });
-
-  it('fixed `buffer<N>` inline column accepts direct index write', () => {
-    const world = new World();
-    world.spawn({
-      component: FixedBlobM4,
-      data: { fixed: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]) },
-    });
-    const state = createQueryState({ with: [FixedBlobM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.FixedBlobM4.fixed).toEqualTypeOf<Uint8Array>();
-      // Inline column: arity-aware subarray of length N for one row.
-      bundle.FixedBlobM4.fixed[0] = 0xff;
-      expect(bundle.FixedBlobM4.fixed[0]).toBe(0xff);
-    });
-  });
-
-  it('fixed `array<T,N>` inline column accepts direct index write', () => {
-    const world = new World();
-    world.spawn({
-      component: FixedListM4,
-      data: { values: new Float32Array([0, 0, 0, 0]) },
-    });
-    const state = createQueryState({ with: [FixedListM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.FixedListM4.values).toEqualTypeOf<Float32Array>();
-      bundle.FixedListM4.values[0] = 9.5;
-      bundle.FixedListM4.values[3] = -3.25;
-      expect(bundle.FixedListM4.values[0]).toBeCloseTo(9.5);
-      expect(bundle.FixedListM4.values[3]).toBeCloseTo(-3.25);
-    });
-  });
-});
-
-describe('w10 --- type-d smoke: ManagedColumnReader<T> per-keyword localisation', () => {
-  it("'string' arm exposes ManagedColumnReader<'string'>", () => {
-    const world = new World();
-    world.spawn({ component: GlyphTextM4, data: { text: 'a', size: 1 } });
-    const state = createQueryState({ with: [GlyphTextM4, Entity] });
-    queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.GlyphTextM4.text).toEqualTypeOf<ManagedColumnReader<'string'>>();
-    });
-  });
-});
-
-describe('contiguous query', () => {
-  it('returns dense writable slices for matching archetype columns', () => {
-    const world = new World();
-    for (let value = 0; value < 4; value++) {
-      world.spawn(
-        { component: ContiguousHealth, data: { value: (value + 1) * 5 } },
-        { component: ContiguousDecay, data: { factor: 0.9 } },
-      );
+    const conflict = world.query({ read: [Position], write: [Position] });
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) {
+      expect(conflict.error).toBeInstanceOf(QueryDescriptorConflictError);
+      expect(conflict.error.detail).toEqual({
+        componentName: Position.name,
+        roles: ['read', 'write'],
+      });
     }
 
-    const state = createQueryState({ with: [ContiguousHealth, ContiguousDecay, Entity] });
-    const lengths: number[] = [];
-    const supported = queryRunContiguous(state, world, (bundle) => {
-      lengths.push(bundle.ContiguousHealth.value.length);
-      expect(bundle.ContiguousHealth.value.length).toBe(bundle.ContiguousDecay.factor.length);
-      expect(bundle.ContiguousHealth.value.length).toBe(bundle.Entity.self.length);
-      for (let row = 0; row < bundle.Entity.self.length; row++) {
-        const health = bundle.ContiguousHealth.value[row] ?? 0;
-        const decay = bundle.ContiguousDecay.factor[row] ?? 0;
-        bundle.ContiguousHealth.value[row] = health * decay;
-      }
-    });
-
-    expect(supported).toBe(true);
-    expect(lengths).toEqual([4]);
-    const values: number[] = [];
-    queryRun(state, world, (bundle) => {
-      for (let row = 0; row < bundle.Entity.self.length; row++) {
-        values.push(bundle.ContiguousHealth.value[row] ?? 0);
-      }
-    });
-    expect(values).toEqual([4.5, 9, 13.5, 18]);
+    const tagData = world.query({ read: [Selected] });
+    expect(tagData.ok).toBe(false);
+    if (!tagData.ok) expect(tagData.error).toBeInstanceOf(QueryDataRequiresFieldsError);
   });
 
-  it('rejects optional and row-filtered descriptors instead of claiming density', () => {
-    const world = new World();
-    world.spawn({ component: ContiguousHealth, data: { value: 5 } });
+  it('iterates each matching entity once and exposes optional data precisely', () => {
+    const { world, first, second } = createWorld();
+    const query = world
+      .query({ read: [Position], optional: [Velocity], with: [Selected] })
+      .unwrap();
+    const seen: number[] = [];
+    for (const row of query) {
+      seen.push(row.entity);
+      expect(row.get(Position).x).toBe(1);
+      expect(row.get(Velocity)?.x).toBe(3);
+    }
+    expect(seen).toEqual([first]);
+    expect(seen).not.toContain(second);
+  });
 
-    const optional = createQueryState({
-      with: [ContiguousHealth, Entity],
-      optional: [ContiguousDecay],
-    });
-    const changed = createQueryState({
-      with: [ContiguousHealth, Entity],
-      changed: [ContiguousHealth],
-    });
-    const added = createQueryState({
-      with: [ContiguousHealth, Entity],
-      added: [ContiguousHealth],
-    });
+  it('row.mut marks one epoch and writes through the component owner', () => {
+    const { world, first } = createWorld();
+    const query = world.query({ write: [Position], with: [Selected] }).unwrap();
+    const before = world._getMutationEpoch();
+    for (const row of query) {
+      const position = row.mut(Position);
+      position.x += 10;
+      position.y = 20;
+    }
+    expect(world._getMutationEpoch()).toBe(before + 1);
+    expect(world.get(first, Position).unwrap()).toMatchObject({ x: 11, y: 20 });
+  });
 
-    expect(queryRunContiguous(optional, world, () => expect.fail('optional query ran'))).toBe(
-      false,
+  it('spans are zero-copy and span.mut marks the whole range once', () => {
+    const { world, first, second } = createWorld();
+    const query = world.query({ write: [Position] }).unwrap();
+    const spans = query.spans().unwrap();
+    const before = world._getMutationEpoch();
+    const buffers = new Set(
+      world._getGraph().tables.flatMap((table) => {
+        const buffer = table.storage.get(Position.id)?.fields.get('x')?.view.buffer;
+        return buffer === undefined ? [] : [buffer];
+      }),
     );
-    expect(queryRunContiguous(changed, world, () => expect.fail('changed query ran'))).toBe(false);
-    expect(queryRunContiguous(added, world, () => expect.fail('added query ran'))).toBe(false);
+    let count = 0;
+    let spanCount = 0;
+    let nextX = 42;
+    for (const span of spans) {
+      spanCount += 1;
+      const positions = span.mut(Position);
+      count += span.length;
+      for (let index = 0; index < span.length; index++) positions.x[index] = nextX++;
+      expect(buffers.has(positions.x.buffer)).toBe(true);
+    }
+    expect(count).toBe(2);
+    expect(world._getMutationEpoch()).toBe(before + spanCount);
+    expect(world.get(first, Position).unwrap().x).toBe(42);
+    expect(world.get(second, Position).unwrap().x).toBe(43);
+  });
+
+  it('returns structured span capability failures', () => {
+    const world = new World();
+    const optional = world
+      .query({ read: [Position], optional: [Velocity] })
+      .unwrap()
+      .spans();
+    expect(!optional.ok && optional.error.detail.reason).toBe('optional-data');
+
+    const changed = world
+      .query({ read: [Position], changed: [Position] })
+      .unwrap()
+      .spans();
+    expect(!changed.ok && changed.error.detail.reason).toBe('row-change-filter');
+  });
+
+  it('does not commit observation after partial iteration', () => {
+    const { world, first, second } = createWorld();
+    const query = world.query({ read: [Position], changed: [Position] }).unwrap();
+    const iterator = query[Symbol.iterator]();
+    expect(iterator.next().done).toBe(false);
+    iterator.return?.();
+
+    const seen: EntityHandle[] = [];
+    for (const row of query) seen.push(row.entity);
+    expect(seen).toEqual([first, second]);
+  });
+
+  it('keeps same-frame late writes for the next observation', () => {
+    const { world, first } = createWorld();
+    const query = world.query({ read: [Position], changed: [Position] }).unwrap();
+    expect([...query].length).toBe(2);
+    world.set(first, Position, { x: 9 }).unwrap();
+    const seen: EntityHandle[] = [];
+    for (const row of query) seen.push(row.entity);
+    expect(seen).toEqual([first]);
+  });
+
+  it('fails fast on reentry and synchronous structural invalidation', () => {
+    const { world } = createWorld();
+    const query = world.query({ read: [Position] }).unwrap();
+    const iterator = query[Symbol.iterator]();
+    expect(iterator.next().done).toBe(false);
+    expect(() => query[Symbol.iterator]()).toThrow(QueryIterationActiveError);
+    iterator.return?.();
+
+    const invalidated = query[Symbol.iterator]();
+    expect(invalidated.next().done).toBe(false);
+    world.spawn({ component: Position, data: { x: 0, y: 0 } }).unwrap();
+    expect(() => invalidated.next()).toThrow(QueryIterationInvalidatedError);
+  });
+
+  it('infers row access without casts', () => {
+    type Row = QueryRow<readonly [typeof Position], readonly [typeof Velocity], readonly []>;
+    expectTypeOf<Row['entity']>().toBeNumber();
   });
 });

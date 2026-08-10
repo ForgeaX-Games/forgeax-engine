@@ -131,3 +131,41 @@ describe('KHR quartic attenuation formula parity', () => {
     }
   });
 });
+
+describe('Three r184 squared finite-range authority', () => {
+  const samples = [
+    [0, 1],
+    [0.25, 0.9922027587890625],
+    [0.5, 0.87890625],
+    [0.75, 0.4673004150390625],
+    [1, 0],
+    [1.25, 0],
+  ] as const;
+
+  function squaredWindow(distanceRatio: number): number {
+    return Math.max(1 - distanceRatio ** 4, 0) ** 2;
+  }
+
+  it('covers finite range boundaries for directional, point, and spot inputs', () => {
+    for (const [distanceRatio, expected] of samples) {
+      expect(squaredWindow(distanceRatio)).toBeCloseTo(expected, 12);
+    }
+  });
+
+  it('keeps the KHR unsquared reference as a falsification sample', () => {
+    const distanceRatio = 0.5;
+    const khrReference = 1 - distanceRatio ** 4;
+    expect(squaredWindow(distanceRatio)).not.toBeCloseTo(khrReference, 6);
+  });
+
+  it('uses inverse-square decay when no finite cutoff is configured', () => {
+    for (const [distance, expected] of [
+      [0, 100],
+      [0.5, 4],
+      [1, 1],
+      [2, 0.25],
+    ] as const) {
+      expect(1 / Math.max(distance ** 2, 0.01)).toBeCloseTo(expected, 12);
+    }
+  });
+});

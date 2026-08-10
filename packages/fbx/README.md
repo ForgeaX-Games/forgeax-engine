@@ -126,12 +126,16 @@ This runs `scripts/fetch-wasm.mjs`, which:
    a lone `.wasm`.
 
 The content key guarantees you get the bundle that matches your exact source --
-no accidental mismatch.
+no accidental mismatch. The shared downloader tries Node `fetch` first; when it
+cannot complete the TLS/network handshake, it falls back to authenticated
+`gh api`/`gh release download`, then `curl` (`curl.exe` on Windows). All paths
+remain pinned to this repository, the `wasm-artifacts` tag, and the exact
+content-keyed asset name.
 
 If the asset is not found (e.g. modified `bridge.c` that was never published),
 the script prints a structured error with a hint to compile locally. If the
-repo is private, set `GITHUB_TOKEN` so the request carries authentication;
-public repos work anonymously (no token needed).
+repo is private, set `GITHUB_TOKEN`/`GH_TOKEN` or run `gh auth login`; public
+repos work anonymously (no token needed).
 
 </details>
 
@@ -162,7 +166,7 @@ Both `ufbx.c`/`.h` and `pkg/` are in `.gitignore`; CI provides emsdk via
 
 | Code | Meaning | Self-help |
 |:--|:--|:--|
-| `E1_NETWORK` | Network unavailable or unexpected HTTP error | `pnpm -F @forgeax/engine-fbx build:wasm` (local emcc) |
+| `E1_NETWORK` | Node fetch and available native transports failed, or an unexpected HTTP error occurred | Check the TLS/proxy diagnosis and retry with `gh auth login`, then use `pnpm -F @forgeax/engine-fbx build:wasm` (local emcc) |
 | `E2_ASSET_NOT_FOUND` | Release tag or asset not found | `pnpm -F @forgeax/engine-fbx build:wasm`, or push to main to trigger CI release |
 | `E3_ORIGIN_UNSUPPORTED_HOST` | `git remote get-url origin` returned a non-GitHub host | Check `git remote -v`; set origin to a GitHub remote |
 | `E3_ORIGIN_PARSE_FAILED` | Cannot parse the origin URL into owner/repo | Expected `git@github.com:OWNER/REPO.git` or `https://github.com/OWNER/REPO.git` |

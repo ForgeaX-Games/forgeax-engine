@@ -33,7 +33,7 @@
 // 32 case matrix); plan-decisions L-3 (pivot ground truth) + L-4
 // (`requirements.md §AC-10 falsifier` charter F1 alignment).
 
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import {
   encodeSortScope,
@@ -42,6 +42,8 @@ import {
   tilemapChunkExtractSystem,
 } from '@forgeax/engine-render/authoring';
 import {
+  Layer,
+  MeshFilter,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
 } from '@forgeax/engine-render/internal';
@@ -94,32 +96,17 @@ function readDerivedTransform(world: World): {
   quatZ: number;
   quatW: number;
 } {
-  type GraphArch = {
-    key: string;
-    columns: Map<number, Map<string, { view: ArrayLike<number> }>>;
-  };
-  const graph = (world as unknown as { _getGraph(): { archetypes: GraphArch[] } })._getGraph();
-  for (const arch of world.inspect().archetypes) {
-    if (!arch.componentNames.includes('Transform')) continue;
-    if (!arch.componentNames.includes('MeshFilter')) continue;
-    if (!arch.componentNames.includes('Layer')) continue;
-    const derived = graph.archetypes.find((a) => a.key === arch.key);
-    if (!derived) continue;
-    const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as Uint32Array | undefined;
-    if (!entityCol) continue;
-    for (let i = 0; i < entityCol.length; i++) {
-      const e = entityCol[i];
-      if (e === undefined || e === 0) continue;
-      const t = world.get(e as never, Transform).unwrap();
-      return {
-        posX: t.pos[0] ?? 0,
-        posY: t.pos[1] ?? 0,
-        scaleX: t.scale[0] ?? 1,
-        scaleY: t.scale[1] ?? 1,
-        quatZ: t.quat[2] ?? 0,
-        quatW: t.quat[3] ?? 1,
-      };
-    }
+  const query = world.query({ read: [Transform], with: [MeshFilter, Layer] }).unwrap();
+  for (const row of query) {
+    const t = row.get(Transform);
+    return {
+      posX: t.pos[0] ?? 0,
+      posY: t.pos[1] ?? 0,
+      scaleX: t.scale[0] ?? 1,
+      scaleY: t.scale[1] ?? 1,
+      quatZ: t.quat[2] ?? 0,
+      quatW: t.quat[3] ?? 1,
+    };
   }
   throw new Error('expected one derived Transform but found none');
 }

@@ -11,9 +11,8 @@
 // The eval scope carries the five live roots (world / renderer / assets /
 // debugAdapter / profiler) + _import(specifier) — identical to the WS-server
 // eval channel. Profiler is present only when the page opted in.
-// Handle discovery uses the real queryRun callback form:
-//   let r; const {createQueryState,queryRun,Entity}=await _import('@forgeax/engine-ecs');
-//   const st=createQueryState({with:[Entity]}); queryRun(st,world,b=>{r=Array.from(b.Entity.self)}); r
+// Handle discovery uses the World-owned row iterator:
+//   const q=world.query({}); if(!q.ok) throw q.error; Array.from(q.value,row=>row.entity)
 //
 // Prereqs: dev stack running (relay on :5733 + an app dev server open at :5173
 // with the bridge connected). Start both with: node scripts/dev-live.mjs <app>.

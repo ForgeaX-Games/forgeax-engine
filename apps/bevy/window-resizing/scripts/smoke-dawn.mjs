@@ -103,7 +103,6 @@ const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { Camera } = await import('@forgeax/engine-render');
 const { CAMERA_PROJECTION_PERSPECTIVE } = await import('@forgeax/engine-render');
-const { queryRun, createQueryState, Entity: EcsEntity } = await import('@forgeax/engine-ecs');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -163,22 +162,13 @@ renderTarget = null;
 
 // Update camera aspect (mirrors syncCameraAspect in createApp)
 const aspect = 640 / 360;
-queryRun(
-  createQueryState({ with: [Camera, EcsEntity] }),
-  world,
-  (bundle) => {
-    const entitySelf = bundle.Entity.self;
-    for (let i = 0; i < entitySelf.length; i++) {
-      const entity = entitySelf[i];
-      if (entity === undefined) continue;
-      const r = world.get(entity, Camera);
-      if (!r.ok) continue;
-      if (r.value.autoAspect !== true) continue;
-      if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
-      world.set(entity, Camera, { aspect });
-    }
-  },
-);
+const cameraQuery = world.query({ read: [Camera] }).unwrap();
+for (const row of cameraQuery) {
+  const camera = row.get(Camera);
+  if (camera.autoAspect !== true) continue;
+  if (camera.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+  world.set(row.entity, Camera, { aspect }).unwrap();
+}
 
 for (let i = 0; i < 10; i++) {
   await renderer.draw([world], { owner: 0 });
@@ -191,21 +181,14 @@ const resizedG = resizedPixels[resizedIdx + 1];
 const resizedB = resizedPixels[resizedIdx + 2];
 const resizedNotBlack = resizedR > 10 || resizedG > 10 || resizedB > 10;
 
-// Verify camera aspect reflects the resize (use world.get, not queryRun)
+// Verify camera aspect reflects the resize.
 let cameraAspect = 0;
-const camQuery = createQueryState({ with: [EcsEntity] });
-queryRun(camQuery, world, (bundle) => {
-  const entities = bundle.Entity.self;
-  for (let i = 0; i < entities.length; i++) {
-    const e = entities[i];
-    if (e === undefined) continue;
-    const r = world.get(e, Camera);
-    if (r.ok && r.value.projection === CAMERA_PROJECTION_PERSPECTIVE) {
-      cameraAspect = r.value.aspect;
-      break;
-    }
-  }
-});
+for (const row of cameraQuery) {
+  const camera = row.get(Camera);
+  if (camera.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+  cameraAspect = camera.aspect;
+  break;
+}
 const aspectMatch = cameraAspect > 0 && Math.abs(cameraAspect - 640 / 360) < 0.01;
 
 // --- restore original size ---

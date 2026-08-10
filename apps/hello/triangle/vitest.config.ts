@@ -4,6 +4,6 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/hello-triangle',
-    include: ['test/**/*.test.ts'],
+    include: ['__tests__/**/*.test.ts'],
   },
 });

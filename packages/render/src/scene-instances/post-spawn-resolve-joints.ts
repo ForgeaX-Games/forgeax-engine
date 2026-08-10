@@ -32,7 +32,7 @@
 //   - charter P3 (explicit failure: path-unresolved fail-fast)
 
 import type { SkinJointResolver } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { Archetype, EntityHandle, Table, World } from '@forgeax/engine-ecs';
 import { Entity as EntityComponent } from '@forgeax/engine-ecs';
 import { Name } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
@@ -42,24 +42,8 @@ import { collectSubtree } from '../scene-utils/collect-subtree';
 // Same pattern used by render-system-extract.ts and propagate-transforms.ts.
 // Minimal interface covering only the fields we walk.
 interface ArchetypeGraph {
-  readonly archetypes: readonly (InternalArchetype | undefined)[];
-}
-interface InternalArchetype {
-  readonly componentIds: ReadonlyArray<number>;
-  readonly columns: ReadonlyMap<
-    number,
-    ReadonlyMap<
-      string,
-      {
-        readonly view:
-          | Uint32Array
-          | Float32Array
-          | ReadonlyArray<Uint32Array>
-          | ReadonlyArray<Float32Array>;
-      }
-    >
-  >;
-  readonly size: number;
+  readonly archetypes: readonly (Archetype | undefined)[];
+  readonly tables: readonly (Table | undefined)[];
 }
 
 // feat-20260705-runtime-tier2-decomposition M1 / w6 (D-1): SkinJointResolver
@@ -100,11 +84,8 @@ type WorldInternal = World & {
  * Read the full packed `Entity` handle for archetype `row` from the essential
  * id=0 `Entity` column (`self` field), present on every archetype.
  */
-function readEntityAt(
-  arch: { columns: ReadonlyMap<number, ReadonlyMap<string, { view: ArrayLike<number> }>> },
-  row: number,
-): EntityHandle {
-  const selfCol = arch.columns.get(EntityComponent.id)?.get('self')?.view as
+function readEntityAt(table: Table, row: number): EntityHandle {
+  const selfCol = table.storage.get(EntityComponent.id)?.fields.get('self')?.view as
     | Uint32Array
     | undefined;
   return (selfCol?.[row] ?? 0) as EntityHandle;
@@ -126,11 +107,12 @@ export function postSpawnResolveJoints(
   const nameIndex = new Map<string, number[]>();
   for (const arch of graph.archetypes) {
     if (!arch || arch.size === 0) continue;
-    const nameCol = arch.columns.get(Name.id);
-    if (nameCol === undefined) continue;
+    if (!arch.components.some((component) => component.id === Name.id)) continue;
+    const table = graph.tables[arch.tableId];
+    if (table === undefined) continue;
 
-    for (let row = 0; row < arch.size; row++) {
-      const entity = readEntityAt(arch, row);
+    for (let archetypeRow = 0; archetypeRow < arch.size; archetypeRow++) {
+      const entity = readEntityAt(table, arch.rows[archetypeRow] ?? 0);
       if (!subtree.has(entity as number)) continue;
 
       const nameData = world.get(entity, Name);
@@ -150,12 +132,15 @@ export function postSpawnResolveJoints(
     if (!arch || arch.size === 0) continue;
     if (!arch.components.some((c) => c.id === Skin.id)) continue;
 
-    const skinRows = arch.columns.get(Skin.id);
+    const table = graph.tables[arch.tableId];
+    if (table === undefined) continue;
+    const skinRows = table.storage.get(Skin.id)?.fields;
     if (skinRows === undefined) continue;
     const skeletonCol = skinRows.get('skeleton')?.view as Uint32Array | undefined;
 
-    for (let row = 0; row < arch.size; row++) {
-      const entity = readEntityAt(arch, row);
+    for (let archetypeRow = 0; archetypeRow < arch.size; archetypeRow++) {
+      const row = arch.rows[archetypeRow] ?? 0;
+      const entity = readEntityAt(table, row);
       if (!subtree.has(entity as number)) continue;
       if (skeletonCol === undefined) continue;
       const skeletonHandle = skeletonCol[row] as number;

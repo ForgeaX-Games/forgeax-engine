@@ -1,5 +1,7 @@
 import { RenderGraph, type ResourceDescriptor } from '@forgeax/engine-render-graph';
+import { err } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { RenderFeaturePreparationFailedError } from '../errors/render';
 import type { RenderFeatureGraphContribution } from '../features/graph-contribution';
 import {
   composeRenderFeatureGraph,
@@ -216,6 +218,27 @@ describe('render feature graphics staging', () => {
       expect(contribution.value.passes).toHaveLength(0);
       expect(contribution.value.resources).toHaveLength(0);
     }
+  });
+
+  it('treats asynchronous pipeline warm-up as an empty retryable frame', () => {
+    const staging = createRenderFeatureContributionStaging('synthetic.warmup', 0, undefined, () =>
+      err(
+        new RenderFeaturePreparationFailedError(
+          'synthetic.warmup',
+          0,
+          'resolve',
+          'pipeline',
+          'custom-material',
+          'pipeline-pending',
+          'next-frame',
+        ),
+      ),
+    );
+
+    expect(staging.addGraphicsPass('warmup', pass).ok).toBe(true);
+    const contribution = staging.commit();
+    expect(contribution.ok).toBe(true);
+    if (contribution.ok) expect(contribution.value.passes).toHaveLength(0);
   });
 
   it('aborts graphics staging without creating a feature-private graph', () => {

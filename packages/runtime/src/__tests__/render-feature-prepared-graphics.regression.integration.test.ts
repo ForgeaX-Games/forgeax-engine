@@ -243,7 +243,7 @@ describe('prepared graphics full-stack regression matrix', () => {
       expect.objectContaining({
         case: 'mismatch',
         featureStatuses: ['failed'],
-        errorCodes: ['render-feature-stage-failed'],
+        errorCodes: ['render-feature-prepared-state-mismatch'],
         drawCount: 0,
       }),
       expect.objectContaining({
@@ -255,7 +255,7 @@ describe('prepared graphics full-stack regression matrix', () => {
       expect.objectContaining({
         case: 'recovery',
         featureStatuses: ['active'],
-        errorCodes: ['render-feature-stage-failed'],
+        errorCodes: ['render-feature-prepared-state-mismatch'],
       }),
     ]);
   });
@@ -283,7 +283,7 @@ describe('prepared graphics full-stack regression matrix', () => {
 
     expect(result.ok).toBe(true);
     expect(diagnostics.map((diagnostic) => diagnostic.status)).toEqual(['active', 'failed']);
-    expect(diagnostics[1]?.latestError?.code).toBe('render-feature-stage-failed');
+    expect(diagnostics[1]?.latestError?.code).toBe('render-feature-prepared-state-mismatch');
     expect(renderer.perFramePassNames).toContain('synthetic.healthy::forward');
     expect(renderer.perFramePassNames).not.toContain('synthetic.failing::forward');
     expect(drawCount()).toBe(1);

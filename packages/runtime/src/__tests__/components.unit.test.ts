@@ -22,22 +22,14 @@
 //   - packages/runtime/src/components/__tests__/sprite-components-schema.test.ts
 //   - packages/runtime/src/components/__tests__/sprite-playback-mode.test.ts
 //   - packages/runtime/src/components/__tests__/transform.test.ts
-//   - packages/runtime/test/mesh-renderer-multi-material.test.ts
+//   - packages/runtime/src/__tests__/mesh-renderer-multi-material.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import {
-  createQueryState,
-  defineComponent,
-  ENTITY_NULL_RAW,
-  Entity,
-  type EntityHandle,
-  queryRun,
-  World,
-} from '@forgeax/engine-ecs';
+import { defineComponent, ENTITY_NULL_RAW, type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   GlyphText,
   SPRITE_PLAYBACK_MODE_CLAMP,
@@ -69,6 +61,7 @@ import {
   SortKey,
   skyboxModeFromF32,
   TONEMAP_NONE,
+  TONEMAP_REINHARD,
   TONEMAP_REINHARD_EXTENDED,
   tonemapFromF32,
 } from '@forgeax/engine-render/internal';
@@ -1327,10 +1320,10 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
-      // Clear-color default: opaque black array [0,0,0,1] (feat-20260709 M3;
+      // Clear-color default: transparent black array [0,0,0,0] (feat-20260709 M3;
       // E9 factory-pathway carries the new array default via
       // cameraPodFromDefaults()).
-      expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 0]);
       // aspect-sync opt-out default (feat-20260617 / M3)
       expect(pod.autoAspect).toBe(true);
     });
@@ -1379,8 +1372,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
-      // Clear-color default: opaque black array [0,0,0,1] (feat-20260709 M3).
-      expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 1]);
+      // Clear-color default: transparent black array [0,0,0,0] (feat-20260709 M3).
+      expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 0]);
       // aspect-sync opt-out default (feat-20260617 / M3): the sidecar only
       // touches perspective cameras, but the column default is shared.
       expect(pod.autoAspect).toBe(true);
@@ -1472,10 +1465,10 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(d.bloomThreshold.default).toBeCloseTo(1.0, 6);
       expect(d.bloomIntensity.default).toBeCloseTo(1.0, 6);
       expect(d.bloomBlurRadius.default).toBeCloseTo(4.0, 6);
-      // Clear-color default: explicit layer-2 opaque black array (feat-20260709
+      // Clear-color default: explicit layer-2 transparent black array (feat-20260709
       // M3; array layer-3 fallback is all-zero so the default MUST be explicit,
       // D-5).
-      expect(Array.from(d.clearColor.default as Float32Array)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(d.clearColor.default as Float32Array)).toEqual([0, 0, 0, 0]);
       // aspect-sync opt-out default (feat-20260617 / M3).
       expect(d.autoAspect.default).toBe(true);
       // Perspective quartet defaults intentionally absent (OOS-5).
@@ -1487,7 +1480,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   });
 
   describe('Camera.defaults — frozen token defaults map (AC-07 + feat-20260528-fxaa-post-processing + feat-20260531-bloom + feat-20260608-clear-color)', () => {
-    it('Camera.defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearColor: [0,0,0,1], autoAspect: true }', () => {
+    it('Camera.defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearColor: [0,0,0,0], autoAspect: true }', () => {
       expect(Camera.defaults).toEqual({
         projection: 0,
         left: -1,
@@ -1502,7 +1495,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
         bloomBlurRadius: 4.0,
-        clearColor: new Float32Array([0, 0, 0, 1]),
+        clearColor: new Float32Array([0, 0, 0, 0]),
         autoAspect: true,
       });
     });
@@ -1609,17 +1602,19 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(tonemapFromF32(1)).toBe('reinhard-extended');
     });
 
-    it('tonemapFromF32 maps all 7 modes correctly', () => {
+    it('tonemapFromF32 maps all 8 modes correctly', () => {
       expect(tonemapFromF32(2)).toBe('linear');
       expect(tonemapFromF32(3)).toBe('cineon');
       expect(tonemapFromF32(4)).toBe('aces-filmic');
       expect(tonemapFromF32(5)).toBe('agx');
       expect(tonemapFromF32(6)).toBe('neutral');
+      expect(TONEMAP_REINHARD).toBe(7);
+      expect(tonemapFromF32(TONEMAP_REINHARD)).toBe('reinhard');
     });
 
     it('tonemapFromF32 falls back to "none" for out-of-range numeric (defensive)', () => {
       expect(tonemapFromF32(-1)).toBe('none');
-      expect(tonemapFromF32(7)).toBe('none');
+      expect(tonemapFromF32(8)).toBe('none');
       expect(tonemapFromF32(NaN)).toBe('none');
     });
   });
@@ -1920,7 +1915,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   //
   // Covers:
   //   (a) Spawning an entity with SkyboxBackground can be queried via
-  //       createQueryState + queryRun (AC-01).
+  //       world.query row iteration (AC-01).
   //   (b) skyboxModeFromF32(0) returns 'cubemap' with TS narrow type
   //       (no `as` cast, AC-01).
   //   (c) SKYBOX_MODE_CUBEMAP === 0 invariant (non-zero sentinel guard,
@@ -1968,15 +1963,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         },
       });
 
-      const state = createQueryState({ with: [SkyboxBackground, Entity] });
-      const hits: Array<{ entityCount: number }> = [];
-      queryRun(state, world, (bundle) => {
-        hits.push({ entityCount: bundle.Entity.self.length });
-      });
-
-      expect(hits.length).toBeGreaterThanOrEqual(1);
-      const total = hits.reduce((sum, b) => sum + b.entityCount, 0);
-      expect(total).toBe(1);
+      const query = world.query({ with: [SkyboxBackground] }).unwrap();
+      expect([...query].length).toBe(1);
     });
 
     it('world.get returns the equirect handle (u32-stored)', () => {
@@ -2579,9 +2567,9 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // all-zero).
   // ────────────────────────────────────────────────────────────────────────
   describe('M3 vec-collapse schema + defaults (w11 AC-01 / E1 / E9)', () => {
-    it('Camera.clearColor is array<f32,4> with explicit layer-2 default [0,0,0,1]', () => {
+    it('Camera.clearColor is array<f32,4> with explicit layer-2 default [0,0,0,0]', () => {
       expect(Camera.schema.clearColor).toBe('array<f32, 4>');
-      expect(Array.from(Camera.fields.clearColor.default as Float32Array)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(Camera.fields.clearColor.default as Float32Array)).toEqual([0, 0, 0, 0]);
     });
 
     it('GlyphText.color is array<f32,4> with explicit layer-2 default [1,1,1,1]; per-axis scalars gone', () => {
@@ -2600,13 +2588,13 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(Array.from(Tilemap.fields.tileSize.default as Float32Array)).toEqual([1, 1]);
     });
 
-    it('E1: Camera spawned with clearColor omitted resolves to [0,0,0,1] (equal to old scalar default)', () => {
+    it('E1: Camera spawned with clearColor omitted resolves to [0,0,0,0]', () => {
       const world = new World();
       const e = world
         .spawn({ component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } })
         .unwrap();
       const row = world.get(e, Camera).unwrap();
-      expect(Array.from(row.clearColor)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(row.clearColor)).toEqual([0, 0, 0, 0]);
     });
 
     it('E1: GlyphText spawned with color omitted resolves to [1,1,1,1] (equal to old scalar default)', () => {
@@ -2630,8 +2618,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
       // The factory output carries the array-shaped clearColor field verbatim
       // from Camera.fields defaults -- no per-axis scalar keys survive.
-      expect(Array.from(p.clearColor)).toEqual([0, 0, 0, 1]);
-      expect(Array.from(o.clearColor)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(p.clearColor)).toEqual([0, 0, 0, 0]);
+      expect(Array.from(o.clearColor)).toEqual([0, 0, 0, 0]);
       expect('clearR' in p).toBe(false);
       expect('clearR' in o).toBe(false);
     });

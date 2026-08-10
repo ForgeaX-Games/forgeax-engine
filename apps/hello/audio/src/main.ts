@@ -38,8 +38,8 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
-import { AudioListener, AudioSource } from '@forgeax/engine-audio';
-import { audioPlugin, WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { AudioListener, AudioSource, audioPlugin } from '@forgeax/engine-audio';
+import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
   Collider,

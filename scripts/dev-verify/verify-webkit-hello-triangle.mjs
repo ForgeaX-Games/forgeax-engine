@@ -31,19 +31,28 @@
 // a deterministic regression fails every attempt so retry never masks a real
 // bug. See docs/how-to/2026-07-06-webkit-fallback-flake-investigation.md.
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { webkit } from 'playwright';
-import { detectWasmCrash, runWithRetry } from './retry-until-pass.mjs';
+import {
+  closeBrowserWithDeadline,
+  detectWasmCrash,
+  evaluateWithDeadline,
+  runWithRetry,
+} from './retry-until-pass.mjs';
 
 const URL = process.env.URL ?? 'http://localhost:5181/';
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS ?? 25000);
 const SCREENSHOT = process.env.SCREENSHOT ?? '/tmp/hello-triangle.png';
 const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS ?? 3);
+const PARITY_STATUS_OUTPUT = process.env.PARITY_STATUS_OUTPUT;
 
 async function runAttempt() {
   const browser = await webkit.launch({ headless: true });
   try {
     const ctx = await browser.newContext({ viewport: { width: 800, height: 600 } });
     const page = await ctx.newPage();
+    page.setDefaultTimeout(TIMEOUT_MS);
 
     const logs = [];
     page.on('console', (msg) => logs.push({ type: msg.type(), text: msg.text() }));
@@ -65,12 +74,18 @@ async function runAttempt() {
     // won't catch wgpu-wasm WebGL2 fallback regressions — fail loudly.
     let channelProof = { hasGpu: null, gl2: null };
     try {
-      channelProof = await page.evaluate(() => ({
-        hasGpu: typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu,
-        // Probe webgl2 availability (Channel 3 needs a GL context to attach to;
-        // Edge `enable-unsafe-webgpu=Disabled` returns null here too).
-        gl2: !!document.createElement('canvas').getContext('webgl2'),
-      }));
+      channelProof = await evaluateWithDeadline(
+        page,
+        () => ({
+          hasGpu: typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu,
+          // Probe webgl2 availability (Channel 3 needs a GL context to attach to;
+          // Edge `enable-unsafe-webgpu=Disabled` returns null here too).
+          gl2: !!document.createElement('canvas').getContext('webgl2'),
+        }),
+        undefined,
+        TIMEOUT_MS,
+        'hello channel probe',
+      );
     } catch (e) {
       console.log(`channel probe failed: ${e}`);
     }
@@ -94,64 +109,76 @@ async function runAttempt() {
     let diag = null;
     let pixelSample = null;
     try {
-      diag = await page.evaluate(() => {
-        const d = globalThis.__forgeax_draw_diag__;
-        if (!d) return { present: false };
-        return {
-          present: true,
-          setPipeline: d.setPipeline,
-          setVertex: d.setVertex,
-          setIndex: d.setIndex,
-          setBindGroup: d.setBindGroup,
-          draw: d.draw,
-          drawIndexed: d.drawIndexed,
-          lastPipelineLabels: d.lastPipelineLabels.slice(0, 16),
-        };
-      });
-      pixelSample = await page.evaluate(() => {
-        const all = [...document.querySelectorAll('canvas')];
-        const inventory = all.map((c) => ({
-          id: c.id,
-          width: c.width,
-          height: c.height,
-          cssW: c.clientWidth,
-          cssH: c.clientHeight,
-        }));
-        const c = document.querySelector('#app') ?? document.querySelector('canvas');
-        if (!c) return { present: false, inventory };
-        const w = c.width,
-          h = c.height;
-        // Try to read center pixel from a 2D copy (works whether GL or WebGPU).
-        const off = document.createElement('canvas');
-        off.width = w;
-        off.height = h;
-        const ctx = off.getContext('2d');
-        if (!ctx) return { present: true, w, h, sampled: false };
-        ctx.drawImage(c, 0, 0);
-        const cx = (w / 2) | 0,
-          cy = (h / 2) | 0;
-        const px = ctx.getImageData(cx, cy, 1, 1).data;
-        const tl = ctx.getImageData(2, 2, 1, 1).data;
-        const tr = ctx.getImageData(w - 3, 2, 1, 1).data;
-        // Triangle vertices in NDC: v0=(0, 0.7), v1=(-0.7, -0.6), v2=(0.7, -0.6).
-        // After the (0,0,3) camera pulled back along -Z, the triangle's NDC
-        // bounds shrink. Sample at NDC (0, -0.2) ≈ inside the triangle, expect
-        // the mid-grey defaultMaterial baseColor.
-        const cx2 = (w * 0.5) | 0;
-        const cy2 = (h * 0.6) | 0;
-        const inside = ctx.getImageData(cx2, cy2, 1, 1).data;
-        return {
-          present: true,
-          w,
-          h,
-          inventory,
-          sampled: true,
-          center: [...px],
-          topLeft: [...tl],
-          topRight: [...tr],
-          insideTri: [...inside],
-        };
-      });
+      diag = await evaluateWithDeadline(
+        page,
+        () => {
+          const d = globalThis.__forgeax_draw_diag__;
+          if (!d) return { present: false };
+          return {
+            present: true,
+            setPipeline: d.setPipeline,
+            setVertex: d.setVertex,
+            setIndex: d.setIndex,
+            setBindGroup: d.setBindGroup,
+            draw: d.draw,
+            drawIndexed: d.drawIndexed,
+            lastPipelineLabels: d.lastPipelineLabels.slice(0, 16),
+          };
+        },
+        undefined,
+        TIMEOUT_MS,
+        'hello diagnostics',
+      );
+      pixelSample = await evaluateWithDeadline(
+        page,
+        () => {
+          const all = [...document.querySelectorAll('canvas')];
+          const inventory = all.map((c) => ({
+            id: c.id,
+            width: c.width,
+            height: c.height,
+            cssW: c.clientWidth,
+            cssH: c.clientHeight,
+          }));
+          const c = document.querySelector('#app') ?? document.querySelector('canvas');
+          if (!c) return { present: false, inventory };
+          const w = c.width,
+            h = c.height;
+          // Try to read center pixel from a 2D copy (works whether GL or WebGPU).
+          const off = document.createElement('canvas');
+          off.width = w;
+          off.height = h;
+          const ctx = off.getContext('2d');
+          if (!ctx) return { present: true, w, h, sampled: false };
+          ctx.drawImage(c, 0, 0);
+          const cx = (w / 2) | 0,
+            cy = (h / 2) | 0;
+          const px = ctx.getImageData(cx, cy, 1, 1).data;
+          const tl = ctx.getImageData(2, 2, 1, 1).data;
+          const tr = ctx.getImageData(w - 3, 2, 1, 1).data;
+          // Triangle vertices in NDC: v0=(0, 0.7), v1=(-0.7, -0.6), v2=(0.7, -0.6).
+          // After the (0,0,3) camera pulled back along -Z, the triangle's NDC
+          // bounds shrink. Sample at NDC (0, -0.2) ≈ inside the triangle, expect
+          // the mid-grey defaultMaterial baseColor.
+          const cx2 = (w * 0.5) | 0;
+          const cy2 = (h * 0.6) | 0;
+          const inside = ctx.getImageData(cx2, cy2, 1, 1).data;
+          return {
+            present: true,
+            w,
+            h,
+            inventory,
+            sampled: true,
+            center: [...px],
+            topLeft: [...tl],
+            topRight: [...tr],
+            insideTri: [...inside],
+          };
+        },
+        undefined,
+        TIMEOUT_MS,
+        'hello pixel probe',
+      );
     } catch (e) {
       console.log(`DIAG QUERY FAILED: ${e}`);
     }
@@ -168,34 +195,40 @@ async function runAttempt() {
       // Extremely tiny PNG IDAT decoder is overkill — instead use the page to
       // read the screenshot we just wrote, but route it through a fresh image:
       const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
-      screenshotSample = await page.evaluate(async (url) => {
-        const img = new Image();
-        img.src = url;
-        await img.decode();
-        const off = document.createElement('canvas');
-        off.width = img.width;
-        off.height = img.height;
-        const ctx = off.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        // Triangle in NDC: v0=(0,0.7) v1=(-0.7,-0.6) v2=(0.7,-0.6); CSS canvas
-        // is 800×600. Center-x=400, sample y≈400 (lower half, inside triangle).
-        const sampleAt = (x, y) => [...ctx.getImageData(x, y, 1, 1).data];
-        return {
-          w: img.width,
-          h: img.height,
-          // Demo canvas (#app) is 512×512 anchored top-left of the 800×600
-          // playwright viewport, so the triangle lives roughly in (150-380,
-          // 130-380). Sample at (256, 256) — solidly inside the triangle body
-          // for both the unlit-flat (mid-grey ≈ 188) and the LearnOpenGL-orange
-          // visual targets. The earlier (400, 380) probe landed in the empty
-          // right half and false-failed even when render was correct.
-          tri: sampleAt(256, 256),
-          // Outside (right of canvas, definitely black):
-          outsideL: sampleAt(600, 50),
-          // Outside (right side, expected black):
-          outsideR: sampleAt(750, 50),
-        };
-      }, dataUrl);
+      screenshotSample = await evaluateWithDeadline(
+        page,
+        async (url) => {
+          const img = new Image();
+          img.src = url;
+          await img.decode();
+          const off = document.createElement('canvas');
+          off.width = img.width;
+          off.height = img.height;
+          const ctx = off.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          // Triangle in NDC: v0=(0,0.7) v1=(-0.7,-0.6) v2=(0.7,-0.6); CSS canvas
+          // is 800×600. Center-x=400, sample y≈400 (lower half, inside triangle).
+          const sampleAt = (x, y) => [...ctx.getImageData(x, y, 1, 1).data];
+          return {
+            w: img.width,
+            h: img.height,
+            // Demo canvas (#app) is 512×512 anchored top-left of the 800×600
+            // playwright viewport, so the triangle lives roughly in (150-380,
+            // 130-380). Sample at (256, 256) — solidly inside the triangle body
+            // for both the unlit-flat (mid-grey ≈ 188) and the LearnOpenGL-orange
+            // visual targets. The earlier (400, 380) probe landed in the empty
+            // right half and false-failed even when render was correct.
+            tri: sampleAt(256, 256),
+            // Outside (right of canvas, definitely black):
+            outsideL: sampleAt(600, 50),
+            // Outside (right side, expected black):
+            outsideR: sampleAt(750, 50),
+          };
+        },
+        dataUrl,
+        TIMEOUT_MS,
+        'hello screenshot probe',
+      );
     } catch (e) {
       console.log(`SCREENSHOT FAILED: ${e}`);
     }
@@ -254,7 +287,7 @@ async function runAttempt() {
     console.log(`RESULT: ${summary}`);
     return { ok: !fail, summary };
   } finally {
-    await browser.close();
+    await closeBrowserWithDeadline(browser, 10000, 'hello WebKit browser close');
   }
 }
 
@@ -262,4 +295,22 @@ const result = await runWithRetry(runAttempt, {
   maxAttempts: MAX_ATTEMPTS,
   label: 'hello-triangle',
 });
+if (PARITY_STATUS_OUTPUT) {
+  mkdirSync(dirname(PARITY_STATUS_OUTPUT), { recursive: true });
+  writeFileSync(
+    PARITY_STATUS_OUTPUT,
+    `${JSON.stringify(
+      {
+        backendId: 'webkit-webgl2',
+        executionStatus: result.ok ? 'complete' : 'failed',
+        status: result.ok ? 'pass' : 'failed',
+        provenance: { implementation: 'forgeax', adapterId: 'rhi-wgpu', channel: 'webkit-webgl2' },
+        summary: result.summary,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+}
 process.exit(result.ok ? 0 : 1);

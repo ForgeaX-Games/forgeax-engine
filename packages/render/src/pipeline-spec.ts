@@ -1648,6 +1648,32 @@ export function buildSpecConstTable(
 }
 
 /**
+ * Derive the material-only pre-warm table for a native linear-LDR target.
+ *
+ * The regular SPEC_CONST table targets the swap-chain view, while the
+ * tonemap=none path records geometry directly into the graph-owned
+ * `rgba16float` target. Keep that second attachment matrix derived from the
+ * same material specs so the first frame does not depend on an asynchronous
+ * lazy PSO build.
+ */
+export function buildLinearLdrMaterialSpecTable(
+  ldrViewFormat: GPUTextureFormat,
+): readonly Readonly<PipelineSpec>[] {
+  return buildSpecConstTable(ldrViewFormat)
+    .filter(
+      (spec) =>
+        spec.shader.passKind === 'forward' && spec.attachments.colorFormats[0] === ldrViewFormat,
+    )
+    .map((spec) => ({
+      ...spec,
+      attachments: {
+        ...spec.attachments,
+        colorFormats: [HDR_FORMAT],
+      },
+    }));
+}
+
+/**
  * Backward-compatible SPEC_CONST_TABLE — the table built with the default
  * LDR view format (`bgra8unorm-srgb`). Unit tests that exercise the
  * spec/cache-keying layer in isolation import this directly. Runtime

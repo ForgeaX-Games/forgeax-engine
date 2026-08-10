@@ -16,7 +16,7 @@
 // rewire reintroduces the deferral-without-pump (or changes the hop count past
 // the bound), this fails.
 
-import { createQueryState, Entity, queryRun, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import {
@@ -79,9 +79,8 @@ function currentState(world: World, state: BootState): string {
 
 function cameraCount(world: World): number {
   let n = 0;
-  queryRun(createQueryState({ with: [Camera, Entity] }), world, (bundle) => {
-    n += bundle.Entity.self.length;
-  });
+  const query = world.query({ with: [Camera] }).unwrap();
+  for (const _row of query) n += 1;
   return n;
 }
 

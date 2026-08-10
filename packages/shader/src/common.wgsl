@@ -1,12 +1,36 @@
 #define_import_path forgeax_view::common
 
-fn sampleMaterialTexture(
+// The texture view owns the texture transfer: an sRGB view decodes once during
+// textureSample, while a linear view is returned unchanged. Authored scalar
+// values are decoded by the material extraction path before the uniform upload.
+fn sampleMaterialTextureLinear(
   texture : texture_2d<f32>,
   textureSampler : sampler,
   uv : vec2<f32>,
   uvScale : vec2<f32>,
 ) -> vec4<f32> {
   return textureSample(texture, textureSampler, uv * uvScale);
+}
+
+// Keep the established helper for the other material paths; the explicit
+// linear name is the owner-facing entry point for the unlit parity path.
+fn sampleMaterialTexture(
+  texture : texture_2d<f32>,
+  textureSampler : sampler,
+  uv : vec2<f32>,
+  uvScale : vec2<f32>,
+) -> vec4<f32> {
+  return sampleMaterialTextureLinear(texture, textureSampler, uv, uvScale);
+}
+
+// Shared linear-LDR -> display-sRGB OETF for raw swap-chain storage writes.
+// sRGB texture views perform this conversion on attachment writes, but the
+// native output and FXAA passes intentionally target the non-sRGB storage view.
+fn linearToSrgbOetf(color : vec3<f32>) -> vec3<f32> {
+  let safe = max(color, vec3<f32>(0.0));
+  let high = pow(safe, vec3<f32>(0.41666)) * vec3<f32>(1.055) - vec3<f32>(0.055);
+  let low = safe * vec3<f32>(12.92);
+  return select(high, low, safe <= vec3<f32>(0.0031308));
 }
 
 // @forgeax/engine-shader - common.wgsl (M5 T-18 feat-20260512-naga-oil-composition-hmr).

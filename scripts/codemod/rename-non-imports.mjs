@@ -133,6 +133,11 @@ function isExcludedPath(rel) {
 function isBareEngineExempt(rel) {
   if (rel === 'AGENTS.md') return true;
   if (rel === 'README.md') return true;
+  // These two consumer-facing records intentionally preserve the bare
+  // placeholder identity. The package family migration must not turn a
+  // classification of `@forgeax/engine` into the runtime package it points to.
+  if (rel === 'README.zh-CN.md') return true;
+  if (rel === path.join('templates', 'game-default', 'capability-adoption.json')) return true;
   // Design docs that discuss the @forgeax/engine placeholder by name
   // (handover spec proposing to upgrade the placeholder into a preset/BOM,
   // and its referenced spike). Rewriting the bare token to @forgeax/engine-runtime

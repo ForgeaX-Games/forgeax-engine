@@ -128,6 +128,8 @@ interface StandardOpts {
   readonly roughness?: number;
   /** Texture channel used for the metallic factor; glTF defaults to B (2). */
   readonly metallicChannel?: number;
+  /** Texture channel used for the roughness factor; glTF defaults to G (1). */
+  readonly roughnessChannel?: number;
   readonly clearcoat?: number;
   readonly clearcoatRoughness?: number;
   readonly specularTint?: readonly [number, number, number];
@@ -146,6 +148,15 @@ interface StandardOpts {
   readonly queue?: number;
 }
 
+function validateChannel(
+  name: 'metallicChannel' | 'roughnessChannel',
+  value: number | undefined,
+): void {
+  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 3)) {
+    throw new Error(`Materials.standard: ${name} must be an integer in [0, 3], got ${value}`);
+  }
+}
+
 function standard(opts: StandardOpts): MaterialAsset {
   const occlusionStrength = opts.occlusionStrength ?? 1;
   if (occlusionStrength < 0 || occlusionStrength > 1) {
@@ -156,16 +167,8 @@ function standard(opts: StandardOpts): MaterialAsset {
   if (opts.alphaCutoff !== undefined && (opts.alphaCutoff < 0 || opts.alphaCutoff > 1)) {
     throw new Error(`Materials.standard: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
   }
-  if (
-    opts.metallicChannel !== undefined &&
-    (!Number.isInteger(opts.metallicChannel) ||
-      opts.metallicChannel < 0 ||
-      opts.metallicChannel > 3)
-  ) {
-    throw new Error(
-      `Materials.standard: metallicChannel must be an integer in [0, 3], got ${opts.metallicChannel}`,
-    );
-  }
+  validateChannel('metallicChannel', opts.metallicChannel);
+  validateChannel('roughnessChannel', opts.roughnessChannel);
   const values: Record<string, MaterialValue> = {
     baseColor: opts.baseColor,
     metallic: opts.metallic ?? 0,
@@ -174,6 +177,7 @@ function standard(opts: StandardOpts): MaterialAsset {
     specularTint: opts.specularTint ?? [1, 1, 1],
   };
   if (opts.metallicChannel !== undefined) values.metallicChannel = opts.metallicChannel;
+  if (opts.roughnessChannel !== undefined) values.roughnessChannel = opts.roughnessChannel;
   if (opts.clearcoat !== undefined) values.clearcoat = opts.clearcoat;
   if (opts.clearcoatRoughness !== undefined) values.clearcoatRoughness = opts.clearcoatRoughness;
   if (opts.emissive !== undefined) values.emissive = opts.emissive;

@@ -33,6 +33,7 @@ type ExecuteModule = {
       assets: unknown;
       debugAdapter?: unknown;
       profiler?: unknown;
+      execution?: unknown;
       importModule?: (specifier: string) => Promise<unknown>;
     },
   ) => Promise<ExecuteResult>;
@@ -75,6 +76,7 @@ export interface BrowserRemoteBridgeDeps {
   readonly debugAdapter?: unknown;
   /** The host's explicit CPU profiler capability, when opted in. */
   readonly profiler?: unknown;
+  readonly execution?: unknown;
   /** Relay port. */
   readonly port: string;
 }
@@ -114,7 +116,7 @@ function serializeError(error: unknown): Record<string, unknown> {
 export async function installBrowserRemoteBridge(
   deps: BrowserRemoteBridgeDeps,
 ): Promise<() => void> {
-  const { world, renderer, assets, debugAdapter, profiler, port } = deps;
+  const { world, renderer, assets, debugAdapter, profiler, execution, port } = deps;
 
   // The ws-free eval core. Dynamic import keeps @forgeax/engine-app free of a
   // static @forgeax/engine-remote dependency (@vite-ignore mirrors the
@@ -168,6 +170,7 @@ export async function installBrowserRemoteBridge(
             assets,
             debugAdapter,
             profiler: profiler,
+            execution,
             importModule,
           });
         } catch (e) {

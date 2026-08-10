@@ -9,10 +9,9 @@
 // `query.iter_combinations_mut()`, then verlet-integrated. Bodies clump over time.
 //
 // forgeax mapping:
-//   - query.iter_combinations_mut() -> queryCombinations(state, world, 2, ([a,b])
-//                                   => ...) — the new pairwise query iterator
-//                                   (solo round 20260713-194533). Before it, a
-//                                   pairwise-interaction system had to queryRun →
+//   - query.iter_combinations_mut() -> query.combinations(2), the pairwise
+//                                   iterator. Before it, a pairwise system had to
+//                                   run a row query, collect handles, then
 //                                   collect handles → hand-write a nested
 //                                   for i/for j=i+1 loop. forgeax's world.get/set
 //                                   Result model needs no mutable-aliasing cursor
@@ -27,12 +26,8 @@
 // what's under test, not the initial scatter). A central heavy "star" pulls them in.
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryCombinations,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
@@ -133,30 +128,28 @@ export function buildIterCombinationsWorld(world: World): void {
 }
 
 function collectBodyHandles(world: World): EntityHandle[] {
-  const state = createQueryState({ with: [Transform, Body, Entity] });
+  const query = world.query({ with: [Transform, Body] }).unwrap();
   const handles: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    const selfCol = bundle.Entity.self;
-    for (let i = 0; i < selfCol.length; i++) handles.push((selfCol[i] ?? 0) as EntityHandle);
-  });
+  for (const row of query) handles.push(row.entity);
   return handles;
 }
 
 /**
  * Accumulate the pairwise gravitational force into every body's `acc`, applying
- * each unordered PAIR exactly once via `queryCombinations` — the direct
+ * each unordered PAIR exactly once via `query.combinations(2)` — the direct
  * transcription of Bevy's `interact_bodies` (`query.iter_combinations_mut()`).
  */
 export function stepInteract(world: World): void {
-  const state = createQueryState({ with: [Transform, Body, Entity] });
-  queryCombinations(state, world, 2, (pair) => {
-    const a = pair[0] as EntityHandle;
-    const b = pair[1] as EntityHandle;
+  const query = world.query({ with: [Transform, Body] }).unwrap();
+  for (const pair of query.combinations(2)) {
+    const a = pair[0]?.entity;
+    const b = pair[1]?.entity;
+    if (a === undefined || b === undefined) continue;
     const ta = world.get(a, Transform);
     const tb = world.get(b, Transform);
     const ba = world.get(a, Body);
     const bb = world.get(b, Body);
-    if (!ta.ok || !tb.ok || !ba.ok || !bb.ok) return;
+    if (!ta.ok || !tb.ok || !ba.ok || !bb.ok) continue;
 
     const pa = ta.value.pos;
     const pb = tb.value.pos;
@@ -182,7 +175,7 @@ export function stepInteract(world: World): void {
     world.set(b, Body, {
       acc: [(ab[0] ?? 0) - fx * ma, (ab[1] ?? 0) - fy * ma, (ab[2] ?? 0) - fz * ma],
     });
-  });
+  }
 }
 
 /**

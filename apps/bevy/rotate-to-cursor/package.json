@@ -15,6 +15,9 @@
   },
   "forgeax": {
     "bevyExample": { "name": "rotate_to_cursor", "category": "2D Rendering", "status": "implemented" },
+    "rhiDebug": {
+      "riskFamilies": ["geometry-scale"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-rotate-to-cursor smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "demo bundle downstream of engine-runtime sizes" },
@@ -37,6 +40,7 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",

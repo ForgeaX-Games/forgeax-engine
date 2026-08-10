@@ -37,6 +37,12 @@ const sharedInputs =
       }
     : null);
 
+if (!Number.isInteger(aggregateAttempt) || aggregateAttempt < 1)
+  fail('ci-provenance-aggregate-attempt-mismatch', {
+    expected: 'a positive aggregate attempt',
+    detail: { observedAggregateAttempt: aggregateAttempt },
+  });
+
 if (!existsSync(recordsDir)) fail('ci-provenance-records-dir-missing', { recordsDir });
 const candidates = [];
 for (const name of readdirSync(recordsDir)) {
@@ -55,7 +61,8 @@ let schemaVersion = null;
 for (const { path, record } of candidates) {
   if (!record || !producers.includes(record.producer)) continue;
   if (
-    !Number.isInteger(record.runAttempt) ||
+    !Number.isInteger(record.producerRunAttempt) ||
+    record.producerRunAttempt < 1 ||
     typeof record.runId !== 'string' ||
     !Array.isArray(record.artifacts) ||
     record.artifacts.some(
@@ -63,7 +70,14 @@ for (const { path, record } of candidates) {
         typeof artifact?.class !== 'string' ||
         typeof artifact?.artifactName !== 'string' ||
         typeof artifact?.artifactId !== 'string' ||
-        typeof artifact?.uploadedAt !== 'string',
+        typeof artifact?.producerRunAttempt !== 'number' ||
+        typeof artifact?.upload?.startedAt !== 'string' ||
+        typeof artifact?.upload?.completedAt !== 'string' ||
+        !Number.isFinite(artifact?.upload?.elapsedSeconds) ||
+        artifact.upload.elapsedSeconds < 0 ||
+        !Number.isInteger(artifact?.upload?.transferAttempt) ||
+        artifact.upload.transferAttempt < 1 ||
+        artifact.upload.transferAttempt > 3,
     )
   )
     fail('ci-provenance-record-invalid', { path, producer: record?.producer });
@@ -71,15 +85,40 @@ for (const { path, record } of candidates) {
     runId = record.runId;
     schemaVersion = record.schemaVersion;
   }
-  if (record.runId !== runId || record.schemaVersion !== schemaVersion)
+  if (record.runId !== runId)
+    fail('ci-provenance-cross-run', {
+      expected: { runId },
+      detail: { observedRunId: record.runId, producer: record.producer },
+    });
+  if (record.schemaVersion !== schemaVersion)
     fail('ci-provenance-schema-mismatch', { path, producer: record.producer });
+  if (record.producerRunAttempt > aggregateAttempt)
+    fail('ci-provenance-aggregate-attempt-mismatch', {
+      expected: { aggregateAttempt, producerRunAttemptAtMost: aggregateAttempt },
+      detail: {
+        producer: record.producer,
+        observedProducerAttempt: record.producerRunAttempt,
+      },
+    });
+  for (const artifact of record.artifacts) {
+    if (artifact.producerRunAttempt !== record.producerRunAttempt)
+      fail('ci-provenance-foreign-producer-attempt', {
+        expected: { producer: record.producer, producerRunAttempt: record.producerRunAttempt },
+        detail: { class: artifact.class, observedProducerAttempt: artifact.producerRunAttempt },
+      });
+    if (typeof artifact.inputFingerprint !== 'string' || artifact.inputFingerprint.length === 0)
+      fail('ci-provenance-fingerprint-missing', {
+        expected: 'a producer-owned per-family input fingerprint',
+        detail: { producer: record.producer, class: artifact.class },
+      });
+  }
   const prior = selected.get(record.producer);
-  if (prior && prior.record.runAttempt === record.runAttempt)
+  if (prior && prior.record.producerRunAttempt === record.producerRunAttempt)
     fail('ci-provenance-record-duplicate', {
       producer: record.producer,
-      attempt: record.runAttempt,
+      attempt: record.producerRunAttempt,
     });
-  if (!prior || record.runAttempt > prior.record.runAttempt)
+  if (!prior || record.producerRunAttempt > prior.record.producerRunAttempt)
     selected.set(record.producer, { path, record });
 }
 
@@ -172,7 +211,7 @@ for (const producer of producers) {
         class: artifact.class,
         producers: [mapped.get(artifact.class).producer, producer],
       });
-    mapped.set(artifact.class, { ...artifact, producer, producerAttempt: record.runAttempt });
+    mapped.set(artifact.class, { ...artifact, producer });
   }
 }
 for (const className of contract.provenance.payloadClasses)
@@ -193,7 +232,7 @@ const merged = {
   runId,
   aggregateAttempt,
   producerAttempts: Object.fromEntries(
-    producers.map((producer) => [producer, selected.get(producer).record.runAttempt]),
+    producers.map((producer) => [producer, selected.get(producer).record.producerRunAttempt]),
   ),
   mergedAt: new Date().toISOString(),
   artifacts,

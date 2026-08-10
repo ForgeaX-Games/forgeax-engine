@@ -1,4 +1,4 @@
-// @ts-nocheck — merged file: pre-existing typecheck patterns from packages/pack/test/ used implicit detail-property accesses that were not validated under tsc rootDir; preserving original behavior post-merge
+// @ts-nocheck — merged file: pre-existing typecheck patterns from packages/pack/src/__tests__/ used implicit detail-property accesses that were not validated under tsc rootDir; preserving original behavior post-merge
 // Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 // biome-ignore-all lint/complexity/useLiteralKeys: literal-key accesses from original source files
@@ -11,12 +11,12 @@
 //   - packages/pack/src/__tests__/scanner-material-step7.test.ts
 //   - packages/pack/src/__tests__/scene-schema.test.ts
 //   - packages/pack/src/atlas/__tests__/shelf-pack.test.ts
-//   - packages/pack/test/builtin.test.ts
-//   - packages/pack/test/errors.test.ts
-//   - packages/pack/test/guid.test.ts
-//   - packages/pack/test/scanner-fail-fast.test.ts
-//   - packages/pack/test/scanner.test.ts
-//   - packages/pack/test/schema.test.ts
+//   - packages/pack/src/__tests__/builtin.test.ts
+//   - packages/pack/src/__tests__/errors.test.ts
+//   - packages/pack/src/__tests__/guid.test.ts
+//   - packages/pack/src/__tests__/scanner-fail-fast.test.ts
+//   - packages/pack/src/__tests__/scanner.test.ts
+//   - packages/pack/src/__tests__/schema.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
@@ -950,9 +950,9 @@ const V1_WHITELIST = new Set([
 }
 
 {
-  // ─── from builtin.test.ts (test/) ───
+  // ─── from builtin.test.ts (__tests__/) ───
 
-  describe('builtin.test.ts (test/)', () => {
+  describe('builtin.test.ts (__tests__/)', () => {
     describe('FORGEAX_NAMESPACE', () => {
       it('is a valid AssetGuid', () => {
         expect(FORGEAX_NAMESPACE).toBeInstanceOf(Uint8Array);
@@ -1021,7 +1021,7 @@ const V1_WHITELIST = new Set([
 }
 
 {
-  // ─── from errors.test.ts (test/) ───
+  // ─── from errors.test.ts (__tests__/) ───
 
   function exhaustiveSwitchCheck(err: PackError): string {
     switch (err.code) {
@@ -1045,7 +1045,7 @@ const V1_WHITELIST = new Set([
   }
   void exhaustiveSwitchCheck;
 
-  describe('errors.test.ts (test/)', () => {
+  describe('errors.test.ts (__tests__/)', () => {
     describe('PackError — 8-member closed set', () => {
       it('pack-malformed-meta: .code + .expected + .hint + detail.ajvErrors', () => {
         const detail: PackErrorDetail = {
@@ -1204,9 +1204,9 @@ const V1_WHITELIST = new Set([
 }
 
 {
-  // ─── from guid.test.ts (test/) ───
+  // ─── from guid.test.ts (__tests__/) ───
 
-  describe('guid.test.ts (test/)', () => {
+  describe('guid.test.ts (__tests__/)', () => {
     describe('AssetGuid.parse', () => {
       it('returns Ok(AssetGuid) for a valid RFC4122 dash-form UUID', () => {
         const result = AssetGuid.parse('01957b3a-1234-7abc-89de-123456789abc');
@@ -1298,7 +1298,7 @@ const V1_WHITELIST = new Set([
 }
 
 {
-  // ─── from scanner-fail-fast.test.ts (test/) ───
+  // ─── from scanner-fail-fast.test.ts (__tests__/) ───
 
   const GUID_A = '018e7a4d-1234-7abc-8def-000000000001';
   const GUID_B = '018e7a4d-1234-7abc-8def-000000000002';
@@ -1417,7 +1417,7 @@ const V1_WHITELIST = new Set([
 }
 
 {
-  // ─── from scanner.test.ts (test/) ───
+  // ─── from scanner.test.ts (__tests__/) ───
 
   async function scanPaths(roots: string[]): Promise<string[]> {
     const result = await scan(roots);
@@ -1750,7 +1750,7 @@ const V1_WHITELIST = new Set([
 }
 
 {
-  // ─── from schema.test.ts (test/) ───
+  // ─── from schema.test.ts (__tests__/) ───
 
   const validMeta1 = {
     schemaVersion: '1.0.0',

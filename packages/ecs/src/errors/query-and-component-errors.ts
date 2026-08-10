@@ -1,84 +1,3 @@
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260531-query-optional-components M1 — closed-union evolution +1.
-//
-// Adds 1 new member 'query-descriptor-with-optional-conflict' to EcsErrorCode
-// (31 -> 32). AGENTS.md §Error model evolution contract: minor (add member
-// only). Same-shape add-only mirror of ScheduleMutationError — the kebab
-// `<noun>-<problem>` series keeps `switch (err.code)` exhaustive narrows
-// visually consistent (charter P4).
-//
-// Triggered by `createQueryState` when a component token appears in both
-// `with` and `optional` arrays — the two roles are contradictory (with =
-// must be present for matching; optional = may be absent, data-only).
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Thrown / returned via `Result.err` from `createQueryState` when the same
- * component token appears in both `with` and `optional` — the two roles are
- * contradictory. AI users remove the component from one of the two lists.
- *
- * `.code = 'query-descriptor-with-optional-conflict'`
- * `.detail = { tokenName }`
- * `.hint` — names the conflicting component + the resolution (remove from
- *   `with` or `optional`).
- */
-export class QueryDescriptorOptionalConflictError extends Error {
-  override readonly name = 'QueryDescriptorOptionalConflictError';
-  readonly code = 'query-descriptor-with-optional-conflict' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly tokenName: string };
-
-  constructor(tokenName: string) {
-    const hint = `Component "${tokenName}" appears in both \`with\` and \`optional\`. These roles conflict: \`with\` requires the component for matching, while \`optional\` is data-only. Remove "${tokenName}" from one of the two lists.`;
-    const expectedStr = 'disjoint with and optional component sets';
-    super(
-      `QueryDescriptor: with-optional conflict.\n` +
-        `  code: query-descriptor-with-optional-conflict\n` +
-        `  token: ${tokenName}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { tokenName };
-  }
-}
-
-/**
- * Thrown by `queryCombinations` when the query state's `with` list omits the
- * `Entity` component. Combinations yield entity-handle tuples (the caller reads
- * each via `world.get`), so `Entity` must be in `with` — the same requirement
- * `queryRun` documents for `bundle.Entity.self`. Fail-fast at the
- * `queryCombinations` entry (mirrors QueryDescriptorOptionalConflictError's
- * setup-time self-consistency shape).
- *
- * `.code = 'query-combinations-entity-required'`; `.detail.withNames` carries
- * the declared component names.
- */
-export class QueryCombinationsEntityRequiredError extends Error {
-  override readonly name = 'QueryCombinationsEntityRequiredError';
-  readonly code = 'query-combinations-entity-required' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly withNames: readonly string[] };
-
-  constructor(withNames: readonly string[]) {
-    const hint = `queryCombinations yields entity-handle tuples, so the query's \`with\` list must include the \`Entity\` component. Add \`Entity\` to \`with\` (currently: [${withNames.join(', ')}]).`;
-    const expectedStr = 'Entity component present in the query `with` list';
-    super(
-      `queryCombinations: Entity component required.\n` +
-        `  code: query-combinations-entity-required\n` +
-        `  with: [${withNames.join(', ')}]\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { withNames };
-  }
-}
-
 /**
  * Returned via `Result.err` from `world.removeComponent` when the caller tries
  * to remove an essential (undeletable) component
@@ -201,5 +120,81 @@ export class SpawnDataUnknownFieldError extends Error {
     this.hint = hint;
     this.expected = expected;
     this.detail = { component: componentName, field: fieldName, knownFields: sortedKnown };
+  }
+}
+export type QuerySpanUnavailableReason = 'optional-data' | 'row-change-filter' | 'sparse-component';
+
+export class QueryDescriptorConflictError extends Error {
+  override readonly name = 'QueryDescriptorConflictError';
+  readonly code = 'query-descriptor-conflict' as const;
+  readonly expected = 'each component occupies one descriptor role';
+  readonly hint: string;
+  readonly detail: { readonly componentName: string; readonly roles: readonly string[] };
+
+  constructor(componentName: string, roles: readonly string[]) {
+    const hint = `Remove ${componentName} from all but one of: ${roles.join(', ')}.`;
+    super(`Query descriptor roles conflict for ${componentName}.\n  hint: ${hint}`);
+    this.hint = hint;
+    this.detail = { componentName, roles };
+  }
+}
+
+export class QueryDataRequiresFieldsError extends Error {
+  override readonly name = 'QueryDataRequiresFieldsError';
+  readonly code = 'query-data-requires-fields' as const;
+  readonly expected = 'a component with at least one data field';
+  readonly hint: string;
+  readonly detail: { readonly componentName: string };
+
+  constructor(componentName: string) {
+    const hint = `Move tag ${componentName} to with or without.`;
+    super(`Query data access requires fields on ${componentName}.\n  hint: ${hint}`);
+    this.hint = hint;
+    this.detail = { componentName };
+  }
+}
+
+export class QuerySpanUnavailableError extends Error {
+  override readonly name = 'QuerySpanUnavailableError';
+  readonly code = 'query-span-unavailable' as const;
+  readonly expected = 'a descriptor whose rows form contiguous table ranges';
+  readonly hint = 'Use row iteration or split the query.';
+  readonly detail: { readonly reason: QuerySpanUnavailableReason };
+
+  constructor(reason: QuerySpanUnavailableReason) {
+    super(`Query spans are unavailable: ${reason}.\n  hint: Use row iteration or split the query.`);
+    this.detail = { reason };
+  }
+}
+
+export class QueryIterationInvalidatedError extends Error {
+  override readonly name = 'QueryIterationInvalidatedError';
+  readonly code = 'query-iteration-invalidated' as const;
+  readonly expected: string;
+  readonly hint = 'Use deferred Commands for structural mutation, then restart iteration.';
+  readonly detail: {
+    readonly expectedStructureEpoch: number;
+    readonly actualStructureEpoch: number;
+  };
+
+  constructor(expectedStructureEpoch: number, actualStructureEpoch: number) {
+    const expected = `structure epoch ${expectedStructureEpoch}`;
+    super(
+      `Query iteration was invalidated by structure epoch ${actualStructureEpoch}.\n  hint: ${'Use deferred Commands for structural mutation, then restart iteration.'}`,
+    );
+    this.expected = expected;
+    this.detail = { expectedStructureEpoch, actualStructureEpoch };
+  }
+}
+
+export class QueryIterationActiveError extends Error {
+  override readonly name = 'QueryIterationActiveError';
+  readonly code = 'query-iteration-active' as const;
+  readonly expected = 'one active iterator per Query';
+  readonly hint = 'Complete the active iterator or create an independent Query.';
+  readonly detail = {};
+
+  constructor() {
+    super('Query already has an active iterator.\n  hint: Complete it before iterating again.');
   }
 }

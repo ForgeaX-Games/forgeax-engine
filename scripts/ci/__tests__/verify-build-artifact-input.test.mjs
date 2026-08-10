@@ -42,7 +42,7 @@ function runVerifier(args = []) {
  * Create a temp directory structure simulating artifact extraction.
  * Pass an object mapping repo-relative paths to file content (or null for dir).
  */
-function tmpExtraction(files) {
+function tmpExtraction(files, mutateContract = () => {}) {
   const root = mkdtempSync(join(tmpdir(), 'verify-input-'));
   // Write a minimal contract into the temp root
   const contract = {
@@ -75,6 +75,7 @@ function tmpExtraction(files) {
     },
     requiredCIJobRoster: [],
   };
+  mutateContract(contract);
   writeFileSync(
     join(root, 'build-artifact-contract.json'),
     JSON.stringify(contract, null, 2),
@@ -112,6 +113,37 @@ test('t3: consumer with all declared paths present exits 0', async () => {
       r.stdout.includes('ok') || r.stdout.includes('pass') || r.stdout.includes('verified'),
       'output should indicate ok/pass/verified',
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('M1-T2: return evidence metadata stays outside consumer payload classes', () => {
+  const repositoryContract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  assert.ok(repositoryContract.returnEvidence, 'repository contract must declare return evidence');
+
+  const root = tmpExtraction(
+    {
+      'packages/runtime/dist/index.mjs': 'export {}',
+      'packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm': 'binary',
+    },
+    (contract) => {
+      contract.returnEvidence = repositoryContract.returnEvidence;
+    },
+  );
+  try {
+    const contract = JSON.parse(readFileSync(join(root, 'build-artifact-contract.json'), 'utf8'));
+    assert.deepEqual(contract.provenance.payloadClasses, Object.keys(contract.artifactClasses));
+
+    const present = runVerifier(['--consumer', 'vitest-dawn', '--root', root]);
+    assert.equal(present.exitCode, 0, present.stderr || present.stdout);
+
+    rmSync(join(root, 'packages', 'wgpu-wasm'), { recursive: true, force: true });
+    const missing = runVerifier(['--consumer', 'vitest-dawn', '--root', root]);
+    assert.notEqual(missing.exitCode, 0);
+    assert.equal(JSON.parse(missing.stdout).code, 'ci-artifact-required-path-missing');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -403,6 +435,38 @@ function sharedInputFixture(mutate = () => {}) {
   );
   return { root, contractPath, manifestPath };
 }
+
+test('M1-T2: return metadata preserves shared payload contract failures', () => {
+  const repositoryContract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  assert.ok(repositoryContract.returnEvidence, 'repository contract must declare return evidence');
+  const { root, contractPath, manifestPath } = sharedInputFixture((contract) => {
+    contract.returnEvidence = repositoryContract.returnEvidence;
+  });
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.payloadInventory.push('shared-app-inputs/shaders/missing.bindings.json');
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const result = runVerifier([
+      '--consumer',
+      'app-shard',
+      '--root',
+      root,
+      '--contract',
+      contractPath,
+      '--shared-input-manifest',
+      manifestPath,
+      '--input-fingerprint',
+      'fixture-fingerprint',
+    ]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-shared-input-payload-missing');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('w6: app shard accepts a complete compatible shared input manifest', () => {
   const { root, contractPath, manifestPath } = sharedInputFixture();

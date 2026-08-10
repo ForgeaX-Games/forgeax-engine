@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   characterizeMaterialWgslProfile,
   MATERIAL_WGSL_PROFILE,
+  MATERIAL_WGSL_PROFILE_CAPABILITIES,
+  type MaterialWgslProfileCapability,
+  type MaterialWgslProfileFeature,
   validateMaterialWgslSource,
 } from '../material/profile.js';
 
@@ -33,6 +36,21 @@ describe('forgeax-material-wgsl-v1 profile characterization', () => {
         expect.objectContaining({ feature: 'override-module', supported: true }),
         expect.objectContaining({ feature: 'span-diagnostic', supported: true }),
       ]),
+    );
+  });
+
+  it('derives the feature vocabulary from the capability rows', () => {
+    expectTypeOf<MaterialWgslProfileFeature>().toEqualTypeOf<
+      (typeof MATERIAL_WGSL_PROFILE_CAPABILITIES)[number]['feature']
+    >();
+    expectTypeOf(MATERIAL_WGSL_PROFILE_CAPABILITIES).toMatchTypeOf<
+      readonly MaterialWgslProfileCapability[]
+    >();
+    expectTypeOf('bool-define' as const).toMatchTypeOf(
+      undefined as unknown as MaterialWgslProfileFeature,
+    );
+    expectTypeOf('unknown-feature' as const).not.toMatchTypeOf(
+      undefined as unknown as MaterialWgslProfileFeature,
     );
   });
 

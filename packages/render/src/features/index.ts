@@ -12,6 +12,19 @@ export type {
   RenderFeaturePassDependency,
   RenderFeaturePassOptions,
 } from './graph-contribution';
+export { createRenderFeatureContributionStaging } from './graph-contribution';
+export type {
+  RenderFeatureGpuBindingsDescriptor,
+  RenderFeatureGpuBindingsRef,
+  RenderFeatureGpuBufferDescriptor,
+  RenderFeatureGpuBufferRef,
+  RenderFeatureGpuBufferUsage,
+  RenderFeatureGpuComputePassDescriptor,
+  RenderFeatureGpuDispatch,
+  RenderFeatureGpuPrepare,
+  RenderFeatureGpuProgramDescriptor,
+  RenderFeatureGpuProgramRef,
+} from './prepared-gpu-work';
 export type {
   PreparedKind,
   RenderFeatureBindingsDescriptor,

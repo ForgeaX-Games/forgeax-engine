@@ -5,8 +5,10 @@
 // castShadow + 8 f32 shadow columns (feat-20260709 M2: direction/color collapsed
 // from 6 per-axis scalar columns to two inline array<f32,3> columns).
 //
-// Direction (xyz, normalized) + color (rgb, linear space) + intensity.
+// Direction (xyz, outgoing) + color (rgb, linear space) + intensity in lux.
 // No Transform dependency (directional lights have no position).
+// The public world-unit convention is 1 world unit = 1 meter. Exposure is a
+// camera output concern and is not folded into this light's intensity.
 //
 // 0 DirectionalLight + standard material -> physically correct black render
 // (charter v2 P3/P4); details: AGENTS.md section Breaking changes 2026-05-18.
@@ -38,9 +40,10 @@ import { validateDirection } from './light-helpers';
  *
  * `direction` @semantics outgoing — points FROM light source TO surface
  * (opposite of Three.js convention; the shader internally negates this
- * vector to obtain the L vector for BRDF evaluation). `normalize` yourself
- * if needed - the shader does not re-normalize. `color` is linear-space rgb
- * in [0, 1] per channel.
+ * vector to obtain the L vector for BRDF evaluation). `color` is
+ * linear-space rgb in [0, 1] per channel and `intensity` is lux. Exposure is
+ * applied after lighting by the camera output stage; no hidden light
+ * multiplier is applied here.
  *
  * castShadow defaults to true — zero-config spawns cast cascaded shadow maps.
  * Set castShadow: false to opt out (shadow fields are still stored but their

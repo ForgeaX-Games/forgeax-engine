@@ -1,7 +1,7 @@
 // Self-test fixture for scripts/check-learn-render-onerror-gate.mjs
 // feat: bug-20260609-learn-render-onerror-gate-coverage M5
 //
-// Five cases cover the gate contract:
+// Eight cases cover the gate contract:
 //   1. clean repo: all demos compliant -> exit 0
 //   2. missing-test mutation: no onerror-gate.browser.test.ts
 //      -> exit != 0 + stderr contains 'missing-test'
@@ -11,6 +11,9 @@
 //      -> exit != 0 + stderr contains 'missing-entry'
 //   5. no-arg default: script invoked without --repo-root, cwd is repo root
 //      -> exit 0 (git upwalk fallback finds pnpm-workspace.yaml)
+//   6. scoped dev import consumer -> exit 0
+//   7. unscoped dev import transport -> exit != 0
+//   8. missing Vite runtime binding -> exit != 0
 //
 // Each mutation operates on a tmpdir copy of the minimal layout so live tree
 // is never mutated.
@@ -51,7 +54,14 @@ function runNoArg(cwdPath) {
 }
 
 function makeFixture(opts = {}) {
-  const { withTest = true, withBusPush = true, withEntry = true } = opts;
+  const {
+    withTest = true,
+    withBusPush = true,
+    withEntry = true,
+    withDevImport = false,
+    withScopedTransport = true,
+    withViteBinding = true,
+  } = opts;
   const fixtureRoot = mkdtempSync(join(tmpBase, 'onerror-gate-fixture-'));
   const srcDir = join(fixtureRoot, 'apps', 'learn-render', '1.testing', '1.sample', 'src');
   const testDir = join(srcDir, '__tests__');
@@ -65,7 +75,21 @@ function makeFixture(opts = {}) {
     } else {
       content += 'console.log("no bus push here");\n';
     }
+    if (withDevImport) {
+      content += 'const runtimeBinding = createStandaloneRuntimeAssetBinding("fixture");\n';
+      content += withScopedTransport
+        ? 'createDevImportTransport(runtimeBinding);\nassets.configureRuntimeBinding(runtimeBinding);\n'
+        : 'createDevImportTransport();\n';
+    }
     writeFileSync(join(srcDir, 'index.ts'), content, 'utf8');
+  }
+
+  if (withDevImport) {
+    writeFileSync(
+      join(fixtureRoot, 'apps', 'learn-render', '1.testing', '1.sample', 'vite.config.ts'),
+      withViteBinding ? 'pluginPack({ runtimeBinding, });\n' : 'pluginPack({});\n',
+      'utf8',
+    );
   }
 
   if (withTest) {
@@ -138,6 +162,40 @@ describe('check-learn-render-onerror-gate', () => {
       expect(r.status).toBe(0);
       expect(r.stderr).toBe('');
       expect(r.stdout).toMatch(/OK/);
+    } finally {
+      cleanup(fixtureRoot);
+    }
+  });
+
+  it('case 6 (scoped dev import consumer): script exits 0', () => {
+    const fixtureRoot = makeFixture({ withDevImport: true });
+    try {
+      const r = run(fixtureRoot);
+      expect(r.status).toBe(0);
+      expect(r.stderr).toBe('');
+    } finally {
+      cleanup(fixtureRoot);
+    }
+  });
+
+  it('case 7 (unscoped dev import transport): exit != 0 + scoped diagnostics', () => {
+    const fixtureRoot = makeFixture({ withDevImport: true, withScopedTransport: false });
+    try {
+      const r = run(fixtureRoot);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/unscoped-import-transport/);
+      expect(r.stderr).toMatch(/unscoped-asset-registry/);
+    } finally {
+      cleanup(fixtureRoot);
+    }
+  });
+
+  it('case 8 (missing Vite runtime binding): exit != 0 + unscoped-pack-host', () => {
+    const fixtureRoot = makeFixture({ withDevImport: true, withViteBinding: false });
+    try {
+      const r = run(fixtureRoot);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/unscoped-pack-host/);
     } finally {
       cleanup(fixtureRoot);
     }

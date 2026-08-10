@@ -1,13 +1,12 @@
 import {
-  Entity,
   Time,
   Update,
   World,
-  createQueryState,
   defineComponent,
-  queryRunContiguous,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
+import { inState } from '@forgeax/engine-state';
+import { GameState } from './gameplay-state';
 import { scoringTargetEntities, type ScoringTargetQuery } from './scoring-target';
 
 const INITIAL_HEALTH = 100;
@@ -19,10 +18,6 @@ export const TargetHealth = defineComponent('GameDefaultTargetHealth', {
   max: 'f32',
 });
 
-const targetHealthQuery = createQueryState<
-  readonly [typeof TargetHealth, typeof Entity],
-  readonly []
->({ with: [TargetHealth, Entity] });
 
 export type TargetHealthWitness = {
   readonly contiguousSupported: boolean;
@@ -51,9 +46,10 @@ type TargetHealthWitnessState = {
 };
 
 export function installTargetHealth(world: World, targetQuery: ScoringTargetQuery): TargetHealthHandle {
-  for (const entity of scoringTargetEntities(world, targetQuery)) {
+  for (const entity of scoringTargetEntities(targetQuery)) {
     world.addComponent(entity, { component: TargetHealth, data: { current: INITIAL_HEALTH, max: INITIAL_HEALTH } });
   }
+  const targetHealthQuery = world.query({ write: [TargetHealth] }).unwrap();
 
   world.insertResource<TargetHealthWitnessState>(GAME_DEFAULT_TARGET_HEALTH_WITNESS, {
     contiguousSupported: false,
@@ -61,32 +57,35 @@ export function installTargetHealth(world: World, targetQuery: ScoringTargetQuer
     rows: 0,
     lengthsEqual: true,
     totalCurrent: 0,
-    totalMax: scoringTargetEntities(world, targetQuery).length * INITIAL_HEALTH,
+    totalMax: scoringTargetEntities(targetQuery).length * INITIAL_HEALTH,
     damageEvents: 0,
   });
   const state = world.getResource<TargetHealthWitnessState>(GAME_DEFAULT_TARGET_HEALTH_WITNESS);
 
   world.addSystem(Update, {
     name: 'game-target-health-contiguous',
+    runIf: inState(GameState, 'Play'),
     queries: [],
     fn: () => {
       const dt = world.getResource(Time).delta;
       state.rows = 0;
       state.totalCurrent = 0;
       state.lengthsEqual = true;
-      state.contiguousSupported = queryRunContiguous(targetHealthQuery, world, (bundle) => {
+      const spans = targetHealthQuery.spans();
+      state.contiguousSupported = spans.ok;
+      if (spans.ok) for (const span of spans.value) {
         state.contiguousCalls += 1;
-        const current = bundle.GameDefaultTargetHealth.current;
-        const max = bundle.GameDefaultTargetHealth.max;
-        const entities = bundle.Entity.self;
-        state.rows += entities.length;
-        state.lengthsEqual = state.lengthsEqual && current.length === max.length && current.length === entities.length;
-        for (let index = 0; index < entities.length; index++) {
+        const health = span.mut(TargetHealth);
+        const current = health.current;
+        const max = health.max;
+        state.rows += span.length;
+        state.lengthsEqual = state.lengthsEqual && current.length === max.length && current.length === span.length;
+        for (let index = 0; index < span.length; index++) {
           const next = Math.min(max[index] ?? INITIAL_HEALTH, (current[index] ?? INITIAL_HEALTH) + HEALTH_REGEN_PER_SECOND * dt);
           current[index] = next;
           state.totalCurrent += next;
         }
-      });
+      }
     },
   }).unwrap();
 
@@ -98,7 +97,9 @@ export function installTargetHealth(world: World, targetQuery: ScoringTargetQuer
   };
 
   const reset = (): void => {
-    for (const entity of scoringTargetEntities(world, targetQuery)) world.set(entity, TargetHealth, { current: INITIAL_HEALTH, max: INITIAL_HEALTH });
+    for (const entity of scoringTargetEntities(targetQuery)) world.set(entity, TargetHealth, { current: INITIAL_HEALTH, max: INITIAL_HEALTH });
+    state.totalCurrent = state.totalMax;
+    state.damageEvents = 0;
   };
 
   return {

@@ -7,6 +7,7 @@ import type {
   RenderFeaturePreparedRef,
 } from '../features/prepared-graphics';
 import type { RenderFeature } from '../features/types';
+import { describeIblCapability } from '../ibl/cubemap-projection';
 
 const supportedCaps: Readonly<RhiCaps> = {
   backendKind: 'null',
@@ -120,5 +121,19 @@ describe('prepared graphics capability projection', () => {
       },
     });
     expect(host.diagnostics()[0]?.status).toBe('disabled');
+  });
+
+  it('marks missing rgba16float renderability as degraded with a white-cube artifact', () => {
+    const report = describeIblCapability({ rgba16floatRenderable: false });
+
+    expect(report).toMatchObject({
+      capabilityStatus: 'degraded',
+      executionStatus: 'notExecuted',
+      verdict: 'failed',
+      fallbackArtifact: 'white-cube',
+      rgba16floatRenderable: false,
+    });
+    expect(report.expectedImpact).toContain('HDR');
+    expect(report.hint).toContain('rgba16floatRenderable');
   });
 });

@@ -8,7 +8,7 @@
 //      defineComponent('Bar', { mat: { type: 'array<f32, 16>' } }) derives `mat` to a
 //      `Float32Array` (fixed-capacity TypedArray snapshot).
 //      Inference holds at three application points: (a) world.addSystem fn
-//      callback; (b) queryRun callback; (c) direct world.get call site.
+//      callback; (b) QueryRow loop; (c) direct world.get call site.
 //
 //   2. Cross-shape (AC-02): both `array<T>` and `array<T, N>` resolve to a
 //      concrete `TypedArrayFor<T>` surface (no intermediate view-class
@@ -79,7 +79,7 @@ describe('array vocab - three-application-point inference (w12, AC-01 / AC-02)',
     expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
   });
 
-  it('application point (b) - inside queryRun callback', () => {
+  it('application point (b) - inside a QueryRow loop', () => {
     type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
     type FooShape = ShapeOf<Foo['schema']>;
     expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();

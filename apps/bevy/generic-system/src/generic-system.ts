@@ -5,7 +5,6 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
-  Entity,
   Time,
   Update,
   World,
@@ -80,18 +79,15 @@ function cleanupSystem<T extends Component<string, ComponentSchema>>(
   leaving: StateTokenVariant<typeof AppState>,
   label: string,
   cleanupLog: string[],
-): SystemDescriptor<readonly [{ readonly with: readonly [T, typeof Entity] }]> {
+): SystemDescriptor<readonly [{ readonly with: readonly [T] }]> {
   return {
     name: `generic-cleanup-${label}`,
-    queries: [{ with: [marker, Entity] as const }],
+    queries: [{ with: [marker] as const }],
     runIf: exiting(leaving),
     fn: (_world, queryResults, commands) => {
-      const bundles = queryResults[0] as Array<{ Entity: { self: EntityHandle[] } }>;
-      for (const bundle of bundles) {
-        for (const entity of bundle.Entity.self) {
-          commands.despawn(entity);
+      for (const row of queryResults[0]) {
+          commands.despawn(row.entity);
           cleanupLog.push(label);
-        }
       }
     },
   };

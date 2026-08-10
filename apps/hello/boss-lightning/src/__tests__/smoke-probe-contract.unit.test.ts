@@ -13,9 +13,9 @@ describe('Boss Lightning smoke probe contract', () => {
     expect(dawnSource).toContain('TARGET_FRAMES = 300');
     expect(dawnSource).toContain('SEED = 42');
     expect(dawnSource).toContain('camera: CAMERA');
-    expect(dawnSource).toContain('bucketCount');
-    expect(dawnSource).toContain('drawCount');
-    expect(dawnSource).toContain('particleCount');
+    expect(dawnSource).toContain('queuedIntents');
+    expect(dawnSource).toContain('runtimeDiagnostics');
+    expect(dawnSource).toContain('runtime.hasPlayer(playerEntity)');
     expect(dawnSource).toContain('billboardEnergy');
     expect(dawnSource).toContain('meshEnergy');
     expect(dawnSource).toContain('persistentErrors');
@@ -43,13 +43,12 @@ describe('Boss Lightning smoke probe contract', () => {
 
   it('keeps Browser validation, readiness, and falsifier exits explicit', () => {
     expect(browserSource).toContain('validationErrors');
-    expect(browserSource).toContain("readiness !== 'ready'");
+    expect(browserSource).toContain('runtime.diagnostics.length !== 0');
     expect(browserSource).toContain('cameraReady');
     expect(browserSource).toContain('seed: 42');
-    expect(falsifySource).toContain("'disable-billboard'");
     expect(falsifySource).toContain("'disable-vfx'");
     expect(falsifySource).toContain("'emitter-zero'");
     expect(falsifySource).toContain("'material-empty'");
-    expect(falsifySource).toContain('result.status === 0');
+    expect(falsifySource).toContain('result.status !== 0');
   });
 });

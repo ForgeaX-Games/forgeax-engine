@@ -4,7 +4,7 @@
 // Anchors: plan-tasks m0-t3; plan-strategy §M0 targetFiles (tilemap.ts);
 // AGENTS.md §Component naming (single-semantic component drops Component suffix).
 
-import { createQueryState } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf } from '@forgeax/engine-scene';
 import { describe, expectTypeOf, it } from 'vitest';
@@ -21,8 +21,8 @@ describe('Tilemap component schema (M0 baseline)', () => {
     expectTypeOf(schema.tileset).toEqualTypeOf<'shared<TilesetAsset>'>();
   });
 
-  it('type-level: Tilemap is consumable by createQueryState({ with: [...] })', () => {
-    const state = createQueryState({ with: [Tilemap, ChildOf] });
-    expectTypeOf(state).not.toBeNever();
+  it('type-level: Tilemap is consumable by world.query({ read: [...] })', () => {
+    const query = new World().query({ read: [Tilemap, ChildOf] });
+    expectTypeOf(query).not.toBeNever();
   });
 });

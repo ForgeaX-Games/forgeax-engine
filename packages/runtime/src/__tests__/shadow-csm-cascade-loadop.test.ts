@@ -144,10 +144,10 @@ function makeMockGPU(device: unknown): unknown {
 const baseNavigator = { userAgent: 'mock-engine-test' } as Partial<Navigator> as Navigator;
 
 function buildManifestDataUrl(): string {
-  const materialShaderStub = (identifier: string) => ({
+  const materialShaderStub = (identifier: string, composedWgsl = '/* stub */') => ({
     identifier,
     sourcePath: `${identifier}.wgsl`,
-    composedWgsl: '/* stub */',
+    composedWgsl,
     paramSchema: '[]',
     variants: [],
   });
@@ -162,22 +162,14 @@ function buildManifestDataUrl(): string {
         glsl: '',
         bindings: '',
       },
-      // createRenderer Step 1c registers forgeax::default-shadow-caster from the
-      // first general entry whose wgsl has '@location(0) position' but not
-      // '@location(1) normal' (vertex-only depth pass marker). Without this the
-      // shadow PSO lookup returns null, recordShadowPass early-exits, and the
-      // 'render-system-shadow' encoder is never created — the cascade call site
-      // would go unexercised.
-      {
-        hash: 'shadowcaster0',
-        wgsl: '/* shadow caster stub - @location(0) position vertex-only */',
-        glsl: '',
-        bindings: '',
-      },
     ],
     materialShaders: [
       materialShaderStub('forgeax::default-standard-pbr'),
       materialShaderStub('forgeax::default-unlit'),
+      materialShaderStub(
+        'forgeax::default-shadow-caster',
+        '/* reserved shadow caster - @location(0) position */',
+      ),
     ],
   };
   return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;

@@ -175,7 +175,9 @@ describe('render feature graph composition', () => {
   });
 
   it('attributes graph pass failures to the owning feature', async () => {
-    const passErrors: Array<Extract<RendererError, { code: 'render-feature-stage-failed' }>> = [];
+    const passErrors: Array<
+      Extract<RendererError, { code: 'render-feature-draw-recording-failed' }>
+    > = [];
     const passRenderer = await constructRenderer(
       canvas(),
       {
@@ -185,7 +187,7 @@ describe('render feature graph composition', () => {
       { shaderManifestUrl: manifest },
     );
     passRenderer.onError((error) => {
-      if (error.code === 'render-feature-stage-failed') passErrors.push(error);
+      if (error.code === 'render-feature-draw-recording-failed') passErrors.push(error);
     });
     expect((await passRenderer.ready).ok).toBe(true);
     passRenderer.registerPipeline(
@@ -199,10 +201,13 @@ describe('render feature graph composition', () => {
       }).ok,
     ).toBe(true);
     expect(passRenderer.draw([new World()], { owner: 0 }).ok).toBe(true);
-    const passError = passErrors.find((error) => error.code === 'render-feature-stage-failed');
+    const passError = passErrors.find(
+      (error) => error.code === 'render-feature-draw-recording-failed',
+    );
     expect(passError?.detail).toMatchObject({
       featureIdentity: 'synthetic.pass-failure',
-      stage: 'contribute',
+      stage: 'record',
+      backendReason: 'synthetic pass failure',
     });
     expect(passRenderer.renderFeatureDiagnostics()[0]?.latestError).toMatchObject({
       code: passError?.code,

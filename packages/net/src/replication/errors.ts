@@ -1,22 +1,23 @@
-export type NetErrorCode =
-  | 'handshake-profile-mismatch'
-  | 'decode-invalid-payload'
-  | 'decode-limit-exceeded'
-  | 'ordering-invalid-tick'
-  | 'identity-invalid'
-  | 'schema-invalid'
-  | 'remap-unresolved-reference'
-  | 'apply-invariant-failed';
+type NetErrorDetailByCode = {
+  'handshake-profile-mismatch': {
+    readonly localFingerprint: string;
+    readonly remoteFingerprint: string;
+  };
+  'decode-invalid-payload': { readonly reason: string };
+  'decode-limit-exceeded': {
+    readonly limit: string;
+    readonly actual: number;
+    readonly maximum: number;
+  };
+  'ordering-invalid-tick': { readonly receivedTick: number; readonly lastTick: number };
+  'identity-invalid': { readonly id: number; readonly reason: string };
+  'schema-invalid': { readonly component: string; readonly reason: string };
+  'remap-unresolved-reference': { readonly id: number; readonly referencedId: number };
+  'apply-invariant-failed': { readonly reason: string };
+};
 
-export type NetErrorDetail =
-  | { readonly localFingerprint: string; readonly remoteFingerprint: string }
-  | { readonly reason: string }
-  | { readonly limit: string; readonly actual: number; readonly maximum: number }
-  | { readonly receivedTick: number; readonly lastTick: number }
-  | { readonly id: number; readonly reason: string }
-  | { readonly component: string; readonly reason: string }
-  | { readonly id: number; readonly referencedId: number }
-  | { readonly reason: string };
+export type NetErrorCode = keyof NetErrorDetailByCode;
+export type NetErrorDetail = NetErrorDetailByCode[NetErrorCode];
 
 class NetErrorClass extends Error {
   readonly code: NetErrorCode;
@@ -38,34 +39,22 @@ class NetErrorClass extends Error {
   }
 }
 
-type Variant<C extends NetErrorCode, D extends NetErrorDetail> = NetErrorClass & {
+type Variant<C extends NetErrorCode> = NetErrorClass & {
   readonly code: C;
-  readonly detail: D;
+  readonly detail: NetErrorDetailByCode[C];
 };
 
-export type NetError =
-  | Variant<
-      'handshake-profile-mismatch',
-      { readonly localFingerprint: string; readonly remoteFingerprint: string }
-    >
-  | Variant<'decode-invalid-payload', { readonly reason: string }>
-  | Variant<
-      'decode-limit-exceeded',
-      { readonly limit: string; readonly actual: number; readonly maximum: number }
-    >
-  | Variant<'ordering-invalid-tick', { readonly receivedTick: number; readonly lastTick: number }>
-  | Variant<'identity-invalid', { readonly id: number; readonly reason: string }>
-  | Variant<'schema-invalid', { readonly component: string; readonly reason: string }>
-  | Variant<'remap-unresolved-reference', { readonly id: number; readonly referencedId: number }>
-  | Variant<'apply-invariant-failed', { readonly reason: string }>;
+export type NetError = {
+  [C in NetErrorCode]: Variant<C>;
+}[NetErrorCode];
 
 interface NetErrorConstructor {
   new <C extends NetErrorCode>(args: {
     code: C;
     expected: string;
     hint: string;
-    detail: Extract<NetError, { code: C }>['detail'];
-  }): Extract<NetError, { code: C }>;
+    detail: NetErrorDetailByCode[C];
+  }): Variant<C>;
   readonly prototype: NetErrorClass;
 }
 export const NetError: NetErrorConstructor = NetErrorClass as unknown as NetErrorConstructor;

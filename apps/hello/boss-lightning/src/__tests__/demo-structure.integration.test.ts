@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseParticleEffectSource } from '@forgeax/engine-vfx';
+import { parseParticleEffectSourceV2 } from '@forgeax/engine-vfx';
 import { describe, expect, it } from 'vitest';
 
 const demoRoot = resolve(import.meta.dirname, '../..');
@@ -36,20 +36,21 @@ describe('Boss Lightning source and Pack declaration', () => {
       kind: 'particle-effect',
       execution: 'cooked',
     });
-    const authored = parseParticleEffectSource(pack.assets[0]?.payload);
+    const authored = parseParticleEffectSourceV2(pack.assets[0]?.payload);
     expect(authored.ok).toBe(true);
     if (!authored.ok) throw new Error(authored.error.hint);
+    if ('parent' in authored.value) throw new Error('Boss Lightning must be a root effect');
     expect(authored.value.emitters.map((emitter) => emitter.id)).toEqual([
       'mouth-charge',
       'impact-mesh',
     ]);
-    expect(authored.value.emitters.map((emitter) => emitter.output.kind)).toEqual([
+    expect(authored.value.emitters.flatMap((emitter) => emitter.renderers.map((renderer) => renderer.kind))).toEqual([
       'billboard',
       'mesh',
     ]);
-    expect(authored.value.emitters.map((emitter) => emitter.operators.output[0]?.kind)).toEqual([
-      'billboard',
-      'mesh',
+    expect(authored.value.emitters.map((emitter) => emitter.program.module)).toEqual([
+      'mouth-charge.vfx.wgsl',
+      'impact-mesh.vfx.wgsl',
     ]);
     expect(pack.assets[0]?.refs).toEqual([]);
     expect(pack.assets[0]?.artifacts).toEqual({});
@@ -58,7 +59,7 @@ describe('Boss Lightning source and Pack declaration', () => {
   it('does not retain the former source, sidecar, or importer path', () => {
     const vite = readFileSync(resolve(demoRoot, 'vite.config.ts'), 'utf8');
     expect(vite).not.toContain('particleEffectImporter');
-    expect(vite).toContain('createParticleEffectNativeCooker');
+    expect(vite).toContain('createParticleCodeNativeCooker');
     expect(vite).toContain('cookers:');
     expect(() => readFileSync(resolve(demoRoot, 'assets/boss-lightning.particle-effect.json'), 'utf8')).toThrow();
     expect(() => readFileSync(resolve(demoRoot, 'assets/boss-lightning.particle-effect.json.meta.json'), 'utf8')).toThrow();
@@ -66,9 +67,9 @@ describe('Boss Lightning source and Pack declaration', () => {
 
   it('requires the public GUID-to-pixels assembly before the demo turns green', () => {
     const entry = readFileSync(entryPath, 'utf8');
-    expect(entry).toContain("loadParticleEffect(assets, '019e9c00-0000-7000-8000-000000000000')");
-    expect(entry).toContain('particleSimulationPlugin');
-    expect(entry).toContain('particleRenderFeature');
+    expect(entry).toContain('loadVfxGpuEffect(assets, EFFECT_GUID)');
+    expect(entry).toContain('createVfxRuntimeHost');
+    expect(entry).toContain('host.feature');
     expect(entry).toContain('ParticleEffectPlayer');
   });
 

@@ -1,15 +1,5 @@
 import type { ProfileResult } from './types.js';
 
-/** Closed expected-failure vocabulary for the public profiler capability. */
-export type ProfilerErrorCode =
-  | 'capture-boundary-invalid'
-  | 'capture-already-active'
-  | 'profiler-not-enabled'
-  | 'phase-catalog-conflict'
-  | 'profile-source-failed'
-  | 'profile-sink-failed'
-  | 'capture-state-invalid';
-
 /** Structured profiler failure with a code-specific detail payload. */
 export type ProfilerError =
   | {
@@ -62,6 +52,9 @@ export type ProfilerError =
       readonly hint: string;
       readonly detail: { readonly operation: string };
     };
+
+/** Closed expected-failure vocabulary derived from the public profiler error owner. */
+export type ProfilerErrorCode = ProfilerError['code'];
 
 /** Result shape returned by profiler operations. */
 export type ProfilerResult<T> = ProfileResult<T, ProfilerError>;

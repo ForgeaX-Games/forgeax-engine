@@ -25,12 +25,16 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Materials, SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } from '@forgeax/engine-render';
 
 import type { EquirectAsset, MaterialAsset } from '@forgeax/engine-types';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 // 2. example glue
 
 const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-6-cubemaps',
+);
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 
@@ -54,7 +58,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.6 cubemaps] createApp failed:', appRes.error);
@@ -70,6 +74,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const assets = renderer.assets;
 
+  assets.configureRuntimeBinding(runtimeBinding);
   assets.configurePackIndex(PACK_INDEX_URL);
 
   // Parse newport_loft.hdr GUID (forgeax-engine-assets vendor submodule, CC BY-NC 4.0).

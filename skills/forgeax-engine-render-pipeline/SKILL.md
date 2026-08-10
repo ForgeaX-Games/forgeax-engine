@@ -13,11 +13,40 @@ description: >-
 
 > **改画面的三个层次**：① 在 `Camera` 组件上拨内建后处理开关（tonemap / fxaa / msaa / bloom）；② spawn `SkyboxBackground` 加天空盒；③ 实现 `RenderPipeline` 接缝、用 7 个声明式图元（`addColorTarget` / `addScenePass` / `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` / `addFullscreenPass`）组装 per-frame 管线拓扑，经 `registerPipeline` / `installPipeline` 装上。引擎自带的 `forgeax::standard-forward` 就是走同一条公共通道 dogfood 的 worked example。聚合 `@forgeax/engine-runtime`（pipeline seam / render flow）· `@forgeax/engine-render-graph`（资源声明 + 编译 + 执行）。
 
+## Color-lighting parity handoff
+
+For a render or output-domain divergence, begin with the [color-lighting parity README](../../apps/parity/color-lighting/README.md) and its [status recovery map](../../apps/parity/color-lighting/status-index.md). Preserve the `linearHdr` versus `finalDisplay` boundary, named pipeline provenance, and the independent `CaseReport`; do not accept a final-canvas-only result as HDR evidence.
+
 ## 心智模型
 
 per-frame 渲染是一张**声明式 render-graph**，graph **直接持有** GPU 纹理：通过 `graph.addColorTarget(name, desc)` 声明 RT（transient / persistent / MSAA），`graph.addColorTargetAlias(name, source)` 折叠逻辑名到物理纹理（如 bloom composite 的 `hdrComposited`），再通过 7 个**公共图元**声明 pass 拓扑与读写依赖。`graph.compile({ device, backendKind, caps })` 分配物理纹理（keyed by `{format, w, h, usage, sampleCount}` pool）、做拓扑排序 + barrier 插入；`graph.execute(ctx)` 按序跑每个 pass 的闭包。
 
 绝大多数后处理你**不用碰 graph**——它们是 `Camera` 组件上的 f32 列：`tonemap`（色调映射模式）/ `exposure` / `antialias`（`'none' | 'fxaa' | 'msaa'`）/ `bloom` + `bloomThreshold` 等，引擎据此往 per-frame graph 里增删内建图元。天空盒同理：spawn 一个 `SkyboxBackground`（equirect handle + mode），引擎在 shadow 与 main 之间插一个 skybox pass。只有当你要**换掉整条管线拓扑**（自定义 pass 链、deferred 等）才实现 `RenderPipeline` 接缝（`buildGraph(ctx, data)` 建图 + `execute(ctx)` 跑图），用 `renderer.registerPipeline(id, impl)` 登记、`renderer.installPipeline(asset)` 装上（`asset` 是 `RenderPipelineAsset` POJO，直收，无 register round-trip）。`renderer.perFramePassNames` 让你内省当前帧实际有哪些 pass。
+
+## Tone mode and output domains
+
+The public `Tonemap` names are `none`, `reinhard-extended`, `linear`,
+`reinhard`, `cineon`, `aces-filmic`, `agx`, and `neutral`. The six names after
+`none` are the Three r184 oracle names except for the explicitly ForgeaX-owned
+`reinhard-extended` curve. Use the matching `TONEMAP_*` constant from
+`@forgeax/engine-render`; do not infer a numeric mode or add a compatibility
+profile.
+
+For any active tone mode, the built-in graph is conceptually:
+
+```text
+linearHdr -> exposure and tone curve -> linearLdr -> displayEncoded
+```
+
+`linearHdr` is the shader input, `linearLdr` is the tone pass result, and
+`displayEncoded` is the final swap-chain capture. `resolveToneOutputContract`
+from `@forgeax/engine-render` exposes this boundary for parity and pipeline
+tests. With `tonemap: 'none'`, the path remains `linearLdr -> displayEncoded`
+and exposure is not silently applied.
+
+The built-in output pass is `forgeax::tonemap`. Its WGSL source is the single
+shader authority at `packages/shader/src/tonemap.wgsl`; Camera mode decoding and
+the shader binding IDs are public typed surfaces, not a second formula table.
 
 自定义 fullscreen 后处理走 `addFullscreenPass`——它是 7 个图元中**唯一的扩展点**（其余 6 个是引擎内置，不接受用户 execute 闭包）。两步：① `renderer.postProcess.register('mypkg::vignette', { source, params?, reads? })` 登记 WGSL；② 在管线 `buildGraph` 里调 `addFullscreenPass(graph, 'vignette', { shader: 'mypkg::vignette', color, reads? })`。
 

@@ -1,8 +1,5 @@
 import {
-  createQueryState,
   defineComponent,
-  Entity,
-  queryRun,
   type EntityHandle,
   type World,
 } from '@forgeax/engine-ecs';
@@ -33,10 +30,9 @@ export function sceneDescendants(world: World, root: EntityHandle): EntityHandle
  * by ChildOf/Children; only each descendant's local Transform is updated.
  */
 export function stepUpdateGltfScene(world: World, elapsed: number): void {
-  const roots = createQueryState({ with: [Entity, MovedScene] });
-  queryRun(roots, world, (bundle) => {
-    for (const raw of bundle.Entity.self) {
-      const root = raw as EntityHandle;
+  const roots = world.query({ with: [MovedScene] }).unwrap();
+  for (const row of roots) {
+      const root = row.entity;
       let offset = 0;
       for (const descendant of sceneDescendants(world, root)) {
         const transform = world.get(descendant, Transform);
@@ -51,6 +47,5 @@ export function stepUpdateGltfScene(world: World, elapsed: number): void {
         }
         offset += 0.5;
       }
-    }
-  });
+  }
 }

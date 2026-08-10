@@ -55,6 +55,12 @@ export { createApp } from './create-app';
 export type {
   AppDetailCanvasDetached,
   AppDetailEmpty,
+  AppDetailExecutionBootstrapFailed,
+  AppDetailExecutionDeadlineExceeded,
+  AppDetailExecutionKernelFailed,
+  AppDetailExecutionRebuildFailed,
+  AppDetailExecutionStaleWorld,
+  AppDetailExecutionTierUnavailable,
   AppDetailSystemUpdateFailed,
   AppErrorCode,
   AppErrorDetail,
@@ -67,24 +73,68 @@ export {
   isAppError,
 } from './errors';
 export type {
+  ExecutionCapabilities,
+  ExecutionCapabilityFact,
+  ExecutionCapabilityName,
+  ExecutionControl,
+  ExecutionEngineHealth,
+  ExecutionFault,
+  ExecutionMeasurement,
+  ExecutionOptions,
+  ExecutionReport,
+  ExecutionRequestedTier,
+  ExecutionSelection,
+  ExecutionSelectionReason,
+  ExecutionTier,
+  ExecutionWorldHealth,
+  KernelDispatchReason,
+} from './execution';
+export {
+  createExecutionReport,
+  EXECUTION_CAPABILITY_NAMES,
+  EXECUTION_REPORT_SCHEMA_VERSION,
+  EXECUTION_REQUESTED_TIERS,
+  EXECUTION_TIERS,
+  isExecutionReport,
+  loadBootstrapEntry,
+  missingExecutionCapabilities,
+  probeExecutionCapabilities,
+  runBootstrapEntry,
+  selectExecutionTier,
+  unavailableExecutionCapabilities,
+} from './execution';
+export type {
   BootstrapContext,
   BootstrapEntry,
   GameActionArgsSchema,
   GameActionDef,
   GameContext,
   GameEntry,
+  GamePluginDescriptor,
+  GamePluginDiagnostic,
+  GamePluginDiagnosticCode,
+  GamePluginLifecycle,
+  GamePluginProducer,
+  GamePluginProducerContext,
+  GamePluginReloadResult,
   GameProjectionRegistrar,
   GameProjectionValue,
   GameReadDef,
 } from './game-context';
+export { GAMEPLAY_PRODUCER_CONTRACT, GAMEPLAY_PRODUCER_CONTRACT_VERSION } from './game-context';
 export type {
+  GamePluginInstallation,
+  GamePluginInstallResult,
   GamePluginLoad,
   GamePluginModule,
+  GamePluginSystemDiagnostic,
   LoadedGamePlugin,
 } from './game-plugins';
 export {
   addGamePluginSystems,
+  describeGamePluginSystems,
   getPlayPluginFailure,
+  installGamePluginProducers,
   loadGamePluginModules,
 } from './game-plugins';
 export { inputPlugin } from './plugin-factories';
@@ -115,6 +165,7 @@ export type {
   CreateAppOptions,
   DrawSource,
   DrawSourceResult,
+  ExecutionApp,
 } from './types';
 export { APP_PHASE_CATALOG } from './types';
 export { isLoadGameError, LOAD_GAME_ERROR_HINTS, LOAD_GAME_EXPECTED, LoadGameError };

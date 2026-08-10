@@ -15,10 +15,12 @@ import type {
 } from '../prepare/prepared-graphics-resolver';
 import type {
   RenderFeatureContributionStaging,
+  RenderFeatureGpuComputeResolver,
   RenderFeatureGraphContribution,
   RenderFeatureGraphicsValidator,
 } from './graph-contribution';
 import { createRenderFeatureContributionStaging } from './graph-contribution';
+import type { RenderFeatureGpuWorkResolver } from './prepared-gpu-work';
 import {
   createRenderFeatureGraphicsPrepare,
   type RenderFeatureGraphicsContributionStaging,
@@ -67,10 +69,12 @@ export interface RenderFeatureFrameInput {
     order: number,
     validateGraphics?: RenderFeatureGraphicsValidator,
     resolveGraphics?: import('./graph-contribution').RenderFeatureGraphicsResolver,
+    resolveGpuCompute?: RenderFeatureGpuComputeResolver,
   ) => RenderFeatureContributionStaging & RenderFeatureGraphicsContributionStaging;
   readonly createPreparedGraphicsResolver?: (
     input: RenderFeaturePreparedGraphicsResolverInput,
   ) => PreparedGraphicsResolver;
+  readonly getGpuWorkResolver?: (featureIdentity: string) => RenderFeatureGpuWorkResolver;
 }
 
 export interface RenderFeaturePreparedGraphicsResolverInput {
@@ -276,6 +280,9 @@ function resolveGraphicsSnapshot(
     generation,
     leases: resolver.leases,
     resolve: (reference) => resources.get(reference),
+    ...(resolver.resolveGpuBuffer === undefined
+      ? {}
+      : { resolveGpuBuffer: resolver.resolveGpuBuffer }),
   });
 }
 
@@ -395,6 +402,9 @@ function featureErrorForSlot(slot: FeatureSlot, error: RenderError): RenderError
     case 'render-feature-stage-failed':
     case 'render-feature-capability-missing':
     case 'render-feature-pass-order-conflict':
+    case 'render-feature-preparation-failed':
+    case 'render-feature-prepared-state-mismatch':
+    case 'render-feature-draw-recording-failed':
       return error.detail.featureIdentity === slot.feature.identity
         ? error
         : new RenderFeatureStageFailedError(
@@ -419,6 +429,9 @@ function errorDescriptor(error: RenderError): RenderFeatureErrorDescriptor {
     case 'render-feature-stage-failed':
     case 'render-feature-capability-missing':
     case 'render-feature-pass-order-conflict':
+    case 'render-feature-preparation-failed':
+    case 'render-feature-prepared-state-mismatch':
+    case 'render-feature-draw-recording-failed':
       return {
         code: error.code,
         expected: error.expected,
@@ -760,6 +773,8 @@ export function runRenderFeatureFrame(
     const transaction = host.beginPreparedFrame(identity, input.generation ?? 0);
     if (transaction === undefined) continue;
     const graphics = createPreparedGraphicsPrepare(transaction);
+    const gpu = input.getGpuWorkResolver?.(identity);
+    gpu?.beginFrame();
     const validateGraphics = graphicsValidator(
       identity,
       transaction,
@@ -801,6 +816,7 @@ export function runRenderFeatureFrame(
           targets: input.targets ?? [],
           reportError: { report: (error) => errors.push(error) },
           graphics,
+          ...(gpu === undefined ? {} : { gpu }),
         }),
       events,
       stageEvents,
@@ -834,9 +850,26 @@ export function runRenderFeatureFrame(
     const releaseResolver = (): void => {
       if (resolver !== undefined) resolver.release();
     };
+    const resolveGpuCompute =
+      gpu === undefined
+        ? undefined
+        : (descriptor: import('./prepared-gpu-work').RenderFeatureGpuComputePassDescriptor) =>
+            gpu.resolveComputePass(identity, descriptor);
     staging =
-      input.createContributionStaging?.(identity, order, validateGraphics, resolveGraphics) ??
-      createRenderFeatureContributionStaging(identity, order, validateGraphics, resolveGraphics);
+      input.createContributionStaging?.(
+        identity,
+        order,
+        validateGraphics,
+        resolveGraphics,
+        resolveGpuCompute,
+      ) ??
+      createRenderFeatureContributionStaging(
+        identity,
+        order,
+        validateGraphics,
+        resolveGraphics,
+        resolveGpuCompute,
+      );
 
     const contributed = invokeStage(
       slot,
@@ -849,6 +882,7 @@ export function runRenderFeatureFrame(
           targets: input.targets ?? [],
           reportError: { report: (error) => errors.push(error) },
           graphics,
+          ...(gpu === undefined ? {} : { gpu }),
           staging,
         }),
       events,
@@ -880,6 +914,7 @@ export function runRenderFeatureFrame(
       }
       const leases = [
         ...new Set(committed.value.passes.flatMap((pass) => pass.resolvedGraphics?.leases ?? [])),
+        ...(gpu?.retireUntouched() ?? []),
       ];
       const retained = host.retainPreparedGraphics(identity, leases);
       if (!retained.ok) {

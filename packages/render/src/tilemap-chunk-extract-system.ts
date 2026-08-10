@@ -50,13 +50,7 @@
 // ECS API adaptation) + §D-7 step 3 (half-texel UV inset).
 
 import { HANDLE_QUAD, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import {
-  createQueryState,
-  Entity,
-  type EntityHandle,
-  queryRun,
-  type World,
-} from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { decodeTileBits } from '@forgeax/engine-graphics-extras';
 import { type box3, frustum, mat4 } from '@forgeax/engine-math';
 import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
@@ -843,17 +837,14 @@ function bucketTileLayer(
  * cull paths use byte-identical planes (charter P4 consistent abstraction).
  */
 function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
-  const q = createQueryState({ with: [Camera, Transform, Entity] });
+  const query = world.query({ with: [Camera, Transform] }).unwrap();
   let result: frustum.Frustum | null = null;
-  queryRun(q, world, (bundle) => {
-    if (result !== null) return;
-    const entitySelf = bundle.Entity.self as unknown as Uint32Array;
-    if (entitySelf.length === 0) return;
-    const camEntity = entitySelf[0] as EntityHandle;
+  for (const row of query) {
+    const camEntity = row.entity;
 
     const camRes = world.get(camEntity, Camera);
     const trRes = world.get(camEntity, Transform);
-    if (!camRes.ok || !trRes.ok) return;
+    if (!camRes.ok || !trRes.ok) continue;
 
     const cam = camRes.value as unknown as {
       near: number;
@@ -869,7 +860,7 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
     const tr = trRes.value as unknown as { world: Float32Array };
 
     const { near, far } = cam;
-    if (near >= far) return;
+    if (near >= far) continue;
 
     const proj = mat4.create();
     if (cam.projection === CAMERA_PROJECTION_ORTHOGRAPHIC) {
@@ -905,7 +896,8 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
     const f = frustum.create();
     frustum.fromViewProjection(f, vp as Parameters<typeof frustum.fromViewProjection>[1]);
     result = f;
-  });
+    break;
+  }
   return result;
 }
 
@@ -1090,22 +1082,18 @@ function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], worldId: nu
  */
 export function tilemapChunkExtractSystem(world: World, worldId: number): void {
   const work: LayerWork[] = [];
-  const tileLayerQuery = createQueryState({ with: [TileLayer, ChildOf, Entity] });
-  queryRun(tileLayerQuery, world, (bundle) => {
-    const childOfBundle = bundle.ChildOf;
-    const layerBundle = bundle.TileLayer;
-    const entitySelf = bundle.Entity.self as unknown as Uint32Array;
-    for (let i = 0; i < entitySelf.length; i++) {
-      const e = (entitySelf[i] ?? 0) as EntityHandle;
-      const parent = (childOfBundle.parent[i] ?? 0) as EntityHandle;
-      work.push({
-        layerEntity: e,
-        parentEntity: parent,
-        dirty: layerBundle.dirty[i] ?? 0,
-        sortScopeRaw: layerBundle.sortScope?.[i] ?? 0,
-      });
-    }
-  });
+  const tileLayerQuery = world.query({ read: [TileLayer, ChildOf] }).unwrap();
+  for (const row of tileLayerQuery) {
+    const layer = row.get(TileLayer);
+    const parent = row.get(ChildOf).parent;
+    if (parent === null) continue;
+    work.push({
+      layerEntity: row.entity,
+      parentEntity: parent,
+      dirty: layer.dirty,
+      sortScopeRaw: layer.sortScope,
+    });
+  }
 
   evictDeadPerCellStreamingCaches(work, worldId);
 

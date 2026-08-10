@@ -13,6 +13,7 @@ export interface RemoteRootValues {
   readonly assets: unknown;
   readonly debugAdapter?: unknown;
   readonly profiler?: unknown;
+  readonly execution?: unknown;
   readonly introspection?: readonly ComponentIntrospectionDescriptor[];
 }
 
@@ -44,6 +45,14 @@ export function isProfilerRoot(value: unknown): boolean {
   );
 }
 
+export function isExecutionRoot(value: unknown): value is { report(): unknown } {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as { report?: unknown }).report === 'function'
+  );
+}
+
 function profilerPhaseCatalog(value: unknown): unknown {
   if (value === null || typeof value !== 'object') return undefined;
   const catalog = (value as { phaseCatalog?: unknown }).phaseCatalog;
@@ -63,6 +72,10 @@ function projectRoot(name: string, value: unknown): RootProjection {
       type: 'Profiler',
       description: 'The opt-in CPU profiler for bounded App and Render capture.',
     },
+    execution: {
+      type: 'ExecutionReportProvider',
+      description: 'The host execution report provider for tier, health, performance, and fault.',
+    },
   };
   const descriptor = descriptions[name] ?? { type: 'unknown', description: 'A live eval root.' };
   return {
@@ -79,14 +92,22 @@ function projectRoot(name: string, value: unknown): RootProjection {
             ? {}
             : { phaseCatalog: profilerPhaseCatalog(value) }),
         }
-      : {}),
+      : name === 'execution'
+        ? {
+            capability: 'execution-report-v1',
+          }
+        : {}),
   };
 }
 
 function projectRoots(roots: RemoteRootValues): Record<string, RootProjection> {
   const projected: Record<string, RootProjection> = {};
   for (const [name, value] of Object.entries(roots)) {
-    if (value !== undefined && (name !== 'profiler' || isProfilerRoot(value))) {
+    if (
+      value !== undefined &&
+      (name !== 'profiler' || isProfilerRoot(value)) &&
+      (name !== 'execution' || isExecutionRoot(value))
+    ) {
       projected[name] = projectRoot(name, value);
     }
   }

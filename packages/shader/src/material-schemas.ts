@@ -1,5 +1,7 @@
 import type { ParamSchemaEntry } from '@forgeax/engine-types';
 
+export const STANDARD_PBR_ALPHA_CUTOFF_DEFAULT = 0;
+
 /** Shared material contract for the standard PBR and skinned PBR shaders. */
 export const DEFAULT_STANDARD_PBR_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
@@ -12,7 +14,7 @@ export const DEFAULT_STANDARD_PBR_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', colorSpace: 'srgb', default: [0, 0, 0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0 },
   { name: 'occlusionStrength', type: 'f32', default: 1 },
-  { name: 'alphaCutoff', type: 'f32', default: 0 },
+  { name: 'alphaCutoff', type: 'f32', default: STANDARD_PBR_ALPHA_CUTOFF_DEFAULT },
   { name: 'clearcoat', type: 'f32', default: 0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
   { name: 'specularTint', type: 'vec3', colorSpace: 'srgb', default: [1, 1, 1] },

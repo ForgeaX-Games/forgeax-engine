@@ -22,11 +22,11 @@ import {
 } from '../errors';
 
 // ---------------------------------------------------------------------------
-// 1. AppErrorCode closed union: 6 members
+// 1. AppErrorCode closed union
 // ---------------------------------------------------------------------------
 
-describe('AppErrorCode closed union (6 members)', () => {
-  it('has exactly 6 members including the new pointer-lock-failed code', () => {
+describe('AppErrorCode closed union', () => {
+  it('has every source-owned member', () => {
     // Verify the full set of members. When 'app-pointer-lock-failed' is added
     // in w12, this set will be complete and the exhaustive-switch check below
     // will pass tsc with no default branch.
@@ -37,13 +37,19 @@ describe('AppErrorCode closed union (6 members)', () => {
       'app-paused-while-stop',
       'app-system-update-failed',
       'app-pointer-lock-failed',
+      'app-execution-tier-unavailable',
+      'app-execution-bootstrap-failed',
+      'app-execution-deadline-exceeded',
+      'app-execution-kernel-failed',
+      'app-execution-stale-world',
+      'app-execution-rebuild-failed',
     ];
 
-    expect(allCodes).toHaveLength(6);
+    expect(allCodes).toHaveLength(12);
 
     // Each member must be unique.
     const unique = new Set(allCodes);
-    expect(unique.size).toBe(6);
+    expect(unique.size).toBe(12);
   });
 
   it('exhaustive switch over AppErrorCode has zero default branch', () => {
@@ -66,6 +72,13 @@ describe('AppErrorCode closed union (6 members)', () => {
           return 'system update failed';
         case 'app-pointer-lock-failed':
           return 'pointer lock failed';
+        case 'app-execution-tier-unavailable':
+        case 'app-execution-bootstrap-failed':
+        case 'app-execution-deadline-exceeded':
+        case 'app-execution-kernel-failed':
+        case 'app-execution-stale-world':
+        case 'app-execution-rebuild-failed':
+          return 'execution';
       }
     }
 
@@ -171,12 +184,12 @@ describe("'app-pointer-lock-failed' detail shape", () => {
 describe('APP_EXPECTED / APP_ERROR_HINTS bidirectional symmetry', () => {
   it('APP_EXPECTED has 6 keys (one per AppErrorCode member)', () => {
     const keys = Object.keys(APP_EXPECTED);
-    expect(keys).toHaveLength(6);
+    expect(keys).toHaveLength(12);
   });
 
   it('APP_ERROR_HINTS has 6 keys (one per AppErrorCode member)', () => {
     const keys = Object.keys(APP_ERROR_HINTS);
-    expect(keys).toHaveLength(6);
+    expect(keys).toHaveLength(12);
   });
 
   it('APP_EXPECTED and APP_ERROR_HINTS have the same key set', () => {

@@ -30,7 +30,7 @@ import { rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { FetchError, getGitOrigin, getReleaseByTag, downloadAsset, extractTarball } from '../../../scripts/lib/fetch-wasm-lib.mjs';
+import { FetchError, getGitOrigin, getReleaseAsset, downloadAsset, extractTarball } from '../../../scripts/lib/fetch-wasm-lib.mjs';
 import { PKG_ROOT, RELEASE_TAG, resolveAsset } from './content-key.mjs';
 
 const PKG_DIR = join(PKG_ROOT, 'pkg');
@@ -60,22 +60,21 @@ async function main() {
   console.log(`  asset name:     ${assetName}`);
 
   console.log(`Fetching release tag "${RELEASE_TAG}" from ${owner}/${repo}...`);
-  const release = await getReleaseByTag(owner, repo, RELEASE_TAG, {
+  const asset = await getReleaseAsset(owner, repo, RELEASE_TAG, assetName, {
+    pkgLabel: PKG_LABEL,
+    buildHint: BUILD_HINT,
+    missingAssetHint:
+      'The wgpu-wasm sources have uncommitted changes, or the release for this content is not yet published.',
+  });
+
+  console.log(`Downloading ${assetName} (${(asset.size / 1024).toFixed(0)} KB)...`);
+  await downloadAsset(asset, TMP_TARBALL, {
+    owner,
+    repo,
+    tag: RELEASE_TAG,
     pkgLabel: PKG_LABEL,
     buildHint: BUILD_HINT,
   });
-
-  const asset = (release.assets || []).find((a) => a.name === assetName);
-  if (!asset) {
-    throw new FetchError(
-      'E4_HASH_MISMATCH',
-      `No release asset matching "${assetName}" found on ${owner}/${repo} (tag: ${RELEASE_TAG}).`,
-      `The wgpu-wasm sources have uncommitted changes, or the release for this content is not yet published. ${BUILD_HINT}, or push to main to trigger a CI release.`,
-    );
-  }
-
-  console.log(`Downloading ${assetName} (${(asset.size / 1024).toFixed(0)} KB)...`);
-  await downloadAsset(asset.url, TMP_TARBALL);
 
   console.log(`Extracting into ${PKG_DIR} ...`);
   await extractTarball(TMP_TARBALL, PKG_DIR);

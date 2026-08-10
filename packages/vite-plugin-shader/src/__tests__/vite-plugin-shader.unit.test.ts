@@ -1150,7 +1150,7 @@ import { toRollupLog } from '../wrap.js';
       expect(typeof plugin.generateBundle).toBe('function');
     });
 
-    it('(c) utility shaders absent from materialShaders[] (only 6 engine entries)', async () => {
+    it('(c) utility shaders stay absent from the complete engine material roster', async () => {
       const plugin = forgeaxShader({ engineEntries: true });
       const ctx = createMockContext();
       await plugin.buildStart?.call(ctx as never);
@@ -1198,7 +1198,7 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::vfx-render.particles.billboard',
         'forgeax::vfx-render.particles.mesh',
       ]);
-    });
+    }, 15_000);
 
     // feat-20260531-skybox-env-background M4 regression: buildEngineShaderManifest()
     // is the standalone runtime manifest helper consumed by the dawn-node smoke

@@ -18,12 +18,26 @@ export {
   type AudioErrorCode,
   type AudioErrorDetail,
 } from '@forgeax/engine-types';
-export type { AudioPlayOptions, AudioState } from './audio-backend';
+export type { AudioListenerPose, AudioPlayOptions, AudioState } from './audio-backend';
 export {
   ASSET_REGISTRY_RESOURCE_KEY,
   AUDIO_ENGINE_RESOURCE_KEY,
   type AudioBackend,
   type BusName,
 } from './audio-backend';
-
+export {
+  type AudioIntent,
+  type AudioIntentBackendOptions,
+  audioIntentErrorState,
+  createAudioIntentBackend,
+} from './audio-intent';
+export {
+  audioTickSystem,
+  createClipResolver,
+  detectEdge,
+  detectRemovedEntities,
+  type EdgeAction,
+  listenerPoseFromWorldMatrix,
+} from './audio-tick-system';
 export { AudioListener, AudioSource } from './components';
+export { AUDIO_TICK_SYSTEM_NAME, audioPlugin } from './plugin-factory';

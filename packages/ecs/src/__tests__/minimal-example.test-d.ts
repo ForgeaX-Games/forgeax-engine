@@ -15,7 +15,6 @@ import { Update } from '../schedule-token';
 
 import { describe, expectTypeOf, it } from 'vitest';
 import { defineComponent } from '../component';
-import { Entity } from '../entity';
 import { World } from '../world';
 
 describe('[w14] AC-4 — 30-second onboarding minimal example', () => {
@@ -26,17 +25,14 @@ describe('[w14] AC-4 — 30-second onboarding minimal example', () => {
     const world = new World();
     world.addSystem(Update, {
       name: 'movement',
-      queries: [{ with: [Position, Velocity, Entity] }],
+      queries: [{ read: [Velocity], write: [Position] }],
       fn: (_world, queryResults, _commands) => {
-        for (const bundles of queryResults[0]) {
-          // Compile-time inference: xs / dxs are Float32Array — no `as` cast.
-          const xs = bundles.Position.x;
-          const dxs = bundles.Velocity.dx;
-          expectTypeOf(xs).toEqualTypeOf<Float32Array>();
-          expectTypeOf(dxs).toEqualTypeOf<Float32Array>();
-          for (let i = 0; i < bundles.Entity.self.length; i++) {
-            xs[i] = (xs[i] ?? 0) + (dxs[i] ?? 0);
-          }
+        for (const row of queryResults[0]) {
+          const velocity = row.get(Velocity);
+          const position = row.mut(Position);
+          expectTypeOf(position.x).toBeNumber();
+          expectTypeOf(velocity.dx).toBeNumber();
+          position.x += velocity.dx;
         }
       },
     });

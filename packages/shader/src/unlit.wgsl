@@ -1,5 +1,5 @@
 #define_import_path forgeax_material::unlit
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture}
+#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTextureLinear}
 
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
@@ -104,7 +104,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale);
+  let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale);
   if (material.alphaCutoff > 0.0 && material.baseColor.a * texSample.a < material.alphaCutoff) {
     discard;
   }

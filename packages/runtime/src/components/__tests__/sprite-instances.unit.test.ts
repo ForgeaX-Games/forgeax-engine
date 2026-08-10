@@ -6,7 +6,7 @@
 //       'SpriteInstances'.
 //   (b) SpriteInstancesData type assertion: { transforms: Float32Array,
 //       regions: Float32Array }, both readonly. The AC-09 type-inference
-//       check happens inside system / queryRun callback paths (not test-d) —
+//       check happens inside system / QueryRow paths (not test-d) —
 //       a `world.get` callback context is the canonical AI-user touchpoint.
 //   (c) barrel re-export from @forgeax/engine-runtime compiles, exposing both
 //       the component value and the data shape type.

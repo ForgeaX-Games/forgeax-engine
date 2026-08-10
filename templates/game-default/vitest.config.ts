@@ -6,7 +6,23 @@ export default defineProject({
     name: '@forgeax/template-game-default-vfx',
     // Keep this project narrowly scoped to authored Pack contracts; the
     // template's DOM tests are browser-owned elsewhere.
-    include: ['tests/vfx-effect-assets.test.ts', 'tests/ui-manifest.test.ts', 'tests/asset-lab-actions.test.ts', 'tests/target-profile-loop.test.ts', 'tests/video-texture-panel.test.ts', 'tests/gameplay-aim.test.ts', 'tests/gameplay-input.integration.test.ts'],
+    include: [
+      '__tests__/vfx-effect-assets.test.ts',
+      '__tests__/ui-manifest.test.ts',
+      '__tests__/asset-lab-actions.test.ts',
+      '__tests__/target-profile-loop.test.ts',
+      '__tests__/target-relay.test.ts',
+      '__tests__/gameplay-state.test.ts',
+      '__tests__/video-texture-panel.test.ts',
+      '__tests__/gameplay-aim.test.ts',
+      '__tests__/gameplay-input.integration.test.ts',
+      '__tests__/counterattack.test.ts',
+      '__tests__/health-pickup.test.ts',
+      '__tests__/repair-cache.test.ts',
+      '__tests__/energy-core-extraction.test.ts',
+      '__tests__/reward-choice.test.ts',
+      '__tests__/barrier-route.test.ts',
+    ],
     exclude: ['**/node_modules/**'],
   },
 });

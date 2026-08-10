@@ -95,7 +95,6 @@ if (ESSENTIAL_COMPONENT_IDS.length !== 1 || ESSENTIAL_COMPONENT_IDS[0] !== 0) {
 // barrel re-export keeps the historical `import { err, ok, Result } from
 // '@forgeax/engine-ecs'` consumer surface unchanged.
 export { err, ok, type Result } from '@forgeax/engine-types';
-export type { ChangeTicks } from './change-detection';
 /**
  * Branded-number handle type identifying a row (24-bit index + 8-bit
  * generation). The `Entity` component token (value-space, id=0) and the
@@ -104,7 +103,14 @@ export type { ChangeTicks } from './change-detection';
  * `: Entity` annotations.
  */
 export type { EntityHandle } from './entity-handle';
-export { FixedUpdate, FrameEnd, type ScheduleToken, Update } from './schedule-token';
+export {
+  FixedUpdate,
+  FrameEnd,
+  type ScheduleName,
+  type ScheduleToken,
+  Update,
+} from './schedule-token';
+export type { ChangeTicks } from './storage/change-detection';
 export {
   FixedTime,
   type FixedTimeResource,
@@ -173,8 +179,8 @@ export { toShared, toUnique } from '@forgeax/engine-types';
  * Opaque component token carrying name + schema type information.
  *
  * Prefer letting `defineComponent` infer the type — both the literal name `N`
- * and schema `S` flow through, enabling `bundles.<Name>.<field>` inference in
- * queries without `as` assertions.
+ * and schema `S` flow through, enabling typed `QueryRow.get` / `QueryRow.mut`
+ * access without `as` assertions.
  *
  * @example
  * ```ts
@@ -190,6 +196,7 @@ export { toShared, toUnique } from '@forgeax/engine-types';
 export type {
   Component,
   ComponentSchema,
+  ComponentStorage,
   DefineComponentOptions,
   FieldInputType,
   FieldValueType,
@@ -233,6 +240,34 @@ export {
   TimeConfigInvalidError,
   TimeDeltaInvalidError,
 } from './errors';
+export type {
+  KernelDispatchFailure,
+  KernelDispatchResult,
+  KernelDispatchSpan,
+  SharedFieldView,
+  SharedKernelDefinition,
+  SharedKernelDispatch,
+  SharedKernelEligibilityReason,
+  SharedKernelExecutor,
+  SharedKernelHandle,
+  SharedSpanBinding,
+  WorldExecutionFault,
+  WorldExecutionHealth,
+  WorldExecutionState,
+} from './execution';
+export {
+  bindSharedSpan,
+  defineSharedKernel,
+  isKernelDispatchFailure,
+  isSharedSpan,
+  SHARED_KERNEL_ELIGIBILITY_REASONS,
+  SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
+  SharedKernelEligibilityError,
+  SharedKernelFailureError,
+  sharedKernelEligibility,
+  splitSharedSpan,
+  WorldPoisonedError,
+} from './execution';
 /**
  * Query descriptor for With/Without archetype filtering.
  *
@@ -241,7 +276,17 @@ export {
  * const desc: QueryDescriptor = { with: [Position, Velocity], without: [Static] };
  * ```
  */
-export type { ColumnBundle, NestedColumnBundle, QueryDescriptor, QueryState } from './query';
+export type {
+  MutableColumnShape,
+  MutableRowShape,
+  Query,
+  QueryCreationError,
+  QueryDescriptor,
+  QueryRow,
+  QuerySpan,
+  ReadonlyColumnShape,
+  ReadonlyRowShape,
+} from './query/query';
 /**
  * ECS-aware refcount-tracked handle store (M3). Owns the lifecycle of every
  * `Handle<T, 'shared'>` derived from `shared<T>` schema fields. The producer
@@ -407,8 +452,8 @@ export {
  * ```
  */
 export type SystemFn<
-  Qs extends ReadonlyArray<import('./query').QueryDescriptor> = ReadonlyArray<
-    import('./query').QueryDescriptor
+  Qs extends ReadonlyArray<import('./query/query').QueryDescriptor> = ReadonlyArray<
+    import('./query/query').QueryDescriptor
   >,
   Ps extends ReadonlyArray<unknown> = readonly [],
 > = import('./schedule').SystemDescriptor<Qs, Ps>['fn'];
@@ -430,6 +475,7 @@ export type {
   SceneInstantiateDiagnostic,
   SceneInstantiateFlatOk,
   SceneInstantiateOk,
+  TableInfo,
   WorldInspection,
   WorldScheduleData,
   WorldScheduleQueryData,
@@ -455,8 +501,6 @@ export { decodeEntity, encodeEntity } from './entity-handle';
 // ────────────────────────────────────────────────────────────────────────────
 // Query engine utilities
 // ────────────────────────────────────────────────────────────────────────────
-
-export { createQueryState, queryCombinations, queryRun, queryRunContiguous } from './query';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Component internals (for advanced use: custom storage, tooling)
@@ -499,13 +543,15 @@ export {
 // Column / storage internals (for advanced use: custom archetype tooling)
 // ────────────────────────────────────────────────────────────────────────────
 
-export type { Column, FieldView, ManagedColumnReader } from './column';
+export type { Column, FieldView, ManagedColumnReader } from './storage/column';
+export { createColumn, growColumn, isHotSchema } from './storage/column';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Archetype internals
 // ────────────────────────────────────────────────────────────────────────────
 
-export type { Archetype, ArchetypeId } from './archetype';
+export type { Archetype, ArchetypeId } from './storage/archetype';
+export type { Table, TableComponentStorage, TableId } from './storage/table';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Schedule internals
@@ -539,6 +585,7 @@ export { matchSeverity, Severity } from './schedule';
 export type {
   EcsErrorCode,
   EcsErrorDetail,
+  QuerySpanUnavailableReason,
   ScheduleMutationErrorCode,
   ScheduleMutationErrorDetail,
 } from './errors';
@@ -546,6 +593,7 @@ export {
   ArrayPopEmptyError,
   BuiltinSlotNotOwnedError,
   CardinalityExceededError,
+  ChangeEpochExhaustedError,
   ComponentAlreadyPresentError,
   ComponentFieldInvalidValueError,
   ComponentNotDefinedError,
@@ -558,6 +606,11 @@ export {
   ManagedArrayElementTypeNotAllowedError,
   ManagedBufferOutOfBoundsError,
   ManagedBufferShrinkNotSupportedError,
+  QueryDataRequiresFieldsError,
+  QueryDescriptorConflictError,
+  QueryIterationActiveError,
+  QueryIterationInvalidatedError,
+  QuerySpanUnavailableError,
   RelationshipDetachMismatchError,
   RelationshipMirrorComponentNotRegisteredError,
   RelationshipMirrorFieldTypeMismatchError,
@@ -571,6 +624,7 @@ export {
   SharedRefDoubleReleaseError,
   SharedRefReleasedError,
   SharedRefStaleError,
+  SparseStorageRequiresTagError,
   SpawnDataUnknownFieldError,
   SpawnLightInvalidBoundsError,
   SpriteAnimationInvalidError,

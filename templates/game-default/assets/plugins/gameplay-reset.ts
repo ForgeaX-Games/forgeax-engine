@@ -37,6 +37,13 @@ import { resetGameplayCommandCounters } from './resources/gameplay';
 import { PAN_HALF_HEIGHT_INITIAL, TOP_DOWN_OFFSET_Z } from './camera-controller';
 import { PERSPECTIVE_FOV_INITIAL } from './camera-zoom';
 import type { MatHandle } from './scene-runtime';
+import type { TargetRelayHandle } from './target-relay';
+import type { CounterattackHandle } from './counterattack';
+import type { HealthPickupHandle } from './health-pickup';
+import type { RepairCacheHandle } from './repair-cache';
+import type { EnergyCoreExtractionHandle } from './energy-core-extraction';
+import type { RewardChoiceHandle } from './reward-choice';
+import type { BarrierRouteHandle } from './barrier-route';
 
 type ResetGameplayArgs = {
   readonly world: World;
@@ -56,6 +63,12 @@ type ResetGameplayArgs = {
   readonly targetHealth: TargetHealthHandle;
   readonly changeDetection: GameplayChangeDetectionHandle;
   readonly hitStreak: HitStreakHandle | undefined;
+  readonly counterattack: CounterattackHandle | undefined;
+  readonly healthPickup: HealthPickupHandle | undefined;
+  readonly repairCache: RepairCacheHandle | undefined;
+  readonly extraction: EnergyCoreExtractionHandle | undefined;
+  readonly rewardChoice: RewardChoiceHandle | undefined;
+  readonly barrierRoute: BarrierRouteHandle | undefined;
   readonly depthOfField: DepthOfFieldHandle;
   readonly chromaticAberration: ChromaticAberrationHandle;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
@@ -67,6 +80,7 @@ type ResetGameplayArgs = {
   readonly jpegTextureSwap: JpegTextureSwap | undefined;
   readonly targetProfile: TargetProfileLoop | undefined;
   readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
+  readonly targetRelay: TargetRelayHandle;
   readonly settingsState: GameSettingsState;
   readonly setMode: (mode: 'topdown' | 'orbit' | 'fps' | 'pan') => void;
   readonly multiWorldOverlay: MultiWorldOverlay | undefined;
@@ -116,6 +130,12 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     args.targetDisabling.reset();
     args.changeDetection.reset();
     args.hitStreak?.reset();
+    args.counterattack?.reset();
+    args.healthPickup?.reset();
+    args.repairCache?.reset();
+    args.extraction?.reset();
+    args.rewardChoice?.reset();
+    args.barrierRoute?.reset();
     args.visibilityLoop.reset();
     args.targetHealth.reset();
     args.depthOfField.reset();
@@ -128,6 +148,7 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     resetGltfMeshSwap(args.world, args.gltfMeshSwap);
     resetJpegTextureSwap(args.world, args.jpegTextureSwap);
     resetTargetProfile(args.world, args.targetProfile);
+    args.targetRelay.reset();
     args.resetMission();
     args.fbxSkinnedTarget?.reset();
     args.settingsState.depthOfField = false;

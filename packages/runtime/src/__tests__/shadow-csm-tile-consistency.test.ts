@@ -39,6 +39,7 @@ interface CapturedViewport {
 interface CaptureLog {
   // setViewport calls on the 'render-system-shadow' encoder, in cascade order.
   shadowViewports: CapturedViewport[];
+  shadowShaderSources: string[];
 }
 
 function makeMockGL2(): unknown {
@@ -100,7 +101,10 @@ function makeMockGPUDevice(log: CaptureLog): unknown {
       writeBuffer: () => undefined,
       writeTexture: () => undefined,
     },
-    createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
+    createShaderModule: (desc: { code: string; label?: string }) => {
+      if (desc.label === 'shadow_caster') log.shadowShaderSources.push(desc.code);
+      return { getCompilationInfo: async () => ({ messages: [] }) };
+    },
     createBindGroupLayout: () => ({}),
     createPipelineLayout: () => ({}),
     createRenderPipeline: () => ({}),
@@ -136,16 +140,25 @@ function makeMockGPU(device: unknown): unknown {
 const baseNavigator = { userAgent: 'mock-engine-test' } as Partial<Navigator> as Navigator;
 
 function buildManifestDataUrl(): string {
-  const materialShaderStub = (identifier: string) => ({
+  const materialShaderStub = (identifier: string, composedWgsl = '/* stub */') => ({
     identifier,
     sourcePath: `${identifier}.wgsl`,
-    composedWgsl: '/* stub */',
+    composedWgsl,
     paramSchema: '[]',
     variants: [],
   });
   const manifest = {
     schemaVersion: '1.0.0',
     entries: [
+      // A game VFX shader may also be vertex-only. Its earlier position in the
+      // flat manifest must not let content-based triage steal the reserved
+      // shadow-caster identity.
+      {
+        hash: 'custom-vfx',
+        wgsl: '/* custom VFX decoy - @location(0) position; @location(5) color */',
+        glsl: '',
+        bindings: '',
+      },
       { hash: 'pbr00000', wgsl: '/* pbr stub - calls f_schlick( */', glsl: '', bindings: '' },
       { hash: 'unlit000', wgsl: '/* unlit stub */', glsl: '', bindings: '' },
       {
@@ -154,10 +167,10 @@ function buildManifestDataUrl(): string {
         glsl: '',
         bindings: '',
       },
-      // createRenderer registers forgeax::default-shadow-caster from the first
-      // entry whose wgsl has '@location(0) position' but not '@location(1)
-      // normal'. Without it the shadow PSO lookup is null, recordShadowPass
-      // early-exits, and no viewport is captured.
+      // The flat entry remains for the shader registry, while the matching
+      // reserved materialShaders identifier below owns its runtime identity.
+      // Without it the shadow PSO lookup is null, recordShadowPass early-exits,
+      // and no viewport is captured.
       {
         hash: 'shadowcaster0',
         wgsl: '/* shadow caster stub - @location(0) position vertex-only */',
@@ -168,6 +181,10 @@ function buildManifestDataUrl(): string {
     materialShaders: [
       materialShaderStub('forgeax::default-standard-pbr'),
       materialShaderStub('forgeax::default-unlit'),
+      materialShaderStub(
+        'forgeax::default-shadow-caster',
+        '/* reserved shadow caster - @location(0) position */',
+      ),
     ],
   };
   return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
@@ -211,7 +228,7 @@ function identityTransform(): Record<string, number[]> {
 }
 
 async function captureCascadeViewports(cascadeCount: number, mapSize: number): Promise<CaptureLog> {
-  const log: CaptureLog = { shadowViewports: [] };
+  const log: CaptureLog = { shadowViewports: [], shadowShaderSources: [] };
   const device = makeMockGPUDevice(log);
   vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
   const { createRenderer } = await importEngine();
@@ -305,6 +322,12 @@ describe('CSM cascade tile / matrix / viewport three-way agreement (AC-04, AC-06
     it(`count=${count}: depth viewport == _atlasTileOrigin == matrix slot for every layer`, async () => {
       const mapSize = 1024;
       const log = await captureCascadeViewports(count, mapSize);
+
+      if (count === 1) {
+        expect(log.shadowShaderSources).toEqual([
+          '/* reserved shadow caster - @location(0) position */',
+        ]);
+      }
 
       // urp issues exactly one shadow pass (one viewport) per cascade.
       expect(log.shadowViewports).toHaveLength(count);

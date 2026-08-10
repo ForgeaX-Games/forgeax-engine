@@ -46,7 +46,7 @@ const world = new World();
 const state = buildContiguousQueryWorld(world);
 const errors = [];
 renderer.onError((error) => errors.push(error.code));
-for (let frame = 0; frame < 180; frame++) {
+for (let frame = 0; frame < 300; frame++) {
   world.update(0.016).unwrap();
   const draw = renderer.draw([world], { owner: 0 });
   if (!draw.ok) throw new Error(`[smoke] draw=${draw.error.code}`);

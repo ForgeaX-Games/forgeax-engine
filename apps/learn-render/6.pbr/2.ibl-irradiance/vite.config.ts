@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
@@ -10,6 +11,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // the shared preset still owns forgeaxShader + vitePluginRhiDebug + fs.allow.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-6-2-ibl-irradiance');
 
 export default withRhiDebug({
   here,
@@ -17,6 +19,7 @@ export default withRhiDebug({
   port: 5196,
   extraPlugins: [
     pluginPack({
+      runtimeBinding,
       refresh: reloadAssetHost(),
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures')],
       importers: [imageImporter],

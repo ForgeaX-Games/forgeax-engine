@@ -12,11 +12,8 @@
 //     and direction.zxy() axis cycle
 
 import {
-  createQueryState,
   defineComponent,
-  Entity,
   type EntityHandle,
-  queryRun,
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -87,11 +84,9 @@ export function buildScaleWorld(world: World): void {
 
 /** Advance the bounded scale state exactly once for every Scaling entity. */
 export function stepScale(world: World, dt: number): void {
-  const state = createQueryState({ with: [Transform, Scaling, Entity] });
+  const query = world.query({ with: [Transform, Scaling] }).unwrap();
   const targets: EntityHandle[] = [];
-  queryRun(state, world, (bundle) => {
-    for (const handle of bundle.Entity.self) targets.push(handle as EntityHandle);
-  });
+  for (const row of query) targets.push(row.entity);
 
   for (const handle of targets) {
     const transform = world.get(handle, Transform);

@@ -28,8 +28,7 @@ adding a new package surface.
 | Assemble a renderer, diagnose backend selection, or recover a lost renderer | `forgeax-engine-app` + `packages/runtime/README.md` assembly owner |
 | Vec/Mat/Quat/Color / 从 mat4 读 pose / screenToRay | `forgeax-engine-math` |
 | authored package → cook/catalog → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
-| VFX source / operator cook / Pack v2 GUID load / CPU `ParticleSimulation` / `ParticleEffectPlayer` / `ParticleRenderBatch` | `forgeax-engine-assets` for the shared Pack v2 path, then `packages/vfx/README.md` and `packages/vfx-compiler/README.md` for the headless VFX contract |
-| Visible particle rendering / stock effects / VFX scene attachment | Wave 3 convergence per [`vfx-particle-runtime-design.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/vfx-particle-runtime-design.md); consume the completed generic prepared-graphics seam downstream and keep `engine-vfx` headless |
+| Code-first GPU VFX source / WGSL hooks and imports / Pack v2 cook and GUID load / `ParticleEffectPlayer` / persistent GPU billboard or mesh output | `forgeax-engine-vfx`; add `forgeax-engine-assets` when changing shared Pack/catalog transport and `forgeax-engine-render-pipeline` when changing the generic RenderFeature graph seam |
 | inspector (JSON-RPC WS) / kubectl 式 CLI 子命令 | `forgeax-engine-cli` |
 | RigidBody / Collider / PhysicsWorld (rapier 2D/3D) | `forgeax-engine-physics` |
 | AudioSource / AudioListener / bus 拓扑 | `forgeax-engine-audio` |

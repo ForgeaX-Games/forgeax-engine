@@ -1,7 +1,8 @@
-import type { BindGroup, RenderPipeline } from '@forgeax/engine-rhi';
+import { type BindGroup, type RenderPipeline, RhiError } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-null';
-import { ok, type Result } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { err, ok, type Result } from '@forgeax/engine-types';
+import { describe, expect, it, vi } from 'vitest';
+import type { RenderFeatureGpuBufferRef } from '../features/prepared-gpu-work';
 import {
   createPreparedGraphicsStore,
   type PreparedGraphicsItem,
@@ -32,6 +33,37 @@ function failure<T>(result: Result<T, unknown>): {
 }
 
 describe('prepared graphics resolver', () => {
+  it('releases producer binding resources exactly once', async () => {
+    const currentDevice = await device();
+    const store = createPreparedGraphicsStore();
+    const transaction = store.beginFrame('resolver.binding-lifetime', 1);
+    const pipeline = transaction.prepare('pipeline', 'forward', {
+      shader: 'synthetic::forward',
+      vertexLayout: 'position',
+      colorFormats: ['rgba8unorm'],
+    });
+    const bindings = transaction.prepare('bindings', 'material', {
+      pipeline: pipeline.unwrap(),
+      values: { group: 1 },
+    });
+    transaction.commit().unwrap();
+    const lookup = resultMap(store.snapshot('resolver.binding-lifetime').items);
+    const release = vi.fn(() => ok(undefined));
+    const resolver = createPreparedGraphicsResolver({
+      device: currentDevice,
+      generation: 1,
+      capabilityAvailable: true,
+      lookup: (reference) => lookup.get(reference),
+      resolvePipeline: () => ok({} as RenderPipeline),
+      resolveBindings: () => ok({ handle: {} as BindGroup, release }),
+    });
+
+    expect(resolver.resolve(bindings.unwrap()).ok).toBe(true);
+    expect(resolver.release().ok).toBe(true);
+    expect(resolver.release().ok).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it('maps normalized operations to current-device handles without using refs as handles', async () => {
     const currentDevice = await device();
     const store = createPreparedGraphicsStore();
@@ -52,6 +84,19 @@ describe('prepared graphics resolver', () => {
     const index = transaction.prepare('index-data', 'triangle', {
       format: 'uint16',
       data: new Uint16Array([0, 1, 2]),
+    });
+    const externalBuffer = currentDevice.createBuffer({ size: 16, usage: 56 }).unwrap();
+    const externalRef = Object.freeze({
+      name: 'external-geometry',
+      generation: 7,
+    }) as RenderFeatureGpuBufferRef;
+    const externalVertex = transaction.prepare('vertex-data', 'external-vertices', {
+      layout: 'position',
+      buffer: externalRef,
+    });
+    const externalIndex = transaction.prepare('index-data', 'external-indices', {
+      format: 'uint16',
+      buffer: externalRef,
     });
     expect(transaction.commit().ok).toBe(true);
 
@@ -75,6 +120,7 @@ describe('prepared graphics resolver', () => {
         const layout = currentDevice.createBindGroupLayout({ entries: [] }).unwrap();
         return currentDevice.createBindGroup({ layout, entries: [] }) as Result<BindGroup, never>;
       },
+      resolveGpuBuffer: (reference) => (reference === externalRef ? externalBuffer : undefined),
     };
     const resolver = createPreparedGraphicsResolver(input);
     const pipelineRef = pipeline.unwrap();
@@ -85,11 +131,15 @@ describe('prepared graphics resolver', () => {
     const resolvedBindings = resolver.resolve(bindingsRef);
     const resolvedVertex = resolver.resolve(vertexRef);
     const resolvedIndex = resolver.resolve(indexRef);
+    const resolvedExternalVertex = resolver.resolve(externalVertex.unwrap());
+    const resolvedExternalIndex = resolver.resolve(externalIndex.unwrap());
 
     expect(resolvedPipeline.ok).toBe(true);
     expect(resolvedBindings.ok).toBe(true);
     expect(resolvedVertex.ok).toBe(true);
     expect(resolvedIndex.ok).toBe(true);
+    expect(resolvedExternalVertex.ok && resolvedExternalVertex.value.handle).toBe(externalBuffer);
+    expect(resolvedExternalIndex.ok && resolvedExternalIndex.value.handle).toBe(externalBuffer);
     expect(resolvedPipeline.ok && resolvedPipeline.value.handle).not.toBe(pipelineRef);
     expect(resolvedBindings.ok && resolvedBindings.value.handle).not.toBe(bindingsRef);
     expect(resolvedVertex.ok && resolvedVertex.value.handle).not.toBe(vertexRef);
@@ -156,5 +206,40 @@ describe('prepared graphics resolver', () => {
     expect(failed.ok).toBe(false);
     expect(failure(failed).code).toBe('render-feature-preparation-failed');
     expect(resolveCalls).toBe(1);
+  });
+
+  it('preserves asynchronous pipeline warm-up as the graph-level pending reason', async () => {
+    const currentDevice = await device();
+    const store = createPreparedGraphicsStore();
+    const transaction = store.beginFrame('resolver.warmup', 5);
+    const pipeline = transaction.prepare('pipeline', 'forward', {
+      shader: 'synthetic::forward',
+      vertexLayout: 'position',
+      colorFormats: ['rgba8unorm'],
+    });
+    expect(transaction.commit().ok).toBe(true);
+    const lookup = resultMap(store.snapshot('resolver.warmup').items);
+
+    const pending = createPreparedGraphicsResolver({
+      device: currentDevice,
+      generation: 5,
+      capabilityAvailable: true,
+      lookup: (ref) => lookup.get(ref),
+      resolvePipeline: () =>
+        err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'asynchronous shader module warm-up to finish',
+            hint: 'retry on the next frame',
+          }),
+        ),
+      resolveBindings: () => ok({} as BindGroup),
+    }).resolve(pipeline.unwrap());
+
+    expect(pending.ok).toBe(false);
+    expect(failure(pending)).toMatchObject({
+      code: 'render-feature-preparation-failed',
+      detail: { reason: 'pipeline-pending' },
+    });
   });
 });

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 declare module '*.wgsl' {
   const value: { readonly hash: string; readonly wgsl: string };
   export default value;
