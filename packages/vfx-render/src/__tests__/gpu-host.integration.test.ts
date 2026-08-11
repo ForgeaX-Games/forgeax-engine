@@ -1,7 +1,12 @@
 import { World } from '@forgeax/engine-ecs';
 import { RenderFeaturePreparationFailedError } from '@forgeax/engine-render';
 import { err, ok } from '@forgeax/engine-types';
-import type { VfxGpuTickIntent } from '@forgeax/engine-vfx';
+import {
+  ParticleEffectPlayer,
+  VFX_GPU_RUNTIME_RESOURCE_KEY,
+  type VfxGpuRuntime,
+  type VfxGpuTickIntent,
+} from '@forgeax/engine-vfx';
 import { describe, expect, it, vi } from 'vitest';
 import { gpuParticleRenderFeature } from '../feature/gpu-particle-feature.js';
 import {
@@ -37,6 +42,68 @@ describe('GPU VFX public host', () => {
       Object.values(PARTICLE_SHADER_IDENTIFIERS),
     );
     expect(host.detachWorld({ world })).toMatchObject({ ok: true, value: { state: 'detached' } });
+  });
+
+  it('fences preview controls to one attached host generation', async () => {
+    const world = new World();
+    const assets = {
+      loaders: { registerPackLoader: () => {} },
+      lookup: () => undefined,
+    };
+    const host = createVfxRuntimeHost({ camera: { read: () => undefined } });
+    expect(host.acquireControl(world)).toMatchObject({
+      ok: false,
+      error: { code: 'vfx-host-control-world-detached' },
+    });
+
+    expect(await host.attachWorld({ world, assets: assets as never })).toMatchObject({ ok: true });
+    const acquired = host.acquireControl(world);
+    expect(acquired).toMatchObject({ ok: true, value: { generation: 1 } });
+    if (!acquired.ok) throw new Error(acquired.error.code);
+    const effect = world.allocSharedRef('ParticleEffectAsset', {} as never);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect, playing: true, seed: 1, timeScale: 1 },
+      })
+      .unwrap();
+
+    expect(
+      acquired.value.setEmitterSessionEnabled({
+        player,
+        emitterId: 'sparks',
+        enabled: false,
+      }),
+    ).toMatchObject({ ok: true, value: { state: 'disabled', generation: 1 } });
+    expect(
+      world
+        .getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY)
+        .isEmitterSessionEnabled(player, 'sparks'),
+    ).toBe(false);
+    expect(acquired.value.replay({ player })).toMatchObject({
+      ok: true,
+      value: { state: 'queued', generation: 1 },
+    });
+
+    world.despawn(player).unwrap();
+    expect(acquired.value.replay({ player })).toMatchObject({
+      ok: false,
+      error: {
+        code: 'vfx-host-control-player-unavailable',
+        detail: { player, requestedGeneration: 1, currentGeneration: 1 },
+      },
+    });
+
+    expect(host.detachWorld({ world })).toMatchObject({ ok: true });
+    expect(await host.attachWorld({ world, assets: assets as never })).toMatchObject({ ok: true });
+    expect(acquired.value.replay({ player })).toMatchObject({
+      ok: false,
+      error: {
+        code: 'vfx-host-control-stale-generation',
+        detail: { requestedGeneration: 1, currentGeneration: 2 },
+      },
+    });
+    expect(host.acquireControl(world)).toMatchObject({ ok: true, value: { generation: 2 } });
   });
 
   it('starts every pending emitter program in one prepare frame', () => {

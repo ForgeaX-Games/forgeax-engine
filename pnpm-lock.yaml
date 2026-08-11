@@ -9076,6 +9076,9 @@ importers:
       '@forgeax/engine-input':
         specifier: workspace:*
         version: link:../../packages/input
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../packages/math
       '@forgeax/engine-physics':
         specifier: workspace:*
         version: link:../../packages/physics
@@ -9088,12 +9091,21 @@ importers:
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@forgeax/engine-scene':
+        specifier: workspace:*
+        version: link:../../packages/scene
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../../packages/types
       '@forgeax/engine-ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@forgeax/engine-vfx':
+        specifier: workspace:*
+        version: link:../../packages/vfx
+      '@forgeax/engine-vfx-render':
+        specifier: workspace:*
+        version: link:../../packages/vfx-render
     devDependencies:
       '@forgeax/apps-shared':
         specifier: workspace:*

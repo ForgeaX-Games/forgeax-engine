@@ -43,6 +43,7 @@
     "smoke:mission-progression-production": "pnpm --dir ../.. build:app preview && FORGEAX_MISSION_PROGRESS_MODE=production node scripts/smoke-mission-progression.mjs",
     "smoke:sentinel-ranged-threat": "node scripts/smoke-sentinel-ranged-threat.mjs",
     "smoke:sentinel-ranged-threat-production": "pnpm --dir ../.. build:app preview && FORGEAX_SENTINEL_MODE=production node scripts/smoke-sentinel-ranged-threat.mjs",
+    "smoke:boss-lightning-vfx-dawn": "pnpm --dir ../.. build:app preview && node scripts/smoke-boss-lightning-vfx-dawn.mjs",
     "smoke:device-loss-reentry": "node scripts/smoke-device-loss-reentry.mjs",
     "smoke:device-loss-reentry-production": "pnpm --dir ../.. build:app preview && FORGEAX_DEVICE_LOSS_MODE=production node scripts/smoke-device-loss-reentry.mjs",
     "smoke:clean-copy-reentry": "node scripts/smoke-clean-copy-reentry.mjs",
@@ -97,12 +98,16 @@
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
-    "@forgeax/engine-render": "workspace:*"
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

@@ -85,7 +85,11 @@ import type {
 import { derive, handleSlot } from '@forgeax/engine-types';
 import { createEngineMetrics } from '../engine-metrics';
 import { RecoverError } from '../errors/recover';
-import { type RenderError, RenderFeatureStageFailedError } from '../errors/render';
+import {
+  type RenderError,
+  RenderFeatureCapabilityMissingError,
+  RenderFeatureStageFailedError,
+} from '../errors/render';
 import { createRenderFeatureHost, type RenderFeatureHost } from '../features/host';
 import { RENDER_FEATURE_VERTEX_LAYOUTS } from '../features/prepared-graphics';
 import type { RenderFeature } from '../features/types';
@@ -2579,6 +2583,14 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (host === undefined) {
         return err(
           new RenderFeatureStageFailedError(feature.identity, -1, 'extract', 'registration'),
+        );
+      }
+      const missingCapability = feature.requiredCapabilities?.find(
+        (capability) => internals.device.caps[capability] !== true,
+      );
+      if (missingCapability !== undefined) {
+        return err(
+          new RenderFeatureCapabilityMissingError(feature.identity, host.size, missingCapability),
         );
       }
       for (const materialShaderId of feature.requiredMaterialShaders ?? []) {

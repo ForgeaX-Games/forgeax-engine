@@ -24,7 +24,17 @@ const templateAssetRoot = resolve(templatesDir, 'game-default', 'assets');
 // relying on a directory-name convention.
 const templatePackRoots = [
   'animated-target-material.pack.json',
+  'arc-nova-ember-shard.shader.pack.json',
+  'arc-nova-geometry.pack.json',
+  'arc-nova-shard.shader.pack.json',
+  'arc-nova-sigil.shader.pack.json',
+  'arc-nova-violet-sigil.shader.pack.json',
   'base-material.pack.json',
+  'boss-lightning-contact.pack.json',
+  'boss-lightning-flight.pack.json',
+  'boss-lightning-materials.pack.json',
+  'boss-lightning-suite.pack.json',
+  'boss-lightning-telegraph.pack.json',
   'charge-vfx-effect.pack.json',
   'hit-flash-material.pack.json',
   'hit-vfx-effect.pack.json',
@@ -89,6 +99,10 @@ export default defineConfig(({ command }) => ({
       materialPackages: [
         resolve(templatesDir, 'game-default/assets/animated-target-material.pack.json'),
         resolve(templatesDir, 'game-default/assets/hit-flash-material.pack.json'),
+        resolve(templatesDir, 'game-default/assets/arc-nova-sigil.shader.pack.json'),
+        resolve(templatesDir, 'game-default/assets/arc-nova-violet-sigil.shader.pack.json'),
+        resolve(templatesDir, 'game-default/assets/arc-nova-shard.shader.pack.json'),
+        resolve(templatesDir, 'game-default/assets/arc-nova-ember-shard.shader.pack.json'),
       ],
     }) as never,
     // RHI capture is a dev-only inspection front door. Keeping the plugin out

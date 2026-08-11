@@ -25,6 +25,14 @@ Every variation changes the existing target-range world and the `R` key visibly 
 RedBox baseline. The default HUD also teaches two gameplay decisions: `F`/click fires immediately,
 while holding `C` starts the authored charge VFX and releasing it fires a larger, higher-impact shot;
 consecutive real hits inside the visible Combo window raise the multiplier, and waiting lets it expire.
+The authored Sentinel encounter also owns the project-local Boss Lightning suite. `assets/plugins/gameplay-vfx.ts`
+creates exactly one GPU VFX host for both legacy player feedback and the 13 hostile emitters in
+`boss-lightning-suite.pack.json`: four telegraph emitters begin on the real first-core cadence edge,
+five ribbon/trail/beam/release emitters ride the real hostile projectile, and four contact emitters
+start at the projectile Transform before an admitted cover/player collision is consumed. The same
+owner stops on Sentinel `Disabled`, `Victory`/`Defeat`, typed Reset, and Stop, and reports structured
+unavailability without a CPU particle mirror or renderer fallback. Protagonist attack presentation
+and Day/Night lighting are intentionally separate follow-up slices.
 The authored BouncyBall now counterattacks through the same arena: dodge it with `WASD`, watch real
 physics contact remove one of three HUD hearts, shoot it through the ordinary target-health path to
 disable it, or lose all hearts and use `R` to replay from typed Defeat. After taking damage, reach the

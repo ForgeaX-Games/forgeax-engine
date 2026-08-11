@@ -14,7 +14,7 @@ import { targetProfileSnapshot, type TargetProfileLoop } from './target-profile-
 import type { MultiWorldOverlay } from './multi-world-overlay';
 import type { WorldScoreTextHandle } from './world-score-text';
 import type { FbxSkinnedTarget } from './fbx-skinned-target';
-import type { VfxHitLoop } from './vfx-hit-loop';
+import type { GameplayVfx } from './gameplay-vfx';
 import type { MeshHandleSwap } from './mesh-handle-swap';
 import type { FbxMeshSwap } from './fbx-mesh-swap';
 import type { GltfMeshSwap } from './gltf-mesh-swap';
@@ -58,7 +58,7 @@ export type GameplayProjectionContext = {
   readonly multiWorldOverlay: MultiWorldOverlay | undefined;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
   readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
-  readonly vfxHitLoop: VfxHitLoop;
+  readonly vfxHitLoop: GameplayVfx;
   readonly triggerFlash: () => void;
   readonly triggerScore: () => { readonly points: number | null };
   readonly resetMeshHandleSwap: (state: MeshHandleSwap | undefined) => void;
@@ -147,6 +147,7 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
           worldScoreText: args.worldScoreText?.snapshot() ?? EMPTY_WORLD_SCORE_TEXT,
           fbxSkinnedTarget: args.fbxSkinnedTarget?.snapshot() ?? EMPTY_FBX_SKINNED_TARGET,
           vfxHit: args.vfxHitLoop.snapshot(),
+          bossVfx: args.vfxHitLoop.bossSnapshot(),
           hitStreak: args.hitStreak?.snapshot() ?? { hits: 0, elapsed: 0, multiplier: 1, state: 'ready' },
           counterattack: args.counterattack?.snapshot() ?? {
             playerHealth: 0, playerMaxHealth: 0, playerPosition: [0, 0, 0], hazardEntity: null,

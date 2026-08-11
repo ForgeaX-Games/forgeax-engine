@@ -16,7 +16,7 @@ import type { MeshHandleSwap } from '../mesh-handle-swap';
 import type { SpriteAtlasLoop } from '../sprite-atlas-loop';
 import type { TargetProfileLoop, TargetProfileSnapshot } from '../target-profile-loop';
 import type { VideoTexturePanel } from '../video-texture-panel';
-import type { VfxHitLoop } from '../vfx-hit-loop';
+import type { GameplayVfx } from '../gameplay-vfx';
 import type { WorldScoreTextHandle } from '../world-score-text';
 import type { ScoringTargetQuery } from '../scoring-target';
 import type { MatHandle } from '../scene-runtime';
@@ -78,7 +78,7 @@ export type GameplaySystemsContext = {
   readonly onAssetLabResult?: (result: AssetLabActionResult) => void;
   readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
-  readonly vfxHitLoop: VfxHitLoop;
+  readonly vfxHitLoop: GameplayVfx;
   readonly toggleCustomProjectileMesh: (state: CustomProjectileMesh) => void;
   readonly resetMeshHandleSwap: (state: MeshHandleSwap | undefined) => void;
   readonly resetFbxMeshSwap: (state: FbxMeshSwap | undefined) => void;
@@ -345,6 +345,9 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     },
     consume: ctx.consumeProjectile,
     onOutcome: (source, outcome, shielded) => ctx.sentinel?.recordOutcome(source, outcome, shielded),
+    onImpact: (source, position, outcome) => {
+      if (outcome !== 'refused' && source === ctx.sentinel?.entity) ctx.vfxHitLoop.emitImpact(position);
+    },
     onTargetResolved: (target) => ctx.sentinel?.onTargetResolved(target),
     after: [
       'physicsCollisionSync',

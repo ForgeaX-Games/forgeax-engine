@@ -47,6 +47,8 @@ export {
 } from './host/data-interface-providers.js';
 export type {
   VfxRuntimeHost,
+  VfxRuntimeHostControl,
+  VfxRuntimeHostControlError,
   VfxRuntimeHostError,
   VfxRuntimeHostInspectSnapshot,
   VfxRuntimeHostOptions,

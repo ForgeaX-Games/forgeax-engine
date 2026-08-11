@@ -378,20 +378,26 @@ async function collectCores(label, captureWake) {
     collected.push(snapshot);
     if (index === 0 && captureWake) {
       const telegraph = await waitForSnapshot(
-        (candidate) => candidate.sentinel.mode === 'telegraph' && candidate.sentinel.ticks > 0,
+        (candidate) => candidate.sentinel.mode === 'telegraph' && candidate.sentinel.ticks > 0
+          && candidate.bossVfx?.phase === 'telegraph' && candidate.bossVfx.telegraphEvents > 0,
         `${label} first-core telegraph`,
       );
       await capture('VE-02-telegraph', telegraph);
+      await capture('BOSS-01-telegraph', telegraph);
       const inFlight = await waitForSnapshot(
-        (candidate) => candidate.projectiles.hostileActive === 1,
+        (candidate) => candidate.projectiles.hostileActive === 1
+          && candidate.bossVfx?.phase === 'flight' && candidate.bossVfx.flightEvents > 0,
         `${label} hostile projectile flight`,
       );
       await capture('VE-03-projectile', inFlight);
+      await capture('BOSS-02-flight', inFlight);
       const blocked = await waitForSnapshot(
-        (candidate) => candidate.sentinel.coverBlocked >= 1 && candidate.projectiles.hostileActive === 0,
+        (candidate) => candidate.sentinel.coverBlocked >= 1 && candidate.projectiles.hostileActive === 0
+          && candidate.bossVfx?.contactEvents > 0 && candidate.bossVfx.activeCarriers === 0,
         `${label} cover block`,
       );
       await capture('VE-04-cover-block', blocked);
+      await capture('BOSS-03-contact', blocked);
     }
     const health = (await readSnapshot()).counterattack;
     if (health.playerHealth < health.playerMaxHealth) {
@@ -495,6 +501,9 @@ function assertBaseline(snapshot, label) {
     || snapshot.sentinel.coverBlocked !== 0 || snapshot.sentinel.playerHits !== 0
     || snapshot.sentinel.shieldBlocks !== 0 || snapshot.sentinel.refused !== 0
     || snapshot.projectiles.active !== 0
+    || snapshot.bossVfx?.phase !== 'dormant'
+    || snapshot.bossVfx?.activePlayers !== 0
+    || snapshot.bossVfx?.activeCarriers !== 0
     || snapshot.targetRelay.status !== 'locked'
     || snapshot.targetRelay.currentStep !== 0
     || snapshot.targetRelay.acceptedHits !== 0
@@ -558,7 +567,9 @@ try {
   const defeat = await waitForSnapshot(
     (snapshot) => snapshot.state.phase === 'Defeat' && snapshot.counterattack.playerHealth === 0
       && snapshot.state.defeatTransitions === dormant.state.defeatTransitions + 1
-      && snapshot.projectiles.hostileActive === 0,
+      && snapshot.projectiles.hostileActive === 0
+      && snapshot.bossVfx?.phase === 'dormant' && snapshot.bossVfx.activePlayers === 0
+      && snapshot.bossVfx.activeCarriers === 0,
     'Sentinel Defeat',
     30_000,
   );
@@ -579,7 +590,9 @@ try {
   }
   const disabled = await waitForSnapshot(
     (snapshot) => snapshot.sentinel.disabled && snapshot.sentinel.health === 0
-      && snapshot.projectiles.hostileActive === 0,
+      && snapshot.projectiles.hostileActive === 0
+      && snapshot.bossVfx?.phase === 'dormant' && snapshot.bossVfx.activePlayers === 0
+      && snapshot.bossVfx.activeCarriers === 0,
     'Sentinel shared target neutralization',
   );
   await capture('VE-06-disabled', disabled);
@@ -587,7 +600,9 @@ try {
   const victory = await waitForSnapshot(
     (snapshot) => snapshot.state.phase === 'Victory' && snapshot.extraction.victoryRequests === 1
       && snapshot.state.victoryTransitions === dormant.state.victoryTransitions + 1
-      && snapshot.projectiles.hostileActive === 0,
+      && snapshot.projectiles.hostileActive === 0
+      && snapshot.bossVfx?.phase === 'dormant' && snapshot.bossVfx.activePlayers === 0
+      && snapshot.bossVfx.activeCarriers === 0,
     'typed Victory',
   );
   await capture('VE-07-victory', victory);

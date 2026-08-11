@@ -106,6 +106,16 @@ no player” from “not attached.” Realm-local entity handles are never reuse
 cross-World identity; consumers must pair them with the host generation and
 asset GUID.
 
+`host.acquireControl(world)` is the command-side counterpart to inspection. It
+returns a generation-bound lease for replay and runtime-only emitter session
+masks, so product hosts do not reach through the public host into
+`VFX_GPU_RUNTIME_RESOURCE_KEY`. Every command revalidates the attachment
+generation, runtime resource and live `ParticleEffectPlayer`; detach,
+reattach, or player destruction therefore returns a structured
+`VfxRuntimeHostControlError` instead of mutating a stale realm. Acquire a new
+lease after any host generation change. These controls are transient runtime
+intent and do not modify authored `ParticleEffectPlayer` data.
+
 `createVfxRenderInspectSnapshot` and `topologyRecoveryHint` expose structured
 readiness and recovery evidence. Device loss or a stale generation discards the
 affected topology resources and rebuilds them from cooked reflection.

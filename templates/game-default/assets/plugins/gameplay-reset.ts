@@ -26,7 +26,7 @@ import type { TargetHealthHandle } from './target-health';
 import type { TargetDisablingHandle } from './target-disabling';
 import type { DepthOfFieldHandle } from './depth-of-field';
 import type { ChromaticAberrationHandle } from './chromatic-aberration';
-import type { VfxHitLoop } from './vfx-hit-loop';
+import type { GameplayVfx } from './gameplay-vfx';
 import type { AnimatedMaterialTarget } from './animated-target-material';
 import { resetAnimatedMaterial } from './animated-target-material';
 import type { MultiWorldOverlay } from './multi-world-overlay';
@@ -89,7 +89,8 @@ type ResetGameplayArgs = {
   readonly gameplayAudio: GameplayAudio | undefined;
   readonly materialElapsedOriginKey: string;
   readonly animatedMaterial: AnimatedMaterialTarget | undefined;
-  readonly vfxHitLoop: VfxHitLoop;
+  readonly vfxHitLoop: GameplayVfx;
+  readonly gameplayVfx: GameplayVfx;
   readonly setProjectileVisual: (visual: 'mesh' | 'sprite' | 'sprite-lit') => void;
   readonly resetMission: () => void;
 };
@@ -165,6 +166,7 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     args.world.insertResource(args.materialElapsedOriginKey, args.world.getResource(Time).elapsed);
     if (args.animatedMaterial) resetAnimatedMaterial(args.world, args.animatedMaterial);
     args.vfxHitLoop.reset();
+    args.gameplayVfx.stopHostile();
     args.spriteAtlasLoop?.reset();
     args.setProjectileVisual('mesh');
   };

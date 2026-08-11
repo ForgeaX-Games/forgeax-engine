@@ -1,5 +1,5 @@
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { err, FixedUpdate, ok, type World } from '@forgeax/engine-ecs';
+import { type EntityHandle, err, FixedUpdate, ok, type World } from '@forgeax/engine-ecs';
 import type { MaterialAsset, Result } from '@forgeax/engine-types';
 import type {
   VfxDataInterfaceError,
@@ -8,8 +8,11 @@ import type {
   VfxDataInterfaceResolution,
   VfxGpuPlayerInspectSnapshot,
   VfxGpuRuntimeDiagnostic,
+  VfxReplayInput,
+  VfxValueMap,
 } from '@forgeax/engine-vfx';
 import {
+  ParticleEffectPlayer,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
   vfxGpuEffectPackLoader,
@@ -38,10 +41,45 @@ export interface VfxRuntimeHostError {
   readonly detail: { readonly cause: unknown };
 }
 
+export interface VfxRuntimeHostControlError {
+  readonly code:
+    | 'vfx-host-control-world-detached'
+    | 'vfx-host-control-stale-generation'
+    | 'vfx-host-control-runtime-unavailable'
+    | 'vfx-host-control-player-unavailable';
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: {
+    readonly requestedGeneration?: number;
+    readonly currentGeneration?: number;
+    readonly player?: EntityHandle;
+  };
+}
+
+export interface VfxRuntimeHostControl {
+  readonly generation: number;
+  replay(input: {
+    readonly player: EntityHandle;
+    readonly replayInput?: VfxReplayInput<VfxValueMap>;
+  }): Result<{ readonly state: 'queued'; readonly generation: number }, VfxRuntimeHostControlError>;
+  setEmitterSessionEnabled(input: {
+    readonly player: EntityHandle;
+    readonly emitterId: string;
+    readonly enabled: boolean;
+  }): Result<
+    {
+      readonly state: 'enabled' | 'disabled';
+      readonly generation: number;
+    },
+    VfxRuntimeHostControlError
+  >;
+}
+
 export interface VfxRuntimeHost {
   readonly feature: ReturnType<typeof gpuParticleRenderFeature>;
   readonly dataInterfaces: VfxDataInterfaceRegistry;
   inspect(world: World): VfxRuntimeHostInspectSnapshot | undefined;
+  acquireControl(world: World): Result<VfxRuntimeHostControl, VfxRuntimeHostControlError>;
   resolveDataInterfaces(input: {
     readonly requirements: readonly VfxDataInterfaceRequirement[];
     readonly generation: number;
@@ -68,6 +106,15 @@ function failure(
   cause: unknown,
 ): VfxRuntimeHostError {
   return { code, expected, hint, detail: { cause } };
+}
+
+function controlFailure(
+  code: VfxRuntimeHostControlError['code'],
+  expected: string,
+  hint: string,
+  detail: VfxRuntimeHostControlError['detail'] = {},
+): VfxRuntimeHostControlError {
+  return { code, expected, hint, detail };
 }
 
 export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntimeHost {
@@ -107,6 +154,83 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
         players: runtime.inspectPlayers(),
         diagnostics: runtime.diagnostics(),
       });
+    },
+    acquireControl: (world) => {
+      const attached = worlds.get(world);
+      if (attached === undefined) {
+        return err(
+          controlFailure(
+            'vfx-host-control-world-detached',
+            'an attached VFX Runtime World',
+            'attach the World to this VfxRuntimeHost before acquiring controls',
+          ),
+        );
+      }
+      const requestedGeneration = attached.generation;
+      const withRuntime = <T>(
+        player: EntityHandle,
+        action: (runtime: VfxGpuRuntime) => T,
+      ): Result<T, VfxRuntimeHostControlError> => {
+        const current = worlds.get(world);
+        if (current === undefined) {
+          return err(
+            controlFailure(
+              'vfx-host-control-world-detached',
+              `VFX host generation ${requestedGeneration} to remain attached`,
+              'reacquire controls after the World is attached again',
+              { requestedGeneration },
+            ),
+          );
+        }
+        if (current.generation !== requestedGeneration) {
+          return err(
+            controlFailure(
+              'vfx-host-control-stale-generation',
+              `VFX host generation ${requestedGeneration}`,
+              'discard this stale control lease and acquire one from the current host generation',
+              { requestedGeneration, currentGeneration: current.generation },
+            ),
+          );
+        }
+        if (!world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) {
+          return err(
+            controlFailure(
+              'vfx-host-control-runtime-unavailable',
+              'the attached World to own its VFX GPU runtime resource',
+              'repair the host attachment before retrying the preview command',
+              { requestedGeneration, currentGeneration: current.generation },
+            ),
+          );
+        }
+        if (!world.get(player, ParticleEffectPlayer).ok) {
+          return err(
+            controlFailure(
+              'vfx-host-control-player-unavailable',
+              'a live entity with ParticleEffectPlayer in the attached World',
+              'discard the stale player handle or target a VFX player owned by this World',
+              { requestedGeneration, currentGeneration: current.generation, player },
+            ),
+          );
+        }
+        return ok(action(world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY)));
+      };
+      const control: VfxRuntimeHostControl = {
+        generation: requestedGeneration,
+        replay: ({ player, replayInput }) =>
+          withRuntime(player, (runtime) => {
+            runtime.replay(player, replayInput);
+            return Object.freeze({ state: 'queued' as const, generation: requestedGeneration });
+          }),
+        setEmitterSessionEnabled: ({ player, emitterId, enabled }) =>
+          withRuntime(player, (runtime) => {
+            runtime.setEmitterSessionEnabled(player, emitterId, enabled);
+            return Object.freeze({
+              state: enabled ? ('enabled' as const) : ('disabled' as const),
+              generation: requestedGeneration,
+            });
+          }),
+      };
+      return ok(Object.freeze(control));
     },
     resolveDataInterfaces: ({ requirements, generation }) =>
       dataInterfaces.resolve(requirements, generation),

@@ -16,6 +16,7 @@ import type { ProjectilePresentation } from './projectile-presentation';
 import type { SentinelEncounterReadiness } from './sentinel-authorship';
 import { GAME_DEFAULT_GAMEPLAY_CONFIG, type GameplayConfig } from './resources/gameplay';
 import { spawnSharedProjectile } from './systems/projectile-simulation';
+import type { GameplayVfx } from './gameplay-vfx';
 
 export const SENTINEL_TELEGRAPH_TICKS = 45;
 export const SENTINEL_COOLDOWN_TICKS = 90;
@@ -115,6 +116,7 @@ export function createSentinelRangedThreat(args: {
   readonly projectileEntities: () => readonly EntityHandle[];
   readonly consumeProjectile: (entity: EntityHandle) => void;
   readonly onSpawn: () => void;
+  readonly vfx?: GameplayVfx;
 }): SentinelRangedThreat {
   const originalPresentation = args.world.get(args.entity, TargetPresentation);
   const originalMaterials = originalPresentation.ok
@@ -154,6 +156,7 @@ export function createSentinelRangedThreat(args: {
       if (projectileAllegianceFromValue(projectile.value.allegiance) !== 'hostile') continue;
       args.consumeProjectile(entity);
     }
+    args.vfx?.stopHostile();
   };
   const reset = (): void => {
     cleanupHostileProjectiles();
@@ -209,11 +212,14 @@ export function createSentinelRangedThreat(args: {
           telegraphTicks: config.sentinel.telegraphTicks,
           cooldownTicks: config.sentinel.cooldownTicks,
         });
-        writeCadence(next);
-        if (next.shotsFired === previous.shotsFired) return;
         const sx = sentinelTransform.value.pos[0] ?? 0;
         const sy = (sentinelTransform.value.pos[1] ?? 0) + 0.45;
         const sz = sentinelTransform.value.pos[2] ?? 0;
+        writeCadence(next);
+        if (next.mode === 'telegraph' && previous.mode !== 'telegraph') {
+          args.vfx?.beginTelegraph([sx, sy, sz]);
+        }
+        if (next.shotsFired === previous.shotsFired) return;
         const dx = next.aim[0] - sx;
         const dy = next.aim[1] - sy;
         const dz = next.aim[2] - sz;
@@ -221,7 +227,7 @@ export function createSentinelRangedThreat(args: {
         if (length <= 0.001) return;
         const direction: readonly [number, number, number] = [dx / length, dy / length, dz / length];
         const rotation = quat.fromUnitVectors(quat.create(), [0, 1, 0], direction);
-        spawnSharedProjectile(commands, {
+        const projectile = spawnSharedProjectile(commands, {
           source: args.entity,
           allegiance: 'hostile',
           position: [sx + direction[0] * 0.75, sy + direction[1] * 0.75, sz + direction[2] * 0.75],
@@ -238,7 +244,9 @@ export function createSentinelRangedThreat(args: {
           halfHeight: config.projectile.halfHeight,
           mesh: args.presentation.projectileMesh,
           material: args.presentation.hostileProjectileMaterial,
+          ...(args.vfx === undefined ? {} : { presentation: args.vfx.flightPresentation() }),
         });
+        args.vfx?.attachFlight(projectile);
         args.onSpawn();
       },
     }).unwrap();

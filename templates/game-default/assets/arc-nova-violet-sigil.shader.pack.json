@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "41f1e2a0-4d1e-4f71-9c55-000000000114",
+      "kind": "material",
+      "name": "Arc Nova Violet Shock",
+      "sourceKey": "arc-nova-violet-sigil.wgsl",
+      "payload": {
+        "kind": "material",
+        "passes": [
+          {
+            "name": "particle-billboard",
+            "program": {
+              "module": "boss_lightning_vfx::arc_nova_violet_sigil",
+              "vertexEntry": "vs_main",
+              "fragmentEntry": "fs_main"
+            },
+            "renderState": {
+              "cullMode": "none",
+              "depthCompare": "always",
+              "depthWriteEnabled": false,
+              "queue": 4000,
+              "blend": {
+                "color": {
+                  "srcFactor": "one",
+                  "dstFactor": "one",
+                  "operation": "add"
+                },
+                "alpha": {
+                  "srcFactor": "one",
+                  "dstFactor": "one-minus-src-alpha",
+                  "operation": "add"
+                }
+              }
+            }
+          }
+        ],
+        "values": {
+          "baseColor": [
+            0.3,
+            0.025,
+            1.0,
+            1.0
+          ],
+          "metallic": 0.42,
+          "roughness": 0.07,
+          "emissive": [
+            0.28,
+            0.015,
+            1.0
+          ],
+          "emissiveIntensity": 4.2,
+          "clearcoat": 1.0,
+          "clearcoatRoughness": 0.025
+        }
+      },
+      "refs": []
+    }
+  ]
+}

@@ -10,6 +10,9 @@ import { verifyDemoCapture } from '../../../../shared/scripts/rhi-debug-verify.m
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+const CSM_ATLAS_TILE_SIZE = 2048;
+const CSM_ATLAS_TILES_PER_SIDE = 2;
+
 await verifyDemoCapture({
   pkg: '@forgeax/app-learn-render-5-advanced-lighting-3-3-csm',
   label: 'learn-render 5.3.3 csm',
@@ -55,6 +58,7 @@ function assertCsmCapture(report) {
   ) {
     throw new Error(`cascade atlas lineage is not 4096x4096 depth32float: ${JSON.stringify(depthTexture?.desc)}`);
   }
+  assertCsmAtlasTileViewports(events, passes);
   for (const pass of passes) {
     const begin = events.indexOf(pass);
     const end = events.findIndex((event, index) => index > begin && event.kind === 'endRenderPass');
@@ -72,6 +76,92 @@ function assertCsmCapture(report) {
   if (depthEntry?.texture?.sampleType !== 'depth' || depthEntry.texture.viewDimension !== '2d') {
     throw new Error('cascade overlay BGL does not declare a 2d depth read');
   }
+}
+
+function assertCsmAtlasTileViewports(events, depthPasses) {
+  const actual = depthPasses.map((pass) => {
+    const viewport = events.find(
+      (event) => event.kind === 'setViewport' && event.passHandleId === pass.passHandleId,
+    );
+    if (viewport === undefined) {
+      throw new Error(`cascade pass ${pass.passHandleId} does not set an atlas viewport`);
+    }
+    return {
+      x: viewport.x,
+      y: viewport.y,
+      w: viewport.w,
+      h: viewport.h,
+      minDepth: viewport.minDepth,
+      maxDepth: viewport.maxDepth,
+    };
+  });
+  const expected = actual.map((_, index) => ({
+    x: (index % CSM_ATLAS_TILES_PER_SIDE) * CSM_ATLAS_TILE_SIZE,
+    y: Math.floor(index / CSM_ATLAS_TILES_PER_SIDE) * CSM_ATLAS_TILE_SIZE,
+    w: CSM_ATLAS_TILE_SIZE,
+    h: CSM_ATLAS_TILE_SIZE,
+    minDepth: 0,
+    maxDepth: 1,
+  }));
+  const gated = actual.map((viewport) => ({ ...viewport }));
+  if (process.env.FALSIFY === 'force-csm-atlas-tile-duplicate') {
+    gated[3] = { ...gated[2] };
+    console.log('[csm] FALSIFY=force-csm-atlas-tile-duplicate -- duplicated cascade 2 viewport');
+  }
+  const mismatch = gated.findIndex((viewport, index) =>
+    Object.keys(expected[index]).some((key) => viewport[key] !== expected[index][key]),
+  );
+  if (mismatch >= 0) {
+    throw new Error(
+      `cascade atlas tile ${mismatch} viewport is not the derived 2x2 layout: ` +
+        `${JSON.stringify({ actual: gated, expected })}`,
+    );
+  }
+  console.log(
+    `[csm] atlas tiles=${JSON.stringify(actual.map(({ x, y }) => [x, y]))} ` +
+      `tileSize=${CSM_ATLAS_TILE_SIZE}`,
+  );
+}
+
+function assertCsmAtlasSamplerFormula(shaderCode) {
+  let gated = shaderCode;
+  if (process.env.FALSIFY === 'force-csm-atlas-sampler-tile-formula') {
+    gated = gated.replace(
+      /let\s+_e\d+\s*=\s*_atlasTileOrigin[^;]+;/,
+      'let _e0 = vec2<f32>(0f);',
+    );
+    console.log(
+      '[csm] FALSIFY=force-csm-atlas-sampler-tile-formula -- replaced sampler tile origin',
+    );
+  }
+  const compact = gated.replace(/\s+/g, '');
+  const atlasStart = compact.indexOf('fn_atlasTileOrigin');
+  const sampleStart = compact.indexOf('fn_sampleShadowForCascade');
+  const sampleEnd = compact.indexOf('fnevalDirectional', sampleStart);
+  if (atlasStart < 0 || sampleStart <= atlasStart || sampleEnd <= sampleStart) {
+    throw new Error('compiled CSM shader atlas sampler function boundaries are missing');
+  }
+  const atlas = compact.slice(atlasStart, sampleStart);
+  const sample = compact.slice(sampleStart, sampleEnd);
+  const required = [
+    [/fn_atlasTileOrigin[^)]*\)->vec2<f32>/, atlas],
+    [/select\(2u,1u,\(count[^)]*<=1u\)\)/, atlas],
+    [/layer[^;]*%tilesPerSide/, atlas],
+    [/layer[^;]*\/tilesPerSide/, atlas],
+    [/_atlasTileOrigin[^;]+;/, sample],
+    [/lettileUv=vec2<f32>\([^;]*projCoords\.x[^;]*projCoords\.y[^;]*\);/, sample],
+    [/letuv_\d+=\(\(tileUv\*inv_\d+\)\+_e\d+\);/, sample],
+    [/lettileLo=\(_e\d+\+texel_\d+\);/, sample],
+    [/lettileHi=\(\(_e\d+\+vec2\(inv_\d+\)\)-texel_\d+\);/, sample],
+    [/letoffsetUv=clamp\(\(uv_\d+\+[^;]*texel_\d+\)\),tileLo,tileHi\);/, sample],
+  ];
+  const missing = required.findIndex(([pattern, source]) => !pattern.test(source));
+  if (missing >= 0) {
+    throw new Error(`CSM atlas sampler formula is missing source term ${missing}`);
+  }
+  console.log(
+    '[csm] sampler lineage layer->tileOrigin->atlasUv->inTilePcf=accepted',
+  );
 }
 
 /** @param {{ pixels: Uint8Array, width: number, height: number }} input */
@@ -147,6 +237,7 @@ function assertCsmTape({ tape }) {
       event.colorAttachmentViewHandleIds.length === 0 &&
       typeof event.depthStencilViewHandleId === 'string',
   );
+  assertCsmAtlasTileViewports(events, depthPasses);
   const depthViewId = depthPasses[0]?.depthStencilViewHandleId;
   const viewBgl = events.find(
     (event) => event.kind === 'createBindGroupLayout' && event.desc?.label === 'pbr-view-bgl',
@@ -320,6 +411,7 @@ function assertCsmTape({ tape }) {
   ) {
     throw new Error(`CSM receiver shader does not retain cascade selection/atlas sampling: ${receiverShader?.handleId}`);
   }
+  assertCsmAtlasSamplerFormula(receiverShader.wgslCode);
   console.log(
     `[csm] receiver lineage selectors=${JSON.stringify(selectorValues)} ` +
       `atlas=${depthViewId} draws=${receiverBody.filter((event) => event.kind === 'drawIndexed').length}`,

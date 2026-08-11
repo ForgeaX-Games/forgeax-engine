@@ -10,7 +10,7 @@ import { installAudioEvidence } from './audio-evidence';
 import { installGameplayState, type GameplayStateHandle } from './gameplay-state';
 import { installDebugAxes, type DebugAxesHandle } from './debug-axes';
 import { createWorldScoreText, type WorldScoreTextHandle } from './world-score-text';
-import { createVfxHitLoop, type VfxHitLoop } from './vfx-hit-loop';
+import { createGameplayVfx, type GameplayVfx } from './gameplay-vfx';
 import { installMultiWorldOverlay, type MultiWorldOverlay } from './multi-world-overlay';
 import { targetProfilePoints } from './target-profile-loop';
 import { scoringPoints } from './scoring-target';
@@ -47,7 +47,8 @@ import {
 export type GameplaySession = {
   readonly cameraController: CameraController;
   readonly projectilePresentation: ProjectilePresentation;
-  readonly vfxHitLoop: VfxHitLoop;
+  readonly vfxHitLoop: GameplayVfx;
+  readonly gameplayVfx: GameplayVfx;
   readonly multiWorldOverlay: MultiWorldOverlay | undefined;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
   readonly changeDetection: GameplayChangeDetectionHandle;
@@ -91,14 +92,16 @@ export async function createGameplaySession(
   });
   const { camera, topQuaternion, hud, settingsState, depthOfField, chromaticAberration, getMode, setMode } = cameraController;
   const vfxTarget = targets.primaryTarget();
-  const vfxHitLoop = await createVfxHitLoop({
+  const gameplayVfx = await createGameplayVfx({
     world,
     ...(host?.assets ? { assets: host.assets } : {}),
     ...(host?.renderer ? { renderer: host.renderer } : {}),
     ...(vfxTarget === undefined ? {} : { target: vfxTarget }),
+    ...(targets.sentinel.available ? { sentinel: targets.sentinel.identity.sentinel } : {}),
     camera,
   });
-  host?.registerCleanup?.(() => vfxHitLoop.dispose());
+  const vfxHitLoop = gameplayVfx;
+  host?.registerCleanup?.(() => gameplayVfx.dispose());
   const multiWorldOverlay = host?.app === undefined ? undefined : installMultiWorldOverlay(host.app, host.registerCleanup);
   const worldScoreText = await createWorldScoreText(world, host?.assets);
   host?.registerCleanup?.(() => worldScoreText?.dispose());
@@ -195,6 +198,7 @@ export async function createGameplaySession(
   installGameplayCommandCounters(world);
   const consumeProjectile = (entity: EntityHandle): void => {
     if (!world.get(entity, Projectile).ok) return;
+    gameplayVfx.stopFlight(entity);
     projectilePresentation.spriteAtlasLoop?.untrack(entity);
     world.despawn(entity).unwrap();
     recordGameplayCommand(world, 'despawned');
@@ -227,6 +231,7 @@ export async function createGameplaySession(
         presentation: projectilePresentation,
         projectileEntities,
         consumeProjectile,
+        vfx: gameplayVfx,
         onSpawn: () => recordGameplayCommand(world, 'spawned'),
       });
   const debugAxes = installDebugAxes({
@@ -283,6 +288,7 @@ export async function createGameplaySession(
     materialElapsedOriginKey: GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN,
     animatedMaterial: targets.animatedMaterial,
     vfxHitLoop,
+    gameplayVfx,
     setProjectileVisual: projectilePresentation.setProjectileVisual,
     resetMission: () => {
       cameraController.hud.resetTransientFeedback();
@@ -297,7 +303,7 @@ export async function createGameplaySession(
   const gameplayState = installGameplayState({
     world,
     reset: resetGameplay,
-    onTerminal: () => sentinel?.cleanupHostileProjectiles(),
+    onTerminal: () => { gameplayVfx.stopHostile(); sentinel?.cleanupHostileProjectiles(); },
     onPhaseChange: cameraController.hud.setPhase,
   });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
@@ -306,6 +312,7 @@ export async function createGameplaySession(
     cameraController,
     projectilePresentation,
     vfxHitLoop,
+    gameplayVfx,
     multiWorldOverlay,
     worldScoreText,
     changeDetection,

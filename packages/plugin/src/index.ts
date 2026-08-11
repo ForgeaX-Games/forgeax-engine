@@ -224,30 +224,37 @@ interface PluginErrorConstructor {
 export const PluginError: PluginErrorConstructor =
   PluginErrorClass as unknown as PluginErrorConstructor;
 
+const pluginErrorPolicy = {
+  'duplicate-plugin': {
+    expected: 'each plugin name must be unique within the merged plugins list',
+    hint: 'remove or rename the duplicate plugin; check both default and user-provided plugins for name collisions',
+  },
+  'plugin-build-failed': {
+    expected: 'every plugin.build(world) call must return Result.ok',
+    hint: 'inspect detail.failures for the complete failure list; check each plugin build implementation for missing resources or invalid world state',
+  },
+} satisfies {
+  [Code in PluginErrorCode]: {
+    readonly expected: string;
+    readonly hint: string;
+  };
+};
+
 /**
  * `expected` table -- the engine-side invariant that was violated when each
  * code surfaces.
  *
- * 2 keys; bidirectional assertion in `__tests__/plugin-error.test.ts` locks
- * the count and non-emptiness of every entry.
+ * Derived from the private exhaustive policy owner; the focused policy-owner
+ * proof locks its exact membership, values, order, and property descriptors.
  */
-export const PLUGIN_EXPECTED: Readonly<Record<PluginErrorCode, string>> = {
-  'duplicate-plugin': 'each plugin name must be unique within the merged plugins list',
-  'plugin-build-failed': 'every plugin.build(world) call must return Result.ok',
-};
+export const PLUGIN_EXPECTED: Readonly<Record<PluginErrorCode, string>> = Object.fromEntries(
+  Object.entries(pluginErrorPolicy).map(([code, policy]) => [code, policy.expected]),
+) as Readonly<Record<PluginErrorCode, string>>;
 
-/**
- * `hint` table -- actionable recovery guidance per code (charter P3).
- *
- * 2 keys; bidirectional assertion in `__tests__/plugin-error.test.ts` locks
- * the count and non-emptiness of every entry.
- */
-export const PLUGIN_ERROR_HINTS: Readonly<Record<PluginErrorCode, string>> = {
-  'duplicate-plugin':
-    'remove or rename the duplicate plugin; check both default and user-provided plugins for name collisions',
-  'plugin-build-failed':
-    'inspect detail.failures for the complete failure list; check each plugin build implementation for missing resources or invalid world state',
-};
+/** Actionable recovery guidance per code (charter P3), derived from the same owner. */
+export const PLUGIN_ERROR_HINTS: Readonly<Record<PluginErrorCode, string>> = Object.fromEntries(
+  Object.entries(pluginErrorPolicy).map(([code, policy]) => [code, policy.hint]),
+) as Readonly<Record<PluginErrorCode, string>>;
 
 /**
  * Type guard for narrowing an unknown error to PluginError.

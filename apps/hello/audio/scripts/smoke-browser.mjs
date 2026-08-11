@@ -12,6 +12,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
+import { AUDIO_GESTURE_READY_STATES } from './browser-readiness.mjs';
 import { extractViteLocalUrl } from './vite-local-url.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -189,8 +190,11 @@ try {
         { timeout: READINESS_TIMEOUT_MS, polling: 100 },
       );
       await page.waitForFunction(
-        () => document.querySelector('#audio-status')?.textContent?.includes('audio='),
-        undefined,
+        (readyStates) => {
+          const text = document.querySelector('#audio-status')?.textContent ?? '';
+          return readyStates.some((state) => text.includes(state));
+        },
+        AUDIO_GESTURE_READY_STATES,
         { timeout: READINESS_TIMEOUT_MS, polling: 100 },
       );
     } catch (error) {
