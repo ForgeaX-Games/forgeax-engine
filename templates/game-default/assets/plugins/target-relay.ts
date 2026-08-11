@@ -1,4 +1,4 @@
-import { Disabled, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { Disabled, defineRecoverableResource, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { Name, Transform } from '@forgeax/engine-scene';
@@ -52,6 +52,12 @@ export function createTargetRelay(
   variation?: TargetVariation,
 ): TargetRelayHandle {
   world.insertResource(TARGET_RELAY_RESOURCE, initialState());
+  world.registerRecoverableResource(
+    defineRecoverableResource<TargetRelayState>(TARGET_RELAY_RESOURCE, {
+      schemaFingerprint: 'game-default.target-relay.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
   const read = (): TargetRelayState => world.getResource<TargetRelayState>(TARGET_RELAY_RESOURCE);
   const write = (state: TargetRelayState): void => world.insertResource(TARGET_RELAY_RESOURCE, state);
   const targetForStep = (step: number): EntityHandle | undefined => scoringTargetEntities(query)

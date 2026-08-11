@@ -153,6 +153,7 @@ export async function createCameraController(args: CameraControllerArgs): Promis
   host?.registerCleanup?.(() => hud.dispose());
 
   world.insertResource('gameDefaultSettings', settingsState);
+  world.registerSimulationTransientResource('gameDefaultSettings');
   if (uiHost) {
     settings = mountSettings(settingsAsset, uiHost, settingsState, canvas, settingsLoad.ok ? undefined : settingsLoad.error);
   }

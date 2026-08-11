@@ -56,15 +56,12 @@ export function registerSimulationParticipants(
   });
 }
 
-export function createSimulationInspection(
-  world: World,
-  assembly: SimulationParticipantAssembly,
-): () => SimulationInspectionSummary {
+export function createSimulationInspection(world: World): () => SimulationInspectionSummary {
   return () => {
     const fixed = world.getResource(FixedTime);
     const record = world.simulationRecord();
     let readinessError: SimulationError | undefined;
-    const participants = assembly.participants.map((participant) => {
+    const participants = world.simulationParticipants().map((participant) => {
       let ready = false;
       try {
         ready = participant.isReady();

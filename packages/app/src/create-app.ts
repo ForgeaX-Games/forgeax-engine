@@ -623,6 +623,9 @@ async function createAppFromCanvas(
   if (opts?.input !== undefined) {
     world.insertResource(INPUT_BACKEND_KEY, opts.input);
   }
+  if (inputBackend !== undefined) {
+    world.registerSimulationTransientResource(INPUT_BACKEND_KEY);
+  }
 
   // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
   // audioPlugin() in plugins[]. This preserves the M2 contract (audioPlugin
@@ -635,6 +638,7 @@ async function createAppFromCanvas(
   if (hasAudioPlugin) {
     audioBackend = createWebAudioBackend();
     world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
+    world.registerSimulationTransientResource(AUDIO_ENGINE_RESOURCE_KEY);
   }
 
   // Step 3.2 (D-2): canvas form runs the full default plugin set merged with
@@ -741,7 +745,7 @@ async function createAppFromCanvas(
     },
   );
 
-  const simulationInspection = createSimulationInspection(world, simulationAssembly.value);
+  const simulationInspection = createSimulationInspection(world);
 
   // Step 3.3: Remote eval server auto-start (deferred from Step 2.4 so
   // World is available). Dynamic import keeps @forgeax/engine-app free
@@ -1088,7 +1092,7 @@ async function createAppFromAssemble(
   if (!simulationAssembly.ok) {
     return err(simulationAssembly.error);
   }
-  const simulationInspection = createSimulationInspection(args.world, simulationAssembly.value);
+  const simulationInspection = createSimulationInspection(args.world);
   const remoteHandle = shouldStartRemote
     ? await startRemoteServer(
         args.world,
@@ -1225,6 +1229,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   // renderer-derived resource (not a plugin), so it stays in the builder.
   if (renderer.assets !== undefined) {
     world.insertResource(ASSET_REGISTRY_RESOURCE_KEY, renderer.assets);
+    world.registerSimulationTransientResource(ASSET_REGISTRY_RESOURCE_KEY);
   }
 
   // physics resolver for app.physics (D-5): physicsPlugin inserts the
@@ -1430,7 +1435,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       return ok(undefined);
     },
     pluginRegistry: args.pluginRegistry,
-    simulationInspection: createSimulationInspection(world, simulationAssembly),
+    simulationInspection: createSimulationInspection(world),
     ...(inputBackend !== undefined ? { input: inputBackend } : {}),
     ...(audioBackend !== undefined ? { audio: audioBackend } : {}),
     get physics():

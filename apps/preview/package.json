@@ -28,6 +28,7 @@
     "smoke:asset-loop": "node scripts/smoke-asset-loop.mjs",
     "smoke:asset-loop-production": "pnpm --dir ../.. build:app preview && FORGEAX_ASSET_LOOP_MODE=production node scripts/smoke-asset-loop.mjs",
     "smoke:templates": "node scripts/smoke-templates.mjs",
+    "smoke:simulation-record-restore": "pnpm --dir ../.. exec vitest run --config vitest.browser.config.ts --project=browser apps/preview/__tests__/simulation-record-restore.browser.test.ts --maxWorkers=1 --teardownTimeout=5000",
     "smoke:inspection-recovery": "node scripts/smoke-inspection-recovery.mjs",
     "smoke:vfx-charge": "node scripts/smoke-vfx-charge.mjs",
     "smoke:vfx-charge-production": "pnpm --dir ../.. build:app preview && FORGEAX_VFX_CHARGE_MODE=production node scripts/smoke-vfx-charge.mjs",

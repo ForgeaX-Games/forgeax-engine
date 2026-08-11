@@ -3,6 +3,7 @@ import {
   type Query,
   World,
   defineComponent,
+  defineRecoverableResource,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
 import { ScoringTarget, scoringTargetEntities, type ScoringTargetQuery } from './scoring-target';
@@ -33,6 +34,12 @@ export function installTargetDisabling(world: World, targetQuery: ScoringTargetQ
   const disabledQuery = world.query({ with: [TargetDisabling, Disabled] }).unwrap();
   for (const entity of scoringTargetEntities(targetQuery)) world.addComponent(entity, { component: TargetDisabling, data: {} }).unwrap();
   world.insertResource(GAME_DEFAULT_TARGET_DISABLING_WITNESS, { disableEvents: 0 });
+  world.registerRecoverableResource(
+    defineRecoverableResource<{ disableEvents: number }>(GAME_DEFAULT_TARGET_DISABLING_WITNESS, {
+      schemaFingerprint: 'game-default.target-disabling-witness.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
   const state = world.getResource<{ disableEvents: number }>(GAME_DEFAULT_TARGET_DISABLING_WITNESS);
 
   const disable = (entity: EntityHandle): void => {

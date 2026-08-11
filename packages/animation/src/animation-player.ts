@@ -1,7 +1,7 @@
 // @forgeax/engine-animation - AnimationPlayer component (variable N-way SoA slots).
 //
 // Schema (10 fields, SoA variable arrays):
-//   clips:   'array<shared<AnimationClip>>'   (layer-3 zero — empty, no slot active)
+//   clips:   'array<shared<AnimationClip>>'   (simulation-transient asset binding)
 //   times:   'array<f32>'                      (layer-3 zero — empty Float32Array)
 //   weights: 'array<f32>'                      (layer-3 zero — empty Float32Array)
 //   speeds:  'array<f32>'                      (layer-3 zero — empty Float32Array)
@@ -67,11 +67,15 @@
 import { defineComponent } from '@forgeax/engine-ecs';
 
 export const AnimationPlayer = defineComponent('AnimationPlayer', {
-  clips: { type: 'array<shared<AnimationClip>>' },
+  // The render/animation owner re-resolves clip assets in the target World;
+  // playback clocks and weights remain portable simulation state.
+  clips: { type: 'array<shared<AnimationClip>>', simulationTransient: true },
   times: { type: 'array<f32>' },
   weights: { type: 'array<f32>' },
   speeds: { type: 'array<f32>' },
-  graph: { type: 'shared<AnimationGraph>' },
+  // The graph evaluator owns this compiled runtime binding; portable playback
+  // controls and derived slots remain available to the simulation record.
+  graph: { type: 'shared<AnimationGraph>', simulationTransient: true },
   nodeWeights: { type: 'array<f32>' },
   nodeTimes: { type: 'array<f32>' },
   nodeSpeeds: { type: 'array<f32>' },

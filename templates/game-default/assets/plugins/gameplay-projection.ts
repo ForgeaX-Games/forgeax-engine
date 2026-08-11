@@ -36,6 +36,7 @@ import type {
 import type { SentinelRangedThreat } from './sentinel-ranged-threat';
 import { GAME_DEFAULT_COMMAND_COUNTERS, type GameplayCommandCounters } from './resources/gameplay';
 import { Projectile, projectileAllegianceFromValue } from './components/gameplay';
+import type { LightingModeHandle } from './lighting-mode';
 
 const COUNTERATTACK_BASELINE = deriveCounterattackPressure(0);
 
@@ -82,6 +83,7 @@ export type GameplayProjectionContext = {
   readonly sentinelReadiness: () => SentinelEncounterReadiness;
   readonly sentinel: SentinelRangedThreat | undefined;
   readonly projectileEntities: () => readonly EntityHandle[];
+  readonly lightingMode: LightingModeHandle;
 };
 
 const EMPTY_VIDEO_TEXTURE = { available: false, active: 'original', swaps: 0, hitReactions: 0, lastHitPlayhead: null, guid: null, name: null, kind: null, url: null } as const;
@@ -137,6 +139,7 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
         return asProjection({
           state: args.gameplayState.snapshot(),
           viewMode: args.getMode(),
+          lighting: args.lightingMode.snapshot(),
           cameraProjection: cameraData.ok && cameraData.value.projection === 1 ? 'orthographic' : 'perspective',
           targetHealth: args.targetHealth.snapshot(),
           targetDisabling: args.targetDisabling.snapshot(),
@@ -359,6 +362,16 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
         const nextEnabled = !args.multiWorldOverlay.snapshot().enabled;
         args.multiWorldOverlay.setEnabled(nextEnabled);
         return asProjection({ enabled: nextEnabled, available: true });
+      },
+    }),
+    projection.registerAction({
+      id: 'game-default.toggle-lighting-mode',
+      title: 'Toggle Day/Night lighting',
+      description: 'Toggle the authored Sun, Skylight, Skybox, and Camera projection through the ECS lighting mode fact.',
+      run: () => {
+        const phase = args.gameplayState.snapshot().phase;
+        if (phase !== 'Play') return asProjection({ mode: args.lightingMode.snapshot().mode, refused: true, phase });
+        return asProjection({ mode: args.lightingMode.toggle() });
       },
     }),
     projection.registerAction({

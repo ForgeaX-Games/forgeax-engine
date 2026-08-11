@@ -128,6 +128,15 @@ export const CameraRig = defineComponent('GameDefaultCameraRig', {
   perspectiveFov: { type: 'f32', default: Math.PI / 3 },
 }, { transient: true });
 
+/** ECS-owned lighting mode fact projected onto the authored scene lights. */
+export const LightingMode = defineComponent('GameDefaultLightingMode', {
+  mode: { type: 'u32', default: 0 },
+}, { transient: true });
+
+export const LIGHTING_MODE_DAY = 0;
+export const LIGHTING_MODE_NIGHT = 1;
+export type LightingModeName = 'Day' | 'Night';
+
 /** Transient target feedback state; material swaps are a render projection of this value. */
 export const HitFlash = defineComponent('GameDefaultHitFlash', {
   remaining: { type: 'f32', default: 0 },

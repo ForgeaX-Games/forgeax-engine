@@ -56,6 +56,10 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   const matHandle = world.allocSharedRef('MaterialAsset', matPayload);
  *   world.spawn({ component: MeshRenderer, data: { materials: [matHandle] } });
  */
-export const MeshRenderer = defineComponent('MeshRenderer', {
-  materials: { type: 'array<shared<MaterialAsset>>', default: [] },
-});
+export const MeshRenderer = defineComponent(
+  'MeshRenderer',
+  {
+    materials: { type: 'array<shared<MaterialAsset>>', default: [] },
+  },
+  { simulationTransient: true },
+);

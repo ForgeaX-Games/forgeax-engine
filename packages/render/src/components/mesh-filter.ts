@@ -55,6 +55,10 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
  *   world.spawn({ component: MeshFilter, data: { assetHandle: HANDLE_CUBE } });
  */
-export const MeshFilter = defineComponent('MeshFilter', {
-  assetHandle: { type: 'shared<MeshAsset>' },
-});
+export const MeshFilter = defineComponent(
+  'MeshFilter',
+  {
+    assetHandle: { type: 'shared<MeshAsset>' },
+  },
+  { simulationTransient: true },
+);

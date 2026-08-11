@@ -1,4 +1,4 @@
-import { Update, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { Update, defineComponent, defineRecoverableResource, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { HudHandle } from './hud';
 import { scoringTargetEntities, type ScoringTargetQuery } from './scoring-target';
 
@@ -40,8 +40,20 @@ export function installGameplayChangeDetection(args: {
     resourceChanges: 0,
     score: 0,
   });
+  world.registerRecoverableResource(
+    defineRecoverableResource<GameplayChangeDetectionWitness>(GAME_DEFAULT_CHANGE_DETECTION_WITNESS, {
+      schemaFingerprint: 'game-default.change-detection-witness.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
   const witness = world.getResource<GameplayChangeDetectionWitness>(GAME_DEFAULT_CHANGE_DETECTION_WITNESS);
   world.insertResource<ScoreResource>(GAME_DEFAULT_SCORE_RESOURCE, { value: 0 });
+  world.registerRecoverableResource(
+    defineRecoverableResource<ScoreResource>(GAME_DEFAULT_SCORE_RESOURCE, {
+      schemaFingerprint: 'game-default.score.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
   let lastResourceChangeTick = -1;
 
   world.addSystem(Update, {

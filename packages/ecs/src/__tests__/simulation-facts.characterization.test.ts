@@ -5,6 +5,7 @@ import { type Component, defineComponent } from '../component';
 import {
   createEntityRemap,
   projectComponentData,
+  projectSimulationComponentData,
   validateProfileComponents,
 } from '../externalization';
 import { FixedUpdate } from '../schedule-token';
@@ -39,6 +40,11 @@ const SimulationTransient = defineComponent(
 
 const SimulationNonPortable = defineComponent('SimulationFactsNonPortable', {
   resource: { type: 'ref' },
+});
+
+const SimulationPresentation = defineComponent('SimulationFactsPresentation', {
+  asset: { type: 'shared<SimulationAsset>', simulationTransient: true },
+  enabled: { type: 'bool', default: true },
 });
 
 function timeFacts(world: World): Record<string, number> {
@@ -115,6 +121,13 @@ describe('M1 ECS simulation facts characterization', () => {
     expect(source).toEqual({ position: [1, 2, 3], target: 17 });
     expect(changedTransient).toEqual(source);
     expect(projectComponentData(SimulationTransient as Component, { value: 9 })).toEqual({});
+  });
+
+  it('keeps scene projection and simulation projection distinct for presentation assets', () => {
+    const raw = { asset: 17, enabled: false };
+
+    expect(projectComponentData(SimulationPresentation, raw)).toEqual(raw);
+    expect(projectSimulationComponentData(SimulationPresentation, raw)).toEqual({ enabled: false });
   });
 
   it('remaps scalar and array entity references through an injected mapping', () => {

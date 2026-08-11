@@ -48,6 +48,10 @@ const SharedRef = defineComponent('TestSharedRef', {
   asset: { type: 'shared<SomeAsset>' },
 });
 
+const SharedArrayRef = defineComponent('TestSharedArrayRef', {
+  assets: { type: 'array<shared<SomeAsset>>' },
+});
+
 const LegacyRef = defineComponent('TestLegacyRef', {
   node: { type: 'ref' },
 });
@@ -128,19 +132,24 @@ describe('m3 — portable value validation: non-portable field type rejection', 
     expect(isFieldPortable('array<f32, 3>')).toBe(true);
   });
 
-  it('(j) bool is portable', () => {
+  it('(j) array<shared<T>> is not portable when its elements are shared refs', () => {
+    expect(isFieldPortable('array<shared<SomeAsset>>')).toBe(false);
+    expect(isFieldPortable('array<shared<SomeAsset>, 2>')).toBe(false);
+  });
+
+  it('(k) bool is portable', () => {
     expect(isFieldPortable('bool')).toBe(true);
   });
 
-  it('(k) enum is portable', () => {
+  it('(l) enum is portable', () => {
     expect(isFieldPortable('enum')).toBe(true);
   });
 
-  it('(l) buffer is portable', () => {
+  it('(m) buffer is portable', () => {
     expect(isFieldPortable('buffer')).toBe(true);
   });
 
-  it('(m) buffer<N> is portable', () => {
+  it('(n) buffer<N> is portable', () => {
     expect(isFieldPortable('buffer<256>')).toBe(true);
   });
 });
@@ -165,7 +174,16 @@ describe('m3 — portable value validation: validateProfileComponents rejects no
     expect(result.errors[0]?.field).toBe('asset');
   });
 
-  it('(c) component with legacy `ref` field is rejected', () => {
+  it('(c) component with array<shared<T>> field is rejected', () => {
+    const result = validateProfileComponents([SharedArrayRef as Component]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]?.code).toBe('field-not-portable');
+    expect(result.errors[0]?.component).toBe('TestSharedArrayRef');
+    expect(result.errors[0]?.field).toBe('assets');
+  });
+
+  it('(d) component with legacy `ref` field is rejected', () => {
     const result = validateProfileComponents([LegacyRef as Component]);
     expect(result.valid).toBe(false);
     expect(result.errors.length).toBe(1);
@@ -174,7 +192,7 @@ describe('m3 — portable value validation: validateProfileComponents rejects no
     expect(result.errors[0]?.field).toBe('node');
   });
 
-  it('(d) component with mixed portable and non-portable fields is rejected', () => {
+  it('(e) component with mixed portable and non-portable fields is rejected', () => {
     // MixedPortable has health (u32, portable) and asset (shared<>, non-portable)
     const result = validateProfileComponents([MixedPortable as Component]);
     expect(result.valid).toBe(false);
@@ -183,13 +201,13 @@ describe('m3 — portable value validation: validateProfileComponents rejects no
     expect(result.errors[0]?.field).toBe('asset');
   });
 
-  it('(e) fully portable component is accepted', () => {
+  it('(f) fully portable component is accepted', () => {
     const result = validateProfileComponents([Portable as Component, WithEntity as Component]);
     expect(result.valid).toBe(true);
     expect(result.errors.length).toBe(0);
   });
 
-  it('(f) each error has structured .expected and .hint', () => {
+  it('(g) each error has structured .expected and .hint', () => {
     const result = validateProfileComponents([UniqueRef as Component]);
     expect(result.errors[0]?.expected).toBeTruthy();
     expect(result.errors[0]?.hint).toBeTruthy();

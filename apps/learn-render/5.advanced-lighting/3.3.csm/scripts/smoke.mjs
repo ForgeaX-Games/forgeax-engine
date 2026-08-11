@@ -27,6 +27,10 @@
 //     cascade 2 and require the final image to change from the all-bands image.
 //   - FALSIFY=force-csm-probe-depth-lit : replace the GPU probe factors with
 //     fully lit values; the sampled-depth contribution gate must turn red.
+//   - FALSIFY=force-csm-probe-raw-depth-sentinel : replace the GPU probe's raw
+//     depth/cascade facts with sentinels; the producer-owned fact gate turns red.
+//   - FALSIFY=force-csm-probe-boundary-layer-shift : shift only the boundary
+//     cascade facts; the split-continuity gate must turn red.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-3-3-csm] backend=<backend>`
@@ -527,19 +531,59 @@ let tightRgba = await readTightRgba('cascadeBlend=0.2');
 // points cover the ground around the near cubes and farther cascade bands;
 // the returned factors are sampled depth evidence, not a CPU reconstruction.
 const csmProbePositions = [
-  [-8, -0.5, -1],
+  [0, -0.5, 4],
+  [0, -0.5, -4],
   [-2, -0.5, -1],
-  [0, -0.5, -1],
-  [2, -0.5, -4],
+  [-3, -0.5, -8],
+  [0, -0.5, -12],
   [0, -0.5, -20],
   [0, -0.5, -40],
 ];
-const csmProbeResults = await app.renderer.debugSampleShadowFactor?.(csmProbePositions);
+// Place paired receivers immediately on the near/far side of each split. The
+// positions use the demo's camera (z=6, forward=-Z), while the renderer owns
+// the actual split values and selector. This fixture only chooses points; it
+// must not reconstruct the cascade result.
+const csmBoundarySplitDepths = Array.from({ length: 3 }, (_, index) => {
+  const t = (index + 1) / 4;
+  const near = 0.1;
+  const far = 50;
+  const lambda = 0.75;
+  return lambda * near * (far / near) ** t + (1 - lambda) * (near + t * (far - near));
+});
+const CSM_BOUNDARY_EPSILON = 0.25;
+const csmBoundaryProbePositions = csmBoundarySplitDepths.flatMap((splitDepth) => [
+  [0, -0.5, 6 - (splitDepth - CSM_BOUNDARY_EPSILON)],
+  [0, -0.5, 6 - (splitDepth + CSM_BOUNDARY_EPSILON)],
+]);
+const csmProbeInput = [...csmProbePositions, ...csmBoundaryProbePositions];
+const csmProbeResults = await app.renderer.debugSampleShadowFactor?.(csmProbeInput);
 if (csmProbeResults === null || csmProbeResults === undefined) {
   console.error('[smoke] FAIL - CSM sampled-depth probe unavailable');
   process.exit(1);
 }
-const csmProbeFactors = csmProbeResults.map(({ shadowFactor }) => shadowFactor);
+const csmBaseProbeResults = csmProbeResults.slice(0, csmProbePositions.length);
+const csmBoundaryResults = csmProbeResults.slice(csmProbePositions.length);
+const csmProbeFactors = csmBaseProbeResults.map(({ shadowFactor }) => shadowFactor);
+const gatedCsmProbeResults = FALSIFY === 'force-csm-probe-raw-depth-sentinel'
+  ? csmProbeResults.map(({ shadowFactor }) => ({
+      shadowFactor,
+      sampledDepth: 1,
+      cascadeIndex: -1,
+      receiverDepth: 2,
+    }))
+  : FALSIFY === 'force-csm-probe-boundary-layer-shift'
+    ? csmProbeResults.map((probe, index) =>
+        index < csmProbePositions.length
+          ? probe
+          : { ...probe, cascadeIndex: (probe.cascadeIndex + 1) % 4 },
+      )
+  : csmProbeResults;
+if (FALSIFY === 'force-csm-probe-raw-depth-sentinel') {
+  console.log('[smoke] FALSIFY=force-csm-probe-raw-depth-sentinel -- replaced raw depth/cascade facts with sentinels');
+}
+console.log(
+  `[smoke] CSM sampled-depth facts=${JSON.stringify(csmProbeResults)}`,
+);
 const gatedCsmProbeFactors = FALSIFY === 'force-csm-probe-depth-lit'
   ? csmProbeFactors.map(() => 1)
   : csmProbeFactors;
@@ -550,15 +594,38 @@ console.log(
   `[smoke] CSM sampled-depth factors=${JSON.stringify(csmProbeFactors)}`,
 );
 const csmProbeExpectations = [
-  { label: 'outside-near', min: 0.9 },
-  { label: 'near-cube-shadow', max: 0.5 },
-  { label: 'near-lit-ground', min: 0.9 },
-  { label: 'second-cube-shadow', max: 0.5 },
-  { label: 'far-lit-ground', min: 0.9 },
-  { label: 'far-cube-shadow', max: 0.5 },
+  { label: 'cascade-0-near-lit', cascade: 0, min: 0.9 },
+  { label: 'cascade-2-mid-lit', cascade: 2, min: 0.9 },
+  { label: 'cascade-1-near-cube-shadow', cascade: 1, max: 0.5 },
+  { label: 'cascade-2-third-cube-shadow', cascade: 2, max: 0.5 },
+  { label: 'cascade-3-far-mid-lit-ground', cascade: 3, min: 0.9 },
+  { label: 'cascade-3-far-lit-ground', cascade: 3, min: 0.9 },
+  { label: 'cascade-3-far-cube-shadow', cascade: 3, max: 0.5 },
 ];
+const perCascadeFactors = new Map();
 for (const [index, expectation] of csmProbeExpectations.entries()) {
+  const probe = gatedCsmProbeResults[index];
   const factor = gatedCsmProbeFactors[index];
+  if (!oneCascade && probe?.cascadeIndex !== expectation.cascade) {
+    throw new Error(
+      `CSM cascade selection mismatch at ${expectation.label}: ` +
+        `selected=${probe?.cascadeIndex} expected=${expectation.cascade}`,
+    );
+  }
+  if (
+    !oneCascade &&
+    (probe === undefined ||
+      !Number.isFinite(probe.sampledDepth) ||
+      probe.sampledDepth < 0 ||
+      probe.sampledDepth > 1 ||
+      !Number.isFinite(probe.receiverDepth) ||
+      probe.receiverDepth < 0 ||
+      probe.receiverDepth > 1)
+  ) {
+    throw new Error(
+      `CSM raw depth witness missing at ${expectation.label}: ${JSON.stringify(probe)}`,
+    );
+  }
   if (
     factor === undefined ||
     (expectation.min !== undefined && factor < expectation.min) ||
@@ -566,11 +633,60 @@ for (const [index, expectation] of csmProbeExpectations.entries()) {
   ) {
     throw new Error(
       `CSM sampled-depth contribution missing at ${expectation.label}: ` +
-        `factor=${factor} expected=${JSON.stringify(expectation)}`,
+      `factor=${factor} expected=${JSON.stringify(expectation)}`,
     );
   }
+  const factors = perCascadeFactors.get(expectation.cascade) ?? [];
+  factors.push(factor);
+  perCascadeFactors.set(expectation.cascade, factors);
+}
+if (!oneCascade) {
+  const gatedBoundaryResults = gatedCsmProbeResults.slice(csmProbePositions.length);
+  const boundaryFacts = [];
+  for (let boundary = 0; boundary < 3; boundary++) {
+    const nearSide = gatedBoundaryResults[boundary * 2];
+    const farSide = gatedBoundaryResults[boundary * 2 + 1];
+    const expectedNear = boundary;
+    const expectedFar = boundary + 1;
+    if (nearSide?.cascadeIndex !== expectedNear || farSide?.cascadeIndex !== expectedFar) {
+      throw new Error(
+        `CSM split-boundary continuity mismatch at boundary ${boundary}: ` +
+          `near=${nearSide?.cascadeIndex} expected=${expectedNear} ` +
+          `far=${farSide?.cascadeIndex} expected=${expectedFar}`,
+      );
+    }
+    for (const [side, probe] of [['near', nearSide], ['far', farSide]]) {
+      if (
+        probe === undefined ||
+        !Number.isFinite(probe.sampledDepth) ||
+        probe.sampledDepth < 0 ||
+        probe.sampledDepth > 1 ||
+        !Number.isFinite(probe.receiverDepth) ||
+        probe.receiverDepth < 0 ||
+        probe.receiverDepth > 1
+      ) {
+        throw new Error(
+          `CSM split-boundary raw depth witness missing at boundary ${boundary}/${side}: ` +
+            JSON.stringify(probe),
+        );
+      }
+    }
+    boundaryFacts.push({ near: nearSide?.cascadeIndex, far: farSide?.cascadeIndex });
+  }
+  console.log(`[smoke] CSM split-boundary facts=${JSON.stringify(boundaryFacts)}`);
+  console.log('[smoke] CSM split-boundary continuity accepted: near-side=i, far-side=i+1');
 }
 console.log('[smoke] CSM sampled-depth atlas resource contribution accepted: lit=3 shadowed=3');
+if (!oneCascade) {
+  const representedCascades = [...perCascadeFactors.keys()].sort();
+  if (representedCascades.join(',') !== '0,1,2,3') {
+    throw new Error(`CSM sampled-depth probe coverage omitted a cascade: ${representedCascades.join(',')}`);
+  }
+  console.log(
+    `[smoke] CSM sampled-depth per-cascade contribution accepted: cascades=${representedCascades.join(',')} ` +
+      `factors=${JSON.stringify([...perCascadeFactors.entries()])}`,
+  );
+}
 
 // Select one real cascade through the existing overlay mode UBO and prove the
 // selected-layer highlight changes the submitted color image. This is a

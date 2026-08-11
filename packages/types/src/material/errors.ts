@@ -140,40 +140,78 @@ export type MaterialError = {
   [C in MaterialErrorCode]: MaterialErrorFor<C>;
 }[MaterialErrorCode];
 
-export const MATERIAL_ERROR_EXPECTED: Readonly<Record<MaterialErrorCode, string>> = {
-  'material-parent-not-found': 'every parent GUID resolves to a MaterialAsset',
-  'material-circular-inheritance': 'the parent chain is acyclic',
-  'material-no-effective-pass': 'the resolved material has at least one pass',
-  'material-value-unknown': 'every value name is declared by the effective contract',
-  'material-value-type-mismatch': 'each value matches its declared parameter type',
-  'material-contract-program-mismatch': 'the program satisfies the material contract',
-  'shader-module-id-missing': 'each WGSL source declares a module ID',
-  'shader-module-id-duplicate': 'each module ID has one source provenance',
-  'shader-module-not-found': 'every referenced module exists in the source catalog',
-  'shader-module-namespace-reserved': 'user modules use a non-reserved namespace',
-  'material-reflection-binding-mismatch': 'reflection matches the material contract bindings',
-  'material-specialization-not-cooked': 'the requested specialization has a cooked artifact',
-  'material-specialization-stale-generation':
-    'all specialization dependencies share one generation',
-  'gltf-material-uv-set-missing': 'each texture slot references an available primitive UV set',
+const MATERIAL_ERROR_POLICY = {
+  'material-parent-not-found': {
+    expected: 'every parent GUID resolves to a MaterialAsset',
+    hint: 'fix the parent GUID and resolve the material again',
+  },
+  'material-circular-inheritance': {
+    expected: 'the parent chain is acyclic',
+    hint: 'remove the repeated GUID from the parent chain',
+  },
+  'material-no-effective-pass': {
+    expected: 'the resolved material has at least one pass',
+    hint: 'add a pass to the root material or an inherited parent',
+  },
+  'material-value-unknown': {
+    expected: 'every value name is declared by the effective contract',
+    hint: 'remove the value or declare the parameter in the root contract',
+  },
+  'material-value-type-mismatch': {
+    expected: 'each value matches its declared parameter type',
+    hint: 'change the value to the declared parameter type',
+  },
+  'material-contract-program-mismatch': {
+    expected: 'the program satisfies the material contract',
+    hint: 'align the program entries with the root contract',
+  },
+  'shader-module-id-missing': {
+    expected: 'each WGSL source declares a module ID',
+    hint: 'add a compiler-native module ID declaration to the WGSL source',
+  },
+  'shader-module-id-duplicate': {
+    expected: 'each module ID has one source provenance',
+    hint: 'rename one module or remove the duplicate source',
+  },
+  'shader-module-not-found': {
+    expected: 'every referenced module exists in the source catalog',
+    hint: 'add the module to the source catalog or fix the reference',
+  },
+  'shader-module-namespace-reserved': {
+    expected: 'user modules use a non-reserved namespace',
+    hint: 'choose a module ID outside the reserved namespace',
+  },
+  'material-reflection-binding-mismatch': {
+    expected: 'reflection matches the material contract bindings',
+    hint: 'update the contract or WGSL binding and cook again',
+  },
+  'material-specialization-not-cooked': {
+    expected: 'the requested specialization has a cooked artifact',
+    hint: 'run the build or development cook path for this selection',
+  },
+  'material-specialization-stale-generation': {
+    expected: 'all specialization dependencies share one generation',
+    hint: 'retry after dependent assets and sources settle',
+  },
+  'gltf-material-uv-set-missing': {
+    expected: 'each texture slot references an available primitive UV set',
+    hint: 'add the requested UV set to the primitive and re-import it',
+  },
+} satisfies {
+  readonly [C in MaterialErrorCode]: {
+    readonly expected: string;
+    readonly hint: string;
+  };
 };
 
-export const MATERIAL_ERROR_HINTS: Readonly<Record<MaterialErrorCode, string>> = {
-  'material-parent-not-found': 'fix the parent GUID and resolve the material again',
-  'material-circular-inheritance': 'remove the repeated GUID from the parent chain',
-  'material-no-effective-pass': 'add a pass to the root material or an inherited parent',
-  'material-value-unknown': 'remove the value or declare the parameter in the root contract',
-  'material-value-type-mismatch': 'change the value to the declared parameter type',
-  'material-contract-program-mismatch': 'align the program entries with the root contract',
-  'shader-module-id-missing': 'add a compiler-native module ID declaration to the WGSL source',
-  'shader-module-id-duplicate': 'rename one module or remove the duplicate source',
-  'shader-module-not-found': 'add the module to the source catalog or fix the reference',
-  'shader-module-namespace-reserved': 'choose a module ID outside the reserved namespace',
-  'material-reflection-binding-mismatch': 'update the contract or WGSL binding and cook again',
-  'material-specialization-not-cooked': 'run the build or development cook path for this selection',
-  'material-specialization-stale-generation': 'retry after dependent assets and sources settle',
-  'gltf-material-uv-set-missing': 'add the requested UV set to the primitive and re-import it',
-};
+export const MATERIAL_ERROR_EXPECTED: Readonly<Record<MaterialErrorCode, string>> =
+  Object.fromEntries(
+    MATERIAL_ERROR_CODES.map((code) => [code, MATERIAL_ERROR_POLICY[code].expected]),
+  ) as Readonly<Record<MaterialErrorCode, string>>;
+
+export const MATERIAL_ERROR_HINTS: Readonly<Record<MaterialErrorCode, string>> = Object.fromEntries(
+  MATERIAL_ERROR_CODES.map((code) => [code, MATERIAL_ERROR_POLICY[code].hint]),
+) as Readonly<Record<MaterialErrorCode, string>>;
 
 export function createMaterialError<C extends MaterialErrorCode>(
   code: C,

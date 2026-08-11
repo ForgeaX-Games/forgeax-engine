@@ -1,9 +1,9 @@
 // errors.ts — FbxError definitions SSOT + factory.
 //
 // Per requirements AC-09 + plan-strategy D-5 (DIP), FbxErrorCode +
-// FbxErrorDetail + FbxError + FBX_ERROR_HINTS are the FBX importer's
-// own error SSOT, local to this package. Subsequent milestones append
-// per-section members as needed.
+// FbxErrorDetail + FbxError + the private error policy owner are the FBX
+// importer's own error SSOT, local to this package. Subsequent milestones
+// append per-section members as needed.
 //
 // Producers MUST go through `fbxErr` so any FbxErrorCode addition that
 // lacks a matching detail variant fails at the call site (TS exhaustive
@@ -62,23 +62,28 @@ export type FbxError = {
   };
 }[FbxErrorCode];
 
-// === FBX_ERROR_HINTS (Record<FbxErrorCode, string>) ===
+// === Private expected/hint policy owner + public hint projection ===
 
-export const FBX_ERROR_HINTS: Readonly<Record<FbxErrorCode, string>> = {
-  'fbx-mesh-type-unsupported':
-    'NURBS and patch surfaces are not supported; convert to polygon mesh in a DCC tool before import',
-  'fbx-animation-target-invalid':
-    'name every node, keep the hierarchy acyclic, and export unique full animation target paths',
+const fbxErrorPolicy = {
+  'fbx-mesh-type-unsupported': {
+    expected: 'all meshes in the file are polygon (triangles/quads), not NURBS or patch surfaces',
+    hint: 'NURBS and patch surfaces are not supported; convert to polygon mesh in a DCC tool before import',
+  },
+  'fbx-animation-target-invalid': {
+    expected:
+      'an acyclic hierarchy where every animation channel uniquely matches one named Scene node and stable target ID',
+    hint: 'name every node, keep the hierarchy acyclic, and export unique full animation target paths',
+  },
+} satisfies {
+  readonly [Code in FbxErrorCode]: {
+    readonly expected: string;
+    readonly hint: string;
+  };
 };
 
-// === FBX_EXPECTED (Record<FbxErrorCode, string>) ===
-
-const FBX_EXPECTED: Readonly<Record<FbxErrorCode, string>> = {
-  'fbx-mesh-type-unsupported':
-    'all meshes in the file are polygon (triangles/quads), not NURBS or patch surfaces',
-  'fbx-animation-target-invalid':
-    'an acyclic hierarchy where every animation channel uniquely matches one named Scene node and stable target ID',
-};
+export const FBX_ERROR_HINTS: Readonly<Record<FbxErrorCode, string>> = Object.fromEntries(
+  Object.entries(fbxErrorPolicy).map(([code, policy]) => [code, policy.hint]),
+) as Readonly<Record<FbxErrorCode, string>>;
 
 // === DetailFor map + fbxErr factory ===
 
@@ -92,7 +97,7 @@ interface DetailFor {
  * call sites narrow with `switch (e.code)` on the result.
  *
  * Charter P3 explicit-failure: `expected` + `hint` fields are sourced from
- * the SSOT tables — no producer can omit them.
+ * the private policy owner — no producer can omit them.
  */
 export function fbxErr<C extends FbxErrorCode>(
   code: C,
@@ -100,8 +105,8 @@ export function fbxErr<C extends FbxErrorCode>(
 ): Extract<FbxError, { readonly code: C }> {
   return {
     code,
-    expected: FBX_EXPECTED[code],
-    hint: FBX_ERROR_HINTS[code],
+    expected: fbxErrorPolicy[code].expected,
+    hint: fbxErrorPolicy[code].hint,
     detail,
   } as Extract<FbxError, { readonly code: C }>;
 }

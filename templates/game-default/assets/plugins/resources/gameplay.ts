@@ -1,4 +1,4 @@
-import type { World } from '@forgeax/engine-ecs';
+import { defineRecoverableResource, type World } from '@forgeax/engine-ecs';
 
 export const GAME_DEFAULT_GAMEPLAY_CONFIG = 'gameDefaultGameplayConfig';
 export const GAME_DEFAULT_COMMAND_COUNTERS = 'gameDefaultCommandCounters';
@@ -52,6 +52,17 @@ export type DefaultGameplayConfigArgs = {
 
 export function installGameplayConfig(world: World, config: GameplayConfig): void {
   world.insertResource(GAME_DEFAULT_GAMEPLAY_CONFIG, config);
+  world.registerRecoverableResource(
+    defineRecoverableResource<GameplayConfig>(GAME_DEFAULT_GAMEPLAY_CONFIG, {
+      schemaFingerprint: 'game-default.gameplay-config.v1',
+      clone: (value) => ({
+        movement: { ...value.movement },
+        camera: { ...value.camera, topQuaternion: [...value.camera.topQuaternion] as [number, number, number, number] },
+        projectile: { ...value.projectile },
+        sentinel: { ...value.sentinel },
+      }),
+    }),
+  );
 }
 
 export function installDefaultGameplayConfig(world: World, args: DefaultGameplayConfigArgs): void {
@@ -85,6 +96,12 @@ export function installDefaultGameplayConfig(world: World, args: DefaultGameplay
 
 export function installGameplayCommandCounters(world: World): void {
   world.insertResource<GameplayCommandCounters>(GAME_DEFAULT_COMMAND_COUNTERS, { spawned: 0, despawned: 0 });
+  world.registerRecoverableResource(
+    defineRecoverableResource<GameplayCommandCounters>(GAME_DEFAULT_COMMAND_COUNTERS, {
+      schemaFingerprint: 'game-default.command-counters.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
 }
 
 export function recordGameplayCommand(world: World, kind: keyof GameplayCommandCounters): void {

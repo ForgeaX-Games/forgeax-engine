@@ -49,7 +49,13 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   });
  */
 export const GlyphText = defineComponent('GlyphText', {
-  fontHandle: { type: 'shared<FontAsset>', default: 0 as never },
+  // The layout/render owner re-resolves the font asset on the target world;
+  // authoring text and style remain portable simulation state.
+  fontHandle: {
+    type: 'shared<FontAsset>',
+    default: 0 as never,
+    simulationTransient: true,
+  },
   text: { type: 'string', default: '' },
   fontSize: { type: 'f32', default: 16 },
   // color carries an explicit layer-2 default [1,1,1,1] (opaque white); the

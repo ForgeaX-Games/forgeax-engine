@@ -9,6 +9,7 @@ export {
   isFieldPortable,
   type ProfileComponentError,
   projectComponentData,
+  projectSimulationComponentData,
   validateProfileComponents,
 } from './projection';
 

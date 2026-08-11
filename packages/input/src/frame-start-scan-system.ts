@@ -94,5 +94,6 @@ export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
       : undefined;
     const snapshot = snapshotFromSample(sample, actionStates, inputMap, previousSnapshot);
     world.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, snapshot);
+    world.registerSimulationTransientResource(INPUT_SNAPSHOT_RESOURCE_KEY);
   },
 });

@@ -1159,11 +1159,12 @@ export interface PipelineState {
   // writes the active lightSpaceMatrix into `shadowProbeLsmUbo`, builds a
   // transient BindGroup binding the active shadow texture + comparison
   // sampler, and renders 1 pixel per probe into `shadowProbeOutputTex`
-  // (1xN r32float). The fragment stage runs `textureSampleCompareLevel`
-  // byte-for-byte mirroring `pbr.wgsl::evalDirectional()`. The 1-row staging
-  // buffer (256 B = PROBE_MAX_COUNT * 4 B; already 256B-aligned) is mapped
-  // and the leading N floats returned. Compiled once at pipeline build time;
-  // null when the shader manifest is empty (no probe possible).
+  // (1xN rgba32float). The fragment stage runs the same atlas-depth PCF path
+  // as `pbr.wgsl::evalDirectional()` and returns factor, center depth,
+  // cascade index, and receiver depth in the four channels. The 1-row staging
+  // buffer (1024 B = PROBE_MAX_COUNT * 16 B; already 256B-aligned) is mapped
+  // and the leading N vec4 records returned. Compiled once at pipeline build
+  // time; null when the shader manifest is empty (no probe possible).
   readonly shadowProbePipeline: RenderPipeline | null;
   readonly shadowProbeBindGroupLayout: BindGroupLayout | null;
   readonly shadowProbeLsmUbo: Buffer | null;
@@ -1438,11 +1439,21 @@ export interface PerPassResources {
   /**
    * feat-20260613-csm-cascaded-shadow-maps M5 / w28: full 4-cascade
    * lightViewProj concatenation (4 × 16 = 64 f32, col-major) consumed by
-   * `debugSampleShadowFactor` so the probe can pick the right cascade
-   * geometrically (frustum containment). Null before the first extract
+   * `debugSampleShadowFactor` so the probe can project against the selected
+   * cascade. Null before the first extract
    * with an active shadow-casting DirectionalLight.
    */
   shadowCsmLightViewProj: Float32Array | null;
+  /**
+   * Producer-owned CSM receiver-selection facts. The debug probe must use the
+   * same view-space depth + split-plane selector as the main receiver path;
+   * keeping the two inputs together prevents a selector mirror from silently
+   * drifting at cascade boundaries.
+   */
+  shadowCsmSelection: {
+    readonly viewMatrix: Float32Array;
+    readonly splitPlanes: Float32Array;
+  } | null;
 
   // ── feat-20260531-bloom-first-declarative-render-graph-pass w13/w16 ────
   //

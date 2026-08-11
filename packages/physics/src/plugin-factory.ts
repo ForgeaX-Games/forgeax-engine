@@ -26,7 +26,7 @@
 //   P4 consistent abstraction: physicsPlugin shares the same Plugin shape as
 //       transform / audio -- one mental model covers every wiring.
 
-import { err, ok } from '@forgeax/engine-ecs';
+import { err, ok, type SimulationParticipant } from '@forgeax/engine-ecs';
 import {
   PLUGIN_ERROR_HINTS,
   PLUGIN_EXPECTED,
@@ -39,12 +39,14 @@ import type { PhysicsWorld, PhysicsWorld2D } from './physics-world';
 interface Rapier3DBackendModule {
   loadRapier3D(): Promise<unknown>;
   createRapier3DPhysicsWorld(rapier: unknown): PhysicsWorld;
+  createRapier3DSimulationParticipant(physics: PhysicsWorld): SimulationParticipant;
   registerPhysicsSystems(world: Parameters<Plugin['build']>[0]): void;
 }
 
 interface Rapier2DBackendModule {
   loadRapier2D(): Promise<unknown>;
   createRapier2DPhysicsWorld(rapier: unknown): PhysicsWorld2D;
+  createRapier2DSimulationParticipant(physics: PhysicsWorld2D): SimulationParticipant;
   registerPhysicsSystems2D(world: Parameters<Plugin['build']>[0]): void;
 }
 
@@ -97,18 +99,36 @@ export function physicsPlugin(backend: PhysicsBackend): Plugin {
     async build(world) {
       try {
         if (backend === 'rapier-3d') {
-          const { loadRapier3D, createRapier3DPhysicsWorld, registerPhysicsSystems } =
-            (await loadRapier3DBackend()) as Rapier3DBackendModule;
+          const {
+            loadRapier3D,
+            createRapier3DPhysicsWorld,
+            createRapier3DSimulationParticipant,
+            registerPhysicsSystems,
+          } = (await loadRapier3DBackend()) as Rapier3DBackendModule;
           const rapier = await loadRapier3D();
           const pw = createRapier3DPhysicsWorld(rapier);
           world.insertResource('PhysicsWorld', pw);
+          world.registerSimulationTransientResource('PhysicsWorld');
+          const registered = world.registerSimulationParticipant(
+            createRapier3DSimulationParticipant(pw),
+          );
+          if (!registered.ok) return err(buildFailed(registered.error.code));
           registerPhysicsSystems(world);
         } else {
-          const { loadRapier2D, createRapier2DPhysicsWorld, registerPhysicsSystems2D } =
-            (await loadRapier2DBackend()) as Rapier2DBackendModule;
+          const {
+            loadRapier2D,
+            createRapier2DPhysicsWorld,
+            createRapier2DSimulationParticipant,
+            registerPhysicsSystems2D,
+          } = (await loadRapier2DBackend()) as Rapier2DBackendModule;
           const rapier = await loadRapier2D();
           const pw = createRapier2DPhysicsWorld(rapier);
           world.insertResource('PhysicsWorld', pw);
+          world.registerSimulationTransientResource('PhysicsWorld');
+          const registered = world.registerSimulationParticipant(
+            createRapier2DSimulationParticipant(pw),
+          );
+          if (!registered.ok) return err(buildFailed(registered.error.code));
           registerPhysicsSystems2D(world);
         }
       } catch (e) {

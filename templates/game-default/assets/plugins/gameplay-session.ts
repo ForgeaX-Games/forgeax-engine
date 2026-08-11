@@ -44,9 +44,11 @@ import {
   readSentinelEncounterReadiness,
   type SentinelEncounterReadiness,
 } from './sentinel-authorship';
+import { installLightingModeProjection, type LightingModeHandle } from './lighting-mode';
 
 export type GameplaySession = {
   readonly cameraController: CameraController;
+  readonly lightingMode: LightingModeHandle;
   readonly projectilePresentation: ProjectilePresentation;
   readonly vfxHitLoop: GameplayVfx;
   readonly gameplayVfx: GameplayVfx;
@@ -83,6 +85,7 @@ export async function createGameplaySession(
   targets: GameplayTargetFeatures,
 ): Promise<GameplaySession> {
   world.insertResource(GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN, 0);
+  world.registerSimulationTransientResource(GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN);
   const cameraController = await createCameraController({
     world,
     canvas,
@@ -93,6 +96,7 @@ export async function createGameplaySession(
     initZ: targets.initZ,
   });
   const { camera, topQuaternion, hud, settingsState, depthOfField, chromaticAberration, getMode, setMode } = cameraController;
+  const lightingMode = installLightingModeProjection({ world, camera, loaded: targets.loaded, hud });
   const vfxTarget = targets.primaryTarget();
   const gameplayVfx = await createGameplayVfx({
     world,
@@ -289,6 +293,7 @@ export async function createGameplaySession(
     targetRelay: targets.targetRelay,
     settingsState,
     setMode,
+    lightingMode,
     multiWorldOverlay,
     gameplayAudio,
     materialElapsedOriginKey: GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN,
@@ -304,6 +309,7 @@ export async function createGameplaySession(
       cameraController.hud.setTargetRelay(targets.targetRelay.snapshot());
       if (extraction !== undefined) cameraController.hud.setExtraction(extraction.snapshot());
       if (rewardChoice !== undefined) cameraController.hud.setRewardChoice(rewardChoice.snapshot());
+      cameraController.hud.setLightingMode('Day');
       cameraController.hud.setAssetLabStatus('Asset Lab reset · authored RedBox baseline', 'restored');
     },
   });
@@ -317,6 +323,7 @@ export async function createGameplaySession(
 
   return {
     cameraController,
+    lightingMode,
     projectilePresentation,
     vfxHitLoop,
     gameplayVfx,

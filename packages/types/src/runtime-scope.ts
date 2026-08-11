@@ -8,9 +8,19 @@ export const RUNTIME_CATALOG_SNAPSHOT_SCHEMA = 'runtime-catalog-snapshot-v1' as 
 export type RuntimeScopeStatus = 'unbound' | 'transitioning' | 'ready' | 'degraded' | 'unavailable';
 
 /**
+ * Logical projection of one package-declared asset root into the runtime
+ * catalog coordinate space. This carries no filesystem path across the wire.
+ */
+export interface RuntimeCatalogRoot {
+  readonly root: string;
+  readonly catalogPrefix: string;
+}
+
+/**
  * The only identity a browser-side asset consumer may use for a dev realm.
  * `scopeId` describes ownership; `generation` rejects stale browser work.
- * Filesystem roots intentionally do not cross this wire contract.
+ * Filesystem roots intentionally do not cross this wire contract; catalogRoots
+ * is only the logical declaration-to-catalog projection used by browser views.
  */
 export interface RuntimeAssetBinding {
   readonly schemaVersion: typeof RUNTIME_ASSET_BINDING_SCHEMA;
@@ -21,8 +31,22 @@ export interface RuntimeAssetBinding {
   readonly catalogUrl: string;
   readonly importUrlBase: string;
   readonly packageUrlBase: string;
+  readonly catalogRoots?: readonly RuntimeCatalogRoot[];
   readonly authority?: 'authoritative' | 'degraded';
   readonly diagnostics?: readonly CatalogDiagnostic[];
+}
+
+export function isRuntimeCatalogRoots(value: unknown): value is readonly RuntimeCatalogRoot[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (root) =>
+        root !== null &&
+        typeof root === 'object' &&
+        typeof (root as { root?: unknown }).root === 'string' &&
+        typeof (root as { catalogPrefix?: unknown }).catalogPrefix === 'string',
+    )
+  );
 }
 
 /** Authority-bearing catalog response for one runtime scope. */

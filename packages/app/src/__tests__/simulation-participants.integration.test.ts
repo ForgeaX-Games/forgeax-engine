@@ -43,7 +43,7 @@ describe('App simulation participant assembly', () => {
     expect(registered.ok).toBe(true);
     if (!registered.ok) return;
 
-    const inspection = createSimulationInspection(world, registered.value);
+    const inspection = createSimulationInspection(world);
     expect(inspection()).toMatchObject({
       formatVersion: 1,
       recordOwner: '@forgeax/engine-ecs',
@@ -77,7 +77,7 @@ describe('App simulation participant assembly', () => {
     const registered = registerSimulationParticipants(world, [participant('owner')]);
     expect(registered.ok).toBe(true);
     if (!registered.ok) return;
-    const summary = createSimulationInspection(world, registered.value)();
+    const summary = createSimulationInspection(world)();
     expect(summary).not.toHaveProperty('record');
     expect(summary).not.toHaveProperty('schema');
     expect(summary.baselineFingerprint).toBe(world.simulationFingerprint());

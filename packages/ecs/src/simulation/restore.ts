@@ -3,7 +3,7 @@ import { type Component, resolveComponent } from '../component';
 import { Entity } from '../entity';
 import { ENTITY_NULL_RAW, type EntityHandle } from '../entity-handle';
 import { createSimulationError } from '../errors/simulation-errors';
-import { isFieldPortable, projectComponentData } from '../externalization';
+import { isFieldPortable, projectSimulationComponentData } from '../externalization';
 import type { RecoverableResourceDescriptor } from '../resource';
 import { FixedTime, Time } from '../time';
 import type { World } from '../world';
@@ -51,11 +51,15 @@ function clockProjection(world: World): SimulationClockProjection {
 }
 
 function validateComponentPortable(component: Component): Result<void, SimulationError> {
-  if (component.transient) return ok(undefined);
+  if (component.transient || component.simulationTransient) return ok(undefined);
   const schema = component.schema as Record<string, string>;
   const fields = component.fields;
   for (const fieldName of Object.keys(schema)) {
-    if (fields?.[fieldName]?.transient === true) continue;
+    if (
+      fields?.[fieldName]?.transient === true ||
+      fields?.[fieldName]?.simulationTransient === true
+    )
+      continue;
     const fieldType = schema[fieldName];
     if (fieldType !== undefined && !isFieldPortable(fieldType)) {
       return err(
@@ -101,7 +105,8 @@ function captureWorldProjectionWithMap(
     if (localId === undefined) continue;
     const components: SimulationComponentProjection[] = [];
     for (const component of row.archetype.components) {
-      if (component.id === Entity.id || component.transient) continue;
+      if (component.id === Entity.id || component.transient || component.simulationTransient)
+        continue;
       const portable = validateComponentPortable(component);
       if (!portable.ok) return err(portable.error);
       try {
@@ -111,7 +116,7 @@ function captureWorldProjectionWithMap(
         >;
         components.push({
           component: component.name,
-          data: projectComponentData(component, data, (sourceId: number) => {
+          data: projectSimulationComponentData(component, data, (sourceId: number) => {
             if (sourceId === ENTITY_NULL_RAW) return ENTITY_NULL_RAW;
             const targetId = sourceToLocal.get(sourceId);
             if (targetId === undefined) throw new MissingEntityMappingError(sourceId);
@@ -139,8 +144,9 @@ function captureWorldProjectionWithMap(
   }
 
   const resources: SimulationResourceProjection[] = [];
+  const transientResourceKeys = world._getSimulationTransientResourceKeys();
   for (const [key, entry] of world._getResources().entries) {
-    if (key === Time.name || key === FixedTime.name) continue;
+    if (key === Time.name || key === FixedTime.name || transientResourceKeys.has(key)) continue;
     const descriptor = world._getSimulationResourceDescriptors().get(key);
     if (descriptor === undefined) {
       return err(
@@ -245,7 +251,7 @@ function materialize(
         }
         return {
           component: token,
-          data: projectComponentData(token, component.data, (localId) =>
+          data: projectSimulationComponentData(token, component.data, (localId) =>
             localId === ENTITY_NULL_RAW ? ENTITY_NULL_RAW : resolveLocal(localId),
           ),
         };

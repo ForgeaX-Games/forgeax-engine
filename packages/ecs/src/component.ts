@@ -792,6 +792,8 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    * Default: `false` (component participates in serialization).
    */
   readonly transient: boolean;
+  /** Runtime/presentation state excluded from simulation record/restore. */
+  readonly simulationTransient: boolean;
   /**
    * Companion components auto-attached at `world.spawn` time when the caller
    * omits them from the spawn bundle (tweak-20260714 M1). `undefined` for
@@ -1077,6 +1079,8 @@ export interface ArrayMeta {
  *   world mat4) is excluded from serialization while its component's persisted
  *   fields still round-trip. Absent (the common case) means the field is
  *   serialized.
+ * - `simulationTransient` — when `true`, the field is excluded from the ECS
+ *   simulation record/restore projection while remaining scene-serializable.
  * - `labels` — for an `enum` field ONLY: the label→numeric-value map (e.g.
  *   `{ static: 0, dynamic: 1, kinematic: 2 }`). An `enum` field stores a bare
  *   `u32` variant index; the human-readable names historically lived in a
@@ -1096,6 +1100,8 @@ export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
   readonly shape?: FieldShapeKind;
   readonly meta?: Readonly<Record<string, unknown>>;
   readonly transient?: boolean;
+  /** Exclude this field from simulation record/restore, but keep scene writeback. */
+  readonly simulationTransient?: boolean;
   readonly labels?: Readonly<Record<string, number>>;
 }
 
@@ -1121,6 +1127,8 @@ export interface FieldReflection {
   readonly shape?: FieldShapeKind;
   readonly arrayMeta?: ArrayMeta;
   readonly transient?: boolean;
+  /** Exclude this field from simulation record/restore, but keep scene writeback. */
+  readonly simulationTransient?: boolean;
   /**
    * For an `enum` field: the label→numeric-value map declared on the field
    * descriptor (see `FieldDescriptor.labels`). Lets a schema consumer resolve a
@@ -1236,6 +1244,8 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * rebuilt by the mirror hook after instantiateScene).
    */
   readonly transient?: boolean;
+  /** Exclude this component from simulation record/restore, but keep scene writeback. */
+  readonly simulationTransient?: boolean;
   /**
    * Companion components auto-attached at `world.spawn` time when the caller
    * omits them from the spawn bundle
@@ -1387,6 +1397,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       shape?: FieldShapeKind;
       arrayMeta?: ArrayMeta;
       transient?: boolean;
+      simulationTransient?: boolean;
       labels?: Readonly<Record<string, number>>;
     } = {
       type: fieldType,
@@ -1403,6 +1414,8 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       }
       // exactOptionalPropertyTypes: only attach `transient` when declared.
       if (desc.transient !== undefined) row.transient = desc.transient;
+      if (desc.simulationTransient !== undefined)
+        row.simulationTransient = desc.simulationTransient;
       // enum label→value map (see FieldDescriptor.labels). Frozen so the
       // reflected row exposes a stable read-only map. Only enum fields declare it.
       if (desc.labels !== undefined) row.labels = Object.freeze({ ...desc.labels });
@@ -1472,6 +1485,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     validate: options?.validate,
     cardinality: options?.cardinality,
     transient: options?.transient ?? false,
+    simulationTransient: options?.simulationTransient ?? false,
     onInsert: options?.onInsert,
     onAdd: options?.onAdd,
     onDiscard: options?.onDiscard,

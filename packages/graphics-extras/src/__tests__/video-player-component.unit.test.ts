@@ -31,6 +31,7 @@ describe('AC-04 — VideoPlayer component registration + mount + read-back', () 
     const registry = getRegisteredComponents();
     expect(registry.has('VideoPlayer')).toBe(true);
     expect(registry.get('VideoPlayer')).toBe(VideoPlayer);
+    expect(VideoPlayer.fields.clip.simulationTransient).toBe(true);
   });
 
   it('spawn entity with VideoPlayer + read back clip/playing/loop/currentTime', () => {

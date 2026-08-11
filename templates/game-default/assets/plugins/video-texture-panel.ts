@@ -186,6 +186,7 @@ export async function createVideoTexturePanel(
     { component: VideoPlayer, data: { clip: videoHandle, playing: false, loop: true, currentTime: 0 } },
   ).unwrap();
   const host = createVideoHost();
+  world.registerSimulationTransientResource(VIDEO_ELEMENT_PROVIDER_KEY);
   const previousProvider = world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY)
     ? world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY)
     : undefined;

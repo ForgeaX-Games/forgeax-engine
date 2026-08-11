@@ -6,6 +6,7 @@ import type { TargetRelaySnapshot } from './target-relay';
 import type { EnergyCoreExtractionSnapshot } from './energy-core-extraction';
 import type { RewardChoiceSnapshot } from './reward-choice';
 import { deriveCounterattackPressure, PLAYER_MAX_HEALTH } from './counterattack';
+import type { LightingModeName } from './components/gameplay';
 
 export type ViewMode = 'topdown' | 'orbit' | 'fps' | 'pan';
 export const HUD_UI_GUID = '019f8354-6386-4386-849d-f2ab4b96229c';
@@ -22,6 +23,7 @@ export interface HudHandle {
   setTargetStatus(text: string, state: 'ready' | 'damaged' | 'disabled'): void;
   setChargeStatus(text: string, state: 'ready' | 'charging' | 'released', progress?: number): void;
   setComboStatus(text: string, state: 'ready' | 'active' | 'expired'): void;
+  setLightingMode(mode: LightingModeName): void;
   setAssetLabStatus(text: string, state: AssetLabActionResult['state'] | 'idle'): void;
   setAssetLabActionHandler(handler: (action: AssetLabAction) => AssetLabActionResult): void;
   setMode(mode: ViewMode): void;
@@ -32,7 +34,7 @@ export interface HudHandle {
 }
 
 function failedHud(error: UiError): HudHandle {
-  return { error, setScore() {}, setHealth() {}, setPhase() {}, setTargetProfileActive() {}, setTargetRelay() {}, setExtraction() {}, setRewardChoice() {}, setTargetStatus() {}, setChargeStatus() {}, setComboStatus() {}, setAssetLabStatus() {}, setAssetLabActionHandler() {}, setMode() {}, setLockStatus() {}, floatScore() {}, resetTransientFeedback() {}, dispose() {} };
+  return { error, setScore() {}, setHealth() {}, setPhase() {}, setTargetProfileActive() {}, setTargetRelay() {}, setExtraction() {}, setRewardChoice() {}, setTargetStatus() {}, setChargeStatus() {}, setComboStatus() {}, setLightingMode() {}, setAssetLabStatus() {}, setAssetLabActionHandler() {}, setMode() {}, setLockStatus() {}, floatScore() {}, resetTransientFeedback() {}, dispose() {} };
 }
 
 function slot<T extends HTMLElement>(shadow: ShadowRoot, name: string): T | null {
@@ -79,6 +81,26 @@ export function installHud(opts: {
   const chargeMeter = chargeStatus?.querySelector<HTMLElement>('[data-ui-slot="charge-meter"]');
   const chargeFill = chargeStatus?.querySelector<HTMLElement>('[data-ui-slot="charge-fill"]');
   const comboStatus = slot<HTMLElement>(shadow, 'combo');
+  const lightingMode = slot<HTMLElement>(shadow, 'lighting-mode') ?? (() => {
+    // The canonical HUD pack is a single cooked JSON payload, so this keeps
+    // copied packs with no lighting slot equally observable without a second
+    // HUD owner or a settings ledger.
+    const fallback = document.createElement('aside');
+    fallback.dataset.uiSlot = 'lighting-mode';
+    Object.assign(fallback.style, {
+      position: 'absolute',
+      top: '180px',
+      left: '14px',
+      padding: '6px 10px',
+      color: '#bdefff',
+      background: 'rgb(10 18 34 / 84%)',
+      border: '1px solid rgb(98 214 255 / 52%)',
+      borderRadius: '8px',
+      fontSize: '12px',
+    });
+    (shadow.querySelector<HTMLElement>('.hud') ?? shadow).append(fallback);
+    return fallback;
+  })();
   const assetLabStatus = slot<HTMLElement>(shadow, 'asset-lab-status');
   const button = shadow.querySelector<HTMLButtonElement>('[data-ui-action="toggle-mode"]');
   const targetProfileButton = shadow.querySelector<HTMLButtonElement>('[data-ui-action="target-profile"]');
@@ -150,12 +172,12 @@ export function installHud(opts: {
     if (button) button.textContent = mode === 'topdown' ? 'View: Top-down > Orbit' : mode === 'orbit' ? 'View: Orbit > FPS' : mode === 'fps' ? 'View: FPS > Map' : 'View: Map > Top-down';
     if (crosshair) crosshair.style.display = mode === 'fps' ? 'block' : 'none';
     if (hint) hint.textContent = mode === 'fps'
-      ? 'WASD move · click/F shoot · hold C charge · release · R restart'
+      ? 'WASD move · click/F shoot · hold C charge · release · T lighting · R restart'
       : mode === 'orbit'
-        ? 'WASD move · drag to orbit · click/F shoot · hold C charge · release · R restart'
+        ? 'WASD move · drag to orbit · click/F shoot · hold C charge · release · T lighting · R restart'
         : mode === 'pan'
-          ? 'Arrows pan · wheel zoom · click/F shoot · hold C charge · release · R restart'
-          : 'WASD move · aim/click shoot · hold C charge · release · R restart';
+          ? 'Arrows pan · wheel zoom · click/F shoot · hold C charge · release · T lighting · R restart'
+          : 'WASD move · aim/click shoot · hold C charge · release · T lighting · R restart';
     if (lockStatus) lockStatus.style.display = mode === 'fps' || mode === 'orbit' ? 'block' : 'none';
   };
   const setScore = (n: number): void => {
@@ -219,6 +241,12 @@ export function installHud(opts: {
     comboStatus.textContent = text;
     comboStatus.dataset.state = state;
   };
+  const setLightingMode = (mode: LightingModeName): void => {
+    if (lightingMode) {
+      lightingMode.textContent = `Lighting · ${mode} · T toggle`;
+      lightingMode.dataset.mode = mode.toLowerCase();
+    }
+  };
   const setAssetLabStatus = (text: string, state: AssetLabActionResult['state'] | 'idle'): void => {
     if (!assetLabStatus) return;
     assetLabStatus.textContent = text;
@@ -246,7 +274,8 @@ export function installHud(opts: {
   applyMode(opts.initialMode);
   setChargeStatus('Hold C to charge · release to fire', 'ready', 0);
   setComboStatus('Combo ready · chain hits for a bonus', 'ready');
+  setLightingMode('Day');
   setLockStatus('Click canvas to lock pointer');
   setAssetLabStatus(`Score ${GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE} to unlock Target profile.`, 'idle');
-  return { setScore, setHealth, setPhase, setTargetProfileActive, setTargetRelay, setExtraction, setRewardChoice, setTargetStatus, setChargeStatus, setComboStatus, setAssetLabStatus, setAssetLabActionHandler, setMode: applyMode, setLockStatus, floatScore, resetTransientFeedback, dispose: instance.dispose };
+  return { setScore, setHealth, setPhase, setTargetProfileActive, setTargetRelay, setExtraction, setRewardChoice, setTargetStatus, setChargeStatus, setComboStatus, setLightingMode, setAssetLabStatus, setAssetLabActionHandler, setMode: applyMode, setLockStatus, floatScore, resetTransientFeedback, dispose: instance.dispose };
 }

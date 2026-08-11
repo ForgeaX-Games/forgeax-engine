@@ -297,19 +297,89 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
 function installCaptureHook(app: App, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
-  const win = window as unknown as { __captureCsm?: CaptureHook };
+  type CapturePrepareHook = () => Promise<void>;
+  const win = window as unknown as {
+    __captureCsm?: CaptureHook;
+    __prepareCsmCapture?: CapturePrepareHook;
+  };
   const renderer = app.renderer;
-  win.__captureCsm = async (): Promise<Uint8Array> => {
+  const drawCsmFrame = (): void => {
     world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
+  };
+  const runCsmBoundaryProbe = async (): Promise<void> => {
+    const boundaryResults =
+      (await renderer.debugSampleShadowFactor?.(csmBoundaryProbePositions())) ?? null;
+    assertCsmBoundaryProbe(boundaryResults);
+  };
+  win.__prepareCsmCapture = async (): Promise<void> => {
+    drawCsmFrame();
+    await runCsmBoundaryProbe();
+  };
+  win.__captureCsm = async (): Promise<Uint8Array> => {
+    drawCsmFrame();
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(
         `[learn-render 5.3.3 csm] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
+    await runCsmBoundaryProbe();
     return r.value;
   };
+}
+
+const CSM_BOUNDARY_PROBE_EPSILON = 0.25;
+
+function csmBoundaryProbePositions(): ReadonlyArray<readonly [number, number, number]> {
+  const splitPlanes = computeCsmSplits();
+  const positions: Array<readonly [number, number, number]> = [];
+  for (let boundary = 0; boundary < splitPlanes.length - 1; boundary++) {
+    const splitDepth = splitPlanes[boundary];
+    if (splitDepth === undefined) continue;
+    positions.push(
+      [0, FLOOR_Y, CAMERA_POS_Z - (splitDepth - CSM_BOUNDARY_PROBE_EPSILON)],
+      [0, FLOOR_Y, CAMERA_POS_Z - (splitDepth + CSM_BOUNDARY_PROBE_EPSILON)],
+    );
+  }
+  return positions;
+}
+
+function assertCsmBoundaryProbe(
+  results: ReadonlyArray<{
+    readonly sampledDepth: number;
+    readonly cascadeIndex: number;
+    readonly receiverDepth: number;
+  }> | null,
+): void {
+  if (results === null || results.length !== 6) {
+    throw new Error(`[learn-render 5.3.3 csm] browser boundary probe unavailable: ${results?.length ?? 'null'}`);
+  }
+  const gatedResults = new URLSearchParams(window.location.search).has('csm-probe-boundary-shift')
+    ? results.map((probe, index) =>
+        index < 6 ? { ...probe, cascadeIndex: (probe.cascadeIndex + 1) % 4 } : probe,
+      )
+    : results;
+  for (let boundary = 0; boundary < 3; boundary++) {
+    const nearSide = gatedResults[boundary * 2];
+    const farSide = gatedResults[boundary * 2 + 1];
+    if (
+      nearSide?.cascadeIndex !== boundary ||
+      farSide?.cascadeIndex !== boundary + 1 ||
+      nearSide === undefined ||
+      farSide === undefined ||
+      !Number.isFinite(nearSide.sampledDepth) ||
+      !Number.isFinite(farSide.sampledDepth) ||
+      !Number.isFinite(nearSide.receiverDepth) ||
+      !Number.isFinite(farSide.receiverDepth)
+    ) {
+      throw new Error(
+        `[learn-render 5.3.3 csm] browser split-boundary mismatch at ${boundary}: ` +
+          `near=${nearSide?.cascadeIndex} far=${farSide?.cascadeIndex}`,
+      );
+    }
+  }
+  console.warn('[learn-render 5.3.3 csm] browser split-boundary probe accepted: near-side=i, far-side=i+1');
 }
 
 async function loadTextureByGuid(

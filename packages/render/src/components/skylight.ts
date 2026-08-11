@@ -85,7 +85,10 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   world.spawn({ component: Skylight, data: { equirect: hdrRes.value } });
  */
 export const Skylight = defineComponent('Skylight', {
-  equirect: { type: 'shared<EquirectAsset>' },
+  // The GPU equirect-to-cubemap projection is render-owned presentation
+  // state. Record/restore preserves the portable lighting controls while the
+  // render owner resolves this asset again on the target world.
+  equirect: { type: 'shared<EquirectAsset>', simulationTransient: true },
   // color carries an explicit layer-2 default [1,1,1] (white); the array
   // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
   color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },

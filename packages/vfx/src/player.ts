@@ -4,7 +4,9 @@ import type { ParticleEffectInstance } from './instance.js';
 
 /** ECS author intent for one shared particle effect. */
 export const ParticleEffectPlayer = defineComponent('ParticleEffectPlayer', {
-  effect: { type: 'shared<ParticleEffectAsset>' },
+  // The VFX render owner re-resolves the compiled effect on the target world;
+  // playback intent remains portable simulation state.
+  effect: { type: 'shared<ParticleEffectAsset>', simulationTransient: true },
   playing: { type: 'bool', default: true },
   seed: { type: 'u32', default: 0 },
   timeScale: { type: 'f32', default: 1 },

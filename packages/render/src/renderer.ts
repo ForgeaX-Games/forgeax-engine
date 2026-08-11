@@ -662,21 +662,29 @@ export interface Renderer {
   } | null;
   /**
    * feat-20260520-directional-light-shadow-mapping M2 / w14 (AC-12):
-   * debugSampleShadowFactor emulates the shader's naive single-sample shadow
-   * factor on CPU given world-space positions. Reads shadow depth via
-   * copyTextureToBuffer + mapAsync, computes lightSpaceMatrix * pos, UV remap,
-   * and currentDepth <= storedDepth comparison (matches pbr.wgsl naive lookup).
+   * debugSampleShadowFactor runs a producer-owned GPU probe for world-space
+   * positions. It reads the same shadow atlas and PCF path as the directional
+   * receiver, then returns the factor plus the selected cascade and the center
+   * atlas texel's raw depth. The extra fields keep the forensic readback tied
+   * to the actual sampled resource rather than a CPU reconstruction.
    *
    * Returns null when the probe pipeline is not compiled (empty shader
    * manifest). When no shadow caster is active (lightSpaceMatrix absent),
    * returns all-1.0 (fully lit) — the caller can distinguish "no shadow
    * data" from "probe unavailable".
-   * Each result carries { shadowFactor: number } where 1 = lit, 0 = fully
-   * shadowed. M2 intentionally does not smooth (M3 adds PCF).
+   * Each result carries `shadowFactor` (1 = lit, 0 = fully shadowed),
+   * `sampledDepth` (the center texel loaded from the active atlas),
+   * `cascadeIndex` (0..3, or -1 when no cascade contains the position), and
+   * `receiverDepth` (the projected depth used by the probe comparison).
    */
   debugSampleShadowFactor?(
     worldPositions: ReadonlyArray<readonly [number, number, number]>,
-  ): Promise<ReadonlyArray<{ readonly shadowFactor: number }> | null>;
+  ): Promise<ReadonlyArray<{
+    readonly shadowFactor: number;
+    readonly sampledDepth: number;
+    readonly cascadeIndex: number;
+    readonly receiverDepth: number;
+  }> | null>;
   /**
    * feat-20260528-frustum-culling M5 / w14: per-frame frustum-culling
    * statistics collected during the extract stage. `culled` is the count

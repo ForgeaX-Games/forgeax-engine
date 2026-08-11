@@ -1,4 +1,4 @@
-import { Update } from '@forgeax/engine-ecs';
+import { defineRecoverableResource, Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-state -- registerStatesPlugin (M2 / m2w2, M3 / m3w4)
 //
 // Idempotent plugin that inserts per-token Resources (State / NextState /
@@ -81,6 +81,25 @@ export function registerStatesPlugin(world: World): void {
       undefined as { value: number; force: boolean } | undefined,
     );
     world.insertResource(previousStateResourceKey(token), defaultValueIdx);
+    world.registerRecoverableResource(
+      defineRecoverableResource(stateResourceKey(token), {
+        schemaFingerprint: `forgeax.state.v1:${token.name}`,
+        clone: (value: unknown) => value,
+      }),
+    );
+    world.registerRecoverableResource(
+      defineRecoverableResource(nextStateResourceKey(token), {
+        schemaFingerprint: `forgeax.next-state.v1:${token.name}`,
+        clone: (value: unknown) =>
+          value === undefined ? undefined : { ...(value as { value: number; force: boolean }) },
+      }),
+    );
+    world.registerRecoverableResource(
+      defineRecoverableResource(previousStateResourceKey(token), {
+        schemaFingerprint: `forgeax.previous-state.v1:${token.name}`,
+        clone: (value: unknown) => value,
+      }),
+    );
   }
 
   // Register the transition system.

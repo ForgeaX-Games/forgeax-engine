@@ -4,6 +4,10 @@ Archetype ECS for forgeax-engine — `World` / `Entity` / `Component` / `Query` 
 
 This README is the **per-package evolution-contract anchor** for `Result<T, E>`. AGENTS.md keeps the cross-package rule brief; concrete shape supersedes are logged here so AI users can locate each breaking change from its dated row.
 
+`world.despawnAll()` routes every live entity through the normal lifecycle and
+managed-reference cleanup path. Hosts can use it after assembling a production
+factory when a target World must be empty before a simulation restore.
+
 ## Time and scheduling
 
 `world.update(delta)` is the single host-neutral time entry point. Pass a measured frame delta (in seconds); the engine validates it, advances the `Time` resource, runs FixedUpdate iterations, and returns a `Result`.
@@ -659,6 +663,11 @@ It is the mirror of `ChildOf`, rebuilt by the mirror hook after `instantiateScen
 ### Field-level `transient` (feat-20260709)
 
 `transient: true` also declares on an **individual field** (via `FieldDescriptor`), not only a whole component. `rootsToSceneAsset` collect skips any field whose reflection carries `transient: true` — a generic mechanism keyed on `component.fields[fieldName].transient`, not a per-component special case. The field stays physically in its column and participates in queries / `world.get`; only the collect write path is gated.
+
+`simulationTransient: true` is the separate record/restore boundary for
+runtime-owned or presentation bindings that must remain in SceneAsset
+writeback. It is filtered only by the simulation projection; use `transient`
+when the field is also derived and must be omitted from scene serialization.
 
 The canonical use is a per-frame **derived cache** field: `Transform.world` (the resolved world mat4, recomposed every frame by the propagate kernel from the persisted local TRS) declares `transient: true`, so scene JSON never stores the reconstructable 16-float matrix (architecture-principles.md #2 Derive). After `instantiateScene` the first propagate pass re-derives an equivalent `world`.
 

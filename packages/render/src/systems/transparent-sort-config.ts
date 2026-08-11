@@ -204,5 +204,6 @@ export function setTransparentSortConfig(
     mode: cfg.mode,
     yzAlpha: cfg.yzAlpha,
   });
+  world.registerSimulationTransientResource(TRANSPARENT_SORT_CONFIG_KEY);
   return ok(undefined);
 }

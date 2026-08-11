@@ -44,6 +44,8 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  * @property {'pixel'|'structural'} mode
  * @property {string} [liveHook]    window fn name returning live RGBA Uint8Array
  *                                  (pixel mode only). e.g. '__captureColors'.
+ * @property {string} [capturePrepareHook] window fn name awaited immediately
+ *                                  before captureFrame arms/snapshots the tape.
  * @property {number} [drawIdx]     draw to inspect in structural mode (default last color pass)
  * @property {number} [rtIdx]       RT index for readbackRt (pixel mode, default 0)
  * @property {number} [epsilon]     max whole-frame RGB pixel delta (default 0.02)
@@ -68,6 +70,7 @@ export async function verifyDemoCapture(opts) {
     label,
     mode,
     liveHook,
+    capturePrepareHook,
     drawIdx,
     rtIdx = 0,
     epsilon = 0.02,
@@ -166,7 +169,14 @@ export async function verifyDemoCapture(opts) {
   let liveDims = null;
   try {
     const result = await page.evaluate(
-      async ({ mode, liveHook }) => {
+      async ({ mode, liveHook, capturePrepareHook }) => {
+        if (capturePrepareHook !== undefined) {
+          const prepare = globalThis[capturePrepareHook];
+          if (typeof prepare !== 'function') {
+            throw new Error(`capture preparation hook window.${capturePrepareHook} is not a function`);
+          }
+          await prepare();
+        }
         const cap = await globalThis.__forgeax.captureFrame(1);
         let live = null;
         let dims = null;
@@ -189,7 +199,7 @@ export async function verifyDemoCapture(opts) {
         }
         return { cap, live, dims };
       },
-      { mode, liveHook },
+      { mode, liveHook, capturePrepareHook },
     );
     captured = result.cap;
     livePixelsB64 = result.live;

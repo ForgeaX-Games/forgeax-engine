@@ -5,6 +5,7 @@ import type { GameplayAudio } from '../gameplay-audio';
 import type { CustomProjectileMesh } from '../custom-projectile-mesh';
 import { GameState } from '../gameplay-state';
 import { applyAssetLabAction, type AssetLabActionContext, type AssetLabActionResult } from '../asset-lab-actions';
+import type { LightingModeHandle } from '../lighting-mode';
 
 export type InputActionsSystemContext = AssetLabActionContext & {
   readonly readInput: () => InputSnapshot;
@@ -12,6 +13,7 @@ export type InputActionsSystemContext = AssetLabActionContext & {
   readonly customProjectile: CustomProjectileMesh | undefined;
   readonly toggleCustomProjectileMesh: (state: CustomProjectileMesh) => void;
   readonly onAssetLabResult?: (result: AssetLabActionResult) => void;
+  readonly lightingMode: LightingModeHandle;
 };
 
 /** Maps the frozen InputSnapshot to named feature/plugin actions. */
@@ -24,6 +26,7 @@ export function installInputActionsSystem(ctx: InputActionsSystemContext): void 
       const snap = ctx.readInput();
       ctx.gameplayAudio?.setMusicPlaying(true);
       ctx.gameplayAudio?.rearm();
+      if (snap.action('lightingMode').justPressed()) ctx.lightingMode.toggle();
       if (ctx.customProjectile !== undefined && snap.action('meshUv').justPressed()) ctx.toggleCustomProjectileMesh(ctx.customProjectile);
       const applyAssetLab = (action: Parameters<typeof applyAssetLabAction>[1]): void => {
         ctx.onAssetLabResult?.(applyAssetLabAction(ctx, action));

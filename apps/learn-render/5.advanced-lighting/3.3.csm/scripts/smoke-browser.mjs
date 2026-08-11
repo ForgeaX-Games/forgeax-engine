@@ -18,12 +18,18 @@ await verifyDemoCapture({
   label: 'learn-render 5.3.3 csm',
   mode: 'pixel',
   liveHook: '__captureCsm',
+  capturePrepareHook: '__prepareCsmCapture',
   rtIdx: 0,
   appDir: dirname(here),
   assertCapture: assertCsmCapture,
   assertTape: assertCsmTape,
   assertPixels: assertCsmPixels,
-  urlSuffix: process.env.FALSIFY === 'force-csm-highlight-layer-2' ? '?csm-highlight=2' : '',
+  urlSuffix:
+    process.env.FALSIFY === 'force-csm-highlight-layer-2'
+      ? '?csm-highlight=2'
+      : process.env.FALSIFY === 'force-csm-browser-probe-boundary-shift'
+        ? '?csm-probe-boundary-shift=1'
+        : '',
 });
 
 /** @param {object} report */
@@ -501,6 +507,66 @@ function assertCsmTape({ tape }) {
   console.log(
     `[csm] View UBO lineage camera=${JSON.stringify(cameraPosition)} ` +
       `matrixDelta=${JSON.stringify(adjacentMatrixDelta)} count=${cascadeCount} blend=${cascadeBlend}`,
+  );
+  const probeLsmBuffer = events.find(
+    (event) => event.kind === 'createBuffer' && event.desc?.size === 352,
+  );
+  if (probeLsmBuffer?.desc?.size !== 352) {
+    throw new Error(`expected 352B CSM probe UBO, got ${JSON.stringify(probeLsmBuffer?.desc)}`);
+  }
+  const probeLsmInitialData = events.find(
+    (event) => event.kind === 'initialData' && event.handleId === probeLsmBuffer.handleId,
+  );
+  const probeLsmBytes = probeLsmInitialData === undefined ? undefined : readBlob(probeLsmInitialData.dataHash);
+  if (probeLsmBytes === undefined || probeLsmBytes.byteLength !== 352) {
+    throw new Error('CSM probe UBO initial-data blob is missing');
+  }
+  const probeFloats = new Float32Array(
+    probeLsmBytes.buffer,
+    probeLsmBytes.byteOffset,
+    probeLsmBytes.byteLength / 4,
+  );
+  const probeView = probeFloats.slice(64, 80);
+  // The main View UBO stores worldViewProj at [0..15], not the raw view
+  // matrix. This fixed demo camera has identity rotation and translation
+  // [0,-1.5,-6]; compare the captured producer-owned probe view to that
+  // camera fact instead of comparing unlike matrix slots.
+  const expectedView = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, -1.5, -6, 1,
+  ];
+  const viewDelta = Math.max(
+    ...probeView.map((value, index) => Math.abs(value - (expectedView[index] ?? 0))),
+  );
+  const probeSplits = [probeFloats[80], probeFloats[81], probeFloats[82], probeFloats[83]];
+  const gatedProbeSplits = [...probeSplits];
+  if (process.env.FALSIFY === 'force-csm-browser-probe-split-shift') {
+    gatedProbeSplits[0] = (gatedProbeSplits[0] ?? 0) + 1;
+    console.log('[csm] FALSIFY=force-csm-browser-probe-split-shift -- shifted probe split plane');
+  }
+  if (
+    !Number.isFinite(viewDelta) ||
+    viewDelta > 0.0001 ||
+    gatedProbeSplits.some(
+      (value, index) =>
+        !Number.isFinite(value) || Math.abs(value - (splits[index] ?? Number.NaN)) > 0.0001,
+    ) ||
+    new DataView(probeLsmBytes.buffer, probeLsmBytes.byteOffset, probeLsmBytes.byteLength).getUint32(336, true) !== 4
+  ) {
+    throw new Error(
+      `CSM probe UBO lineage diverged: ${JSON.stringify({
+        viewDelta,
+        probeSplits: gatedProbeSplits,
+        viewSplits: splits,
+        cascadeCount: new DataView(probeLsmBytes.buffer, probeLsmBytes.byteOffset, probeLsmBytes.byteLength).getUint32(336, true),
+      })}`,
+    );
+  }
+  console.log(
+    `[csm] probe UBO lineage viewDelta=${viewDelta.toFixed(6)} ` +
+      `splits=${JSON.stringify(probeSplits)} cascadeCount=4 accepted`,
   );
   if (viewFloats.slice(0, 16).every((value) => value === 0 || !Number.isFinite(value))) {
     throw new Error('camera matrix region in the view UBO is empty');

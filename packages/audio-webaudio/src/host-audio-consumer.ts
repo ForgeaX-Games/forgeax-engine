@@ -13,6 +13,7 @@ import {
   type SimulationRestoreContext,
 } from '@forgeax/engine-ecs';
 import { AudioError, ok, type Result } from '@forgeax/engine-types';
+import { createHostAudioSimulationParticipant } from './simulation-participant';
 import { WebAudioEngine } from './web-audio-engine';
 
 export interface HostAudioSimulationSource {
@@ -287,8 +288,12 @@ export function createHostAudioConsumer(engine = new WebAudioEngine()): HostAudi
 
 export function createWebAudioBackend(): AudioBackend {
   const consumer = createHostAudioConsumer();
-  return createAudioIntentBackend({
+  const backend = createAudioIntentBackend({
     emit: (intent) => consumer.consume(intent),
     state: () => consumer.state(),
   });
+  return {
+    ...backend,
+    simulationParticipant: createHostAudioSimulationParticipant(consumer),
+  };
 }

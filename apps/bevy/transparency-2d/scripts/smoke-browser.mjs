@@ -1,37 +1,70 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
-import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from 'playwright';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { verifyDemoCapture } from '../../../shared/scripts/rhi-debug-verify.mjs';
 
-const port = Number(process.env.PORT ?? 5174);
-const vite = spawn('pnpm', ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { stdio: 'pipe' });
-try {
-  await delay(1000);
-  const browser = await chromium.launch({
-    headless: true,
-    channel: 'chrome',
-    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
-  });
-  const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
-  page.on('console', (message) => { if (message.type() === 'error' && !message.text().includes('404')) errors.push(`console: ${message.text()}`); });
-  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
-  try {
-    await page.waitForFunction(() => globalThis.__bevyTransparency2dReady === true, null, { timeout: 30000 });
-  } catch (error) {
-    console.error(`[smoke-browser] ready timeout; diagnostics=${errors.join(' | ') || 'none'}`);
-    throw error;
-  }
-  await page.waitForTimeout(1000);
-  await page.screenshot({ path: 'artifacts/transparency-2d-browser.png' });
-  const canvasSize = await page.locator('canvas').evaluate((element) => ({ width: element.width, height: element.height }));
-  if (canvasSize.width <= 0 || canvasSize.height <= 0) throw new Error(`invalid canvas size: ${JSON.stringify(canvasSize)}`);
-  console.log(`[smoke-browser] ready=1 canvas=${canvasSize.width}x${canvasSize.height}`);
-  if (errors.length > 0) throw new Error(errors.join(' | '));
-  console.log('[smoke-browser] PASS - Chrome loaded transparency_2d and reached the running-system ready marker');
-  await browser.close();
-} finally {
-  vite.kill('SIGTERM');
-  await delay(100);
-}
+const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const transparentSpriteDraw = 2;
+
+await verifyDemoCapture({
+  pkg: '@forgeax/bevy-transparency-2d',
+  label: 'bevy transparency 2d',
+  mode: 'structural',
+  drawIdx: transparentSpriteDraw,
+  appDir: dirname(scriptsDir),
+  assertTape({ tape }) {
+    const pipelines = new Map();
+    const draws = [];
+    let pipelineHandleId;
+    for (const event of tape.events) {
+      if (event.kind === 'createRenderPipeline') pipelines.set(event.handleId, event.desc);
+      if (event.kind === 'setPipeline') pipelineHandleId = event.pipelineHandleId;
+      if (event.kind === 'draw' || event.kind === 'drawIndexed') {
+        draws.push({ event, pipeline: pipelines.get(pipelineHandleId) });
+      }
+    }
+    const transparentSpriteDraws = draws.filter(({ event }) => event.kind === 'drawIndexed');
+    const selected = transparentSpriteDraws[transparentSpriteDraw];
+    const target = selected?.pipeline?.fragment?.targets?.[0];
+    const blend = target?.blend;
+    const expected = {
+      drawKind: 'drawIndexed',
+      indexCount: 6,
+      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      depthWriteEnabled: false,
+    };
+    const actual = {
+      drawKind: selected?.event?.kind,
+      indexCount: selected?.event?.indexCount,
+      targetFormat: target?.format,
+      color: {
+        srcFactor: blend?.color?.srcFactor,
+        dstFactor: blend?.color?.dstFactor,
+        operation: blend?.color?.operation,
+      },
+      alpha: {
+        srcFactor: blend?.alpha?.srcFactor,
+        dstFactor: blend?.alpha?.dstFactor,
+        operation: blend?.alpha?.operation,
+      },
+      depthWriteEnabled: selected?.pipeline?.depthStencil?.depthWriteEnabled,
+    };
+    if (transparentSpriteDraws.length !== 3) {
+      throw new Error(`expected 3 transparent sprite draws, got ${transparentSpriteDraws.length}`);
+    }
+    const targetFormats = new Set(['bgra8unorm', 'rgba16float']);
+    const blendEvidenceMatches =
+      actual.drawKind === expected.drawKind &&
+      actual.indexCount === expected.indexCount &&
+      actual.color !== undefined &&
+      JSON.stringify(actual.color) === JSON.stringify(expected.color) &&
+      actual.alpha !== undefined &&
+      JSON.stringify(actual.alpha) === JSON.stringify(expected.alpha) &&
+      actual.depthWriteEnabled === expected.depthWriteEnabled;
+    if (!targetFormats.has(actual.targetFormat) || !blendEvidenceMatches) {
+      throw new Error(`selected draw ${transparentSpriteDraw} alpha/blend mismatch: ${JSON.stringify({ expected, actual })}`);
+    }
+    console.log(`[bevy transparency 2d] selected draw ${transparentSpriteDraw} alpha/blend evidence=${JSON.stringify(actual)}`);
+  },
+});

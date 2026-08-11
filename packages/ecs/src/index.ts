@@ -708,6 +708,7 @@ export {
   type EntityFieldKind,
   type ProfileComponentError,
   projectComponentData,
+  projectSimulationComponentData,
   validateProfileComponents,
 } from './externalization/index';
 

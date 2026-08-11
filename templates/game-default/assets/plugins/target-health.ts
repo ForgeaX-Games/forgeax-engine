@@ -2,6 +2,7 @@ import {
   Time,
   Update,
   World,
+  defineRecoverableResource,
   defineComponent,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
@@ -60,6 +61,12 @@ export function installTargetHealth(world: World, targetQuery: ScoringTargetQuer
     totalMax: scoringTargetEntities(targetQuery).length * INITIAL_HEALTH,
     damageEvents: 0,
   });
+  world.registerRecoverableResource(
+    defineRecoverableResource<TargetHealthWitnessState>(GAME_DEFAULT_TARGET_HEALTH_WITNESS, {
+      schemaFingerprint: 'game-default.target-health-witness.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
   const state = world.getResource<TargetHealthWitnessState>(GAME_DEFAULT_TARGET_HEALTH_WITNESS);
 
   world.addSystem(Update, {

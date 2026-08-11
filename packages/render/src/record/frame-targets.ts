@@ -52,6 +52,7 @@ import type {
 import type { RenderGraphExecutionPhase, RenderRecordPhase } from '../renderer';
 
 import { type RenderFrameState, retirePerFrameGraph } from './frame-snapshot';
+import { computeViewMatrix } from './helpers';
 
 type RecordProfilePhase = (phase: RenderRecordPhase, action: () => void) => void;
 
@@ -306,6 +307,7 @@ export function writebackGraphViews(
   shadowMs: number | undefined,
   targetW: number,
   targetH: number,
+  camera?: CameraSnapshot,
 ): void {
   const graphDepthView = frameState.perFrameGraph?.getColorTargetView('depth') as
     | TextureView
@@ -355,12 +357,25 @@ export function writebackGraphViews(
       }
       pipelineState.perPassResources.shadowCsmLightViewProj = csmPack;
     }
+    if (
+      camera !== undefined &&
+      lights.splitPlanes !== undefined &&
+      lights.lightViewProj !== undefined
+    ) {
+      pipelineState.perPassResources.shadowCsmSelection = {
+        viewMatrix: new Float32Array(computeViewMatrix(camera)),
+        splitPlanes: new Float32Array(lights.splitPlanes),
+      };
+    } else {
+      pipelineState.perPassResources.shadowCsmSelection = null;
+    }
   } else {
     pipelineState.perPassResources.shadowTexture = null;
     pipelineState.perPassResources.shadowMapSize = 0;
     pipelineState.perPassResources.shadowCascadeCount = 0;
     pipelineState.perPassResources.shadowLightSpaceMatrix = null;
     pipelineState.perPassResources.shadowCsmLightViewProj = null;
+    pipelineState.perPassResources.shadowCsmSelection = null;
   }
   const graphHdrView = frameState.perFrameGraph?.getColorTargetView('hdrColor') as
     | TextureView

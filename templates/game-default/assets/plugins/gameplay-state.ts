@@ -1,4 +1,10 @@
-import { FixedTime, FixedUpdate, Update, type World } from '@forgeax/engine-ecs';
+import {
+  FixedTime,
+  FixedUpdate,
+  Update,
+  defineRecoverableResource,
+  type World,
+} from '@forgeax/engine-ecs';
 import {
   addOnEnter,
   defineState,
@@ -54,6 +60,12 @@ export function installGameplayState(ctx: GameplayStateContext): GameplayStateHa
     resetTransitions: 0,
   };
   ctx.world.insertResource(GAMEPLAY_STATE_WITNESS_KEY, initialWitness);
+  ctx.world.registerRecoverableResource(
+    defineRecoverableResource<GameplayStateWitness>(GAMEPLAY_STATE_WITNESS_KEY, {
+      schemaFingerprint: 'game-default.gameplay-state-witness.v1',
+      clone: (value) => ({ ...value }),
+    }),
+  );
 
   const witness = (): GameplayStateWitness => ctx.world.getResource<GameplayStateWitness>(GAMEPLAY_STATE_WITNESS_KEY);
   const patchWitness = (patch: Partial<GameplayStateWitness>): void => {

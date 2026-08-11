@@ -26,6 +26,7 @@ export default defineProject({
       '__tests__/barrier-route.test.ts',
       '__tests__/sentinel-ranged-threat.test.ts',
       '__tests__/simulation-evidence.integration.test.ts',
+      '__tests__/lighting-mode.test.ts',
     ],
     exclude: ['**/node_modules/**'],
   },

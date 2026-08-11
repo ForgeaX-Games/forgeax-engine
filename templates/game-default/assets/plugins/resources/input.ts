@@ -16,6 +16,7 @@ export const GAME_DEFAULT_INPUT_MAP: readonly ActionConfig[] = [
   { action: 'targetProfile', bindings: [{ type: 'key', key: 'p' }, { type: 'key', key: 'P' }] },
   { action: 'spriteAtlas', bindings: [{ type: 'key', key: 'n' }, { type: 'key', key: 'N' }] },
   { action: 'fontSource', bindings: [{ type: 'key', key: 'y' }, { type: 'key', key: 'Y' }] },
+  { action: 'lightingMode', bindings: [{ type: 'key', key: 't' }, { type: 'key', key: 'T' }] },
   { action: 'freeUp', bindings: [{ type: 'key', key: 'e' }] },
   { action: 'freeDown', bindings: [{ type: 'key', key: 'q' }] },
   { action: 'freeRun', bindings: [{ type: 'key', key: 'Shift' }] },
@@ -29,6 +30,7 @@ export const GAME_DEFAULT_INPUT_MAP: readonly ActionConfig[] = [
 /** Install the authored action map and expose a frame-zero-safe snapshot reader. */
 export function installGameplayInputMap(world: World): () => InputSnapshot {
   world.insertResource(INPUT_MAP_KEY, GAME_DEFAULT_INPUT_MAP);
+  world.registerSimulationTransientResource(INPUT_MAP_KEY);
   const empty = createInputSnapshot();
   return () => world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)
     ? world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)

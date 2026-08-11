@@ -367,7 +367,16 @@ export function recordFrame(
     // Write back graph-resolved TextureViews (depth / shadow / fxaa / hdr)
     // into perPassResources so downstream pass closures read them without
     // signature changes. Extracted to writebackGraphViews (M3/w18).
-    writebackGraphViews(frameState, pipelineState, lights, shadowView, shadowMs, targetW, targetH);
+    writebackGraphViews(
+      frameState,
+      pipelineState,
+      lights,
+      shadowView,
+      shadowMs,
+      targetW,
+      targetH,
+      camera,
+    );
 
     // Tonemap + skybox-active resolution (skybox requires tonemap HDR target +
     // a resident cubemap view). Extracted to resolveSkyboxActive (M3/w18).

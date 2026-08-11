@@ -42,7 +42,9 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * archetype column slots (AC-05).
  */
 export const VideoPlayer = defineComponent('VideoPlayer', {
-  clip: { type: 'shared<VideoAsset>' },
+  // The host HTMLVideoElement owns the live asset/presentation binding; the
+  // portable play controls remain in the simulation projection.
+  clip: { type: 'shared<VideoAsset>', simulationTransient: true },
   playing: { type: 'bool', default: false },
   loop: { type: 'bool', default: false },
   currentTime: { type: 'f32', default: 0, transient: true },

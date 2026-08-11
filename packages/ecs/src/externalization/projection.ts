@@ -45,13 +45,16 @@ function deepCopyValue(value: unknown): unknown {
  * @param entityRemap Optional transform for entity and array<entity> field values
  * @returns           Owned snapshot with all non-transient, portable fields filled
  */
-export function projectComponentData<S extends ComponentSchema>(
+type ProjectionMode = 'scene' | 'simulation';
+
+function projectComponentDataInMode<S extends ComponentSchema>(
   token: Component<string, S>,
   raw: Partial<Record<string, unknown>> | undefined,
   entityRemap?: (entity: number) => number,
+  mode: ProjectionMode = 'scene',
 ): Record<string, unknown> {
   // Component-level transient: no fields are externalized
-  if (token.transient) {
+  if (token.transient || (mode === 'simulation' && token.simulationTransient)) {
     return {};
   }
 
@@ -68,7 +71,11 @@ export function projectComponentData<S extends ComponentSchema>(
 
     // Skip field-level transient in the input
     const fieldRefl = fields?.[fieldName];
-    if (fieldRefl?.transient === true) continue;
+    if (
+      fieldRefl?.transient === true ||
+      (mode === 'simulation' && fieldRefl?.simulationTransient === true)
+    )
+      continue;
 
     if (rawObj !== undefined && fieldName in rawObj) {
       const value = rawObj[fieldName];
@@ -104,13 +111,33 @@ export function projectComponentData<S extends ComponentSchema>(
   if (fields !== undefined) {
     for (const fieldName of Object.keys(schema)) {
       const fieldRefl = fields[fieldName];
-      if (fieldRefl?.transient === true) {
+      if (
+        fieldRefl?.transient === true ||
+        (mode === 'simulation' && fieldRefl?.simulationTransient === true)
+      ) {
         delete result[fieldName];
       }
     }
   }
 
   return result;
+}
+
+export function projectComponentData<S extends ComponentSchema>(
+  token: Component<string, S>,
+  raw: Partial<Record<string, unknown>> | undefined,
+  entityRemap?: (entity: number) => number,
+): Record<string, unknown> {
+  return projectComponentDataInMode(token, raw, entityRemap);
+}
+
+/** Project ECS data for simulation record/restore, excluding runtime bindings. */
+export function projectSimulationComponentData<S extends ComponentSchema>(
+  token: Component<string, S>,
+  raw: Partial<Record<string, unknown>> | undefined,
+  entityRemap?: (entity: number) => number,
+): Record<string, unknown> {
+  return projectComponentDataInMode(token, raw, entityRemap, 'simulation');
 }
 
 /**
@@ -149,6 +176,13 @@ export function isFieldPortable(fieldType: string): boolean {
   if (fieldType === 'ref') return false;
   if (fieldType.startsWith('unique<')) return false;
   if (fieldType.startsWith('shared<')) return false;
+  if (fieldType.startsWith('array<') && fieldType.endsWith('>')) {
+    const body = fieldType
+      .slice('array<'.length, -1)
+      .replace(/,\s*\d+$/, '')
+      .trim();
+    return body.length > 0 && isFieldPortable(body);
+  }
   return true;
 }
 

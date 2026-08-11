@@ -11,13 +11,17 @@
 
 import { defineComponent } from '@forgeax/engine-ecs';
 
-export const AudioSource = defineComponent('AudioSource', {
-  clip: { type: 'shared<AudioClipAsset>' },
-  playing: { type: 'bool', default: false },
-  loop: { type: 'bool', default: false },
-  volume: { type: 'f32', default: 1.0 },
-  spatialBlend: { type: 'f32', default: 0 },
-  bus: { type: 'string', default: 'sfx' },
-});
+export const AudioSource = defineComponent(
+  'AudioSource',
+  {
+    clip: { type: 'shared<AudioClipAsset>' },
+    playing: { type: 'bool', default: false },
+    loop: { type: 'bool', default: false },
+    volume: { type: 'f32', default: 1.0 },
+    spatialBlend: { type: 'f32', default: 0 },
+    bus: { type: 'string', default: 'sfx' },
+  },
+  { simulationTransient: true },
+);
 
 export const AudioListener = defineComponent('AudioListener', {});

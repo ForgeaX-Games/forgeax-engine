@@ -18,6 +18,7 @@ import type {
   SceneEntity,
   SceneInstanceMount,
 } from '@forgeax/engine-types';
+import { ok } from '@forgeax/engine-types';
 import { BufferPool } from './buffer-pool';
 import type {
   Component,
@@ -27,7 +28,7 @@ import type {
   ManagedArrayElementValue,
   ShapeOf,
 } from './component';
-import { type EntityHandle, entityGeneration, entityIndex } from './entity-handle';
+import { type EntityHandle, encodeEntity, entityGeneration, entityIndex } from './entity-handle';
 import type {
   ArrayPopEmptyError,
   CardinalityExceededError,
@@ -408,6 +409,7 @@ export class World {
   private readonly resources: ResourceStore = createResourceStore();
   private readonly simulationParticipantRegistry = new SimulationParticipantRegistry();
   private readonly simulationResourceDescriptors = new Map<string, RecoverableResourceDescriptor>();
+  private readonly simulationTransientResourceKeys = new Set<string>();
   /** Error handler for Layer 3 (defaults to matchSeverity — Panic throws). */
   private errorHandler: ErrorHandler = matchSeverity;
   /** Remainder carried between fixed-step runs. */
@@ -657,6 +659,9 @@ export class World {
   /** @internal */
   _getSimulationResourceDescriptors(): ReadonlyMap<string, RecoverableResourceDescriptor> {
     return this.simulationResourceDescriptors;
+  }
+  /** @internal */ _getSimulationTransientResourceKeys(): ReadonlySet<string> {
+    return this.simulationTransientResourceKeys;
   }
   /** @internal */ _getErrorHandler(): ErrorHandler {
     return this.errorHandler;
@@ -944,6 +949,11 @@ export class World {
       descriptor.key,
       descriptor as RecoverableResourceDescriptor,
     );
+  }
+
+  /** Mark a host-owned resource as outside the portable simulation projection. */
+  registerSimulationTransientResource(key: string): void {
+    this.simulationTransientResourceKeys.add(key);
   }
 
   simulationRecord(): Result<SimulationRecordV1, SimulationError> {
@@ -1292,6 +1302,22 @@ export class World {
    */
   despawn(entity: EntityHandle): Result<void, EcsError> {
     return despawnCore(this, entity, false);
+  }
+
+  /** Despawn every live entity through the normal lifecycle and ref cleanup path. */
+  despawnAll(): Result<void, EcsError> {
+    const entities: EntityHandle[] = [];
+    for (let index = 0; index < this.records.length; index += 1) {
+      const record = this.records[index];
+      if (record !== undefined && record.archetypeId >= 0) {
+        entities.push(encodeEntity(index, record.generation));
+      }
+    }
+    for (const entity of entities) {
+      const result = this.despawn(entity);
+      if (!result.ok) return result;
+    }
+    return ok(undefined);
   }
 
   /**

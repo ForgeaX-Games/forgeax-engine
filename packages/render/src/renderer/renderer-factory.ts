@@ -3118,13 +3118,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // feat-20260520-directional-light-shadow-mapping M3 / w16 (D-6 + AC-13):
     // debugSampleShadowFactor renders one pixel per probe through the
     // shadow-probe pipeline (constructed in createPipelineState) and reads
-    // back the resulting r32float values. The probe shader runs the same
-    // textureSampleCompareLevel(shadowMap, shadowSampler, uv, currentDepth)
-    // call pbr.wgsl::evalDirectional() uses with the same UV remap and the
-    // **same** PipelineState.shadowSampler. M3 probe uses 3x3 PCF + fixed
-    // floor-bias 0.005 (conservative lower bound; probe has no surface
-    // normal for the slope-dependent term). Caps at
-    // PROBE_MAX_COUNT (64); excess inputs are dropped with no error.
+    // back the resulting rgba32float values. The probe shader runs the same
+    // textureLoad-based 3x3 PCF path as pbr.wgsl::evalDirectional() with the
+    // same UV remap and the **same** PipelineState.shadowSampler binding. The
+    // four output lanes are shadow factor, center atlas depth, selected
+    // cascade index, and receiver depth. Caps at PROBE_MAX_COUNT (64); excess
+    // inputs are dropped with no error.
     //
     // Separate command encoder per the M1c lesson (see feat-20260520
     // commit ceff773b): binding the shadow RT as both depth-attachment
@@ -3132,7 +3131,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // WebGPU "usage scope" validation and silently drops one side.
     async debugSampleShadowFactor(
       worldPositions: ReadonlyArray<readonly [number, number, number]>,
-    ): Promise<ReadonlyArray<{ readonly shadowFactor: number }> | null> {
+    ): Promise<ReadonlyArray<{
+      readonly shadowFactor: number;
+      readonly sampledDepth: number;
+      readonly cascadeIndex: number;
+      readonly receiverDepth: number;
+    }> | null> {
       if (pipelineState === null) return null;
       const state = pipelineState;
       if (
@@ -3153,11 +3157,17 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       const csmPack = state.perPassResources.shadowCsmLightViewProj;
       const cascadeCount = state.perPassResources.shadowCascadeCount;
       const lsm = state.perPassResources.shadowLightSpaceMatrix;
+      const csmSelection = state.perPassResources.shadowCsmSelection;
       // No shadow caster → all points are fully lit (1.0). Return identity
       // values so callers (e.g. shadow-quality-metrics falsify probe) can
       // distinguish "no shadow" from "probe not compiled".
       if (csmPack === null && lsm === null) {
-        return worldPositions.slice(0, PROBE_MAX_COUNT).map(() => ({ shadowFactor: 1 }));
+        return worldPositions.slice(0, PROBE_MAX_COUNT).map(() => ({
+          shadowFactor: 1,
+          sampledDepth: 1,
+          cascadeIndex: -1,
+          receiverDepth: 1,
+        }));
       }
       // M5-T2: shadow texture view resolved via render-graph getter
       // (`renderSystem.getCurrentShadowView()` -> graph
@@ -3199,8 +3209,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         return null;
       }
 
-      // LSM UBO write: PROBE_LSM_UBO_BYTES bytes (4 × 64 mat4 + cascadeCount
-      // u32 + 12 B pad). Layout mirrors the SHADOW_PROBE_WGSL `CsmLsm` struct.
+      // LSM UBO write: PROBE_LSM_UBO_BYTES bytes. Layout mirrors the
+      // SHADOW_PROBE_WGSL `CsmLsm` struct and carries the producer-owned
+      // view-space selector facts alongside the cascade matrices.
       // When only the legacy single-mat4 lsm is available (CSM pack null),
       // duplicate it across all 4 cascade slots so the probe still works
       // pre-extract or in single-cascade legacy paths.
@@ -3213,10 +3224,14 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           for (let i = 0; i < 16; i++) lsmBytes[c * 16 + i] = lsm[i] ?? 0;
         }
       }
-      // cascadeCount (u32) at byte 256 -> float index 64. Use a Uint32 view
+      if (csmSelection !== null) {
+        for (let i = 0; i < 16; i++) lsmBytes[64 + i] = csmSelection.viewMatrix[i] ?? 0;
+        for (let i = 0; i < 4; i++) lsmBytes[80 + i] = csmSelection.splitPlanes[i] ?? 0;
+      }
+      // cascadeCount (u32) at byte 336 -> float index 84. Use a Uint32 view
       // sharing the underlying buffer so the value stays a u32 word.
       const lsmU32 = new Uint32Array(lsmBytes.buffer);
-      lsmU32[64] = Math.max(1, cascadeCount) >>> 0;
+      lsmU32[84] = Math.max(1, cascadeCount) >>> 0;
       const lsmUploadResult = internals.device.queue.writeBuffer(
         state.shadowProbeLsmUbo,
         0,
@@ -3272,9 +3287,11 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       }
       const enc = encResult.value;
 
-      // Clear value: r=1.0 means "fully lit" — slots beyond probeCount land
-      // here, and any fragments outside the rasterised columns (none, since
-      // we cover the full RT row exactly) would also default to lit.
+      // Clear value: r=1.0 means "fully lit"; g=1.0 is the empty-atlas
+      // depth sentinel; b=-1.0 marks no selected cascade; a=1.0 is the
+      // receiver-depth sentinel. Slots beyond probeCount land here, and any
+      // fragments outside the rasterised columns (none, since we cover the
+      // full RT row exactly) would also default to these sentinels.
       const probePass = enc.beginRenderPass({
         label: 'shadow-probe-pass',
         colorAttachments: [
@@ -3282,7 +3299,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
             view: state.shadowProbeOutputView,
             loadOp: 'clear',
             storeOp: 'store',
-            clearValue: { r: 1, g: 0, b: 0, a: 0 },
+            clearValue: { r: 1, g: 1, b: -1, a: 1 },
           },
         ],
       } as never);
@@ -3324,15 +3341,31 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         return null;
       }
       const data = new Float32Array(rangeResult.value);
-      const results: { shadowFactor: number }[] = [];
+      const results: {
+        shadowFactor: number;
+        sampledDepth: number;
+        cascadeIndex: number;
+        receiverDepth: number;
+      }[] = [];
       for (let i = 0; i < requested; i++) {
         if (i < probeCount) {
-          results.push({ shadowFactor: data[i] ?? 1 });
+          const base = i * 4;
+          results.push({
+            shadowFactor: data[base] ?? 1,
+            sampledDepth: data[base + 1] ?? 1,
+            cascadeIndex: Math.round(data[base + 2] ?? -1),
+            receiverDepth: data[base + 3] ?? 1,
+          });
         } else {
           // Caller asked for more than PROBE_MAX_COUNT; surface a sentinel
-          // 1.0 (fully lit) so length matches the request without inventing
-          // a new error code (charter F2 minimal surface).
-          results.push({ shadowFactor: 1 });
+          // result so length matches the request without inventing a new
+          // error code (charter F2 minimal surface).
+          results.push({
+            shadowFactor: 1,
+            sampledDepth: 1,
+            cascadeIndex: -1,
+            receiverDepth: 1,
+          });
         }
       }
       mappedBuf.unmap();
@@ -3787,32 +3820,32 @@ const VIEW_UBO_BYTES = 784;
 // ── feat-20260520-directional-light-shadow-mapping M2 / w15 (AC-12 numeric flip)
 //
 // debugSampleShadowFactor probe pipeline. Renders one pixel per probe into a
-// 1xN r32float color attachment using a fragment shader that mirrors
+// 1xN rgba32float color attachment using a fragment shader that mirrors
 // pbr.wgsl::evalDirectional()'s M3 shadow lookup (slope-scaled bias + 3x3 PCF).
 // The probe uses a fixed floor-bias of 0.005 (no normal-dependent slope term)
 // because it only receives world positions, not surface normals. This is the
 // minimum-bias floor the main pass applies; the probe's result is a conservative
-// lower bound on the actual shadow factor.
+// lower bound on the actual shadow factor. The other lanes expose the raw
+// center depth, selected cascade index, and projected receiver depth.
 //
 // M3 probe uses textureLoad (returns raw f32 from texture_depth_2d) for 9-tap
 // PCF; the comparison sampler (binding 3) is retained in the bindings for layout
 // compatibility with the probe BindGroupLayout but is unused by the M3 probe
 // fragment stage.
 //
-// Probe count cap: 64. AI users wanting more should batch. Keeps the
-// readback staging buffer at 256 B (single 256B-aligned row).
+// Probe count cap: 64. AI users wanting more should batch. Four f32 lanes per
+// probe keep the readback staging buffer at 1024 B (single 256B-aligned row).
 const PROBE_MAX_COUNT = 64;
 const PROBE_INPUT_BYTES = PROBE_MAX_COUNT * 16; // array<vec4<f32>, 64>
 // feat-20260613-csm-cascaded-shadow-maps M5 / w28: probe LSM UBO carries
-// 4 cascade lightViewProj matrices (4 × 64 B = 256 B) + cascadeCount u32
-// + 12 B pad to 16 B = 272 B; round up to 288 for std140 / 16 B alignment.
-// The shader walks the 4 matrices in order and picks the first cascade
-// whose projected (uv, z) falls inside [0,1]^3 -- the geometric equivalent
-// of the main path's viewZ-based cascade selection (probe has no camera
-// matrix, so frustum-containment is the closed form).
-const PROBE_LSM_UBO_BYTES = 288;
-const PROBE_OUTPUT_TEXTURE_FORMAT: GPUTextureFormat = 'r32float';
-const PROBE_READBACK_ROW_BYTES = 256; // 256B-aligned per WebGPU spec; 64*4=256 B already
+// 4 cascade lightViewProj matrices (4 × 64 B = 256 B), then the producer's
+// receiver-selection view matrix (64 B), split planes (16 B), and
+// cascadeCount + 12 B pad (16 B). The probe therefore shares the main
+// viewZ + splitPlanes selector instead of approximating it with geometric
+// containment, which can disagree at split boundaries.
+const PROBE_LSM_UBO_BYTES = 352;
+const PROBE_OUTPUT_TEXTURE_FORMAT: GPUTextureFormat = 'rgba32float';
+const PROBE_READBACK_ROW_BYTES = 1024; // 256B-aligned per WebGPU spec; 64*16=1024 B
 
 const SHADOW_PROBE_WGSL = `
 struct CsmLsm {
@@ -3820,6 +3853,8 @@ struct CsmLsm {
   m1 : mat4x4<f32>,
   m2 : mat4x4<f32>,
   m3 : mat4x4<f32>,
+  view : mat4x4<f32>,
+  splitPlanes : vec4<f32>,
   cascadeCount : u32,
   probePadA : u32,
   probePadB : u32,
@@ -3866,33 +3901,34 @@ fn _probeCascadeMatrix(layer : u32) -> mat4x4<f32> {
   }
 }
 
-@fragment fn fs_main(in : VsOut) -> @location(0) f32 {
-  let p4 = worldPositions.p[in.probeIdx];
-  // Walk cascades in order; pick the first whose projection lands inside
-  // its tile-local UV [0,1]^2 with z <= 1. Cascades are nested (cascade 0
-  // tight near, cascade 3 wide far) so the smallest containing cascade
-  // wins -- same geometric containment evalDirectional resolves via
-  // viewZ + splitPlanes in the main path.
-  let count = max(lsm.cascadeCount, 1u);
-  let tilesPerSide : u32 = select(2u, 1u, count <= 1u);
-  let inv = 1.0 / f32(tilesPerSide);
-  var uv : vec2<f32> = vec2<f32>(2.0, 2.0);
-  var currentDepth : f32 = 2.0;
-  for (var c : u32 = 0u; c < count; c = c + 1u) {
-    let m = _probeCascadeMatrix(c);
-    let lightClip = m * vec4<f32>(p4.xyz, 1.0);
-    let projCoords = lightClip.xyz / lightClip.w;
-    let tileUv = vec2<f32>(projCoords.x * 0.5 + 0.5, -projCoords.y * 0.5 + 0.5);
-    let candDepth = projCoords.z;
-    if (tileUv.x >= 0.0 && tileUv.x <= 1.0 && tileUv.y >= 0.0 && tileUv.y <= 1.0 && candDepth <= 1.0) {
-      let col = c % tilesPerSide;
-      let row = c / tilesPerSide;
-      let tileOrigin = vec2<f32>(f32(col) * inv, f32(row) * inv);
-      uv = tileUv * inv + tileOrigin;
-      currentDepth = candDepth;
+fn _pickCascadeLayer(viewDepth : f32, count : u32) -> u32 {
+  var layer : u32 = count - 1u;
+  for (var i : u32 = 0u; i < count - 1u; i = i + 1u) {
+    if (viewDepth < lsm.splitPlanes[i]) {
+      layer = i;
       break;
     }
   }
+  return layer;
+}
+
+@fragment fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  let p4 = worldPositions.p[in.probeIdx];
+  let count = max(lsm.cascadeCount, 1u);
+  let tilesPerSide : u32 = select(2u, 1u, count <= 1u);
+  let inv = 1.0 / f32(tilesPerSide);
+  let viewPosition = lsm.view * vec4<f32>(p4.xyz, 1.0);
+  let selectedLayer = _pickCascadeLayer(-viewPosition.z, count);
+  let m = _probeCascadeMatrix(selectedLayer);
+  let lightClip = m * vec4<f32>(p4.xyz, 1.0);
+  let projCoords = lightClip.xyz / lightClip.w;
+  let tileUv = vec2<f32>(projCoords.x * 0.5 + 0.5, -projCoords.y * 0.5 + 0.5);
+  let col = selectedLayer % tilesPerSide;
+  let row = selectedLayer / tilesPerSide;
+  let tileOrigin = vec2<f32>(f32(col) * inv, f32(row) * inv);
+  let uv = tileUv * inv + tileOrigin;
+  let currentDepth = projCoords.z;
+  var sampledDepth : f32 = 1.0;
   var shadow : f32 = 1.0;
   let bias : f32 = 0.005;
   let adjustedDepth : f32 = currentDepth - bias;
@@ -3900,6 +3936,8 @@ fn _probeCascadeMatrix(layer : u32) -> mat4x4<f32> {
     let texelDims = vec2<f32>(textureDimensions(shadowMap, 0));
     let baseCoord = vec2<i32>(uv * texelDims);
     let maxCoord = vec2<i32>(texelDims) - vec2<i32>(1, 1);
+    let centerCoord = clamp(baseCoord, vec2<i32>(0, 0), maxCoord);
+    sampledDepth = textureLoad(shadowMap, centerCoord, 0);
     var blocked : f32 = 0.0;
     for (var x = -1; x <= 1; x++) {
       for (var y = -1; y <= 1; y++) {
@@ -3912,7 +3950,7 @@ fn _probeCascadeMatrix(layer : u32) -> mat4x4<f32> {
     }
     shadow = 1.0 - blocked / 9.0;
   }
-  return shadow;
+  return vec4<f32>(shadow, sampledDepth, f32(selectedLayer), currentDepth);
 }
 `;
 
@@ -6593,7 +6631,7 @@ async function buildReadyWebGPU(
   // pattern). The probe uses an inline WGSL constant (SHADOW_PROBE_WGSL,
   // declared near the top of this file) and its own 1-BGL pipeline layout —
   // intentionally orthogonal to the main pipeline's 4-BGL chain. Probe-only
-  // resources (LSM UBO + storage input + 1xN r32float RT + 256B staging
+  // resources (LSM UBO + storage input + 1xN rgba32float RT + 1024B staging
   // buffer) are allocated up-front; per-call cost in `debugSampleShadowFactor`
   // is two `queue.writeBuffer` + one transient BindGroup + one render pass +
   // one `copyTextureToBuffer` + one `mapAsync`.
@@ -6673,14 +6711,14 @@ async function buildReadyWebGPU(
             }),
       'shader-compile-failed',
       'shadow-probe shader module compiled',
-      'inspect SHADOW_PROBE_WGSL constant; verify textureSampleCompareLevel + comparison sampler binding',
+      'inspect SHADOW_PROBE_WGSL constant; verify textureLoad depth sampling + output lanes',
     );
     if (!probeShaderResult.ok) throw probeShaderResult.error;
     const probeModule = probeShaderResult.value;
 
     // M2-T4: shadow-probe pipeline via getOrBuildPipeline (lazy-build).
     // The probe is a fullscreen pass that samples the cascaded shadow map and
-    // writes a per-pixel visibility factor into an r32float color attachment
+    // writes per-probe factor/depth/cascade evidence into an rgba32float color attachment
     // (PROBE_OUTPUT_TEXTURE_FORMAT) — `passKind: 'post-process'` is correct;
     // the prior `'shadow-caster'` value triggered `buildPipelineDescriptor`'s
     // depth-only branch (skip fragment stage), producing a PSO with no
@@ -6763,7 +6801,7 @@ async function buildReadyWebGPU(
     const probeOutputTexResult = runShimSyncStep(
       () =>
         rhiDevice.createTexture({
-          label: 'shadow-probe-output-1xN-r32float',
+          label: 'shadow-probe-output-1xN-rgba32float',
           size: { width: PROBE_MAX_COUNT, height: 1, depthOrArrayLayers: 1 },
           mipLevelCount: 1,
           sampleCount: 1,
@@ -6775,7 +6813,7 @@ async function buildReadyWebGPU(
         }),
       'webgpu-runtime-error',
       'createTexture(shadow-probe output) succeeded',
-      'check device.limits.maxTextureDimension2D and r32float RENDER_ATTACHMENT support',
+      'check device.limits.maxTextureDimension2D and rgba32float RENDER_ATTACHMENT support',
     );
     if (!probeOutputTexResult.ok) throw probeOutputTexResult.error;
     shadowProbeOutputTexHandle = probeOutputTexResult.value;
@@ -7995,6 +8033,7 @@ async function buildReadyWebGPU(
       shadowSampler: shadowSamplerResult.value,
       shadowLightSpaceMatrix: null,
       shadowCsmLightViewProj: null,
+      shadowCsmSelection: null,
       // feat-20260531-bloom-first-declarative-render-graph-pass / w13 + w16:
       // bloom per-pass resource slots. Pipeline handles assembled during
       // buildReadyWebGPU (marker-triage + compile + createRenderPipeline).

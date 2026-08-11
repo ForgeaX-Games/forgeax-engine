@@ -114,6 +114,7 @@ describe('createApp plugin runner -- physics + audio system set (AC-02)', () => 
     const result = await runPlugins(world, [], [audioPlugin()]);
     expect(result.ok).toBe(true);
     expect(systemNames(world)).toContain(AUDIO_TICK_SYSTEM_NAME);
+    expect(world.simulationParticipants().map((entry) => entry.id)).toEqual(['forgeax.audio.ecs']);
   });
 
   it('physicsPlugin inserts PhysicsWorld + registers physics systems on success', {
@@ -130,6 +131,9 @@ describe('createApp plugin runner -- physics + audio system set (AC-02)', () => 
     expect(names).toContain('physicsSyncBackend');
     expect(names).toContain('physicsStepSimulation');
     expect(names).toContain('physicsWriteback');
+    expect(world.simulationParticipants().map((entry) => entry.id)).toEqual([
+      'forgeax.physics.rapier-3d',
+    ]);
   });
 });
 

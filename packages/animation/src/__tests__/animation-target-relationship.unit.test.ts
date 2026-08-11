@@ -26,6 +26,8 @@ function spawnTarget(world: World) {
 describe('animation target relationship', () => {
   it('declares an exclusive non-linked relationship', () => {
     expect(AnimationTargets.transient).toBe(true);
+    expect(AnimationPlayer.fields.clips.simulationTransient).toBe(true);
+    expect(AnimationPlayer.fields.graph.simulationTransient).toBe(true);
     expect(AnimatedBy.relationship).toEqual({
       mirror: 'AnimationTargets',
       field: 'targets',

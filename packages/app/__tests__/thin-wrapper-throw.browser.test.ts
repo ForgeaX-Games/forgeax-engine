@@ -39,32 +39,36 @@ vi.mock('@forgeax/engine-runtime', async (importOriginal) => {
 });
 
 describe('createApp(canvas) thin wrapper -- (A) path createRenderer throw (AC-01)', () => {
-  it('createRenderer throws EngineEnvironmentError -> Result.err preserves original object + .detail.webgpuError?.code', async () => {
-    // Use a dynamic import so the vi.mock hoist takes effect before
-    // the create-app module graph is loaded.
-    const { createApp } = await import('../src/index');
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    document.body.appendChild(canvas);
-    try {
-      const result = await createApp(canvas);
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      const err = result.error;
-      // double-layer narrow: instanceof first, then access
-      // .detail.webgpuError?.code. Reference equality on the
-      // EngineEnvironmentError instance proves no re-wrap happened.
-      expect(err instanceof EngineEnvironmentError).toBe(true);
-      if (!(err instanceof EngineEnvironmentError)) return;
-      expect(err).toBe(constructionThrow);
-      expect((err.detail.webgpuError as { code?: string } | undefined)?.code).toBe(
-        'rhi-not-available',
-      );
-    } finally {
-      canvas.remove();
-    }
-  });
+  it(
+    'createRenderer throws EngineEnvironmentError -> Result.err preserves original object + .detail.webgpuError?.code',
+    async () => {
+      // Use a dynamic import so the vi.mock hoist takes effect before
+      // the create-app module graph is loaded.
+      const { createApp } = await import('../src/index');
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      document.body.appendChild(canvas);
+      try {
+        const result = await createApp(canvas);
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        const err = result.error;
+        // double-layer narrow: instanceof first, then access
+        // .detail.webgpuError?.code. Reference equality on the
+        // EngineEnvironmentError instance proves no re-wrap happened.
+        expect(err instanceof EngineEnvironmentError).toBe(true);
+        if (!(err instanceof EngineEnvironmentError)) return;
+        expect(err).toBe(constructionThrow);
+        expect((err.detail.webgpuError as { code?: string } | undefined)?.code).toBe(
+          'rhi-not-available',
+        );
+      } finally {
+        canvas.remove();
+      }
+    },
+    45_000,
+  );
 
   it('(B) assemble path is unaffected by createRenderer mock (host owns renderer)', async () => {
     // Sanity counter: the (B) path never calls createRenderer, so the

@@ -176,6 +176,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const falsify = new URLSearchParams(globalThis.location?.search ?? '').get('falsify') === '1';
     if (!falsify) {
       const provider = createDemoVideoProvider();
+      world.registerSimulationTransientResource(VIDEO_ELEMENT_PROVIDER_KEY);
       world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider);
     } else {
       console.warn('[video-texture] FALSIFY mode: VideoElementProvider NOT registered');

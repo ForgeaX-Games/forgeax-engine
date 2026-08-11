@@ -46,6 +46,7 @@ import type { EnergyCoreExtractionHandle } from './energy-core-extraction';
 import type { RewardChoiceHandle } from './reward-choice';
 import type { BarrierRouteHandle } from './barrier-route';
 import type { SentinelRangedThreat } from './sentinel-ranged-threat';
+import type { LightingModeHandle } from './lighting-mode';
 
 type ResetGameplayArgs = {
   readonly world: World;
@@ -86,6 +87,7 @@ type ResetGameplayArgs = {
   readonly targetRelay: TargetRelayHandle;
   readonly settingsState: GameSettingsState;
   readonly setMode: (mode: 'topdown' | 'orbit' | 'fps' | 'pan') => void;
+  readonly lightingMode: LightingModeHandle;
   readonly multiWorldOverlay: MultiWorldOverlay | undefined;
   readonly gameplayAudio: GameplayAudio | undefined;
   readonly materialElapsedOriginKey: string;
@@ -158,6 +160,7 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     args.resetMission();
     args.fbxSkinnedTarget?.reset();
     args.settingsState.depthOfField = false;
+    args.lightingMode.reset();
     args.setMode('topdown');
     args.multiWorldOverlay?.setEnabled(true);
     if (args.player !== undefined) {

@@ -14,12 +14,12 @@ const CHILD_TIMEOUT_MS = 180_000;
 // sequential lifecycle child starts.
 const BOUNDED_VITEST_ARGS = ['--maxWorkers=1', '--teardownTimeout=5000'];
 
-function run(label, args) {
+function run(label, args, env = childEnv) {
   console.log(`[m4-interactive] START - ${label}`);
   try {
     execFileSync('pnpm', args, {
       cwd: root,
-      env: childEnv,
+      env,
       stdio: 'inherit',
       timeout: CHILD_TIMEOUT_MS,
       killSignal: 'SIGTERM',
@@ -82,17 +82,18 @@ try {
     'bus|routing|declarative playback|Entity despawn cleanup|listener getter|audioListenerSyncSystem|spatialBlend|edge detection|destroy then new backend|concurrent backends|F24',
     ...BOUNDED_VITEST_ARGS,
   ]);
-  run('simulation evidence/cleanup/invariants', [
-    'exec',
-    'vitest',
-    'run',
-    '--root',
-    'templates/game-default',
-    '--config',
-    'vitest.config.ts',
-    '__tests__/simulation-evidence.integration.test.ts',
-    ...BOUNDED_VITEST_ARGS,
-  ]);
+  // The authored Preview path imports the full game-default asset graph. Keep
+  // that one browser child inside the same 4 GiB bound used by the heavy
+  // Vitest browser CI job; the smaller lifecycle children remain unchanged.
+  const previewSimulationEnv = {
+    ...childEnv,
+    NODE_OPTIONS: `${childEnv.NODE_OPTIONS ?? ''} --max-old-space-size=4096`.trim(),
+  };
+  run('authored Preview simulation evidence/cleanup/invariants', [
+    '--filter',
+    '@forgeax/preview',
+    'smoke:simulation-record-restore',
+  ], previewSimulationEnv);
   // Keep the three public front doors on their owning project configs. The
   // root workspace config enumerates the whole app fleet and is unnecessary
   // for these isolated integration probes.

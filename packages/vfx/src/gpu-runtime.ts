@@ -698,6 +698,7 @@ export function vfxGpuRuntimePlugin(options: VfxGpuRuntimeOptions = {}): Plugin 
         );
       }
       const runtime = new VfxGpuRuntime(options);
+      world.registerSimulationTransientResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
       world.insertResource(VFX_GPU_RUNTIME_RESOURCE_KEY, runtime);
       const added = world.addSystem(FixedUpdate, {
         name: 'vfx-gpu-runtime',

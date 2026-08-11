@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createStandaloneRuntimeAssetBinding,
+  isRuntimeCatalogRoots,
   runtimeScopePath,
 } from '../src/runtime-scope';
 
@@ -29,5 +30,14 @@ describe('runtime scope binding', () => {
     expect(runtimeScopePath(binding, 'asset/example.pack.json')).toBe(
       '/__pack/scopes/preview/1/asset/example.pack.json',
     );
+  });
+
+  it('validates logical catalog root projections without accepting malformed values', () => {
+    expect(isRuntimeCatalogRoots([
+      { root: 'assets', catalogPrefix: 'games/sample/assets' },
+    ])).toBe(true);
+    expect(isRuntimeCatalogRoots([{ root: 'assets' }])).toBe(false);
+    expect(isRuntimeCatalogRoots([{ root: 42, catalogPrefix: 'assets' }])).toBe(false);
+    expect(isRuntimeCatalogRoots(null)).toBe(false);
   });
 });

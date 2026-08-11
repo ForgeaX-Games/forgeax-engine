@@ -22,6 +22,7 @@ import type { ScoringTargetQuery } from '../scoring-target';
 import type { MatHandle } from '../scene-runtime';
 import type { ProjectileVisual } from '../components/gameplay';
 import type { AssetLabActionResult } from '../asset-lab-actions';
+import type { LightingModeHandle } from '../lighting-mode';
 import type { HitStreakHandle } from '../hit-streak';
 import { installHitStreakSystem } from '../hit-streak';
 import { installInputActionsSystem } from './input-actions';
@@ -104,6 +105,7 @@ export type GameplaySystemsContext = {
   readonly setPerspectiveFov: (fov: number) => void;
   readonly applyPanCamera: () => void;
   readonly hitStreak: HitStreakHandle | undefined;
+  readonly lightingMode: LightingModeHandle;
 };
 
 /**
@@ -131,6 +133,7 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     spriteAtlasLoop: ctx.spriteAtlasLoop,
     worldScoreText: ctx.worldScoreText,
     toggleCustomProjectileMesh: ctx.toggleCustomProjectileMesh,
+    lightingMode: ctx.lightingMode,
   });
   installCameraInputSystem({
     world: ctx.world,

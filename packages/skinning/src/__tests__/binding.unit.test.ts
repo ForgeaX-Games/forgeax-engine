@@ -5,6 +5,7 @@ describe('skinning binding contract', () => {
   it('exposes Skin as the optional binding component', () => {
     expect(Skin.name).toBe('Skin');
     expect(Skin.schema.skeleton).toBe('shared<SkeletonAsset>');
+    expect(Skin.fields.skeleton.simulationTransient).toBe(true);
     expect(Skin.schema.joints).toBe('array<entity>');
   });
 

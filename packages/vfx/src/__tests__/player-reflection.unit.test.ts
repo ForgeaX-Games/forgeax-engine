@@ -30,6 +30,7 @@ describe('ParticleEffectPlayer ECS contract', () => {
       timeScale: 1,
     });
     expect(ParticleEffectPlayer.fields.effect.type).toBe('shared<ParticleEffectAsset>');
+    expect(ParticleEffectPlayer.fields.effect.simulationTransient).toBe(true);
     expect(ParticleEffectPlayer.fields.playing.default).toBe(true);
     expect(ParticleEffectPlayer.fields.seed.default).toBe(0);
     expect(ParticleEffectPlayer.fields.timeScale.default).toBe(1);

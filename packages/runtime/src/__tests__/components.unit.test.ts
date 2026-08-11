@@ -2574,6 +2574,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 
     it('GlyphText.color is array<f32,4> with explicit layer-2 default [1,1,1,1]; per-axis scalars gone', () => {
       expect(GlyphText.schema.color).toBe('array<f32, 4>');
+      expect(GlyphText.fields.fontHandle.simulationTransient).toBe(true);
       expect('colorR' in GlyphText.schema).toBe(false);
       expect('colorG' in GlyphText.schema).toBe(false);
       expect('colorB' in GlyphText.schema).toBe(false);
