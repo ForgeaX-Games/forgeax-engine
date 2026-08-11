@@ -52,6 +52,8 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  * @property {(report: object) => void} [assertCapture] extra report-level contract gate
  * @property {(input: {tape: object}) => void} [assertTape] extra contract over the
  *                                  deserialized self-contained capture tape
+ * @property {(input: {pixels: Uint8Array, width: number, height: number}) => void} [assertPixels]
+ *                                  extra contract over the live RGBA frame
  * @property {string} [appDir]      the demo's own dir (dirname of its smoke script's parent);
  *                                  the dev endpoint writes .forgeax-debug relative to vite cwd
  *                                  (= the package dir), so artifacts are resolved against this.
@@ -73,6 +75,7 @@ export async function verifyDemoCapture(opts) {
     coveredEpsilon = 0.03,
     assertCapture,
     assertTape,
+    assertPixels,
     appDir = REPO_ROOT,
     warmupMs = 3000,
     urlSuffix = '',
@@ -305,6 +308,15 @@ export async function verifyDemoCapture(opts) {
         `(${liveDims?.width}x${liveDims?.height}) replay=${replayPixels.length} (${rw}x${rh}). ` +
         `Suspect: RT size disagreement between live canvas and replayed attachment.`,
     );
+  }
+
+  if (assertPixels !== undefined) {
+    try {
+      assertPixels({ pixels: livePixels, width: rw, height: rh });
+    } catch (e) {
+      freshDevice.destroy?.();
+      fail(1, `[${label}] RED -- live pixel contract failed: ${e?.message ?? e}`);
+    }
   }
 
   // Empty-frame guard (empty-vs-empty trap): if the LIVE frame is essentially

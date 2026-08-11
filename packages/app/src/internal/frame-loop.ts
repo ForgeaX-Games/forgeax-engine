@@ -27,6 +27,8 @@ export interface FrameLoopHandle {
   stop(): Result<void, AppError>;
   pause(): Result<void, AppError>;
   resume(): Result<void, AppError>;
+  /** Run one complete update/draw frame through this loop while paused. */
+  stepFrame(deltaSeconds: number): Result<void, AppError | RhiError>;
   /** Replace the per-frame world routing pull without replacing the loop. */
   setDrawSource(drawSource: FrameLoopOptions['drawSource']): void;
   getState(): FrameState;
@@ -174,21 +176,14 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
     }
   }
 
-  function tick(): void {
-    if (state !== 'running') return;
-
-    // Device loss is a renderer-owned degraded interval, not an application
-    // stop. Keep the rAF heartbeat alive while the host performs the explicit
-    // Renderer.recover() rebuild, but freeze simulation so recovery does not
-    // advance the World against frames that cannot be submitted. The next
-    // tick observes `alive` and resumes the normal update/draw sequence.
-    if (renderer.health?.().reason === 'device-lost') {
-      pendingFrameId = raf(tick);
-      return;
-    }
-
+  function runFrame(deltaSeconds: number): Result<void, AppError | RhiError> {
     const session = opts.profiler?.activeSession();
     let profileFrame: ProfileFrameToken | undefined;
+    let frameError: AppError | RhiError | undefined;
+    const reportError = (error: AppError | RhiError): void => {
+      frameError ??= error;
+      opts.onError?.(error);
+    };
     if (session !== undefined) {
       if (profilerCaptureId !== session.captureId) {
         profilerCaptureId = session.captureId;
@@ -201,16 +196,11 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
     }
 
     runProfiledPhase(session, 'frame-total', () => {
-      const timestamp = now();
-      const deltaSeconds = (timestamp - lastTimestamp) / 1000;
-      lastTimestamp = timestamp;
-      const fireError = opts.onError;
-
       runProfiledPhase(session, 'world-update-primary', () => {
         try {
-          fireWorldUpdateResult(world.update(deltaSeconds), fireError);
+          fireWorldUpdateResult(world.update(deltaSeconds), reportError);
         } catch (cause: unknown) {
-          if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
+          reportError(makeWorldUpdateError(cause));
         }
       });
 
@@ -222,13 +212,13 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
         try {
           injected = drawSource();
         } catch (cause: unknown) {
-          if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
+          reportError(makeWorldUpdateError(cause));
         }
       });
 
       runProfiledPhase(session, 'world-update-injected', () => {
         if (injected !== undefined) {
-          updateInjectedWorlds(injected.worlds, world, deltaSeconds, fireError);
+          updateInjectedWorlds(injected.worlds, world, deltaSeconds, reportError);
         }
       });
 
@@ -245,22 +235,61 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
               : renderer.draw([world], { owner: 0, ...profileOptions });
           if (drawResult !== undefined) {
             const result = drawResult as { ok: boolean; error?: RhiError };
-            if (!result.ok && result.error !== undefined && fireError !== undefined) {
-              fireError(result.error);
+            if (!result.ok && result.error !== undefined) {
+              reportError(result.error);
             }
           }
         } catch (cause: unknown) {
-          if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
+          reportError(makeWorldUpdateError(cause));
         }
       });
     });
     endFrame(session);
+    return frameError === undefined ? ok(undefined) : err(frameError);
+  }
+
+  function tick(): void {
+    if (state !== 'running') return;
+
+    // Device loss is a renderer-owned degraded interval, not an application
+    // stop. Keep the rAF heartbeat alive while the host performs the explicit
+    // Renderer.recover() rebuild, but freeze simulation so recovery does not
+    // advance the World against frames that cannot be submitted. The next
+    // tick observes `alive` and resumes the normal update/draw sequence.
+    if (renderer.health?.().reason === 'device-lost') {
+      pendingFrameId = raf(tick);
+      return;
+    }
+
+    const timestamp = now();
+    const deltaSeconds = (timestamp - lastTimestamp) / 1000;
+    lastTimestamp = timestamp;
+    runFrame(deltaSeconds);
     pendingFrameId = raf(tick);
   }
 
   return {
     setDrawSource(nextDrawSource): void {
       drawSource = nextDrawSource;
+    },
+    stepFrame(deltaSeconds): Result<void, AppError | RhiError> {
+      const reason =
+        state !== 'paused'
+          ? 'state'
+          : !Number.isFinite(deltaSeconds) || deltaSeconds < 0
+            ? 'delta'
+            : undefined;
+      if (reason !== undefined) {
+        return err(
+          makeAppError(
+            'app-frame-step-invalid',
+            'state is "paused" and deltaSeconds is finite and non-negative',
+            'pause the App and pass a finite non-negative delta before retrying',
+            { state, deltaSeconds, reason },
+          ),
+        );
+      }
+      return runFrame(deltaSeconds);
     },
     start(): Result<void, AppError> {
       if (state === 'running') {

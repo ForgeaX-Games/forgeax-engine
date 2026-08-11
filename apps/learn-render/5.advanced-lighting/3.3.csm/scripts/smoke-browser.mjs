@@ -19,6 +19,8 @@ await verifyDemoCapture({
   appDir: dirname(here),
   assertCapture: assertCsmCapture,
   assertTape: assertCsmTape,
+  assertPixels: assertCsmPixels,
+  urlSuffix: process.env.FALSIFY === 'force-csm-highlight-layer-2' ? '?csm-highlight=2' : '',
 });
 
 /** @param {object} report */
@@ -72,6 +74,70 @@ function assertCsmCapture(report) {
   }
 }
 
+/** @param {{ pixels: Uint8Array, width: number, height: number }} input */
+function assertCsmPixels({ pixels, width, height }) {
+  let sumRg = 0;
+  let sumRgSq = 0;
+  let rgCount = 0;
+  for (let i = 0; i < width * height; i++) {
+    const red = pixels[i * 4] ?? 0;
+    const green = pixels[i * 4 + 1] ?? 0;
+    if (green > 5) {
+      const ratio = red / green;
+      sumRg += ratio;
+      sumRgSq += ratio * ratio;
+      rgCount++;
+    }
+  }
+  const meanRg = rgCount > 0 ? sumRg / rgCount : 0;
+  const varianceRg = rgCount > 1 ? sumRgSq / rgCount - meanRg * meanRg : 0;
+  const stddevRg = Math.sqrt(Math.max(0, varianceRg));
+
+  const regionAvgRgRatio = (y0, regionHeight) => {
+    let redSum = 0;
+    let greenSum = 0;
+    for (let y = y0; y < y0 + regionHeight; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = (y * width + x) * 4;
+        redSum += pixels[index] ?? 0;
+        greenSum += pixels[index + 1] ?? 0;
+      }
+    }
+    return greenSum > 0 ? redSum / greenSum : 999;
+  };
+  const stripHeight = Math.floor(height * 0.1);
+  const bottomRg = regionAvgRgRatio(Math.floor(height * 0.85), stripHeight);
+  const topRg = regionAvgRgRatio(0, stripHeight);
+  console.log(
+    `[csm] pixel cascade bands meanRg=${meanRg.toFixed(3)} stddevRg=${stddevRg.toFixed(4)} ` +
+      `bottomRg=${bottomRg.toFixed(3)} topRg=${topRg.toFixed(3)}`,
+  );
+  if (process.env.FALSIFY === 'force-csm-highlight-layer-2') {
+    if (meanRg >= 1.8 || stddevRg >= 0.45) {
+      throw new Error(
+        `selected cascade c2 pixel signature is missing: meanRg=${meanRg.toFixed(3)} ` +
+          `stddevRg=${stddevRg.toFixed(4)}`,
+      );
+    }
+    if (bottomRg >= topRg - 0.05) {
+      throw new Error(
+        `selected cascade c2 pixel depth gradient is missing: bottomRg=${bottomRg.toFixed(3)} ` +
+          `topRg=${topRg.toFixed(3)}`,
+      );
+    }
+    console.log('[csm] selected cascade c2 pixel signature accepted');
+    return;
+  }
+  if (stddevRg < 0.35) {
+    throw new Error(`cascade overlay pixel diversity is too low: stddevRg=${stddevRg.toFixed(4)}`);
+  }
+  if (bottomRg >= topRg - 0.05) {
+    throw new Error(
+      `cascade overlay pixel depth gradient is missing: bottomRg=${bottomRg.toFixed(3)} topRg=${topRg.toFixed(3)}`,
+    );
+  }
+}
+
 /** @param {{ tape: { events: readonly object[], blobPool: Map<string, ArrayBuffer> } }} input */
 function assertCsmTape({ tape }) {
   const events = tape.events;
@@ -105,17 +171,159 @@ function assertCsmTape({ tape }) {
     const blob = tape.blobPool.get(hash);
     return blob === undefined ? undefined : new Uint8Array(blob);
   };
-  const selectorValues = events
-    .filter(
-      (event) =>
-        event.kind === 'writeBuffer' &&
-        event.handleId === cascadeIndexBufferId &&
-        event.size === 16,
-    )
-    .map((event) => new Uint32Array(readBlob(event.dataHash)?.buffer ?? new ArrayBuffer(0))[0]);
-  if (selectorValues.length < 4 || ![0, 1, 2, 3].every((value) => selectorValues.includes(value))) {
-    throw new Error(`cascade selector writes are not 0..3: ${JSON.stringify(selectorValues)}`);
+
+  const overlayBglIds = new Set(
+    events
+      .filter(
+        (event) =>
+          event.kind === 'createBindGroupLayout' &&
+          event.desc?.label === 'fullscreen-post-with-scene-depth-bgl',
+      )
+      .map((event) => event.handleId),
+  );
+  const overlayGroup = events.find(
+    (event) => event.kind === 'createBindGroup' && overlayBglIds.has(event.layoutHandleId),
+  );
+  const overlayParamsBufferId = overlayGroup?.resourceHandleIds?.[2];
+  const overlayParamsWrite = events.find(
+    (event) =>
+      event.kind === 'writeBuffer' &&
+      event.handleId === overlayParamsBufferId &&
+      event.size === 16,
+  );
+  const overlayParamsBytes =
+    overlayParamsWrite === undefined ? undefined : readBlob(overlayParamsWrite.dataHash);
+  const overlayTintMode =
+    overlayParamsBytes === undefined || overlayParamsBytes.byteLength < 4
+      ? undefined
+      : new DataView(
+          overlayParamsBytes.buffer,
+          overlayParamsBytes.byteOffset,
+          overlayParamsBytes.byteLength,
+        ).getFloat32(0, true);
+  const expectedOverlayTintMode =
+    process.env.FALSIFY === 'force-csm-highlight-layer-2' ? 2 : 0;
+  if (overlayTintMode !== expectedOverlayTintMode) {
+    throw new Error(
+      `expected CSM overlay tintMode=${expectedOverlayTintMode}, got ${overlayTintMode}`,
+    );
   }
+  console.log(`[csm] overlay params tintMode=${overlayTintMode}`);
+
+  const selectorRows = depthPasses.map((pass, expectedIndex) => {
+    const begin = events.indexOf(pass);
+    const selectorWrite = events
+      .slice(0, begin)
+      .findLast(
+        (event) =>
+          event.kind === 'writeBuffer' &&
+          event.handleId === cascadeIndexBufferId &&
+          event.size === 16,
+      );
+    const selectorBytes = selectorWrite === undefined ? undefined : readBlob(selectorWrite.dataHash);
+    const selector =
+      selectorBytes === undefined || selectorBytes.byteLength < 4
+        ? undefined
+        : new DataView(selectorBytes.buffer, selectorBytes.byteOffset, selectorBytes.byteLength).getUint32(0, true);
+    const end = events.findIndex(
+      (event, index) => index > begin && event.kind === 'endRenderPass',
+    );
+    const body = events.slice(begin, end < 0 ? events.length : end);
+    const shadowViewGroupId = body.find(
+      (event) => event.kind === 'setBindGroup' && event.index === 0,
+    )?.bindGroupHandleId;
+    const shadowViewGroup = events.find(
+      (event) => event.kind === 'createBindGroup' && event.handleId === shadowViewGroupId,
+    );
+    return {
+      expectedIndex,
+      selector,
+      draws: body.filter((event) => event.kind === 'drawIndexed').length,
+      selectorBound: shadowViewGroup?.resourceHandleIds[7] === cascadeIndexBufferId,
+    };
+  });
+  const selectorValues = selectorRows.map((row) => row.selector);
+  const gatedSelectorValues = [...selectorValues];
+  if (process.env.FALSIFY === 'force-csm-selector-duplicate') {
+    gatedSelectorValues[3] = gatedSelectorValues[2];
+    console.log('[csm] FALSIFY=force-csm-selector-duplicate -- duplicated cascade 2 selector');
+  }
+  if (
+    gatedSelectorValues.length !== 4 ||
+    gatedSelectorValues.some((value, index) => value !== index) ||
+    selectorRows.some((row) => row.draws < 10 || !row.selectorBound)
+  ) {
+    throw new Error(
+      `cascade receiver lineage is not ordered 0..3 with bound shadow draws: ${JSON.stringify(selectorRows)}`,
+    );
+  }
+
+  const receiverPass = events
+    .map((event, index) => ({ event, index }))
+    .find(({ event, index }) => {
+      if (
+        event.kind !== 'beginRenderPass' ||
+        !event.colorAttachmentViewHandleIds.some((handleId) => typeof handleId === 'string')
+      ) {
+        return false;
+      }
+      const end = events.findIndex(
+        (candidate, candidateIndex) =>
+          candidateIndex > index && candidate.kind === 'endRenderPass',
+      );
+      return events
+        .slice(index, end < 0 ? events.length : end)
+        .some((candidate) => candidate.kind === 'drawIndexed');
+    });
+  if (receiverPass === undefined) {
+    throw new Error('CSM receiver render pass with indexed draws is missing');
+  }
+  const receiverEnd = events.findIndex(
+    (event, index) => index > receiverPass.index && event.kind === 'endRenderPass',
+  );
+  const receiverBody = events.slice(
+    receiverPass.index,
+    receiverEnd < 0 ? events.length : receiverEnd,
+  );
+  const receiverViewBindIndex = receiverBody.findIndex(
+    (event) =>
+      event.kind === 'setBindGroup' &&
+      event.index === 0 &&
+      event.bindGroupHandleId === viewGroup.handleId,
+  );
+  if (
+    receiverViewBindIndex < 0 ||
+    !receiverBody.slice(receiverViewBindIndex).some((event) => event.kind === 'drawIndexed') ||
+    viewGroup.resourceHandleIds[3] !== depthViewId
+  ) {
+    throw new Error('CSM receiver draw does not bind and draw from the cascade atlas view');
+  }
+  const receiverPipelineId = receiverBody.find((event) => event.kind === 'setPipeline')?.pipelineHandleId;
+  const receiverPipeline = events.find(
+    (event) => event.kind === 'createRenderPipeline' && event.handleId === receiverPipelineId,
+  );
+  const receiverShader = events.find(
+    (event) =>
+      event.kind === 'createShaderModule' &&
+      event.handleId === receiverPipeline?.fragmentShaderModuleHandleId,
+  );
+  const cascadeShaderTerms = [
+    '_pickCascadeLayer',
+    '_atlasTileOrigin',
+    '_sampleShadowForCascade',
+    'cascadeBlend',
+    'textureSampleCompareLevel',
+  ];
+  if (
+    receiverShader?.wgslCode === undefined ||
+    cascadeShaderTerms.some((term) => !receiverShader.wgslCode.includes(term))
+  ) {
+    throw new Error(`CSM receiver shader does not retain cascade selection/atlas sampling: ${receiverShader?.handleId}`);
+  }
+  console.log(
+    `[csm] receiver lineage selectors=${JSON.stringify(selectorValues)} ` +
+      `atlas=${depthViewId} draws=${receiverBody.filter((event) => event.kind === 'drawIndexed').length}`,
+  );
   const viewBufferId = viewGroup.resourceHandleIds[0];
   const viewBuffer = events.find(
     (event) => event.kind === 'createBuffer' && event.handleId === viewBufferId,

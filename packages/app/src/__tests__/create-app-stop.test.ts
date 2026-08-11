@@ -179,6 +179,9 @@ function makeFrameLoopStub(): FrameLoopHandle {
     resume() {
       return ok(undefined);
     },
+    stepFrame() {
+      return ok(undefined);
+    },
     getState() {
       return 'idle' as const;
     },

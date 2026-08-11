@@ -182,4 +182,51 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     expect(calls).toHaveLength(2);
     loop.stop();
   });
+
+  it('steps one deterministic frame through the same update and draw authority while paused', () => {
+    const world = new World();
+    const update = vi.spyOn(world, 'update');
+    const { renderer, calls } = makeSpyRenderer();
+    const { raf, caf, now } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf });
+
+    expect(loop.start().ok).toBe(true);
+    expect(loop.pause().ok).toBe(true);
+    const stepped = loop.stepFrame(1 / 60);
+
+    expect(stepped.ok).toBe(true);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(1 / 60);
+    expect(calls).toEqual([{ worlds: [world], options: { owner: 0 } }]);
+
+    expect(loop.resume().ok).toBe(true);
+    expect(loop.stop().ok).toBe(true);
+  });
+
+  it('rejects deterministic stepping outside paused state and with an invalid delta', () => {
+    const world = new World();
+    const { renderer } = makeSpyRenderer();
+    const { raf, caf, now } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf });
+
+    const idle = loop.stepFrame(1 / 60);
+    expect(idle.ok).toBe(false);
+    if (!idle.ok) {
+      expect(idle.error.code).toBe('app-frame-step-invalid');
+      expect(idle.error.detail).toEqual({ state: 'idle', deltaSeconds: 1 / 60, reason: 'state' });
+    }
+
+    expect(loop.start().ok).toBe(true);
+    expect(loop.pause().ok).toBe(true);
+    const invalidDelta = loop.stepFrame(Number.NaN);
+    expect(invalidDelta.ok).toBe(false);
+    if (!invalidDelta.ok) {
+      expect(invalidDelta.error).toMatchObject({
+        code: 'app-frame-step-invalid',
+        detail: { reason: 'delta' },
+      });
+    }
+    expect(loop.resume().ok).toBe(true);
+    expect(loop.stop().ok).toBe(true);
+  });
 });

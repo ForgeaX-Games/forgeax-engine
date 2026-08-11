@@ -358,6 +358,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     'app-already-running',
     'app-canvas-detached',
     'app-paused-while-stop',
+    'app-frame-step-invalid',
     'app-system-update-failed',
     'app-pointer-lock-failed',
     'app-execution-tier-unavailable',

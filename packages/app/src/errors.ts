@@ -1,8 +1,8 @@
-// @forgeax/engine-app -- AppError + closed AppErrorCode union (12 members) +
+// @forgeax/engine-app -- AppError + closed AppErrorCode union (13 members) +
 // APP_ERROR_HINTS / APP_EXPECTED + discriminated AppErrorDetail per code.
 //
 // Shape:
-//   - AppErrorCode = closed union 12 members (charter P4 closed-union
+//   - AppErrorCode = closed union 13 members (charter P4 closed-union
 //     exhaustive switch needs no default fallback; tsc strict mode guards
 //     completeness; AGENTS.md "Errors are structured" + AC-07).
 //     Members:
@@ -36,7 +36,7 @@
 //     non-canonical fields like `{ state: 'running' }` on the
 //     'app-already-running' arm.
 //
-//   - APP_ERROR_HINTS / APP_EXPECTED are 12-key Records keyed by AppErrorCode;
+//   - APP_ERROR_HINTS / APP_EXPECTED are 13-key Records keyed by AppErrorCode;
 //     one private policy owner supplies both projections. The focused policy-owner
 //     proof asserts that every code has the exact expected and hint strings.
 //
@@ -52,7 +52,7 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
 
 /**
- * Closed AppErrorCode union (12 members).
+ * Closed AppErrorCode union (13 members).
  *
  * | code | trigger |
  * |:--|:--|
@@ -70,6 +70,7 @@ export type AppErrorCode =
   | 'app-already-running'
   | 'app-canvas-detached'
   | 'app-paused-while-stop'
+  | 'app-frame-step-invalid'
   | 'app-system-update-failed'
   | 'app-pointer-lock-failed'
   | 'app-execution-tier-unavailable'
@@ -116,6 +117,13 @@ export interface AppDetailSystemUpdateFailed {
 export interface AppDetailPointerLockFailed {
   readonly path: 'w3c' | 'provider';
   readonly cause: unknown;
+}
+
+/** Why a host-requested deterministic frame could not run. */
+export interface AppDetailFrameStepInvalid {
+  readonly state: 'idle' | 'running' | 'paused' | 'stopped';
+  readonly deltaSeconds: number;
+  readonly reason: 'state' | 'delta';
 }
 
 export interface AppDetailExecutionTierUnavailable {
@@ -171,23 +179,25 @@ export type AppDetailEmpty = Readonly<Record<string, never>>;
  */
 export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-detached'
   ? AppDetailCanvasDetached
-  : C extends 'app-system-update-failed'
-    ? AppDetailSystemUpdateFailed
-    : C extends 'app-pointer-lock-failed'
-      ? AppDetailPointerLockFailed
-      : C extends 'app-execution-tier-unavailable'
-        ? AppDetailExecutionTierUnavailable
-        : C extends 'app-execution-bootstrap-failed'
-          ? AppDetailExecutionBootstrapFailed
-          : C extends 'app-execution-deadline-exceeded'
-            ? AppDetailExecutionDeadlineExceeded
-            : C extends 'app-execution-kernel-failed'
-              ? AppDetailExecutionKernelFailed
-              : C extends 'app-execution-stale-world'
-                ? AppDetailExecutionStaleWorld
-                : C extends 'app-execution-rebuild-failed'
-                  ? AppDetailExecutionRebuildFailed
-                  : AppDetailEmpty;
+  : C extends 'app-frame-step-invalid'
+    ? AppDetailFrameStepInvalid
+    : C extends 'app-system-update-failed'
+      ? AppDetailSystemUpdateFailed
+      : C extends 'app-pointer-lock-failed'
+        ? AppDetailPointerLockFailed
+        : C extends 'app-execution-tier-unavailable'
+          ? AppDetailExecutionTierUnavailable
+          : C extends 'app-execution-bootstrap-failed'
+            ? AppDetailExecutionBootstrapFailed
+            : C extends 'app-execution-deadline-exceeded'
+              ? AppDetailExecutionDeadlineExceeded
+              : C extends 'app-execution-kernel-failed'
+                ? AppDetailExecutionKernelFailed
+                : C extends 'app-execution-stale-world'
+                  ? AppDetailExecutionStaleWorld
+                  : C extends 'app-execution-rebuild-failed'
+                    ? AppDetailExecutionRebuildFailed
+                    : AppDetailEmpty;
 
 /**
  * Tagged union of `.detail` payloads carried by structured AppError.
@@ -342,7 +352,7 @@ export const AppError: AppErrorConstructor = AppErrorClass as unknown as AppErro
  * code surfaces. AI users read this as the L2 detail (charter F2 priority
  * text); `.hint` carries the recovery action.
  *
- * 12 keys; the focused policy-owner proof locks the exact key set and values.
+ * 13 keys; the focused policy-owner proof locks the exact key set and values.
  * locks the count and non-emptiness of every entry.
  */
 type AppErrorPolicy = { readonly expected: string; readonly hint: string };
@@ -365,6 +375,11 @@ const appErrorPolicy = {
   'app-paused-while-stop': {
     expected: 'state must be "running" to stop; paused handles must resume() before stop()',
     hint: 'call resume() then stop(), or treat stop-while-paused as a host bug and audit the lifecycle',
+  },
+  'app-frame-step-invalid': {
+    expected:
+      'stepFrame(deltaSeconds) runs only while the App is paused and deltaSeconds is finite and non-negative',
+    hint: 'pause the App before deterministic stepping and pass an explicit finite delta; resume after the bounded step sequence completes',
   },
   'app-system-update-failed': {
     expected:

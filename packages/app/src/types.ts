@@ -398,6 +398,11 @@ export interface App {
    */
   resume(): Result<void, AppError>;
   /**
+   * Advance one complete update/draw frame through the App-owned frame authority.
+   * The App must be paused; deterministic tools supply the explicit delta.
+   */
+  stepFrame(deltaSeconds: number): Result<void, AppDispatchError>;
+  /**
    * Subscribe to structured errors fan-out from the rAF loop. Returns an
    * unsubscribe handle. The callback signature deliberately excludes raw
    * Error (charter P3 -- AI users walk .code, not message strings).

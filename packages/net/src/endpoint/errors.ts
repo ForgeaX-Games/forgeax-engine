@@ -7,7 +7,7 @@
 import type { PeerId } from './endpoint';
 
 // ---------------------------------------------------------------------------
-// EndpointErrorCode -- closed 4-member union
+// EndpointErrorCode -- closed 5-member union
 // ---------------------------------------------------------------------------
 
 /** Transport-level endpoint error codes (requirements AC-02, AC-13). */
@@ -127,28 +127,41 @@ interface EndpointErrorConstructor {
 export const EndpointError: EndpointErrorConstructor =
   EndpointErrorClass as unknown as EndpointErrorConstructor;
 
+type EndpointErrorPolicy = { readonly expected: string; readonly hint: string };
+
+const endpointErrorPolicy = {
+  'peer-not-found': {
+    expected: 'the target peer must exist in the current connection set',
+    hint: 'verify the PeerId is from a connect event; check that the peer has not disconnected',
+  },
+  'connection-closed': {
+    expected: 'the peer connection must be alive for the operation',
+    hint: 'the peer disconnected; poll for a disconnect event and handle the lifecycle',
+  },
+  'send-failed': {
+    expected: 'message bytes must be delivered to the target peer or the connection must fail',
+    hint: 'the memory connection is broken; the peer may have disconnected or the buffer is full',
+  },
+  'already-closed': {
+    expected: 'the endpoint must be open for any operation',
+    hint: 'the endpoint is closed; create a new endpoint pair for further communication',
+  },
+  'connection-failed': {
+    expected:
+      'the endpoint factory must successfully establish a connection or bind to the listen address',
+    hint: 'the initial connection or bind failed; verify the address is reachable and the port is not in use, then retry',
+  },
+} satisfies Record<EndpointErrorCode, EndpointErrorPolicy>;
+
 /** Expected-invariant table per error code. */
-export const ENDPOINT_EXPECTED: Readonly<Record<EndpointErrorCode, string>> = {
-  'peer-not-found': 'the target peer must exist in the current connection set',
-  'connection-closed': 'the peer connection must be alive for the operation',
-  'send-failed': 'message bytes must be delivered to the target peer or the connection must fail',
-  'already-closed': 'the endpoint must be open for any operation',
-  'connection-failed':
-    'the endpoint factory must successfully establish a connection or bind to the listen address',
-};
+export const ENDPOINT_EXPECTED: Readonly<Record<EndpointErrorCode, string>> = Object.fromEntries(
+  Object.entries(endpointErrorPolicy).map(([code, policy]) => [code, policy.expected]),
+) as Readonly<Record<EndpointErrorCode, string>>;
 
 /** Actionable hint table per error code. */
-export const ENDPOINT_ERROR_HINTS: Readonly<Record<EndpointErrorCode, string>> = {
-  'peer-not-found':
-    'verify the PeerId is from a connect event; check that the peer has not disconnected',
-  'connection-closed':
-    'the peer disconnected; poll for a disconnect event and handle the lifecycle',
-  'send-failed':
-    'the memory connection is broken; the peer may have disconnected or the buffer is full',
-  'already-closed': 'the endpoint is closed; create a new endpoint pair for further communication',
-  'connection-failed':
-    'the initial connection or bind failed; verify the address is reachable and the port is not in use, then retry',
-};
+export const ENDPOINT_ERROR_HINTS: Readonly<Record<EndpointErrorCode, string>> = Object.fromEntries(
+  Object.entries(endpointErrorPolicy).map(([code, policy]) => [code, policy.hint]),
+) as Readonly<Record<EndpointErrorCode, string>>;
 
 /** Type guard for narrowing unknown to EndpointError. */
 export function isEndpointError(err: unknown): err is EndpointError {

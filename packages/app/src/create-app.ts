@@ -1383,6 +1383,9 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       if (r.ok) execution.setEngineHealth('running');
       return r;
     },
+    stepFrame(deltaSeconds): Result<void, AppDispatchError> {
+      return loop.stepFrame(deltaSeconds);
+    },
     onError(cb: (e: AppDispatchError) => void): () => void {
       return fanout.add(cb);
     },

@@ -35,6 +35,7 @@ describe('AppErrorCode closed union', () => {
       'app-already-running',
       'app-canvas-detached',
       'app-paused-while-stop',
+      'app-frame-step-invalid',
       'app-system-update-failed',
       'app-pointer-lock-failed',
       'app-execution-tier-unavailable',
@@ -45,11 +46,11 @@ describe('AppErrorCode closed union', () => {
       'app-execution-rebuild-failed',
     ];
 
-    expect(allCodes).toHaveLength(12);
+    expect(allCodes).toHaveLength(13);
 
     // Each member must be unique.
     const unique = new Set(allCodes);
-    expect(unique.size).toBe(12);
+    expect(unique.size).toBe(13);
   });
 
   it('exhaustive switch over AppErrorCode has zero default branch', () => {
@@ -68,6 +69,8 @@ describe('AppErrorCode closed union', () => {
           return 'canvas detached';
         case 'app-paused-while-stop':
           return 'paused while stop';
+        case 'app-frame-step-invalid':
+          return 'frame step invalid';
         case 'app-system-update-failed':
           return 'system update failed';
         case 'app-pointer-lock-failed':
@@ -184,12 +187,12 @@ describe("'app-pointer-lock-failed' detail shape", () => {
 describe('APP_EXPECTED / APP_ERROR_HINTS bidirectional symmetry', () => {
   it('APP_EXPECTED has 6 keys (one per AppErrorCode member)', () => {
     const keys = Object.keys(APP_EXPECTED);
-    expect(keys).toHaveLength(12);
+    expect(keys).toHaveLength(13);
   });
 
   it('APP_ERROR_HINTS has 6 keys (one per AppErrorCode member)', () => {
     const keys = Object.keys(APP_ERROR_HINTS);
-    expect(keys).toHaveLength(12);
+    expect(keys).toHaveLength(13);
   });
 
   it('APP_EXPECTED and APP_ERROR_HINTS have the same key set', () => {

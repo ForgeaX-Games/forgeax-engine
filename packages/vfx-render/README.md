@@ -79,6 +79,8 @@ use the same owner path.
 - Billboard blend is explicit: `additive`, premultiplied `alpha`, or `opaque-cutout`.
 - Scene color/depth target formats and sample counts derive from RenderFeature targets.
 - Fixed bounds cull projection/draw before graph contribution; simulation follows the source culling policy.
+- Camera-frustum results publish through `setEmitterCameraVisibility`; session mute/isolate is a separate mask that suppresses compute and draw contribution while retaining prepared bindings as warm state. A paused player can therefore be isolated and restored without a new simulation intent or GPU-resource reallocation.
+- WGSL runtime time is the effect-relative `phaseTick`; the world-global tick remains an internal ring-selection and correlation clock. Replay and deterministic seek therefore restart shader time as well as CPU scheduling.
 
 Billboard texture sheets, pivot, soft-particle depth sampling, and sorting are
 executed from the reflected renderer contract. Ribbon, trail, and beam use

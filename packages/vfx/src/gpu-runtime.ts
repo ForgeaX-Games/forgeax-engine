@@ -61,6 +61,9 @@ export interface VfxGpuTickIntent {
   readonly programFingerprint: string;
   readonly reset: boolean;
   readonly fixedDelta: number;
+  /** Effect-relative fixed tick. Resets to zero for replay and restart-on-visible. */
+  readonly phaseTick: number;
+  /** World-global FixedTime tick retained for renderer ring selection and correlation. */
   readonly tick: number;
   readonly seed: number;
   readonly playCycle: number;
@@ -79,7 +82,11 @@ export interface VfxGpuEmitterInspectSnapshot {
   readonly id: string;
   readonly module: string;
   readonly capacity: number;
-  readonly visible: boolean;
+  /** Renderer-owned camera-frustum result. This is not an editor mute/isolate control. */
+  readonly cameraVisible: boolean;
+  /** Session-only preview mask. False suppresses both simulation and retained rendering. */
+  readonly sessionEnabled: boolean;
+  readonly phaseTick: number | null;
   readonly tick: number | null;
   readonly spawnCount: number;
   readonly firstParticleId: number;
@@ -129,13 +136,13 @@ interface PlayerState {
   emitters: readonly VfxGpuEmitterProgram[];
   seed: number;
   playing: boolean;
-  sessionPlaying: boolean;
   playCycle: number;
   elapsed: number[];
   rateRemainders: number[];
   nextParticleIds: number[];
   playCycles: number[];
-  visible: boolean[];
+  cameraVisible: boolean[];
+  phaseTicks: number[];
   hasCommitted: boolean;
 }
 
@@ -175,7 +182,8 @@ export class VfxGpuRuntime {
   readonly #lastCommitted = new Map<EntityHandle, VfxGpuTickIntent>();
   readonly #lastCommittedByEmitter = new Map<EntityHandle, Map<string, VfxGpuTickIntent>>();
   readonly #eventCounters = new Map<EntityHandle, VfxChannelCounters>();
-  readonly #visibility = new Map<string, boolean>();
+  readonly #cameraVisibility = new Map<string, boolean>();
+  readonly #sessionEnabled = new Map<string, boolean>();
   readonly #replayRequests = new Set<EntityHandle>();
   readonly #replayInputs = new Map<EntityHandle, VfxReplayInput<VfxValueMap>>();
   #sequence = 0;
@@ -240,7 +248,9 @@ export class VfxGpuRuntime {
             id: emitter.id,
             module: emitter.module,
             capacity: emitter.capacity,
-            visible: this.#visibility.get(`${player}:${emitter.id}`) ?? true,
+            cameraVisible: this.#cameraVisibility.get(`${player}:${emitter.id}`) ?? true,
+            sessionEnabled: this.isEmitterSessionEnabled(player, emitter.id),
+            phaseTick: intent?.phaseTick ?? null,
             tick: intent?.tick ?? null,
             spawnCount: intent?.spawnCount ?? 0,
             firstParticleId: intent?.firstParticleId ?? 0,
@@ -321,20 +331,26 @@ export class VfxGpuRuntime {
     return this.#instances.get(player);
   }
 
-  setEmitterVisibility(player: EntityHandle, emitterId: string, visible: boolean): void {
-    this.#visibility.set(`${player}:${emitterId}`, visible);
+  setEmitterCameraVisibility(player: EntityHandle, emitterId: string, visible: boolean): void {
+    this.#cameraVisibility.set(`${player}:${emitterId}`, visible);
+  }
+
+  setEmitterSessionEnabled(player: EntityHandle, emitterId: string, enabled: boolean): void {
+    this.#sessionEnabled.set(`${player}:${emitterId}`, enabled);
+  }
+
+  isEmitterSessionEnabled(player: EntityHandle, emitterId: string): boolean {
+    return this.#sessionEnabled.get(`${player}:${emitterId}`) ?? true;
   }
 
   /** Restart from tick zero without changing authored `ParticleEffectPlayer.playing`. */
   replay(player: EntityHandle, input?: VfxReplayInput<VfxValueMap>): void {
     if (input === undefined) {
       this.#instances.delete(player);
-      this.#replayRequests.add(player);
     } else {
       this.#replayInputs.set(player, input);
     }
-    const state = this.#players.get(player);
-    if (state !== undefined) state.sessionPlaying = true;
+    this.#replayRequests.add(player);
   }
 
   commit(sequence: number): void {
@@ -369,8 +385,11 @@ export class VfxGpuRuntime {
     this.#eventCounters.delete(player);
     this.#replayInputs.delete(player);
     const prefix = `${player}:`;
-    for (const key of this.#visibility.keys()) {
-      if (key.startsWith(prefix)) this.#visibility.delete(key);
+    for (const key of this.#cameraVisibility.keys()) {
+      if (key.startsWith(prefix)) this.#cameraVisibility.delete(key);
+    }
+    for (const key of this.#sessionEnabled.keys()) {
+      if (key.startsWith(prefix)) this.#sessionEnabled.delete(key);
     }
   }
 
@@ -433,7 +452,6 @@ export class VfxGpuRuntime {
       this.#clearDiagnostics(input.player, 'vfx-effect-unavailable');
       const previous = this.#players.get(input.player);
       const replayRequested = this.#replayRequests.delete(input.player);
-      const sessionPlaying = replayRequested || previous?.sessionPlaying === true;
       const restart =
         previous === undefined ||
         previous.effect !== input.effect ||
@@ -448,21 +466,22 @@ export class VfxGpuRuntime {
             emitters: resolved.value.program.emitters,
             seed: input.seed,
             playing: input.playing,
-            sessionPlaying,
             playCycle: (previous?.playCycle ?? -1) + 1,
             elapsed: resolved.value.program.emitters.map(() => 0),
             rateRemainders: resolved.value.program.emitters.map(() => 0),
             nextParticleIds: resolved.value.program.emitters.map(() => 0),
             playCycles: resolved.value.program.emitters.map(() => (previous?.playCycle ?? -1) + 1),
-            visible: resolved.value.program.emitters.map(() => true),
+            cameraVisible: resolved.value.program.emitters.map(() => true),
+            phaseTicks: resolved.value.program.emitters.map(() => 0),
             hasCommitted: false,
           }
         : previous;
       this.#players.set(input.player, state);
-      state.sessionPlaying = sessionPlaying;
-      if (input.playing) state.sessionPlaying = false;
-      state.playing = input.playing || state.sessionPlaying;
-      if (!state.playing) continue;
+      // Replay is a one-FixedUpdate request, not a second persistent play-state
+      // authority. Inspection always returns the authored player state after
+      // the requested reset intent has been emitted.
+      state.playing = input.playing;
+      if (!input.playing && !replayRequested) continue;
       const queuedForPlayer = this.#intents.reduce(
         (count, intent) => count + (intent.player === input.player ? 1 : 0),
         0,
@@ -485,12 +504,14 @@ export class VfxGpuRuntime {
         this.#instances.get(input.player) ?? this.#createInstance(input.player, resolved.value);
       if (instance === undefined) continue;
       const hasActiveEmitter = resolved.value.program.emitters.some((emitter) => {
-        const visible = this.#visibility.get(`${input.player}:${emitter.id}`) ?? true;
-        return visible || emitter.simulationWhenCulled === 'continue';
+        if (!this.isEmitterSessionEnabled(input.player, emitter.id)) return false;
+        const cameraVisible = this.#cameraVisibility.get(`${input.player}:${emitter.id}`) ?? true;
+        return cameraVisible || emitter.simulationWhenCulled === 'continue';
       });
       if (!hasActiveEmitter) {
         for (const [index, emitter] of resolved.value.program.emitters.entries()) {
-          state.visible[index] = this.#visibility.get(`${input.player}:${emitter.id}`) ?? true;
+          state.cameraVisible[index] =
+            this.#cameraVisibility.get(`${input.player}:${emitter.id}`) ?? true;
         }
         continue;
       }
@@ -512,10 +533,11 @@ export class VfxGpuRuntime {
       const delta = fixedDelta * input.timeScale;
       const committedChannels = committed.value.channelInputs;
       for (const [index, emitter] of resolved.value.program.emitters.entries()) {
-        const visible = this.#visibility.get(`${input.player}:${emitter.id}`) ?? true;
-        const becameVisible = visible && state.visible[index] === false;
-        state.visible[index] = visible;
-        if (!visible && emitter.simulationWhenCulled !== 'continue') continue;
+        const cameraVisible = this.#cameraVisibility.get(`${input.player}:${emitter.id}`) ?? true;
+        const becameVisible = cameraVisible && state.cameraVisible[index] === false;
+        state.cameraVisible[index] = cameraVisible;
+        if (!this.isEmitterSessionEnabled(input.player, emitter.id)) continue;
+        if (!cameraVisible && emitter.simulationWhenCulled !== 'continue') continue;
         const visibilityRestart =
           becameVisible && emitter.simulationWhenCulled === 'restart-on-visible';
         if (visibilityRestart) {
@@ -523,6 +545,7 @@ export class VfxGpuRuntime {
           state.rateRemainders[index] = 0;
           state.nextParticleIds[index] = 0;
           state.playCycles[index] = (state.playCycles[index] ?? state.playCycle) + 1;
+          state.phaseTicks[index] = 0;
         }
         const previousElapsed = state.elapsed[index] ?? 0;
         const scheduled = spawnCount(
@@ -543,6 +566,7 @@ export class VfxGpuRuntime {
         );
         const channelInputs =
           (emitter.events?.length ?? 0) > 0 || consumesEvent ? committedChannels : [];
+        const phaseTick = state.phaseTicks[index] ?? 0;
         this.#intents.push(
           Object.freeze({
             sequence: this.#sequence++,
@@ -551,6 +575,7 @@ export class VfxGpuRuntime {
             programFingerprint: resolved.value.program.fingerprint,
             reset: restart || visibilityRestart,
             fixedDelta: delta,
+            phaseTick,
             tick,
             seed: input.seed,
             playCycle: state.playCycles[index] ?? state.playCycle,
@@ -570,6 +595,7 @@ export class VfxGpuRuntime {
           }),
         );
         state.elapsed[index] = previousElapsed + delta;
+        state.phaseTicks[index] = phaseTick + 1;
       }
     }
     for (const player of this.#players.keys()) {

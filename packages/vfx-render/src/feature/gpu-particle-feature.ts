@@ -223,7 +223,7 @@ function runtimeData(
   const floats = new Float32Array(storage);
   const words = new Uint32Array(storage);
   floats[0] = intent.fixedDelta;
-  words[1] = intent.tick;
+  words[1] = intent.phaseTick;
   words[2] = intent.seed;
   words[3] = intent.playCycle;
   words[4] = intent.emitter.capacity;
@@ -598,11 +598,21 @@ export function gpuParticleRenderFeature(
           ...state.projections.map((projection) => projection.ring.bindings),
         ]);
         if (!retained.ok) return retained;
+        if (!extracted.runtime.isEmitterSessionEnabled(state.player, state.emitterId)) {
+          // Session isolation is transient preview state, not a resource
+          // lifetime boundary. Keep prepared bindings warm while suppressing
+          // every contribution: a paused player may be re-enabled without a
+          // fresh simulation intent that could rebuild those bindings.
+          state.projections = [];
+          state.draws = [];
+          state.depthSampledDraws = [];
+          continue;
+        }
         const renderers = intent.emitter.renderers;
         if (renderers.length === 0) continue;
         const localToWorld = emitterTransform(state.world, intent);
         const visible = emitterVisible(intent, extracted.camera, localToWorld);
-        extracted.runtime.setEmitterVisibility(state.player, state.emitterId, visible);
+        extracted.runtime.setEmitterCameraVisibility(state.player, state.emitterId, visible);
         const currentIntents = extracted.intents.filter(
           (candidate) =>
             candidate.player === state.player && candidate.emitter.id === state.emitterId,
@@ -972,6 +982,7 @@ export function gpuParticleRenderFeature(
         if (refs === undefined) continue;
         const extracted = frame.worlds.find((entry) => entry.world === state.world);
         if (extracted === undefined) continue;
+        if (!extracted.runtime.isEmitterSessionEnabled(state.player, state.emitterId)) continue;
         const currentIntents = extracted.intents.filter(
           (intent) => intent.player === state.player && intent.emitter.id === state.emitterId,
         );

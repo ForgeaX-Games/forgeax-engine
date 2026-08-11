@@ -174,11 +174,13 @@ responsibility.
 - `vfx_random_spawn` and `vfx_random_update` are addressable by seed, particle ID, tick, and sample key.
 - Cold GPU preparation stalls effect time within the bounded queue. Post-start overflow reports `vfx-intent-queue-overflow`; ticks are not silently discarded.
 - Seed/effect changes and stop-to-play transitions restart the player at a fixed boundary.
+- `phaseTick` is effect-relative and resets to zero on replay or `restart-on-visible`; the existing `tick` remains the World-global FixedTime correlation key.
+- `replay(player)` advances an authored stopped player for exactly one FixedUpdate and never creates a second persistent play-state authority.
 
 `VfxGpuRuntime.inspectPlayers()` and `inspectPlayer(player)` expose stable keyed
 snapshots for every attached player and emitter. They report the asset GUID,
 program/layout fingerprints, parameter generation, pending patch count, channel
-counters, visibility, schedule, bounds, renderer/stage metadata and the latest
+counters, `cameraVisible`, `sessionEnabled`, phase/global ticks, schedule, bounds, renderer/stage metadata and the latest
 committed tick intent per emitter. Observation never selects a single global
 “latest intent,” so two players and multi-emitter effects remain distinguishable.
 
@@ -191,6 +193,12 @@ committed tick intent per emitter. Observation never selects a single global
 | `restart-on-visible` | Freeze while hidden | Reset before drawing again |
 
 Bounds are required and conservatively tested against the camera frustum. Local-space bounds use the player's world transform and maximum axis scale.
+
+Camera culling and editor preview masking are independent runtime axes:
+
+- `setEmitterCameraVisibility` is renderer-owned frustum evidence and applies the authored culling policy.
+- `setEmitterSessionEnabled` is a non-authored preview mask used for mute/isolate. Disabled emitters neither simulate nor render retained output.
+- Neither API changes a cooked renderer's authored `enabled` field.
 
 ## Structured recovery
 

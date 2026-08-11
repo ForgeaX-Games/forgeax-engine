@@ -182,10 +182,17 @@ describe('GPU VFX fixed-tick intents', () => {
     expect(runtime.snapshot()[0]).toMatchObject({
       player,
       reset: true,
+      phaseTick: 0,
       spawnCount: 8,
       firstParticleId: 0,
     });
     expect(world.get(player, ParticleEffectPlayer).unwrap().playing).toBe(false);
+
+    runtime.commit(runtime.snapshot().at(0)?.sequence ?? -1);
+    world.update(1 / 60).unwrap();
+
+    expect(runtime.snapshot()).toHaveLength(0);
+    expect(runtime.inspectPlayer(player)?.playing).toBe(false);
   });
 
   it('holds time during cold GPU preparation, then diagnoses post-start backpressure', async () => {
@@ -279,17 +286,30 @@ describe('GPU VFX fixed-tick intents', () => {
         assetGuid: 'effect-guid',
         programFingerprint: 'sha256:test',
         emitters: [
-          expect.objectContaining({ id: 'sparks', module: 'sparks.vfx.wgsl', visible: true }),
-          expect.objectContaining({ id: 'smoke', module: 'smoke.vfx.wgsl', visible: true }),
+          expect.objectContaining({
+            id: 'sparks',
+            module: 'sparks.vfx.wgsl',
+            cameraVisible: true,
+            sessionEnabled: true,
+            phaseTick: 0,
+          }),
+          expect.objectContaining({
+            id: 'smoke',
+            module: 'smoke.vfx.wgsl',
+            cameraVisible: true,
+            sessionEnabled: true,
+            phaseTick: 0,
+          }),
         ],
       }),
       expect.objectContaining({ player: second }),
     ]);
 
-    runtime.setEmitterVisibility(first, 'smoke', false);
+    runtime.setEmitterCameraVisibility(first, 'smoke', false);
     expect(runtime.inspectPlayer(first)?.emitters[1]).toMatchObject({
       id: 'smoke',
-      visible: false,
+      cameraVisible: false,
+      sessionEnabled: true,
     });
     expect(runtime.inspectPlayer(999 as never)).toBeUndefined();
   });
@@ -346,12 +366,52 @@ describe('GPU VFX fixed-tick intents', () => {
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     runtime.commit(runtime.snapshot().at(0)?.sequence ?? -1);
 
-    runtime.setEmitterVisibility(player, 'sparks', false);
+    runtime.setEmitterCameraVisibility(player, 'sparks', false);
     world.update(1 / 60).unwrap();
     expect(runtime.snapshot()).toHaveLength(0);
 
-    runtime.setEmitterVisibility(player, 'sparks', true);
+    runtime.setEmitterCameraVisibility(player, 'sparks', true);
     world.update(1 / 60).unwrap();
-    expect(runtime.snapshot()[0]).toMatchObject({ reset, firstParticleId });
+    expect(runtime.snapshot()[0]).toMatchObject({
+      reset,
+      firstParticleId,
+      phaseTick: reset ? 0 : 1,
+    });
+  });
+
+  it('keeps editor session masks independent from camera culling and authored enablement', async () => {
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', effect);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 4, timeScale: 1 },
+      })
+      .unwrap();
+    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    world.update(1 / 60).unwrap();
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+    runtime.commit(runtime.snapshot().at(0)?.sequence ?? -1);
+
+    runtime.setEmitterSessionEnabled(player, 'sparks', false);
+    world.update(1 / 60).unwrap();
+    expect(runtime.snapshot()).toHaveLength(0);
+    expect(runtime.inspectPlayer(player)?.emitters[0]).toMatchObject({
+      cameraVisible: true,
+      sessionEnabled: false,
+      phaseTick: 0,
+    });
+
+    runtime.setEmitterCameraVisibility(player, 'sparks', false);
+    runtime.setEmitterSessionEnabled(player, 'sparks', true);
+    expect(runtime.isEmitterSessionEnabled(player, 'sparks')).toBe(true);
+    expect(runtime.inspectPlayer(player)?.emitters[0]).toMatchObject({
+      cameraVisible: false,
+      sessionEnabled: true,
+    });
+
+    runtime.setEmitterCameraVisibility(player, 'sparks', true);
+    world.update(1 / 60).unwrap();
+    expect(runtime.snapshot()[0]).toMatchObject({ reset: false, phaseTick: 1 });
   });
 });

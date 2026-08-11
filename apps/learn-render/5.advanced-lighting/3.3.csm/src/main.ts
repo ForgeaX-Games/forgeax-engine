@@ -238,6 +238,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
   }
 
+  // The RHI-debug Browser lane can select one cascade through the same public
+  // overlay mode used by the keyboard path, proving that the selected layer
+  // reaches the post-process UBO without adding a debug-only engine seam.
+  const queryOverlayMode = csmOverlayModeForKey(
+    new URLSearchParams(window.location.search).get('csm-highlight') ?? '',
+  );
+  if (queryOverlayMode !== null) {
+    setCsmOverlayMode(queryOverlayMode);
+    console.warn(`[learn-render 5.3.3 csm] query cascade overlay -> ${queryOverlayMode}`);
+  }
+
   // Key handlers: 1-4 highlight a single cascade band, 0 turns the overlay
   // off; Space toggles the shadow on/off via ECS structural change (the engine
   // has no runtime setShadowEnabled API).

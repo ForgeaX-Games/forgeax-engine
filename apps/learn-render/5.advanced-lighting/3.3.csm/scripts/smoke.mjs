@@ -23,6 +23,8 @@
 //     the delta; shadows survive — the AUGMENT, not REPLACE, guarantee).
 //   - FALSIFY=force-no-shadow-pass : castShadow=false -> no
 //     shadowCascade* pass (proves the shadowCascade assertion can fail).
+//   - FALSIFY=force-csm-highlight-layer-2 : switch the existing overlay UBO to
+//     cascade 2 and require the final image to change from the all-bands image.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-3-3-csm] backend=<backend>`
@@ -38,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
+const highlightLayerControl = FALSIFY === 'force-csm-highlight-layer-2';
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -413,7 +416,9 @@ const { PostProcessParams } = await import('@forgeax/engine-render');
 const paramsInitial = falsifyFakeDepth
   ? packOverlayParams(0 /* all */, 1 /* fake */)
   : packOverlayParams(0 /* all */, 0 /* real */);
-world.spawn({ component: PostProcessParams, data: { shader: OVERLAY_PP_ID, data: paramsInitial } }).unwrap();
+const paramsEntity = world
+  .spawn({ component: PostProcessParams, data: { shader: OVERLAY_PP_ID, data: paramsInitial } })
+  .unwrap();
 
 // Install URP once with the overlay. When overlayOffLine, install without to
 // keep the old structural assertion (f) working.
@@ -515,6 +520,41 @@ async function readTightRgba(label) {
 }
 
 let tightRgba = await readTightRgba('cascadeBlend=0.2');
+
+// Select one real cascade through the existing overlay mode UBO and prove the
+// selected-layer highlight changes the submitted color image. This is a
+// same-scene control: shadow atlas, receiver draws, and all other inputs stay
+// fixed while only tintMode changes from all-bands (0) to cascade 2 (2).
+if (highlightLayerControl && shadowPresent && !oneCascade && !falsifyFakeDepth) {
+  world.set(paramsEntity, PostProcessParams, { data: packOverlayParams(2 /* c2 */, 0 /* real */) });
+  for (let i = 0; i < 60; i++) {
+    const due = rafQueue.shift();
+    if (!due) break;
+    fakeNow += 16.67;
+    due.cb(fakeNow);
+  }
+  const highlightedRgba = await readTightRgba('cascade-highlight=c2');
+  let highlightChangedPixels = 0;
+  let highlightMeanRgbDelta = 0;
+  for (let i = 0; i < highlightedRgba.length; i += 4) {
+    const pixelDelta =
+      Math.abs(tightRgba[i] - highlightedRgba[i]) +
+      Math.abs(tightRgba[i + 1] - highlightedRgba[i + 1]) +
+      Math.abs(tightRgba[i + 2] - highlightedRgba[i + 2]);
+    if (pixelDelta > 0) highlightChangedPixels++;
+    highlightMeanRgbDelta += pixelDelta / (3 * 255);
+  }
+  highlightMeanRgbDelta /= highlightedRgba.length / 4;
+  console.log(
+    `[smoke] cascade highlight c2 visual control changedPixels=${highlightChangedPixels}/${highlightedRgba.length / 4} ` +
+      `meanRgbDelta=${highlightMeanRgbDelta.toFixed(6)}`,
+  );
+  if (highlightChangedPixels === 0) {
+    console.error('[smoke] FAIL - cascade highlight c2 produced no visual change from all-bands overlay');
+    process.exit(1);
+  }
+  world.set(paramsEntity, PostProcessParams, { data: packOverlayParams(0 /* all */, 0 /* real */) });
+}
 
 // Compare the same live scene after removing the blend zone. This is a real
 // visual falsifier for the producer-owned cascadeBlend input: if changing it
