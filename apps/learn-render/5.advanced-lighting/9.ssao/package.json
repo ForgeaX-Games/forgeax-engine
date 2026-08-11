@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
     "smoke:discrimination": "node scripts/smoke-dawn.mjs --discrimination",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:browser:pair": "node scripts/smoke-browser-pair.mjs"
   },
   "forgeax": {
     "rhiDebug": {

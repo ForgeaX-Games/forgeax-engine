@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_COPY_SRC,
   GPU_BUFFER_USAGE_INDEX,
   GPU_BUFFER_USAGE_MAP_READ,
   GPU_BUFFER_USAGE_STORAGE,
@@ -64,10 +65,11 @@ describe('render buffer usage owner', () => {
     expect(GPU_BUFFER_USAGE_VERTEX).toBe(0x20);
     expect(GPU_BUFFER_USAGE_INDEX).toBe(0x10);
     expect(GPU_BUFFER_USAGE_COPY_DST).toBe(0x08);
+    expect(GPU_BUFFER_USAGE_COPY_SRC).toBe(0x04);
     expect(GPU_BUFFER_USAGE_UNIFORM).toBe(0x40);
     expect(GPU_BUFFER_USAGE_STORAGE).toBe(0x80);
     expect(GPU_BUFFER_USAGE_MAP_READ).toBe(0x01);
-    expect(ownerSource.match(/export const GPU_BUFFER_USAGE_/g)).toHaveLength(6);
+    expect(ownerSource.match(/export const GPU_BUFFER_USAGE_/g)).toHaveLength(7);
   });
 
   it('routes mesh descriptor, update, and bootstrap consumers through the owner', () => {

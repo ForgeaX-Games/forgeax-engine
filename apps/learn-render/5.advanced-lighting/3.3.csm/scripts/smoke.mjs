@@ -30,10 +30,11 @@
 //   - `[smoke] PASS`
 //   - `[smoke] FAIL`
 
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const FALSIFY = process.env.FALSIFY ?? '';
@@ -317,18 +318,22 @@ for (const c of cubes) {
 
 // Directional light with 4-cascade CSM shadow. FALSIFY=force-no-shadow-pass
 // sets castShadow=false (proves the shadowCascade assertion can fail).
+// FALSIFY=force-one-cascade keeps shadows enabled but requests one cascade,
+// proving the graph count follows the producer's cascadeCount rather than a
+// hard-coded four-pass assumption.
 const shadowPresent = FALSIFY !== 'force-no-shadow-pass';
+const oneCascade = FALSIFY === 'force-one-cascade';
 if (!shadowPresent) {
   console.log('[smoke] FALSIFY=force-no-shadow-pass -- DirectionalLight castShadow=false');
 }
-world.spawn(
+const lightEntity = world.spawn(
   {
     component: DirectionalLight,
     data: {
       direction: [0.3, -0.9, -0.3],
       color: [1, 1, 1], intensity: 1,
       ...(shadowPresent
-        ? { castShadow: true, cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, shadowDistance: 50 }
+        ? { castShadow: true, cascadeCount: oneCascade ? 1 : 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, shadowDistance: 50 }
         : { castShadow: false }),
     },
   },
@@ -453,19 +458,12 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i % 16 === 15) await delay(1);
 }
 
-const stopResult = app.stop();
-if (!stopResult.ok) {
-  console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
-  process.exit(1);
-}
-
 console.log(`[smoke] frames observed=${totalFrames}`);
 console.log(`[smoke] perFramePassNames=${JSON.stringify(passNames)}`);
 
 // --- 9a. Pixel readback (AC-07: memory assertions, zero tape dependency) ---
 
-let tightRgba = null; // Uint8Array, WIDTH*HEIGHT*4, tight-packed RGBA
-{
+async function readTightRgba(label) {
   const device = sharedDevice;
   if (!device) {
     console.error('[smoke] FAIL - no shared device captured for pixel readback');
@@ -501,7 +499,7 @@ let tightRgba = null; // Uint8Array, WIDTH*HEIGHT*4, tight-packed RGBA
   readbackBuffer.unmap();
   readbackBuffer.destroy();
 
-  tightRgba = new Uint8Array(WIDTH * HEIGHT * 4);
+  const tightRgba = new Uint8Array(WIDTH * HEIGHT * 4);
   for (let y = 0; y < HEIGHT; y++) {
     for (let x = 0; x < WIDTH; x++) {
       const off = y * bytesPerRow + x * bytesPerPixel;
@@ -512,6 +510,52 @@ let tightRgba = null; // Uint8Array, WIDTH*HEIGHT*4, tight-packed RGBA
       tightRgba[dst + 3] = bytes[off + 3] ?? 0;
     }
   }
+  console.log(`[smoke] ${label} pixel RGBA sha256=${createHash('sha256').update(tightRgba).digest('hex')}`);
+  return tightRgba;
+}
+
+let tightRgba = await readTightRgba('cascadeBlend=0.2');
+
+// Compare the same live scene after removing the blend zone. This is a real
+// visual falsifier for the producer-owned cascadeBlend input: if changing it
+// does not alter the submitted color image, the CSM seam-continuity path is not
+// connected to the rendered result and the smoke must fail.
+const blendControlFrames = 60;
+if (shadowPresent && !oneCascade) {
+  world.set(lightEntity, DirectionalLight, { cascadeBlend: 0 });
+  for (let i = 0; i < blendControlFrames; i++) {
+    const due = rafQueue.shift();
+    if (!due) break;
+    fakeNow += 16.67;
+    due.cb(fakeNow);
+  }
+  const noBlendRgba = await readTightRgba('cascadeBlend=0');
+  let blendChangedPixels = 0;
+  let blendMeanRgbDelta = 0;
+  for (let i = 0; i < noBlendRgba.length; i += 4) {
+    const pixelDelta =
+      Math.abs(tightRgba[i] - noBlendRgba[i]) +
+      Math.abs(tightRgba[i + 1] - noBlendRgba[i + 1]) +
+      Math.abs(tightRgba[i + 2] - noBlendRgba[i + 2]);
+    if (pixelDelta > 0) blendChangedPixels++;
+    blendMeanRgbDelta += pixelDelta / (3 * 255);
+  }
+  blendMeanRgbDelta /= noBlendRgba.length / 4;
+  console.log(
+    `[smoke] cascadeBlend visual control changedPixels=${blendChangedPixels}/${noBlendRgba.length / 4} ` +
+      `meanRgbDelta=${blendMeanRgbDelta.toFixed(6)}`,
+  );
+  if (blendChangedPixels === 0) {
+    console.error('[smoke] FAIL - cascadeBlend=0 produced no visual change from cascadeBlend=0.2');
+    process.exit(1);
+  }
+}
+
+world.set(lightEntity, DirectionalLight, { cascadeBlend: 0.2 });
+const stopResult = app.stop();
+if (!stopResult.ok) {
+  console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
+  process.exit(1);
 }
 
 // --- 9b. Pixel assertions (AC-07 a/b/c) ---
@@ -603,15 +647,17 @@ if (unexpectedConsoleErrors.length > 0) {
   );
 }
 
-// (e) 4-cascade CSM: the demo spawns cascadeCount=4, so the graph MUST contain
-// exactly 4 shadowCascade passes. This is the assertion the prior
+// (e) CSM: the smoke requests four cascades normally and one under the
+// force-one-cascade control, so the graph MUST contain the requested count.
+// This is the assertion the prior
 // installPipeline-replacement smoke could not make (it REPLACED URP and dropped
 // every shadow pass yet stayed green). FALSIFY=force-no-shadow-pass sets
 // castShadow=false -> URP falls back to a single shadowCascade0 (count 1, not 4),
 // flipping this assertion.
-if (shadowPresent && shadowCascadeCount !== 4) {
+const expectedShadowCascadeCount = oneCascade ? 1 : 4;
+if (shadowPresent && shadowCascadeCount !== expectedShadowCascadeCount) {
   failures.push(
-    `(e) expected 4 shadowCascade passes (cascadeCount=4), got ${shadowCascadeCount} -- ${JSON.stringify(passNames)}`,
+    `(e) expected ${expectedShadowCascadeCount} shadowCascade passes, got ${shadowCascadeCount} -- ${JSON.stringify(passNames)}`,
   );
 }
 if (!shadowPresent && shadowCascadeCount !== 1) {
@@ -630,12 +676,12 @@ if (!overlayEnabled && hasPostEffectPass) {
   failures.push('(f) post-effect pass PRESENT with overlay disabled (FALSIFY did not falsify)');
 }
 
-// (g) AUGMENT guarantee: all 4 shadow cascades survive even with the overlay on
+// (g) AUGMENT guarantee: all requested shadow cascades survive even with the overlay on
 // (the whole point of the M4' fix -- the overlay layers on top, it does not
 // replace URP and drop its shadow passes).
-if (overlayEnabled && shadowPresent && !(shadowCascadeCount === 4 && hasPostEffectPass)) {
+if (overlayEnabled && shadowPresent && !(shadowCascadeCount === expectedShadowCascadeCount && hasPostEffectPass)) {
   failures.push(
-    `(g) AUGMENT broken: expected 4 shadowCascade + a post-effect pass, got cascades=${shadowCascadeCount} overlay=${hasPostEffectPass}`,
+    `(g) AUGMENT broken: expected ${expectedShadowCascadeCount} shadowCascade + a post-effect pass, got cascades=${shadowCascadeCount} overlay=${hasPostEffectPass}`,
   );
 }
 

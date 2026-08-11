@@ -40,6 +40,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const capsRenderable: RhiCaps = {
   backendKind: 'webgpu',
   timestampQuery: false,
+  timestampPeriodNanoseconds: null,
   storageBuffer: true,
   storageTexture: false,
   rgba16floatRenderable: true,

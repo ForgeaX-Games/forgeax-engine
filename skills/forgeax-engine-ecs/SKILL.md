@@ -230,3 +230,21 @@ reflection; ECS remains the component owner.
 
 Out of scope: renderer culling, camera, picking, app lifecycle, assets, and VFX
 shadow policy. Route each question to its owning package skill.
+
+## Simulation record/restore seam
+
+Use the ECS owner when deterministic fixed-tick state must be restored into a
+fresh target and compared semantically. The minimum path is
+`source.simulationRecord()` -> `target.simulationRestore(record)` ->
+`simulationCompare({ facts })`.
+
+`trace` contains ordered fixed-tick input samples. A `participant` is one ready,
+versioned owner for portable external state. Every numeric report fact declares
+a non-negative `tolerance`. Expected failures are closed errors; switch on
+`code` and read `expected`, `hint`, and narrowed `detail`.
+
+The App, Preview, and Remote boundaries expose only the inspection summary and
+the schema at `packages/app/schema/simulation-inspection.schema.json`. They do
+not own record/schema state or provide restore/replay actions. Do not use this
+seam for network rollback, disk persistence, RHI tape replay, game replay, or
+pixel comparison.

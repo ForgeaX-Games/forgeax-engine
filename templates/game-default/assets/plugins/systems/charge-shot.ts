@@ -1,4 +1,4 @@
-import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { inState } from '@forgeax/engine-state';
 import type { HudHandle } from '../hud';
@@ -23,17 +23,16 @@ function powerFor(seconds: number): number {
 
 /** Turns a held InputSnapshot action into ECS charge intent and authored VFX. */
 export function installChargeShotSystem(ctx: ChargeShotSystemContext): void {
-  ctx.world.addSystem(Update, {
+  ctx.world.addSystem(FixedUpdate, {
     name: 'game-charge-shot',
     runIf: inState(GameState, 'Play'),
-    after: ['game-pick-shoot'],
     before: ['game-projectile-simulation'],
     queries: [],
     fn: () => {
       const state = ctx.world.get(ctx.root, ChargeShot);
       if (!state.ok) return;
       const action = ctx.readInput().action('charge');
-      const dt = ctx.world.getResource(Time).delta;
+      const dt = ctx.world.getResource(FixedTime).delta;
 
       if (action.justPressed()) {
         ctx.world.set(ctx.root, ChargeShot, { active: 1, release: 0, elapsed: 0, power: 1 });

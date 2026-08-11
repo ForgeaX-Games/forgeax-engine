@@ -152,68 +152,84 @@ export type GltfError = {
   };
 }[GltfErrorCode];
 
-// === GLTF_ERROR_HINTS (Record<GltfErrorCode, string>) ===
+// === Private per-code policy owner ===
 
-export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = {
-  'gltf-malformed-header':
-    'verify .glb is not truncated; rerun: forgeax-engine-remote-gltf import <path>',
-  'gltf-version-unsupported': 'asset.version must be "2.0"; v1 or v3 not supported',
-  'gltf-buffer-out-of-bounds':
-    'rebuild .gltf with valid bufferViews; check accessor index; ensure accessor.byteOffset + EFFECTIVE_STRIDE * (count - 1) + element_size <= bufferView.byteLength',
-  'gltf-extension-unsupported':
-    'see feat-future-gltf-extensions-allowlist; remove this extension or wait for the allowlist to expand',
-  'gltf-accessor-type-mismatch':
-    'sparse: see feat-future-gltf-sparse-accessor; morph: see feat-future-gltf-morph; interleaved: see feat-future-gltf-mesh-multi-section',
-  'gltf-texture-load-failed':
-    'check sidecar meta.json + textures/ directory + vite-plugin-pack /__pack/lookup route',
-  'gltf-meta-missing': 'run: forgeax-engine-remote-gltf import <path>',
-  'gltf-instancing-count-mismatch':
-    'EXT_mesh_gpu_instancing requires TRANSLATION/ROTATION/SCALE accessors to share count; see https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/EXT_mesh_gpu_instancing/README.md#extending-nodes-with-instance-attributes',
-  'gltf-image-mime-unsupported':
-    'convert to JPG/PNG via external tool; only image/jpeg and image/png are supported',
-  'gltf-skin-joint-count-exceeded':
-    'reduce joint count below MAX_JOINTS (256) or see OOS-skin-max-joints',
-  'gltf-animation-cubicspline-unsupported':
-    'see OOS-skin-cubicspline; convert CUBICSPLINE to LINEAR/STEP in DCC tool',
-  'gltf-morph-unsupported':
-    'see OOS-skin-morph-anim; remove morph targets from animation channels in DCC tool',
-  'gltf-skin-joint-name-missing':
-    'ensure every joint node has a non-empty name and the node hierarchy is acyclic',
-  'gltf-image-extract-failed':
-    'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-remote-gltf import <path>',
-  'gltf-skin-attr-asymmetric':
-    'glTF spec requires JOINTS_0 and WEIGHTS_0 to appear together for each skinned primitive; add the missing attribute or remove the present one in the DCC tool',
-  'gltf-animation-target-invalid':
-    'name every node in the animated hierarchy and ensure each animated full path is unique',
-};
+type GltfErrorPolicy = { readonly expected: string; readonly hint: string };
 
-// === GLTF_EXPECTED (Record<GltfErrorCode, string>) ===
+const gltfErrorPolicy = {
+  'gltf-malformed-header': {
+    expected:
+      'GLB 12-byte header (magic 0x46546C67 + version=2 + length) plus mandatory JSON chunk',
+    hint: 'verify .glb is not truncated; rerun: forgeax-engine-remote-gltf import <path>',
+  },
+  'gltf-version-unsupported': {
+    expected: 'asset.version === "2.0"',
+    hint: 'asset.version must be "2.0"; v1 or v3 not supported',
+  },
+  'gltf-buffer-out-of-bounds': {
+    expected: 'accessor byte range within bufferView.byteLength',
+    hint: 'rebuild .gltf with valid bufferViews; check accessor index; ensure accessor.byteOffset + EFFECTIVE_STRIDE * (count - 1) + element_size <= bufferView.byteLength',
+  },
+  'gltf-extension-unsupported': {
+    expected: 'extension listed in v1 allowlist (see EXTENSION_ALLOWLIST in @forgeax/engine-gltf)',
+    hint: 'see feat-future-gltf-extensions-allowlist; remove this extension or wait for the allowlist to expand',
+  },
+  'gltf-accessor-type-mismatch': {
+    expected: 'dense fixed-stride accessor with supported componentType',
+    hint: 'sparse: see feat-future-gltf-sparse-accessor; morph: see feat-future-gltf-morph; interleaved: see feat-future-gltf-mesh-multi-section',
+  },
+  'gltf-texture-load-failed': {
+    expected: 'externalLoader resolved the URI into an ArrayBuffer without throwing',
+    hint: 'check sidecar meta.json + textures/ directory + vite-plugin-pack /__pack/lookup route',
+  },
+  'gltf-meta-missing': {
+    expected: "sidecar <source>.meta.json (importer: 'gltf') present in same directory",
+    hint: 'run: forgeax-engine-remote-gltf import <path>',
+  },
+  'gltf-instancing-count-mismatch': {
+    expected: 'all instance attribute accessors share the same count',
+    hint: 'EXT_mesh_gpu_instancing requires TRANSLATION/ROTATION/SCALE accessors to share count; see https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/EXT_mesh_gpu_instancing/README.md#extending-nodes-with-instance-attributes',
+  },
+  'gltf-image-mime-unsupported': {
+    expected: 'image/mimeType is image/jpeg or image/png',
+    hint: 'convert to JPG/PNG via external tool; only image/jpeg and image/png are supported',
+  },
+  'gltf-skin-joint-count-exceeded': {
+    expected: 'skin.joints.length <= MAX_JOINTS (256)',
+    hint: 'reduce joint count below MAX_JOINTS (256) or see OOS-skin-max-joints',
+  },
+  'gltf-animation-cubicspline-unsupported': {
+    expected: 'animation sampler interpolation is LINEAR or STEP',
+    hint: 'see OOS-skin-cubicspline; convert CUBICSPLINE to LINEAR/STEP in DCC tool',
+  },
+  'gltf-morph-unsupported': {
+    expected: 'no animation channel targets morph weights (path !== "weights")',
+    hint: 'see OOS-skin-morph-anim; remove morph targets from animation channels in DCC tool',
+  },
+  'gltf-skin-joint-name-missing': {
+    expected: 'every joint node has a non-empty name and belongs to an acyclic hierarchy',
+    hint: 'ensure every joint node has a non-empty name and the node hierarchy is acyclic',
+  },
+  'gltf-image-extract-failed': {
+    expected:
+      'image bytes extractable from bufferView / data-URI / external URI without corruption',
+    hint: 'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-remote-gltf import <path>',
+  },
+  'gltf-skin-attr-asymmetric': {
+    expected:
+      'mesh primitive declares JOINTS_0 and WEIGHTS_0 symmetrically (both present or both absent)',
+    hint: 'glTF spec requires JOINTS_0 and WEIGHTS_0 to appear together for each skinned primitive; add the missing attribute or remove the present one in the DCC tool',
+  },
+  'gltf-animation-target-invalid': {
+    expected:
+      'every animation channel resolves to one uniquely named scene node and stable target ID',
+    hint: 'name every node in the animated hierarchy and ensure each animated full path is unique',
+  },
+} satisfies Record<GltfErrorCode, GltfErrorPolicy>;
 
-const GLTF_EXPECTED: Readonly<Record<GltfErrorCode, string>> = {
-  'gltf-malformed-header':
-    'GLB 12-byte header (magic 0x46546C67 + version=2 + length) plus mandatory JSON chunk',
-  'gltf-version-unsupported': 'asset.version === "2.0"',
-  'gltf-buffer-out-of-bounds': 'accessor byte range within bufferView.byteLength',
-  'gltf-extension-unsupported':
-    'extension listed in v1 allowlist (see EXTENSION_ALLOWLIST in @forgeax/engine-gltf)',
-  'gltf-accessor-type-mismatch': 'dense fixed-stride accessor with supported componentType',
-  'gltf-texture-load-failed':
-    'externalLoader resolved the URI into an ArrayBuffer without throwing',
-  'gltf-meta-missing': "sidecar <source>.meta.json (importer: 'gltf') present in same directory",
-  'gltf-instancing-count-mismatch': 'all instance attribute accessors share the same count',
-  'gltf-image-mime-unsupported': 'image/mimeType is image/jpeg or image/png',
-  'gltf-skin-joint-count-exceeded': 'skin.joints.length <= MAX_JOINTS (256)',
-  'gltf-animation-cubicspline-unsupported': 'animation sampler interpolation is LINEAR or STEP',
-  'gltf-morph-unsupported': 'no animation channel targets morph weights (path !== "weights")',
-  'gltf-skin-joint-name-missing':
-    'every joint node has a non-empty name and belongs to an acyclic hierarchy',
-  'gltf-image-extract-failed':
-    'image bytes extractable from bufferView / data-URI / external URI without corruption',
-  'gltf-skin-attr-asymmetric':
-    'mesh primitive declares JOINTS_0 and WEIGHTS_0 symmetrically (both present or both absent)',
-  'gltf-animation-target-invalid':
-    'every animation channel resolves to one uniquely named scene node and stable target ID',
-};
+export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = Object.fromEntries(
+  Object.entries(gltfErrorPolicy).map(([code, policy]) => [code, policy.hint]),
+) as Readonly<Record<GltfErrorCode, string>>;
 
 // === DetailFor map + gltfErr factory ===
 
@@ -249,8 +265,8 @@ export function gltfErr<C extends GltfErrorCode>(
 ): Extract<GltfError, { readonly code: C }> {
   return {
     code,
-    expected: GLTF_EXPECTED[code],
-    hint: GLTF_ERROR_HINTS[code],
+    expected: gltfErrorPolicy[code].expected,
+    hint: gltfErrorPolicy[code].hint,
     detail,
   } as Extract<GltfError, { readonly code: C }>;
 }

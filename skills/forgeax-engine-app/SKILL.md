@@ -64,6 +64,13 @@ const report = app.execution.report();
 
 World, Renderer, and WebGPU stay together in the Engine Worker. The Host owns DOM input, one-credit rAF pacing, Web Audio, and diagnostic projection. Shared Kernel Workers receive only bound numeric spans. Use [`packages/app/schema/execution-report.schema.json`](../../packages/app/schema/execution-report.schema.json) as the report authority and [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md) for Kernel eligibility.
 
+When a host temporarily hands the presentation surface to another carrier
+(for example, a disposable Play iframe or Tauri WebView), use
+`await app.releaseSurfacePreserveWorld()` before mounting the new owner and
+`await app.restoreSurface()` after it is destroyed. This preserves the exact
+Edit World and Renderer identity; `app.stop()` and `renderer.dispose()` are
+terminal teardown and are not relocation APIs.
+
 ## Optional CPU profiling
 
 Attach `@forgeax/engine-profiler` to the App or Renderer assembly when a bounded CPU artifact is
@@ -85,6 +92,15 @@ if (!capture.ok) throw capture.error;
 Read `profiler.phaseCatalog` for the App/Render owner relation. Use
 `validateProfileCapture` and `buildProfileModel` from the profiler package for offline analysis;
 do not recreate phase lists or turn this capability into an ECS, GPU, UI, or RPC surface.
+
+## Render-owned deferred membership timing
+
+`CreateAppOptions.membershipTiming` is forwarded unchanged to Render through
+Runtime. Omission performs no timing work. `cpu-control` is an independent CPU
+control route and never emits GPU timestamps; `gpu` is a bounded opt-in that
+can be refused by backend capability. App does not define timing statuses,
+reasons, timestamp units, or a generic profiler. Read the Render contract in
+[`packages/render/src/record/membership-timing.ts`](../../packages/render/src/record/membership-timing.ts).
 
 ## Renderer feature assembly
 
@@ -286,3 +302,15 @@ Use `plugins` to compose optional capability packages such as physics and audio.
 - A demo that freezes after migration exposes an engine or schedule integration failure. Do not add a demo-side callback or manual loop workaround.
 
 For exact option, Result, lifecycle, input, and renderer contracts, read `packages/app/README.md`, `packages/app/src/types.ts`, and `packages/app/src/internal/frame-loop.ts`.
+
+## Simulation inspection
+
+Pass already-created, ready simulation participants to `createApp`; App
+registers them with the World and exposes one read-only inspection summary.
+Use `app.simulationInspection()` for participant/readiness, baseline, trace,
+report, tolerance, and structured error diagnostics. The schema is
+`packages/app/schema/simulation-inspection.schema.json`.
+
+App does not define record/schema/component state or restore policy. Preview and
+Remote only consume the summary through existing read/eval paths. Do not add
+restore/replay actions or transport raw World, Rapier, or Web Audio objects.

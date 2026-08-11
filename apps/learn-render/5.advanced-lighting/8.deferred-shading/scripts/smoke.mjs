@@ -12,8 +12,9 @@
 //   - `[smoke] PASS`
 //   - `[smoke] FAIL`
 
-import { writeFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -26,6 +27,20 @@ const PROFILE_FRAME_LIMIT = Number.parseInt(
   10,
 );
 const PROFILE_EVENT_LIMIT = Number.parseInt(process.env.FORGEAX_PROFILE_EVENT_LIMIT ?? '40000', 10);
+const MEMBERSHIP_TIMING_MODE = process.env.FORGEAX_MEMBERSHIP_TIMING;
+const MEMBERSHIP_TIMING_REPORT_PATH = process.env.FORGEAX_MEMBERSHIP_TIMING_REPORT;
+const MEMBERSHIP_RECORD_DIR = process.env.FORGEAX_MEMBERSHIP_RECORD_DIR;
+const MEMBERSHIP_RECORD_KIND = process.env.FORGEAX_MEMBERSHIP_RECORD_KIND ?? 'attempt';
+const MEMBERSHIP_ATTEMPT_ID = process.env.FORGEAX_MEMBERSHIP_ATTEMPT_ID;
+const MEMBERSHIP_REFERENCE_ID = process.env.FORGEAX_MEMBERSHIP_REFERENCE_ID;
+const MEMBERSHIP_PARENT_ATTEMPT_ID = process.env.FORGEAX_MEMBERSHIP_PARENT_ATTEMPT_ID;
+const MEMBERSHIP_REFERENCE_KIND = process.env.FORGEAX_MEMBERSHIP_REFERENCE_KIND;
+const MEMBERSHIP_REFERENCES = process.env.FORGEAX_MEMBERSHIP_REFERENCES
+  ?.split(',')
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
+const MEMBERSHIP_MANIFEST_PATH = process.env.FORGEAX_MEMBERSHIP_MANIFEST;
+const MEMBERSHIP_ARTIFACT_ROOT = process.env.FORGEAX_MEMBERSHIP_ARTIFACT_ROOT;
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -34,8 +49,8 @@ const NUM_LIGHTS = (() => {
   const requested = process.env.FORGEAX_DEFERRED_LIGHTS;
   if (requested === undefined) return DEFAULT_NUM_LIGHTS;
   const parsed = Number(requested);
-  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 128) return parsed;
-  throw new Error('FORGEAX_DEFERRED_LIGHTS must be an integer in [1, 128]');
+  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 256) return parsed;
+  throw new Error('FORGEAX_DEFERRED_LIGHTS must be an integer in [1, 256]');
 })();
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 };
 const CUBE_SCALE = 0.5;
@@ -127,6 +142,42 @@ function ensureRenderTarget(device, format) {
   return renderTarget;
 }
 
+async function readRawPixels() {
+  if (sharedDevice === undefined || renderTarget === undefined) return null;
+  const bytesPerPixel = 4;
+  const bytesPerRow = WIDTH * bytesPerPixel;
+  const bufferSize = bytesPerRow * HEIGHT;
+  let readback;
+  try {
+    await sharedDevice.queue.onSubmittedWorkDone();
+    readback = sharedDevice.createBuffer({
+      size: bufferSize,
+      usage: 0x0001 | 0x0008,
+      mappedAtCreation: false,
+    });
+    const encoder = sharedDevice.createCommandEncoder();
+    encoder.copyTextureToBuffer(
+      { texture: renderTarget },
+      { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
+      { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    );
+    sharedDevice.queue.submit([encoder.finish()]);
+    await readback.mapAsync(0x0001, 0, bufferSize);
+    const mapped = new Uint8Array(readback.getMappedRange(0, bufferSize));
+    const pixels = new Uint8Array(bufferSize);
+    pixels.set(mapped);
+    readback.unmap();
+    return pixels;
+  } catch (error) {
+    console.error(
+      `[smoke] raw membership pixel readback unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  } finally {
+    readback?.destroy();
+  }
+}
+
 const mockCanvas = {
   tagName: 'CANVAS',
   isConnected: true,
@@ -181,11 +232,13 @@ const profiler =
         // clock, so diagnostic profiling must use an independent monotonic clock.
         clock: createProfileClock(() => Number(process.hrtime.bigint() / 1000n)),
       });
-const appResult = await createApp(
-  mockCanvas,
-  profiler === undefined ? {} : { profiler },
-  { shaderManifestUrl: MANIFEST_URL },
-);
+const appOptions = profiler === undefined ? {} : { profiler };
+if (MEMBERSHIP_TIMING_MODE === 'gpu' || MEMBERSHIP_TIMING_MODE === 'cpu-control') {
+  appOptions.membershipTiming = MEMBERSHIP_TIMING_MODE === 'gpu'
+    ? { mode: 'gpu', maxPendingCaptures: 2 }
+    : { mode: 'cpu-control' };
+}
+const appResult = await createApp(mockCanvas, appOptions, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 
 if (!appResult.ok) {
@@ -368,13 +421,50 @@ if (!startResult.ok) {
 }
 
 let totalFrames = 0;
+let membershipCaptureStarted = false;
+let membershipCaptureStartError = null;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   const due = rafQueue.shift();
   if (!due) break;
   fakeNow += 16.67;
+  if (!membershipCaptureStarted && i >= Math.min(30, SMOKE_MIN_FRAMES - 1) && app.renderer.membershipTiming !== undefined) {
+    const started = app.renderer.membershipTiming.start();
+    if (!started.ok) {
+      membershipCaptureStartError = { code: started.error.code, detail: started.error.hint };
+      if (MEMBERSHIP_RECORD_DIR === undefined) {
+        console.error(`[smoke] FAIL - membership timing start: ${started.error.code}`);
+        process.exit(1);
+      }
+    } else {
+      membershipCaptureStarted = true;
+    }
+  }
   due.cb(fakeNow);
   totalFrames++;
   if (i % 16 === 15) await delay(1);
+}
+
+let timingReport = membershipCaptureStartError;
+if (membershipCaptureStarted && app.renderer.membershipTiming !== undefined) {
+  const timing = await app.renderer.membershipTiming.finish();
+  timingReport = timing.ok ? timing.value : { code: timing.error.code, detail: timing.error.hint };
+  if (MEMBERSHIP_TIMING_REPORT_PATH !== undefined) {
+    writeFileSync(MEMBERSHIP_TIMING_REPORT_PATH, `${JSON.stringify(timing.ok ? timing.value : { code: timing.error.code })}\n`);
+  }
+  if (MEMBERSHIP_TIMING_MODE === 'gpu' && !timing.ok && MEMBERSHIP_RECORD_DIR === undefined) {
+    console.error(`[smoke] FAIL - membership timing finish: ${timing.error.code}`);
+    process.exit(1);
+  }
+}
+
+let pixels = null;
+if (MEMBERSHIP_RECORD_DIR !== undefined) {
+  pixels = await readRawPixels();
+  if (pixels === null) {
+    const pixelResult = await app.renderer.readPixels();
+    if (pixelResult.ok) pixels = pixelResult.value;
+    else console.error(`[smoke] membership pixel readback unavailable: ${pixelResult.error.code}`);
+  }
 }
 
 const stopResult = app.stop();
@@ -393,6 +483,55 @@ if (profiler !== undefined && PROFILE_CAPTURE_PATH !== undefined) {
   console.log(
     `[smoke] profiler capture written=${PROFILE_CAPTURE_PATH} records=${capture.records.length} completeness=${capture.completeness.status} dropped=${capture.completeness.droppedEventCount}`,
   );
+}
+
+if (MEMBERSHIP_RECORD_DIR !== undefined) {
+  if (MEMBERSHIP_MANIFEST_PATH === undefined) throw new Error('FORGEAX_MEMBERSHIP_MANIFEST is required with record output');
+  const manifest = JSON.parse(readFileSync(MEMBERSHIP_MANIFEST_PATH, 'utf8'));
+  const sourceHead = process.env.FORGEAX_SOURCE_HEAD ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const evidence = {
+    backendKind: app.renderer.device.caps.backendKind,
+    compute: app.renderer.device.caps.compute,
+    timestampQuery: MEMBERSHIP_TIMING_MODE === 'cpu-control'
+      ? false
+      : app.renderer.device.caps.timestampQuery,
+    timestampPeriodNanoseconds: MEMBERSHIP_TIMING_MODE === 'cpu-control'
+      ? null
+      : app.renderer.device.caps.timestampPeriodNanoseconds ?? null,
+    adapter: 'dawn-node',
+    environment: 'node-dawn',
+    actualProducer:
+      timingReport?.actualProducer ??
+      (MEMBERSHIP_REFERENCE_KIND === 'timing-omitted-pixel' ? 'gpu' : MEMBERSHIP_TIMING_MODE === 'gpu' ? 'gpu' : 'cpu'),
+  };
+  const { writeMembershipEvidence } = await import('./membership-evidence.mjs');
+  const record = writeMembershipEvidence({
+    outputDir: MEMBERSHIP_RECORD_DIR,
+    artifactRoot: MEMBERSHIP_ARTIFACT_ROOT,
+    manifest,
+    recordKind: MEMBERSHIP_RECORD_KIND,
+    attemptId: MEMBERSHIP_ATTEMPT_ID,
+    referenceId: MEMBERSHIP_REFERENCE_ID,
+    parentAttemptId: MEMBERSHIP_PARENT_ATTEMPT_ID,
+    referenceKind: MEMBERSHIP_REFERENCE_KIND,
+    mode:
+      MEMBERSHIP_TIMING_MODE === undefined || MEMBERSHIP_TIMING_MODE === ''
+        ? 'omitted'
+        : MEMBERSHIP_TIMING_MODE,
+    sourceHead,
+    command: process.argv,
+    evidence,
+    timing: timingReport,
+    references: MEMBERSHIP_REFERENCES,
+    membership: timingReport?.membership ?? null,
+    pixels: MEMBERSHIP_REFERENCE_KIND === 'cpu-membership' ? null : pixels,
+    profile:
+      profiler?.latestCapture() ??
+      { completeness: { status: 'not-requested', droppedEventCount: 0 } },
+    lights: NUM_LIGHTS,
+    frames: totalFrames,
+  });
+  console.log(`[smoke] membership terminal record=${join(MEMBERSHIP_RECORD_DIR, 'record.json')} kind=${record.record.recordKind} outcome=${record.record.status ?? record.record.terminal.outcome}`);
 }
 
 console.log(`[smoke] frames observed=${totalFrames}`);

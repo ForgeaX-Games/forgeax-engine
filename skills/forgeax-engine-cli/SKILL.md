@@ -399,3 +399,14 @@ The remote server receives a JSON-safe registry projection from app. It keeps
 the two existing methods and the closed `RemoteError` shape; production remote
 still has no ECS, render, or runtime dependency. Camera, picking, lifecycle,
 assets, material authoring, and VFX shadow policy are out of scope.
+
+## Simulation inspection through the existing front door
+
+Discover the `simulation` root from `introspect`, then read
+`simulation.inspect()` through existing `eval` transport. Consume the summary
+fields and schema; do not add a Remote/CLI restore or replay method and do not
+return raw World, Rapier, or Web Audio objects.
+
+For errors, switch on the closed `code` and use `expected`, `hint`, and
+`detail`. Repair the owner or fresh target and inspect again. RHI tape replay
+and game replay have separate commands and evidence owners.

@@ -28,11 +28,15 @@ type ReadyResult = { ok: true; value: undefined } | { ok: false; error: RhiError
 interface StubRenderer {
   readonly renderer: Renderer;
   readonly disposeSpy: ReturnType<typeof vi.fn>;
+  readonly releaseSurfaceSpy: ReturnType<typeof vi.fn>;
+  readonly restoreSurfaceSpy: ReturnType<typeof vi.fn>;
 }
 
 function makeRendererStubForStop(): StubRenderer {
   const ready: Promise<ReadyResult> = Promise.resolve({ ok: true, value: undefined });
   const disposeSpy = vi.fn<() => void>();
+  const releaseSurfaceSpy = vi.fn(() => ok(undefined));
+  const restoreSurfaceSpy = vi.fn(() => ok(undefined));
   const renderer = {
     backend: 'webgpu' as const,
     ready,
@@ -49,12 +53,54 @@ function makeRendererStubForStop(): StubRenderer {
         // no-op unsubscribe
       };
     },
+    releaseSurface: releaseSurfaceSpy,
+    restoreSurface: restoreSurfaceSpy,
     dispose: disposeSpy,
   } as unknown as Renderer;
-  return { renderer, disposeSpy };
+  return { renderer, disposeSpy, releaseSurfaceSpy, restoreSurfaceSpy };
 }
 
 describe('create-app-stop.test.ts', () => {
+  describe('App presentation-surface lease', () => {
+    it('releases and restores presentation without replacing World or Renderer', async () => {
+      const { renderer, releaseSurfaceSpy, restoreSurfaceSpy } = makeRendererStubForStop();
+      const world = new World();
+      const result = await createApp({ renderer, world });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const app = result.value;
+
+      expect(app.start().ok).toBe(true);
+      expect((await app.releaseSurfacePreserveWorld()).ok).toBe(true);
+      expect(releaseSurfaceSpy).toHaveBeenCalledTimes(1);
+      expect(app.world).toBe(world);
+      expect(app.renderer).toBe(renderer);
+
+      expect((await app.restoreSurface()).ok).toBe(true);
+      expect(restoreSurfaceSpy).toHaveBeenCalledTimes(1);
+      expect(app.world).toBe(world);
+      expect(app.renderer).toBe(renderer);
+    });
+
+    it('does not restore a running loop when surface release fails', async () => {
+      const { renderer } = makeRendererStubForStop();
+      const releaseError = new (await import('@forgeax/engine-rhi')).RhiError({
+        code: 'rhi-not-available',
+        expected: 'test release succeeds',
+        hint: 'forced failure',
+      });
+      vi.mocked(renderer.releaseSurface).mockReturnValue({ ok: false, error: releaseError });
+      const result = await createApp({ renderer, world: new World() });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      expect(result.value.start().ok).toBe(true);
+      const released = await result.value.releaseSurfacePreserveWorld();
+      expect(released.ok).toBe(false);
+      expect(result.value.execution.report().engine.health).toBe('running');
+    });
+  });
+
   describe('createApp().stop() chains into Renderer.dispose() (AC-08)', () => {
     it('start -> stop calls renderer.dispose() exactly once', async () => {
       const { renderer, disposeSpy } = makeRendererStubForStop();

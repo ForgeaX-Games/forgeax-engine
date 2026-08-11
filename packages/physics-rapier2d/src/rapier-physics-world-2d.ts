@@ -1,4 +1,4 @@
-import { Time, Update } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate } from '@forgeax/engine-ecs';
 // @forgeax/engine-physics-rapier2d — RapierPhysicsWorld2D class and three-phase
 // tick systems (syncBackend / stepSimulation / writeback).
 //
@@ -19,6 +19,7 @@ import type { PhysicsWorld2D, RaycastHit2D } from '@forgeax/engine-physics';
 import {
   CharacterController,
   Collider,
+  CollidingEntities,
   colliderShapeFromF32,
   PHYSICS_ERROR_HINTS,
   PhysicsError,
@@ -28,6 +29,13 @@ import {
   registerColliderRemoveListener,
   rigidBodyTypeFromF32,
 } from '@forgeax/engine-physics';
+import type {
+  Rapier2DKinematicControllerState,
+  Rapier2DSimulationBody,
+  Rapier2DSimulationCollider,
+  Rapier2DSimulationJoint,
+  Rapier2DSimulationState,
+} from './simulation-participant';
 import type { Rapier2DModule } from './wasm-loader';
 
 interface PhysicsEntityRecord {
@@ -51,6 +59,12 @@ interface PhysicsCollider2D {
   readonly isSensor: number;
   readonly collisionGroups: number;
   readonly solverGroups: number;
+}
+
+export interface Rapier2DCollisionEvent {
+  readonly type: 'started' | 'stopped';
+  readonly entityA: number;
+  readonly entityB: number;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Rapier types from dynamically loaded module
@@ -108,7 +122,7 @@ function rapierBodyTypeToString(rapier: any, bodyType: number): string {
 }
 
 export class RapierPhysicsWorld2D implements PhysicsWorld2D {
-  readonly raw: RapierWorld2D;
+  raw: RapierWorld2D;
 
   private readonly rapierModule: Rapier2DModule;
 
@@ -118,7 +132,13 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
   /** Pending teleports: entity -> target position and rotation. */
   private readonly pendingTeleports = new Map<number, { x: number; y: number; rotation: number }>();
 
-  private readonly eventQueue: RapierEventQueue;
+  private eventQueue: RapierEventQueue;
+
+  private readonly collisionPairs = new Map<number, Set<number>>();
+
+  private readonly pendingCollisionEvents: Rapier2DCollisionEvent[] = [];
+
+  private readonly collisionEventHistory: Rapier2DCollisionEvent[] = [];
 
   private currentGravity: { x: number; y: number };
 
@@ -130,6 +150,8 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Rapier KinematicCharacterController from dynamic module
   readonly kccCache = new Map<number, any>();
+
+  private readonly kccOffsets = new Map<number, number>();
 
   /**
    * ECS World + components wired in by `registerPhysicsSystems2D`, so
@@ -225,6 +247,434 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     void deltaTime;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.step
     (this.raw as any).step(this.eventQueue);
+    this.drainRapierCollisionEvents();
+  }
+
+  private drainRapierCollisionEvents(): void {
+    this.eventQueue.drainCollisionEvents((handle1: number, handle2: number, started: boolean) => {
+      const entityA = this.colliderHandleToEntity(handle1);
+      const entityB = this.colliderHandleToEntity(handle2);
+      if (entityA === undefined || entityB === undefined) return;
+      const changed = started
+        ? this.addCollisionPair(entityA, entityB)
+        : this.removeCollisionPair(entityA, entityB);
+      if (!changed) return;
+      this.pushCollisionEvent({
+        type: started ? 'started' : 'stopped',
+        entityA,
+        entityB,
+      });
+    });
+  }
+
+  private colliderHandleToEntity(colliderHandle: number): number | undefined {
+    // biome-ignore lint/suspicious/noExplicitAny: Rapier World.getCollider from dynamically loaded module
+    const collider = (this.raw as any).getCollider(colliderHandle) as {
+      parent(): { userData: number } | null;
+    } | null;
+    const body = collider?.parent();
+    return body?.userData;
+  }
+
+  private addCollisionPair(entityA: number, entityB: number): boolean {
+    let first = this.collisionPairs.get(entityA);
+    if (!first) {
+      first = new Set<number>();
+      this.collisionPairs.set(entityA, first);
+    }
+    if (first.has(entityB)) return false;
+    first.add(entityB);
+    let second = this.collisionPairs.get(entityB);
+    if (!second) {
+      second = new Set<number>();
+      this.collisionPairs.set(entityB, second);
+    }
+    second.add(entityA);
+    return true;
+  }
+
+  private removeCollisionPair(entityA: number, entityB: number): boolean {
+    const first = this.collisionPairs.get(entityA);
+    const second = this.collisionPairs.get(entityB);
+    const firstChanged = first?.delete(entityB) === true;
+    const secondChanged = second?.delete(entityA) === true;
+    if (!first) this.collisionPairs.set(entityA, new Set());
+    if (!second) this.collisionPairs.set(entityB, new Set());
+    return firstChanged || secondChanged;
+  }
+
+  private pushCollisionEvent(event: Rapier2DCollisionEvent): void {
+    this.pendingCollisionEvents.push(event);
+    this.collisionEventHistory.push(event);
+  }
+
+  drainCollisionEvents(): Rapier2DCollisionEvent[] {
+    return this.pendingCollisionEvents.splice(0);
+  }
+
+  getCollisionPairs(): Map<number, Set<number>> {
+    return new Map([...this.collisionPairs].map(([entity, others]) => [entity, new Set(others)]));
+  }
+
+  getCollisionEventHistory(): readonly Rapier2DCollisionEvent[] {
+    return [...this.collisionEventHistory];
+  }
+
+  getPendingTeleports(): readonly [
+    number,
+    { readonly x: number; readonly y: number; readonly rotation: number },
+  ][] {
+    return [...this.pendingTeleports].map(([entity, target]) => [entity, { ...target }]);
+  }
+
+  getKinematicControllerStates(): readonly Rapier2DKinematicControllerState[] {
+    return [...this.kccOffsets]
+      .sort(([first], [second]) => first - second)
+      .map(([entity, offset]) => ({ entity, offset }));
+  }
+
+  captureSimulationState(
+    entityMapper?: (entity: number) => number | undefined,
+  ): Rapier2DSimulationState {
+    const mapEntity = (entity: number): number => {
+      if (entityMapper === undefined) return entity;
+      const mapped = entityMapper(entity);
+      if (mapped === undefined) throw new Error('simulation entity mapping is missing');
+      return mapped;
+    };
+    const mapEvent = (event: Rapier2DCollisionEvent): Rapier2DCollisionEvent => ({
+      type: event.type,
+      entityA: mapEntity(event.entityA),
+      entityB: mapEntity(event.entityB),
+    });
+    const bodies: Rapier2DSimulationBody[] = [];
+    (this.raw as RapierWorld2D).forEachRigidBody((body: RapierRigidBody2D) => {
+      const colliders: Rapier2DSimulationCollider[] = [];
+      for (let index = 0; index < body.numColliders(); index += 1) {
+        const collider = body.collider(index);
+        const shapeType = collider.shapeType();
+        const shape = {
+          shapeType,
+          translation: { ...collider.translation() },
+          rotation: collider.rotation(),
+          density: collider.density(),
+          friction: collider.friction(),
+          restitution: collider.restitution(),
+          sensor: collider.isSensor(),
+          enabled: collider.isEnabled(),
+          collisionGroups: Number(collider.collisionGroups()),
+          solverGroups: Number(collider.solverGroups()),
+          activeEvents: Number(collider.activeEvents()),
+          activeCollisionTypes: Number(collider.activeCollisionTypes()),
+          ...(shapeType === this.rapierModule.ShapeType.Ball
+            ? { radius: collider.radius() }
+            : shapeType === this.rapierModule.ShapeType.Cuboid
+              ? { halfExtents: { ...collider.halfExtents() } }
+              : shapeType === this.rapierModule.ShapeType.Capsule
+                ? { halfHeight: collider.halfHeight(), radius: collider.radius() }
+                : {}),
+        } satisfies Rapier2DSimulationCollider;
+        colliders.push(shape);
+      }
+      const translation = body.translation();
+      const nextTranslation = body.nextTranslation();
+      const force = body.userForce();
+      bodies.push({
+        entity: mapEntity(body.userData),
+        bodyType: body.bodyType(),
+        translation: { ...translation },
+        rotation: body.rotation(),
+        nextTranslation: { ...nextTranslation },
+        nextRotation: body.nextRotation(),
+        linearVelocity: { ...body.linvel() },
+        angularVelocity: body.angvel(),
+        gravityScale: body.gravityScale(),
+        linearDamping: body.linearDamping(),
+        angularDamping: body.angularDamping(),
+        ccdEnabled: body.isCcdEnabled(),
+        sleeping: body.isSleeping(),
+        enabled: body.isEnabled(),
+        userForce: { ...force },
+        userTorque: body.userTorque(),
+        colliders,
+      });
+    });
+    return {
+      version: 1,
+      gravity: { ...this.currentGravity },
+      bodies,
+      joints: this.captureSimulationJoints(mapEntity),
+      kinematicControllers: this.getKinematicControllerStates().map((controller) => ({
+        ...controller,
+        entity: mapEntity(controller.entity),
+      })),
+      pendingTeleports: this.getPendingTeleports().map(([entity, target]) => [
+        mapEntity(entity),
+        target,
+      ]),
+      collisionPairs: [...this.collisionPairs].map(([entity, others]) => [
+        mapEntity(entity),
+        [...others].map(mapEntity).sort(),
+      ]),
+      collisionEvents: this.getCollisionEventHistory().map(mapEvent),
+      pendingCollisionEvents: this.pendingCollisionEvents.map(mapEvent),
+    };
+  }
+
+  private captureSimulationJoints(
+    entityMapper?: (entity: number) => number,
+  ): Rapier2DSimulationJoint[] {
+    const mapEntity = entityMapper ?? ((entity: number) => entity);
+    const joints: Rapier2DSimulationJoint[] = [];
+    (this.raw as RapierWorld2D).impulseJoints.forEach((joint: RapierWorld2D) => {
+      if (!joint?.isValid()) return;
+      const body1 = joint.body1();
+      const body2 = joint.body2();
+      joints.push({
+        type: joint.type(),
+        body1Entity: mapEntity(body1.userData),
+        body2Entity: mapEntity(body2.userData),
+        anchor1: { ...joint.anchor1() },
+        anchor2: { ...joint.anchor2() },
+        contactsEnabled: joint.contactsEnabled(),
+      });
+    });
+    return joints;
+  }
+
+  createRestoreCandidate(): RapierPhysicsWorld2D {
+    return new RapierPhysicsWorld2D(this.rapierModule);
+  }
+
+  loadSimulationState(state: Rapier2DSimulationState): void {
+    this.setGravity(new Float32Array([state.gravity.x, state.gravity.y]) as never);
+    const byEntity = new Map<number, RapierRigidBody2D>();
+    for (const bodyState of state.bodies) {
+      const desc = this.rigidBodyDescFromState(bodyState);
+      const body = (this.raw as RapierWorld2D).createRigidBody(desc) as RapierRigidBody2D;
+      body.userData = bodyState.entity;
+      this.registerBody(bodyState.entity, body.handle);
+      byEntity.set(bodyState.entity, body);
+      for (const colliderState of bodyState.colliders) {
+        (this.raw as RapierWorld2D).createCollider(this.colliderDescFromState(colliderState), body);
+      }
+      body.setTranslation(bodyState.translation, false);
+      body.setRotation(bodyState.rotation, false);
+      const isKinematic =
+        bodyState.bodyType === this.rapierModule.RigidBodyType.KinematicPositionBased ||
+        bodyState.bodyType === this.rapierModule.RigidBodyType.KinematicVelocityBased;
+      if (isKinematic) {
+        body.setNextKinematicTranslation(bodyState.nextTranslation);
+        body.setNextKinematicRotation(bodyState.nextRotation);
+      }
+      body.setLinvel(bodyState.linearVelocity, false);
+      body.setAngvel(bodyState.angularVelocity, false);
+      body.setGravityScale(bodyState.gravityScale, false);
+      body.addForce(bodyState.userForce, false);
+      body.addTorque(bodyState.userTorque, false);
+    }
+    for (const jointState of state.joints) {
+      const body1 = byEntity.get(jointState.body1Entity);
+      const body2 = byEntity.get(jointState.body2Entity);
+      if (!body1 || !body2) throw new Error('joint body mapping is missing');
+      const data = this.jointDataFromState(jointState);
+      const joint = (this.raw as RapierWorld2D).createImpulseJoint(data, body1, body2, true);
+      joint.setContactsEnabled(jointState.contactsEnabled);
+    }
+    for (const controllerState of state.kinematicControllers) {
+      if (!byEntity.has(controllerState.entity)) {
+        throw new Error('kinematic controller body mapping is missing');
+      }
+      this.ensureKcc(controllerState.entity, controllerState.offset);
+    }
+    for (const [entity, target] of state.pendingTeleports) {
+      this.pendingTeleports.set(entity, { ...target });
+    }
+    for (const [entity, others] of state.collisionPairs) {
+      this.collisionPairs.set(entity, new Set(others));
+    }
+    this.collisionEventHistory.push(...(state.collisionEvents as Rapier2DCollisionEvent[]));
+    this.pendingCollisionEvents.push(...(state.pendingCollisionEvents as Rapier2DCollisionEvent[]));
+  }
+
+  private rigidBodyDescFromState(state: Rapier2DSimulationBody): RapierWorld2D {
+    const RAPIER = this.rapierModule;
+    const descByType = new Map<number, () => RapierWorld2D>([
+      [RAPIER.RigidBodyType.Dynamic, () => RAPIER.RigidBodyDesc.dynamic()],
+      [RAPIER.RigidBodyType.Fixed, () => RAPIER.RigidBodyDesc.fixed()],
+      [
+        RAPIER.RigidBodyType.KinematicPositionBased,
+        () => RAPIER.RigidBodyDesc.kinematicPositionBased(),
+      ],
+      [
+        RAPIER.RigidBodyType.KinematicVelocityBased,
+        () => RAPIER.RigidBodyDesc.kinematicVelocityBased(),
+      ],
+    ]);
+    const factory = descByType.get(state.bodyType);
+    if (!factory) throw new Error('unsupported body type');
+    return factory()
+      .setTranslation(state.translation.x, state.translation.y)
+      .setRotation(state.rotation)
+      .setLinvel(state.linearVelocity.x, state.linearVelocity.y)
+      .setAngvel(state.angularVelocity)
+      .setGravityScale(state.gravityScale)
+      .setLinearDamping(state.linearDamping)
+      .setAngularDamping(state.angularDamping)
+      .setCcdEnabled(state.ccdEnabled)
+      .setSleeping(state.sleeping)
+      .setEnabled(state.enabled);
+  }
+
+  private colliderDescFromState(state: Rapier2DSimulationCollider): RapierWorld2D {
+    const RAPIER = this.rapierModule;
+    const desc =
+      state.shapeType === RAPIER.ShapeType.Ball
+        ? RAPIER.ColliderDesc.ball(state.radius)
+        : state.shapeType === RAPIER.ShapeType.Cuboid && state.halfExtents !== undefined
+          ? RAPIER.ColliderDesc.cuboid(state.halfExtents.x, state.halfExtents.y)
+          : state.shapeType === RAPIER.ShapeType.Capsule
+            ? RAPIER.ColliderDesc.capsule(state.halfHeight, state.radius)
+            : undefined;
+    if (!desc) throw new Error('unsupported collider shape');
+    return desc
+      .setTranslation(state.translation.x, state.translation.y)
+      .setRotation(state.rotation)
+      .setDensity(state.density)
+      .setFriction(state.friction)
+      .setRestitution(state.restitution)
+      .setSensor(state.sensor)
+      .setEnabled(state.enabled)
+      .setCollisionGroups(state.collisionGroups)
+      .setSolverGroups(state.solverGroups)
+      .setActiveEvents(state.activeEvents)
+      .setActiveCollisionTypes(state.activeCollisionTypes);
+  }
+
+  private jointDataFromState(state: Rapier2DSimulationJoint): RapierWorld2D {
+    const RAPIER = this.rapierModule;
+    if (state.type === RAPIER.JointType.Revolute) {
+      return RAPIER.JointData.revolute(state.anchor1, state.anchor2);
+    }
+    if (state.type === RAPIER.JointType.Fixed) {
+      return RAPIER.JointData.fixed(state.anchor1, 0, state.anchor2, 0);
+    }
+    throw new Error('unsupported joint type');
+  }
+
+  commitRestoreCandidate(
+    candidate: RapierPhysicsWorld2D,
+    entityMap?: ReadonlyMap<number, number>,
+  ): void {
+    if (entityMap !== undefined) candidate.remapEntities(entityMap);
+    const previousRaw = this.raw;
+    const previousEventQueue = this.eventQueue;
+    this.raw = candidate.raw;
+    this.eventQueue = candidate.eventQueue;
+    this.currentGravity = { ...candidate.currentGravity };
+    this.entityMap.clear();
+    for (const [entity, record] of candidate.entityMap) this.entityMap.set(entity, record);
+    this.pendingTeleports.clear();
+    for (const [entity, target] of candidate.pendingTeleports) {
+      this.pendingTeleports.set(entity, { ...target });
+    }
+    this.collisionPairs.clear();
+    for (const [entity, others] of candidate.collisionPairs) {
+      this.collisionPairs.set(entity, new Set(others));
+    }
+    this.pendingCollisionEvents.splice(
+      0,
+      this.pendingCollisionEvents.length,
+      ...candidate.pendingCollisionEvents,
+    );
+    this.collisionEventHistory.splice(
+      0,
+      this.collisionEventHistory.length,
+      ...candidate.collisionEventHistory,
+    );
+    this.kccCache.clear();
+    for (const [entity, controller] of candidate.kccCache) {
+      this.kccCache.set(entity, controller);
+    }
+    this.kccOffsets.clear();
+    for (const [entity, offset] of candidate.kccOffsets) {
+      this.kccOffsets.set(entity, offset);
+    }
+    if (previousRaw !== this.raw && typeof previousRaw.free === 'function') previousRaw.free();
+    if (previousEventQueue !== this.eventQueue && typeof previousEventQueue.free === 'function') {
+      previousEventQueue.free();
+    }
+  }
+
+  private remapEntities(entityMap: ReadonlyMap<number, number>): void {
+    const remap = (entity: number): number => {
+      const mapped = entityMap.get(entity);
+      if (mapped === undefined) throw new Error('simulation entity mapping is missing');
+      return mapped;
+    };
+    (this.raw as RapierWorld2D).forEachRigidBody((body: RapierRigidBody2D) => {
+      body.userData = remap(body.userData);
+    });
+    const entityRecords = [...this.entityMap].map(
+      ([entity, record]) => [remap(entity), record] as const,
+    );
+    this.entityMap.clear();
+    for (const [entity, record] of entityRecords) this.entityMap.set(entity, record);
+
+    const teleports = [...this.pendingTeleports].map(
+      ([entity, target]) => [remap(entity), target] as const,
+    );
+    this.pendingTeleports.clear();
+    for (const [entity, target] of teleports) this.pendingTeleports.set(entity, target);
+
+    const pairs = [...this.collisionPairs].map(
+      ([entity, others]) => [remap(entity), new Set([...others].map(remap))] as const,
+    );
+    this.collisionPairs.clear();
+    for (const [entity, others] of pairs) this.collisionPairs.set(entity, others);
+
+    const remapEvent = (event: Rapier2DCollisionEvent): Rapier2DCollisionEvent => ({
+      ...event,
+      entityA: remap(event.entityA),
+      entityB: remap(event.entityB),
+    });
+    this.pendingCollisionEvents.splice(
+      0,
+      this.pendingCollisionEvents.length,
+      ...this.pendingCollisionEvents.map(remapEvent),
+    );
+    this.collisionEventHistory.splice(
+      0,
+      this.collisionEventHistory.length,
+      ...this.collisionEventHistory.map(remapEvent),
+    );
+
+    const kccOffsets = [...this.kccOffsets].map(
+      ([entity, offset]) => [remap(entity), offset] as const,
+    );
+    this.kccOffsets.clear();
+    for (const [entity, offset] of kccOffsets) this.kccOffsets.set(entity, offset);
+    const kccCache = [...this.kccCache].map(
+      ([entity, controller]) => [remap(entity), controller] as const,
+    );
+    this.kccCache.clear();
+    for (const [entity, controller] of kccCache) this.kccCache.set(entity, controller);
+  }
+
+  dispose(): void {
+    if (typeof this.raw.free === 'function') this.raw.free();
+    if (typeof this.eventQueue.free === 'function') this.eventQueue.free();
+    this.kccCache.clear();
+    this.kccOffsets.clear();
+  }
+
+  writebackCollidingEntities(world: World, component: Component = CollidingEntities): void {
+    for (const [entity, others] of this.collisionPairs) {
+      const handle = entity as EntityHandle;
+      if (world.get(handle, component).ok) {
+        world.set(handle, component, { entities: [...others] });
+      }
+    }
   }
 
   getBodyCount(): number {
@@ -388,6 +838,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCharacterController
     const ctrl = (this.raw as any).createCharacterController(offset);
     this.kccCache.set(entity, ctrl);
+    this.kccOffsets.set(entity, offset);
     return ctrl;
   }
 
@@ -397,6 +848,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
    */
   removeKccController(entity: number): void {
     const ctrl = this.kccCache.get(entity);
+    this.kccOffsets.delete(entity);
     if (!ctrl) return;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.removeCharacterController
     (this.raw as any).removeCharacterController(ctrl);
@@ -642,12 +1094,19 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
   removeEntity(entity: number): void {
     const record = this.entityMap.get(entity);
     if (!record) return;
+    const ownPairs = [...(this.collisionPairs.get(entity) ?? [])];
+    for (const other of ownPairs) {
+      if (this.removeCollisionPair(entity, other)) {
+        this.pushCollisionEvent({ type: 'stopped', entityA: entity, entityB: other });
+      }
+    }
     this.removeKccController(entity); // D-3: clear cached KCC before body removal
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.removeRigidBody
     (this.raw as any).removeRigidBody({
       handle: record.bodyHandle,
     } as RapierRigidBody2D);
     this.entityMap.delete(entity);
+    this.collisionPairs.delete(entity);
   }
 }
 
@@ -773,7 +1232,7 @@ function registerBackendForRemoveHook2D(pw: RapierPhysicsWorld2D): void {
  * (plan-strategy C-3 symmetry):
  *   - physicsSyncBackend2D:  after propagateTransforms — query (Transform,
  *     RigidBody, Collider) and call RapierPhysicsWorld2D.ensureBody for each.
- *   - physicsStepSimulation2D: after physicsSyncBackend2D — read Time.delta and
+ *   - physicsStepSimulation2D: after physicsSyncBackend2D — read FixedTime.delta and
  *     call pw.step() with dt-gating.
  *   - physicsWriteback2D: after physicsStepSimulation2D — call
  *     pw.writebackDynamicBodies() and write positions + rotation back to ECS
@@ -788,6 +1247,7 @@ function registerBackendForRemoveHook2D(pw: RapierPhysicsWorld2D): void {
 const PHYSICS_SYNC_BACKEND_2D = 'physicsSyncBackend2D' as const;
 const PHYSICS_STEP_SIMULATION_2D = 'physicsStepSimulation2D' as const;
 const PHYSICS_WRITEBACK_2D = 'physicsWriteback2D' as const;
+const PHYSICS_COLLISION_SYNC_2D = 'physicsCollisionSync2D' as const;
 
 /**
  * Resolve the runtime `Transform` component token from the global ECS
@@ -813,7 +1273,7 @@ function resolveTransform(): Component | undefined {
 export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_SYNC_BACKEND_2D,
   queries: [],
-  after: ['propagateTransforms'],
+  after: ['propagateTransformsFixed'],
   fn: (world) => {
     const transformComponent = resolveTransform();
     if (transformComponent === undefined) return;
@@ -1017,7 +1477,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
 /**
  * `physicsStepSimulation2D` system token (M2 — full resource-ification, D-4).
  *
- * After physicsSyncBackend2D — read Time.delta and call pw.step() with dt-gating.
+ * After physicsSyncBackend2D — read FixedTime.delta and call pw.step() with dt-gating.
  */
 export const PhysicsStepSimulation2D: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_STEP_SIMULATION_2D,
@@ -1031,7 +1491,7 @@ export const PhysicsStepSimulation2D: SystemHandle<readonly []> = defineSystem({
       return; // C-2: safe early out
     }
 
-    const dt = world.getResource(Time).delta;
+    const dt = world.getResource(FixedTime).delta;
     if (dt <= 0 || dt > PHYSICS_DT_MAX) return; // D-4: skip abnormal delta
 
     pw.step(dt);
@@ -1076,6 +1536,21 @@ export const PhysicsWriteback2D: SystemHandle<readonly []> = defineSystem({
   },
 });
 
+export const PhysicsCollisionSync2D: SystemHandle<readonly []> = defineSystem({
+  name: PHYSICS_COLLISION_SYNC_2D,
+  queries: [],
+  after: [PHYSICS_WRITEBACK_2D],
+  fn: (world) => {
+    let pw: RapierPhysicsWorld2D;
+    try {
+      pw = world.getResource<RapierPhysicsWorld2D>('PhysicsWorld');
+    } catch {
+      return;
+    }
+    pw.writebackCollidingEntities(world);
+  },
+});
+
 /**
  * Register three-phase physics tick systems into an ECS World (2D variant).
  *
@@ -1108,9 +1583,10 @@ export function registerPhysicsSystems2D(world: World): void {
     // CharacterController schema defaults until a later registration wires it.
   }
 
-  world.addSystems(Update, PhysicsSet, [
+  world.addSystems(FixedUpdate, PhysicsSet, [
     PhysicsSyncBackend2D,
     PhysicsStepSimulation2D,
     PhysicsWriteback2D,
+    PhysicsCollisionSync2D,
   ]);
 }

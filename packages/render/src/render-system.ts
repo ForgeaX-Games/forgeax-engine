@@ -114,6 +114,7 @@ import {
   observeCurrentFrame,
 } from './record/frame-observation';
 import { applyParamSnapshotToUbo, residentTextureView } from './record/main-pass-material';
+import type { MembershipTimingController } from './record/membership-timing';
 // The forgeax-concept RenderPipeline (registrable / installable unit) - aliased to avoid
 // the name collision with the RHI opaque `RenderPipeline` handle imported above. The RHI
 // handle stays internal (requirements line 155); this concept type is the public surface.
@@ -611,6 +612,8 @@ export interface RenderSystemRuntime {
    * EngineMetrics instance (D-5 candidate 1: multi-Renderer isolation).
    */
   readonly metrics: EngineMetrics;
+  /** Optional Render-owned membership timing capability. */
+  readonly membershipTiming?: MembershipTimingController | undefined;
   /**
    * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M3 / F-2 fix-up:
    * post-process registry lookup. Returns the `PostProcessShaderEntry` registered

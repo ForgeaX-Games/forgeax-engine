@@ -45,6 +45,10 @@ FALSIFY_NO_LIGHT=1 FALSIFY_MATERIAL_EMISSIVE_INTENSITY=2 pnpm --filter "@forgeax
 # Standard PBR metallicChannel witness: select the authored red metallic channel
 # from the engine-managed metallic-roughness texture; the command is expected green.
 FALSIFY_MATERIAL_METALLIC_CHANNEL=red pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
+
+# Standard PBR roughnessChannel witness: select the authored blue roughness channel
+# from the engine-managed metallic-roughness texture; expected green.
+FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=blue pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
 ```
 
 The semantic smoke samples the cube center and requires a stable lit-orange channel ordering

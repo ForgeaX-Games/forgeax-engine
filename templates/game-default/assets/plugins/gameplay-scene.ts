@@ -13,6 +13,7 @@ import type { AuthoredRepairCacheIdentity } from './repair-cache';
 import type { AuthoredExtractionIdentity } from './energy-core-extraction';
 import type { AuthoredRewardChoiceIdentity, RewardKind } from './reward-choice';
 import type { AuthoredBarrierRouteIdentity } from './barrier-route';
+import { resolveAuthoredSentinelIdentity, type SentinelIdentityResolution } from './sentinel-authorship';
 
 export type GameplaySceneAssembly = {
   readonly loaded: LoadedScene | null;
@@ -22,6 +23,7 @@ export type GameplaySceneAssembly = {
   readonly extraction: AuthoredExtractionIdentity | undefined;
   readonly rewardChoice: AuthoredRewardChoiceIdentity | undefined;
   readonly barrierRoute: AuthoredBarrierRouteIdentity | undefined;
+  readonly sentinel: SentinelIdentityResolution;
   readonly initX: number;
   readonly initZ: number;
   readonly animatedMaterial: AnimatedMaterialTarget | undefined;
@@ -45,11 +47,13 @@ export async function assembleGameplayScene(world: World, host: BootstrapContext
   let extraction: AuthoredExtractionIdentity | undefined;
   let rewardChoice: AuthoredRewardChoiceIdentity | undefined;
   let barrierRoute: AuthoredBarrierRouteIdentity | undefined;
+  let sentinel: SentinelIdentityResolution = { available: false, identity: null, unavailableReason: { code: 'authored-sentinel-missing', detail: 'SceneAsset is unavailable' } };
   let initX = 0;
   let initZ = 0;
   let animatedMaterial: AnimatedMaterialTarget | undefined;
   const targetQuery = createScoringTargetQuery(world);
   if (loaded) {
+    sentinel = resolveAuthoredSentinelIdentity(loaded);
     const physics = attachScenePhysics({ world }, loaded);
     for (const [slot, prop] of physics.props.entries()) {
       world.addComponent(prop.e, {
@@ -146,5 +150,5 @@ export async function assembleGameplayScene(world: World, host: BootstrapContext
       }
     }
   }
-  return { loaded, player, healthPickups, repairCache, extraction, rewardChoice, barrierRoute, initX, initZ, animatedMaterial, targetQuery };
+  return { loaded, player, healthPickups, repairCache, extraction, rewardChoice, barrierRoute, sentinel, initX, initZ, animatedMaterial, targetQuery };
 }

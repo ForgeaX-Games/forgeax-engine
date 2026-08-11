@@ -31,6 +31,7 @@ import { describe, expect, it } from 'vitest';
 
 const capsRenderable: RhiCaps = {
   timestampQuery: false,
+  timestampPeriodNanoseconds: null,
   indirectFirstInstance: false,
   firstInstanceIndirect: false,
   storageBuffer: true,

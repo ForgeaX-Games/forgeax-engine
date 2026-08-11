@@ -1209,15 +1209,20 @@ export function executeFrameGraph(
 
   const finishResult = encoder.finish();
   if (!finishResult.ok) {
+    internals.membershipTiming?.markEncodeFailed(finishResult.error.hint);
     internals.errorRegistry.fire(finishResult.error);
     return false;
   }
   const cmd: CommandBuffer = finishResult.value;
+  internals.membershipTiming?.markEncodeFinished();
+  internals.membershipTiming?.markSubmitStarted();
   const submitResult = internals.device.queue.submit([cmd]);
   if (!submitResult.ok) {
+    internals.membershipTiming?.markSubmitFailed();
     internals.errorRegistry.fire(submitResult.error);
     return false;
   }
+  internals.membershipTiming?.markSubmitted(cmd);
   graph.reclaimRetiredTransients().catch(() => {});
   return true;
 }

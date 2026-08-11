@@ -398,6 +398,7 @@ export const hdrpPipeline: RenderPipeline = {
           const internal = ctx as _InternalRenderPipelineContext;
           if (pipeline === null || internal.hdrpClusterMembershipBindGroup === null) return;
           const grid = ctx.frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
+          internal.runtime.membershipTiming?.beforeMembership(ctx.encoder);
           const computePass = ctx.encoder.beginComputePass({
             label: 'hdrp-cluster-membership',
           });
@@ -405,6 +406,7 @@ export const hdrpPipeline: RenderPipeline = {
           computePass.setBindGroup(0, internal.hdrpClusterMembershipBindGroup);
           computePass.dispatchWorkgroups(Math.ceil((grid.x * grid.y * grid.z) / 64));
           computePass.end();
+          internal.runtime.membershipTiming?.afterMembership(ctx.encoder);
         },
       });
     }

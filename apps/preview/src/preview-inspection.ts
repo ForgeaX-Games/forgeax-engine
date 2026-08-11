@@ -5,6 +5,7 @@ import type {
   GameProjectionValue,
   GameReadDef,
 } from '@forgeax/engine-app';
+import type { SimulationError, SimulationErrorCode } from '@forgeax/engine-ecs';
 
 type PreviewInspectionErrorCode =
   | 'projection-action-not-found'
@@ -29,6 +30,75 @@ export type PreviewInspectionError = {
 export type PreviewInspectionResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: PreviewInspectionError };
+
+export interface SimulationErrorSurface {
+  readonly code: SimulationErrorCode;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: SimulationError['detail'];
+  readonly action: string;
+  readonly baselineFingerprint: string;
+}
+
+export const SIMULATION_INSPECTION_SCHEMA_URI =
+  'https://forgeax.dev/schema/simulation-inspection-v1.json';
+
+/** Project a simulation failure without turning the Preview into a restore owner. */
+export function consumeSimulationError(
+  simulationError: SimulationError,
+  baselineFingerprint: string,
+): SimulationErrorSurface {
+  let action: string;
+  switch (simulationError.code) {
+    case 'simulation-record-invalid':
+      action = 'repair the record and create a new in-process v1 record';
+      break;
+    case 'simulation-state-unsupported':
+      action = 'mark the value transient or add an owner-level portable descriptor';
+      break;
+    case 'simulation-resource-invalid':
+      action = 'register the recoverable resource descriptor and create a new record';
+      break;
+    case 'simulation-entity-unmapped':
+      action = 'create a fresh target and preserve every entity mapping';
+      break;
+    case 'simulation-participant-duplicate':
+      action = 'keep one participant registration per stable id';
+      break;
+    case 'simulation-participant-missing':
+      action = 'register participant on a fresh target and retry';
+      break;
+    case 'simulation-participant-version-mismatch':
+      action = 'use the declared participant version and create a new record';
+      break;
+    case 'simulation-participant-schema-mismatch':
+      action = 'use a compatible participant schema and create a new record';
+      break;
+    case 'simulation-participant-not-ready':
+      action = 'wait until the participant is ready, then retry on a fresh target';
+      break;
+    case 'simulation-participant-prepare-failed':
+      action = 'discard the staging result and retry with a fresh target';
+      break;
+    case 'simulation-trace-invalid':
+      action = 'repair the fixed-tick trace before restoring the record';
+      break;
+    case 'simulation-compare-invalid':
+      action = 'declare a finite non-negative tolerance for every numeric field';
+      break;
+    case 'simulation-target-not-fresh':
+      action = 'create a new target World and retry without reusing partial state';
+      break;
+  }
+  return {
+    code: simulationError.code,
+    expected: simulationError.expected,
+    hint: simulationError.hint,
+    detail: simulationError.detail,
+    action,
+    baselineFingerprint,
+  };
+}
 
 export type PreviewProjectionDescriptor = {
   readonly id: string;
@@ -105,6 +175,18 @@ export function createPreviewInspection(
 ): { readonly registrar: GameProjectionRegistrar; readonly inspection: PreviewInspection } {
   const actions = new Map<string, GameActionDef>();
   const reads = new Map<string, GameReadDef>();
+
+  const simulationInspection = (
+    app as App & { readonly simulationInspection?: () => GameProjectionValue }
+  ).simulationInspection;
+  if (simulationInspection !== undefined) {
+    reads.set('simulation.inspect', {
+      id: 'simulation.inspect',
+      title: 'Simulation inspection',
+      description: `Read the World-owned simulation record, participant, trace, and report summary (${SIMULATION_INSPECTION_SCHEMA_URI}).`,
+      read: simulationInspection,
+    });
+  }
 
   const registrar: GameProjectionRegistrar = {
     registerAction(def) {

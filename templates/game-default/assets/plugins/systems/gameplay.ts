@@ -29,7 +29,7 @@ import { installCameraInputSystem } from './camera-input';
 import { installPlayerMovementSystem } from './player-movement';
 import { installChargeShotSystem } from './charge-shot';
 import { installProjectileSimulationSystem } from './projectile-simulation';
-import { installTargetFeedbackSystem } from './target-feedback';
+import { admitTargetImpact, installTargetFeedbackSystem, type TargetFeedbackSystemContext } from './target-feedback';
 import { installCameraFollowSystem } from './camera-follow';
 import type { TargetRelayHandle } from '../target-relay';
 import {
@@ -42,6 +42,8 @@ import type { RepairCacheHandle } from '../repair-cache';
 import type { EnergyCoreExtractionHandle } from '../energy-core-extraction';
 import type { RewardChoiceHandle } from '../reward-choice';
 import type { BarrierRouteHandle } from '../barrier-route';
+import type { SentinelRangedThreat } from '../sentinel-ranged-threat';
+import { installProjectileImpactSystem } from '../projectile-impact';
 
 export type GameplaySystemsContext = {
   readonly world: World;
@@ -70,6 +72,7 @@ export type GameplaySystemsContext = {
   readonly extraction: EnergyCoreExtractionHandle | undefined;
   readonly rewardChoice: RewardChoiceHandle | undefined;
   readonly barrierRoute: BarrierRouteHandle | undefined;
+  readonly sentinel: SentinelRangedThreat | undefined;
   readonly readScore: () => number;
   readonly toggleProfile: () => TargetProfileSnapshot;
   readonly onAssetLabResult?: (result: AssetLabActionResult) => void;
@@ -85,6 +88,7 @@ export type GameplaySystemsContext = {
   readonly targetQuery: ScoringTargetQuery;
   readonly projectileEntities: () => readonly EntityHandle[];
   readonly recordCommand: (kind: 'spawned' | 'despawned') => void;
+  readonly consumeProjectile: (entity: EntityHandle) => void;
   readonly damageTarget: (entity: EntityHandle, points: number) => void;
   readonly spawnPopup: (text: string, x: number, y: number, z: number) => void;
   readonly triggerFlash: (entity?: EntityHandle) => void;
@@ -100,7 +104,11 @@ export type GameplaySystemsContext = {
   readonly hitStreak: HitStreakHandle | undefined;
 };
 
-/** Register the gameplay systems after bootstrap has assembled their asset plugins. */
+/**
+ * Register gameplay after bootstrap has assembled asset plugins. Movement,
+ * charge, projectile, collision, and reward ownership run at FixedUpdate;
+ * input presentation, camera, HUD, and rendering helpers stay at Update.
+ */
 export function installGameplaySystems(ctx: GameplaySystemsContext): void {
   installInputActionsSystem({
     world: ctx.world,
@@ -161,12 +169,11 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     projectileEntities: ctx.projectileEntities,
     rewardChoice: ctx.rewardChoice,
     onSpawn: () => ctx.recordCommand('spawned'),
-    onDespawn: () => ctx.recordCommand('despawned'),
+    consumeProjectile: ctx.consumeProjectile,
   });
-  installTargetFeedbackSystem({
+  const targetFeedback: TargetFeedbackSystemContext = {
     world: ctx.world,
     targetQuery: ctx.targetQuery,
-    projectileEntities: ctx.projectileEntities,
     targetProfile: ctx.targetProfile,
     targetRelay: ctx.targetRelay,
     onTargetImpact: (entity, impactScale) => {
@@ -208,10 +215,10 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     materialsForCurrentMesh: ctx.materialsForCurrentMesh,
     chromaticAberration: ctx.chromaticAberration,
     hitStreak: ctx.hitStreak,
-  });
+  };
+  installTargetFeedbackSystem(targetFeedback);
   ctx.barrierRoute?.installSystem({
     physics: ctx.physics,
-    projectileEntities: ctx.projectileEntities,
     isUnlocked: () => ctx.targetRelay.snapshot().status === 'complete',
     onImpact: (result, position) => {
       const text = result === 'open'
@@ -280,7 +287,7 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
   ctx.extraction?.installSystem({
     physics: ctx.physics,
     isUnlocked: () => ctx.targetRelay.snapshot().status === 'complete',
-    canExtract: () => ctx.rewardChoice !== undefined && ctx.rewardChoice.snapshot().state !== 'none',
+    canExtract: () => ctx.rewardChoice?.snapshot().state === 'consumed',
     requestVictory: ctx.requestVictory,
     onProgress: ctx.hud.setExtraction,
     onCollect: (progress, position) => {
@@ -309,6 +316,45 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
       ctx.gameplayAudio?.triggerHit();
       ctx.vfxHitLoop.trigger();
     },
+  });
+  ctx.sentinel?.installSystem();
+  installProjectileImpactSystem({
+    world: ctx.world,
+    player: ctx.root,
+    projectileEntities: ctx.projectileEntities,
+    barrierEntity: ctx.barrierRoute?.snapshot().emitterEntity as EntityHandle | undefined,
+    barrierRoute: ctx.barrierRoute,
+    counterattack: ctx.counterattack,
+    admitTarget: (target, projectile, impactScale) => admitTargetImpact(
+      targetFeedback,
+      target,
+      projectile,
+      impactScale,
+    ),
+    onCoverImpact: (cover) => {
+      const transform = ctx.world.get(cover, Transform);
+      if (!transform.ok) return;
+      const position = transform.value.pos;
+      const x = position[0] ?? 0;
+      const y = position[1] ?? 0;
+      const z = position[2] ?? 0;
+      ctx.spawnPopup('BLOCK', x, y + 0.8, z);
+      ctx.worldScoreText?.show('BLOCK', [x, y + 1.7, z]);
+      ctx.gameplayAudio?.triggerHit();
+      ctx.vfxHitLoop.trigger();
+    },
+    consume: ctx.consumeProjectile,
+    onOutcome: (source, outcome, shielded) => ctx.sentinel?.recordOutcome(source, outcome, shielded),
+    onTargetResolved: (target) => ctx.sentinel?.onTargetResolved(target),
+    after: [
+      'physicsCollisionSync',
+      'game-projectile-simulation',
+      ...(ctx.healthPickup === undefined ? [] : ['game-health-pickup-collection']),
+      ...(ctx.extraction === undefined ? [] : ['game-energy-core-extraction']),
+      ...(ctx.rewardChoice === undefined ? [] : ['game-reward-choice']),
+      ...(ctx.barrierRoute === undefined ? [] : ['game-barrier-route']),
+    ],
+    before: ['game-target-feedback', 'game-counterattack'],
   });
   installCameraFollowSystem({
     world: ctx.world,

@@ -46,9 +46,9 @@
         "compression": "gzip",
         "baseline": {
           "source": "b2ea70919",
-          "threshold": 11990
+          "threshold": 13280
         },
-        "reason": "dist/index.mjs = 10899 B gzip after adding mouse justPressed/justReleased readpoints and the mouse_input example to the frozen InputSnapshot. Threshold 11990 B = approximately 10% headroom over measured gzip. Prior keyboard baseline 10796 B gzip @ b2ea70919 (threshold 11880). Includes: action-state.ts (deriveActionStates + getAxis/getVector), gesture-recognizer.ts (5 state machines), gamepad-frame.ts (DB remap), browser-backend.ts (recognizer wiring + lazy-load), composite-backend.ts (per-key-yield merge decorator), input-snapshot.ts (keyboard/mouse/action/gesture readpoints + PointerType narrowing), index.ts (barrel). The SDL controller DB sub-export (dist/controller-db.mjs, ~1.5 KB gzip) and data sub-export (dist/controller-db-data.mjs, ~45 KB gzip / 545 KB raw) are opt-in lazy dynamic-imports and are NOT in the main-entry path (path=dist/index.mjs)."
+        "reason": "dist/index.mjs = 12069 B gzip after adding the fixed-tick simulation input projection and trace hook to the frozen InputSnapshot. Threshold 13280 B = approximately 10% headroom over measured gzip. Prior baseline 10899 B gzip @ b2ea70919 (threshold 11990). Includes: action-state.ts (deriveActionStates + getAxis/getVector), gesture-recognizer.ts (5 state machines), gamepad-frame.ts (DB remap), browser-backend.ts (recognizer wiring + lazy-load), composite-backend.ts (per-key-yield merge decorator), input-snapshot.ts (keyboard/mouse/action/gesture readpoints + PointerType narrowing), simulation-input.ts (portable fixed-tick sample and existing ECS trace hook), index.ts (barrel). The SDL controller DB sub-export (dist/controller-db.mjs, ~1.5 KB gzip) and data sub-export (dist/controller-db-data.mjs, ~45 KB gzip / 545 KB raw) are opt-in lazy dynamic-imports and are NOT in the main-entry path (path=dist/index.mjs)."
       },
       "fps": {
         "enabled": false,

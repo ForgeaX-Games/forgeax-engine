@@ -85,6 +85,7 @@ describe('game-default authored VFX effects', () => {
         topQuaternion: [0, 0, 0, 1],
       },
       projectile: { radius: 0.12, halfHeight: 0.16, speed: 24, life: 1.5, shootCooldown: 0.18 },
+      sentinel: { telegraphTicks: 45, cooldownTicks: 90, projectileSpeed: 10, projectileLife: 2.5 },
     });
     expect(world.getResource<{ movement: { speed: number } }>(GAME_DEFAULT_GAMEPLAY_CONFIG).movement.speed).toBe(6);
   });

@@ -62,7 +62,7 @@ async function main() {
     const hasEval = r.stdout.includes('eval');
     const hasEcs = r.stdout.includes('ecs');
     const hasScript = r.stdout.includes('script');
-    const noInspect = !r.stdout.includes('inspect');
+    const noInspect = !/^ {2}inspect(?:\s|$)/m.test(r.stdout);
     const ok = r.code === 0 && hasEval && hasScript && noInspect;
     logCase('a-remote-help-eval', ok, {
       hasEval,

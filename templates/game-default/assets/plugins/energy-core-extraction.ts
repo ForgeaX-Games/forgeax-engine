@@ -1,5 +1,5 @@
 import {
-  Update,
+  FixedUpdate,
   defineComponent,
   type EntityHandle,
   type World,
@@ -320,7 +320,7 @@ export function createEnergyCoreExtraction(
   return {
     installSystem: (ctx) => {
       physics = ctx.physics;
-      world.addSystem(Update, {
+      world.addSystem(FixedUpdate, {
         name: 'game-energy-core-extraction',
         runIf: inState(GameState, 'Play'),
         after: ['physicsCollisionSync', 'game-player-movement', 'game-health-pickup-collection'],

@@ -150,6 +150,10 @@ import {
   type PipelineSpec,
   PipelineSpecError,
 } from '../pipeline-spec';
+import {
+  createMembershipTiming,
+  type MembershipTimingController,
+} from '../record/membership-timing';
 import { TONEMAP_POST_PROCESS_ID } from '../render-graph-primitives';
 import {
   configureSurface,
@@ -919,15 +923,17 @@ function attachDeviceLostFanout(
     lostRegistry: LostListenerRegistry;
     errorRegistry: RhiErrorListenerRegistry;
     healthRegistry: HealthListenerRegistry;
+    onDeviceLost?: (detail: string) => void;
   },
 ): void {
-  const { lostRegistry, errorRegistry, healthRegistry } = registries;
+  const { lostRegistry, errorRegistry, healthRegistry, onDeviceLost } = registries;
   device.lost
     .then((info) => {
       const safe = {
         reason: info?.reason ?? 'unknown',
         message: info?.message ?? '',
       };
+      onDeviceLost?.(`device.lost: ${safe.reason}; ${safe.message || '<empty>'}`);
       lostRegistry.fire(safe);
       // Health channel fan-out: safe.reason is 'unknown' | 'destroyed' per
       // RhiDevice.lost return type, matching HealthDetailDeviceLost.lostReason
@@ -968,6 +974,7 @@ function attachDeviceLostFanout(
       }
     })
     .catch((err: unknown) => {
+      onDeviceLost?.(`device.lost rejected: ${String(err)}`);
       lostRegistry.fire({ reason: 'unknown', message: String(err) });
       healthRegistry.fire({
         reason: 'device-lost',
@@ -1010,8 +1017,12 @@ const COMPRESSION_FEATURES: GPUFeatureName[] = [
 
 function deviceOptionsForAdapter(
   adapter: Pick<RhiAdapter, 'features'>,
+  membershipTiming?: RendererOptions['membershipTiming'],
 ): { requiredFeatures: GPUFeatureName[] } | undefined {
   const requiredFeatures = COMPRESSION_FEATURES.filter((feature) => adapter.features.has(feature));
+  if (membershipTiming?.mode === 'gpu' && adapter.features.has('timestamp-query')) {
+    requiredFeatures.push('timestamp-query');
+  }
   return requiredFeatures.length > 0 ? { requiredFeatures } : undefined;
 }
 
@@ -1061,7 +1072,7 @@ async function tryCreateWebGPURenderer(
   const adapter = adapterResult.value;
   // M4 w28: filter compression features from adapter.features (AC-07). The
   // same helper is used by recover() below so both paths share one profile.
-  const deviceOpts = deviceOptionsForAdapter(adapter);
+  const deviceOpts = deviceOptionsForAdapter(adapter, options?.membershipTiming);
   const result = await adapter.requestDevice(deviceOpts);
   if (!result.ok) {
     return { kind: 'rhi-err', error: result.error };
@@ -1082,11 +1093,20 @@ async function tryCreateWebGPURenderer(
   const lostRegistry = new LostListenerRegistry();
   const errorRegistry = new RhiErrorListenerRegistry();
   const healthRegistry = new HealthListenerRegistry();
+  const membershipTiming =
+    options?.membershipTiming === undefined
+      ? undefined
+      : createMembershipTiming(device, options.membershipTiming);
   // device.lost dual-track (research §F-4 / R2 countermeasure): the spec
   // Promise is passed through to the lost-fan-out registry (extracted to
   // attachDeviceLostFanout so the recover() rebuild path re-attaches the
   // SAME wiring to the freshly-minted device — SSOT, one fan-out shape).
-  attachDeviceLostFanout(device, pack, { lostRegistry, errorRegistry, healthRegistry });
+  attachDeviceLostFanout(device, pack, {
+    lostRegistry,
+    errorRegistry,
+    healthRegistry,
+    onDeviceLost: (detail) => membershipTiming?.markDeviceLost(detail),
+  });
 
   // D-VD2 Round 2 wire-up part 2: register the spec `onuncapturederror`
   // listener on the raw GPUDevice so GPUUncapturedErrorEvent (validation /
@@ -1142,6 +1162,7 @@ async function tryCreateWebGPURenderer(
       lostRegistry,
       errorRegistry,
       healthRegistry,
+      ...(membershipTiming === undefined ? {} : { membershipTiming }),
       pack,
       importTransport,
       ...(rawDevice !== undefined ? { rawDevice } : {}),
@@ -1168,6 +1189,7 @@ interface WebGPURendererInternals {
   lostRegistry: LostListenerRegistry;
   errorRegistry: RhiErrorListenerRegistry;
   healthRegistry: HealthListenerRegistry;
+  membershipTiming?: MembershipTimingController;
   /** M3 D-P4 auto-select pack — carries the dynamic-imported rhi-webgpu / rhi-wgpu singleton + optional async shader factory. */
   pack: RhiBackendPack;
   /**
@@ -1217,6 +1239,11 @@ interface WebGPURendererInternals {
 
 async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<Renderer> {
   let disposed = false;
+  const membershipTiming =
+    internals.membershipTiming ??
+    (internals.options?.membershipTiming === undefined
+      ? undefined
+      : createMembershipTiming(internals.device, internals.options.membershipTiming));
   const featureHostResult = createRenderFeatureHost(internals.options?.features ?? []);
   if (!featureHostResult.ok) throw featureHostResult.error;
   internals.featureHost = featureHostResult.value;
@@ -2445,6 +2472,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     assets,
     gpuStore,
     dynamicTextureStore,
+    membershipTiming,
     errorRegistry: internals.errorRegistry,
     healthRegistry: internals.healthRegistry,
     getMaterialShaderPipeline,
@@ -2495,6 +2523,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // renderSystem.draw(world). @internal — underscore-prefix, not part of
   // the public Renderer interface in renderer.ts.
   const _onFrameEndListeners = new Set<() => void>();
+  let surfaceReleased = false;
 
   type RendererInternal = Renderer & {
     /** @internal Register a frame-end listener. Returns an unsubscribe function. */
@@ -2519,6 +2548,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     store: gpuStore,
     input: RENDERER_INPUT_FACADE,
     ready,
+    ...(membershipTiming === undefined ? {} : { membershipTiming }),
     observeCurrentFrame(options) {
       return renderSystem.observeCurrentFrame(options);
     },
@@ -2606,6 +2636,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         });
         internals.errorRegistry.fire(e);
         return err(e);
+      }
+      if (surfaceReleased) {
+        return err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'renderer surface restored before drawing',
+            hint: 'call renderer.restoreSurface() after the temporary surface owner stops',
+          }),
+        );
       }
       // M2 / w9 (A-IN-5): device-lost guard — draw() silently returns err
       // without firing onError each frame. The device-lost channel fires once
@@ -2763,6 +2802,40 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         );
       }
     },
+    releaseSurface(): Result<void, RhiError> {
+      if (surfaceReleased) return ok(undefined);
+      if (disposed) {
+        return err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'live renderer before releasing its surface',
+            hint: 'create a new Renderer; disposed renderers are terminal',
+          }),
+        );
+      }
+      try {
+        internals.context.unconfigure();
+        if (pipelineState !== null) pipelineState.perPassResources.configured = false;
+        surfaceReleased = true;
+        return ok(undefined);
+      } catch (cause) {
+        return err(wrapDisposeError(cause, 'context.unconfigure'));
+      }
+    },
+    restoreSurface(): Result<void, RhiError> {
+      if (!surfaceReleased) return ok(undefined);
+      if (disposed) {
+        return err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'live renderer before restoring its surface',
+            hint: 'create a new Renderer; disposed renderers are terminal',
+          }),
+        );
+      }
+      surfaceReleased = false;
+      return ok(undefined);
+    },
     /**
      * Release every GPU resource the renderer owns + detach the listener
      * registries; flip the `disposed` latch so subsequent `draw(world)`
@@ -2800,6 +2873,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      membershipTiming?.dispose();
       // Release the current swap-chain image before destroying any resource
       // wrappers that may share its underlying device allocation. The wgpu
       // WebGL2 surface owns an explicit SurfaceTexture; leaving this until
@@ -2924,7 +2998,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       let device: RhiDevice;
       try {
         const deviceResult = await adapterResult.value.requestDevice(
-          deviceOptionsForAdapter(adapterResult.value),
+          deviceOptionsForAdapter(adapterResult.value, internals.options?.membershipTiming),
         );
         if (!deviceResult.ok) {
           return err(new RecoverError('recover-device-unavailable'));
@@ -2943,6 +3017,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // swap is observed without reconstructing the RenderSystem.
       internals.device = device;
       internals.context = ctxResult.value;
+      membershipTiming?.bindDevice(device);
 
       // Re-attach the device.lost fan-out to the new device's lost Promise,
       // reusing the SAME registries the host already subscribed to (SSOT
@@ -2952,6 +3027,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         lostRegistry: internals.lostRegistry,
         errorRegistry: internals.errorRegistry,
         healthRegistry: internals.healthRegistry,
+        onDeviceLost: (detail) => membershipTiming?.markDeviceLost(detail),
       });
 
       // Step (e): rebuild GPU-bound state against the new device. The per-shader

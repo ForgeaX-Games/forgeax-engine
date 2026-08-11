@@ -74,6 +74,11 @@ The machine-readable report contract is [`schema/execution-report.schema.json`](
 
 ## Renderer feature passthrough
 
+`CreateAppOptions.membershipTiming` is a transparent Render option. App does
+not timestamp frames or own timing reasons; it forwards the value to Runtime
+and Render. Omit it for zero timing work, use `cpu-control` for the independent
+CPU control path, or use `gpu` for bounded backend-aware evidence.
+
 `CreateAppOptions.features` is the transparent app seam for producer-owned
 renderer features. The array is forwarded to the existing renderer options
 without reordering, copying, or adding an App-level VFX branch. A feature host
@@ -267,6 +272,7 @@ owns its renderer, World, input backend, and explicit plugin source list.
 | `App.execution.rebuild()` | `Promise<Result<ExecutionReport, AppError>>` | Rebuilds only a poisoned Worker World with a new identity. |
 | `App.start()` | `Result<void, AppError>` | Arms the rAF loop. |
 | `App.stop()` / `pause()` / `resume()` | `Result<void, AppError>` | Controls the rAF lifecycle. |
+| `App.releaseSurfacePreserveWorld()` / `restoreSurface()` | `Promise<Result<void, RhiError>>` | Temporarily pauses presentation and relinquishes the canvas surface while preserving the same World, Renderer, registry, and execution authority; restore resumes only a loop that was running before release. |
 | `App.onError(callback)` | `() => void` | Subscribes to structured World and renderer failures. |
 | `App.setDrawSource(drawSource)` | `void` | Replaces per-frame multi-world routing; `undefined` restores the single-world path. |
 | `App.world` / `App.renderer` | readonly | Exposes the assembled ECS and renderer instances. |
@@ -306,3 +312,27 @@ The descriptor is a transport projection, not a live token: it contains schema,
 field reflection, labels, and JSON-safe metadata, but no methods or validator
 functions. Camera, picking, lifecycle, assets, and VFX shadow policy remain
 outside the app host.
+
+## Simulation inspection
+
+App assembles already-created, ready participant owners into the World and
+exposes one read-only `simulationInspection()` projection. App does not define
+ECS components, record schemas, restore policy, or a second state owner.
+
+```ts
+const result = await createApp({ renderer, world, simulationParticipants });
+if (!result.ok) return result.error;
+const summary = result.value.simulationInspection();
+```
+
+The summary follows [`schema/simulation-inspection.schema.json`](schema/simulation-inspection.schema.json):
+format and owner fields, participant readiness, baseline fingerprint, trace
+counts, report domains/tolerance, and structured error fields. Preview and
+Remote consume this summary through existing read/eval paths only. They do not
+add restore or replay actions and do not receive World, Rapier, or Web Audio
+objects.
+
+Use this seam when diagnosing deterministic ECS state across fresh targets. Do
+not use it for network rollback, disk persistence, RHI tape replay, or pixels.
+Recover by switching on `error.code`, repairing the named owner or target, and
+retrying with a fresh target.

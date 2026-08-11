@@ -91,6 +91,13 @@ export {
   snapshotFromSample,
 } from './input-snapshot';
 export {
+  INPUT_SIMULATION_SAMPLE_RESOURCE_KEY,
+  installSimulationInput,
+  projectSimulationInputSample,
+  type SimulationInputController,
+  type SimulationInputSample,
+} from './simulation-input';
+export {
   createUiInputResetBoundary,
   isUiOwnedEvent,
   resolveUiOwnership,

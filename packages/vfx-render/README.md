@@ -88,6 +88,22 @@ counterparts remain outside this runtime boundary.
 Material texture and sampler bindings remain executable for particle materials;
 the advanced renderer fields augment that shared material path.
 
+## Runtime inspection
+
+`host.inspect(world)` returns one immutable aggregate for the attached world:
+
+| Field | Meaning |
+|:--|:--|
+| `generation` | Host attachment generation; changes when a new World realm is attached |
+| `players[]` | Keyed per-player snapshots, including every emitter rather than one latest intent |
+| `diagnostics[]` | Runtime-owned structured diagnostics for the same world |
+
+The aggregate is `undefined` for an unattached World. A freshly attached empty
+World returns an explicit empty aggregate, which lets tools distinguish “ready,
+no player” from “not attached.” Realm-local entity handles are never reused as
+cross-World identity; consumers must pair them with the host generation and
+asset GUID.
+
 `createVfxRenderInspectSnapshot` and `topologyRecoveryHint` expose structured
 readiness and recovery evidence. Device loss or a stale generation discards the
 affected topology resources and rebuilds them from cooked reflection.

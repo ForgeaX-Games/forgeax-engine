@@ -5,6 +5,11 @@
 
 ## Assemble producer features
 
+`createRenderer(..., { membershipTiming })` forwards the Render-owned timing
+option without interpreting it. Runtime does not add a generic profiler or a
+second reason vocabulary. Capability refusal, timestamp capture, recovery
+fencing, and terminal records remain Render and RHI responsibilities.
+
 The host receives a heterogeneous list of producer-owned
 `RenderFeature<FrameData>` values through one `createRenderer` options bag.
 Import the feature contract and render vocabulary from

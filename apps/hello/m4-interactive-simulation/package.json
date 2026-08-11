@@ -30,8 +30,10 @@
           "[m4-interactive] 2D physics ECS/KCC lifecycle: PASS",
           "[m4-interactive] physics lifecycle tests: PASS",
           "[m4-interactive] audio lifecycle tests: PASS",
-          "[m4-interactive] PASS - M4 interactive simulation gates GREEN",
-          "[m4-interactive] deferred: replay remains outside this round."
+          "[m4-interactive] simulation evidence/cleanup/invariants: PASS",
+          "[m4-interactive] simulation public front door/errors: PASS",
+          "[m4-interactive] simulation restore/replay: read-only front door PASS",
+          "[m4-interactive] PASS - M4 interactive simulation gates GREEN"
         ]
       }
     },

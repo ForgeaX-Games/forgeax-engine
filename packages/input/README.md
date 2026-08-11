@@ -276,3 +276,23 @@ Frozen into `snap.mouse.pointerLocked` at frame-start. Consumers read `if (snap.
 
 - [`@forgeax/engine-ecs`](../ecs) — 提供 `World` + Resource 存储 + Schedule（消费方契约依赖：`world.insertResource('InputSnapshot', frozenSnapshot)`）
 - [`@forgeax/engine-runtime`](../runtime) — 在 `Engine.create({ canvas })` 流水线里调用 `attachBrowserInputBackend(canvas)`、`world.insertResource(INPUT_BACKEND_KEY, backend)` 与 `world.addSystem(Update, InputFrameStartScan)`，对 AI 用户屏蔽组装细节
+
+## Simulation input boundary
+
+Use `InputSnapshot` as the frame-start boundary for simulation input. A
+simulation trace stores the normalized value consumed by a fixed tick; it does
+not store DOM events, browser objects, or a render frame.
+
+```ts
+const snapshot = inputBackend.snapshot();
+const sample = { tick: fixedTick + 1, input: snapshot.action('moveForward').isPressed() };
+```
+
+The input package freezes the snapshot. ECS owns `record`, `restore`, `trace`,
+participant registration, comparison tolerance, and closed simulation errors.
+Use the same snapshot source for source and fresh target Worlds. Do not add a
+second input recorder, a replay action, or a browser event queue to Remote.
+
+If a trace fails, inspect `code`, `expected`, `hint`, and `detail`, repair the
+named input boundary, then create a fresh target. RHI tape replay and game
+replay have different owners and are not input snapshot formats.

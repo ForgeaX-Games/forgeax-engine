@@ -278,6 +278,17 @@ GpuResource v1 是单 owner immortal 模型：有且仅有一个所有者负责 
 - **想调 `device.destroy()` 释放整个设备**：不可在公共路径调用（chromium adapter pool 中毒）。只加资源级 `destroyBuffer` / `destroyTexture`；需要裸 `GPUDevice.destroy()` 走 `_internal_getRawDevice(device)` escape hatch。
 - **wgpu-wasm Channel 3（WebKit/headless chromium）上 submit 后静默黑屏 / GPU 死**：旧代码 `RhiWgpuQueue::submit` 返回 `()` 不标 `#[wasm_bindgen(catch)]`，且 wgpu backend 的 submit 校验 error 走 error-sink 对 JS 侧不可见——相当于 submit 失败被静默吞掉、GPU 死透。已修（bug-20260622 R5 M4）：Rust 侧 `device.on_uncaptured_error` 全局回调接收 error-sink 投递并写入 per-queue last-error 槽位；`submit()` 标 `#[wasm_bindgen(catch)]` 改返回 `Result`，调用后同步读取 + 清空槽位，命中则以 `[rhi-code:<code>]` 前缀抛回 JS。TS shim `queue.ts` 按前缀路由到 `queueSubmitFailed` / `webgpuRuntimeError`（复用既有 `RhiErrorCode` 闭合联合成员，零新增）。**行为变化**：submit 期校验错误从「panic(GPU 死)」改为「经 onError 返回 RhiError(实例存活)」，下一帧 submit 正常。
 
+## Deferred membership timing
+
+Render is the sole timing owner. The existing opaque
+`writeTimestamp` -> `resolveQuerySet` -> `mapAsync` seam is used only around
+the real membership compute dispatch. A backend publishes
+`caps.timestampQuery` plus its positive `timestampPeriodNanoseconds` when
+trustworthy; RhiNull and the current wgpu WebGL2 backend publish `false` and
+`null`. Do not synthesize ticks, add a profiler, or move the Render reason
+union into RHI. `feature-not-enabled` remains an RHI detail and is translated
+to Render's `timestamp-query-unsupported` refusal at that boundary.
+
 ## 深入
 
 - 14 opaque handles / 7 interfaces / 9 descriptors 完整表 + `ExplicitUndefined<>` 桥接：见 `packages/rhi/README.md` §14 opaque handles / §9 descriptors

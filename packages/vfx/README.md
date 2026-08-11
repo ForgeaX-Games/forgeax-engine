@@ -135,6 +135,37 @@ world.spawn({
 
 Install `createVfxRuntimeHost` from `@forgeax/engine-vfx-render`, attach each World once, and register `host.feature` with the Renderer. The host installs the loader and FixedUpdate intent producer.
 
+## Authoring projection
+
+Runtime-safe tools can inspect the cooked effect without importing the build-time
+compiler or duplicating renderer schemas:
+
+```ts
+import {
+  describeVfxGpuEffect,
+  isVfxGpuEffectAsset,
+} from '@forgeax/engine-vfx';
+
+const payload = assets.lookup(EFFECT_GUID);
+if (!isVfxGpuEffectAsset(payload)) return;
+
+const descriptor = describeVfxGpuEffect(payload);
+// descriptor.emitters: stable tree of program/stage/channel/event/renderer nodes
+// descriptor.timeline: rate, bursts and loop duration by emitter
+// descriptor.dependencies: module, asset and data-interface identities
+// descriptor.capabilities: executable / partial / unavailable truth
+```
+
+The descriptor is immutable, UI-neutral and versioned. It preserves the authored
+WGSL module ID in each cooked emitter, but intentionally omits WGSL bytes and
+compiler objects. `isVfxGpuEffectAsset` owns the stable cooked discriminator at
+the producer boundary; detailed artifact validation remains the Pack loader's
+responsibility.
+
+> [!IMPORTANT]
+> The descriptor is an inspection/read-model contract, not a second authoring
+> language. Source v2 plus `.vfx.wgsl` remain authoritative.
+
 ## Runtime invariants
 
 - FixedUpdate is the only simulation clock; render frames consume ordered tick intents.
@@ -143,6 +174,13 @@ Install `createVfxRuntimeHost` from `@forgeax/engine-vfx-render`, attach each Wo
 - `vfx_random_spawn` and `vfx_random_update` are addressable by seed, particle ID, tick, and sample key.
 - Cold GPU preparation stalls effect time within the bounded queue. Post-start overflow reports `vfx-intent-queue-overflow`; ticks are not silently discarded.
 - Seed/effect changes and stop-to-play transitions restart the player at a fixed boundary.
+
+`VfxGpuRuntime.inspectPlayers()` and `inspectPlayer(player)` expose stable keyed
+snapshots for every attached player and emitter. They report the asset GUID,
+program/layout fingerprints, parameter generation, pending patch count, channel
+counters, visibility, schedule, bounds, renderer/stage metadata and the latest
+committed tick intent per emitter. Observation never selects a single global
+“latest intent,” so two players and multi-emitter effects remain distinguishable.
 
 ## Culling policy
 

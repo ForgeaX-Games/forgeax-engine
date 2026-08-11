@@ -49,6 +49,9 @@ describe('game-default HUD consumer', () => {
     expect(assetHost?.shadowRoot?.querySelector('[data-ui-slot="mission"]')?.getAttribute('data-complete')).toBe('false');
     expect(assetHost?.shadowRoot?.querySelector<HTMLButtonElement>('[data-ui-action="fbx-companion"]')?.disabled).toBe(false);
     hud.setTargetRelay({ status: 'complete', currentStep: 3, cleared: 3, total: 3, activeTarget: null, activeTargetName: null, acceptedHits: 3, rejectedHits: 1, variationActive: false });
+    hud.setPhase('Defeat');
+    expect(assetHost?.shadowRoot?.textContent).toContain('Defeat · incoming attack · R to replay');
+    expect(assetHost?.shadowRoot?.textContent).not.toContain('BouncyBall counterattack');
     hud.setPhase('Victory');
     expect(assetHost?.shadowRoot?.textContent).toContain('Victory · Final score 50 · R to replay');
     expect(assetHost?.shadowRoot?.querySelector('[data-ui-slot="mission"]')?.getAttribute('data-complete')).toBe('true');

@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 
 // hello-audio vite config (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba).
 //
@@ -24,11 +25,17 @@ import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const sfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-audio');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [sfxDir], importers: [audioImporter], refresh: reloadAssetHost() }),
+    pluginPack({
+      roots: [sfxDir],
+      importers: [audioImporter],
+      refresh: reloadAssetHost(),
+      runtimeBinding,
+    }),
   ],
   server: {
     port: 5195,

@@ -1219,6 +1219,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     backendKind: 'webgpu' as const,
     compute: true,
     timestampQuery: false,
+    timestampPeriodNanoseconds: null,
     indirectDrawing: false,
     textureCompressionBc: false,
     textureCompressionEtc2: false,

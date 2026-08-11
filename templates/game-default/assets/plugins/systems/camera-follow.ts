@@ -1,4 +1,4 @@
-import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedUpdate, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { quat } from '@forgeax/engine-runtime';
 import { inState } from '@forgeax/engine-state';
@@ -24,7 +24,7 @@ export function installCameraFollowSystem(ctx: CameraFollowSystemContext): void 
   ctx.world.addSystem(Update, {
     name: 'game-camera-follow',
     runIf: inState(GameState, 'Play'),
-    after: ['game-target-feedback'],
+    after: [FixedUpdate],
     queries: [],
     fn: () => {
       const dt = ctx.world.getResource(Time).delta;

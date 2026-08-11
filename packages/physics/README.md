@@ -207,3 +207,19 @@ not kinematic), `body-not-found` (no Rapier body for the entity), or
 - **ECS bridge**: backend packages call `registerPhysicsSystems(world, Transform)` to wire the three-phase tick pipeline into the ECS schedule.
 - **Fire-and-forget**: WASM backends load asynchronously; entities spawned before load are picked up once the `PhysicsWorld` resource appears.
 - **Component schemas SSOT**: `packages/physics/src/components.ts` is the authoritative definition for all physics component fields, defaults, and types.
+
+## Simulation participant boundary
+
+Physics backends may register one ready simulation participant with the ECS
+World. The participant owns only portable backend state; ECS owns the versioned
+record, atomic restore, fixed-tick trace, comparison report, tolerance, and
+closed errors.
+
+Use the minimum path: create a source World, capture its record, create a fresh
+target World with the same participant version/schema fingerprint, restore, and
+compare semantic collision facts. Do not pass Rapier WASM handles, native
+vectors, or backend World objects through App, Preview, or Remote.
+
+On failure, branch on `error.code`, read `expected`, `hint`, and the narrowed
+`detail`, then rebuild the participant or target named by the hint. A physics
+participant is not a network rollback store, RHI tape, or game replay owner.

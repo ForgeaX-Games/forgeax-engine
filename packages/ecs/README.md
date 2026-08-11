@@ -1189,3 +1189,47 @@ component reflection into remote `introspect`; ECS remains the component owner.
 
 Out of scope: renderer culling, camera frusta, picking, app lifecycle, asset
 loading, and VFX shadow policy. Use the owning package contract for each.
+
+## Simulation record and restore
+
+> Use this seam to compare one ECS World across fresh targets and host frame
+> groupings. Do not use it for network rollback, disk saves, RHI tape replay, or
+> pixel comparison.
+
+The minimum path is one authored source World, one fresh target World, and one
+owner call for each operation:
+
+```ts
+const record = source.simulationRecord();
+if (!record.ok) return record.error;
+const restored = target.simulationRestore(record.value);
+if (!restored.ok) return restored.error;
+const report = simulationCompare({ facts });
+```
+
+| Field | Meaning | Owner rule |
+|:--|:--|:--|
+| `record` | Versioned ECS state plus clock, participants, and trace | ECS creates it |
+| `restore` | Atomic projection into a fresh target | ECS validates it |
+| `trace` | Ordered fixed-tick input samples | Feed fixed simulation, not render frames |
+| `participant` | Versioned external simulation state | Register one ready owner per stable id |
+| `tolerance` | Per numeric comparison allowance | Declare it in the report |
+| `error` | Closed code with `expected`, `hint`, and narrowed `detail` | Switch on `error.code` |
+
+Remote and Preview expose only the inspection summary: participant readiness,
+format/schema owners, baseline fingerprint, trace counts, report domains, and
+tolerance metadata. They never expose World, native physics, or Web Audio
+objects and never add restore or replay actions.
+
+<details>
+<summary>Failure recovery</summary>
+
+Repair the field named by `detail.path`, register the missing or incompatible
+participant, or create a fresh target. Preserve the baseline fingerprint while
+diagnosing. Do not catch an expected error by parsing `message`.
+</details>
+
+RHI tape replay answers whether recorded GPU commands can run on another device.
+Game replay answers whether authored gameplay input can recreate a session. The
+simulation seam answers whether ECS state and fixed-tick semantics agree; it is
+the lower-level owner used by those consumers, not a replacement for either.

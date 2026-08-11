@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FixedUpdate, Update } from '../schedule-token';
 import { FixedTime, Time } from '../time';
 import { World } from '../world';
+import { registerFixedTickHook } from '../world-scheduling';
 
 describe('fixed update loop', () => {
   it('runs zero, one, and multiple fixed iterations while preserving remainder', () => {
@@ -55,5 +56,22 @@ describe('fixed update loop', () => {
 
     expect(world.update(1 / 60).ok).toBe(true);
     expect(trace).toEqual(['before', 'fixed', 'after']);
+  });
+
+  it('runs fixed boundary hooks after tick growth and before FixedUpdate systems', () => {
+    const world = new World();
+    const trace: string[] = [];
+    const unregister = registerFixedTickHook(world, (_world, tick) => {
+      trace.push(`hook:${tick}`);
+    });
+    world.addSystem(FixedUpdate, {
+      name: 'fixed-boundary-observer',
+      queries: [],
+      fn: (_world) => trace.push(`system:${_world.getResource(FixedTime).tick}`),
+    });
+
+    expect(world.update(1 / 30).ok).toBe(true);
+    expect(trace).toEqual(['hook:1', 'system:1', 'hook:2', 'system:2']);
+    unregister();
   });
 });

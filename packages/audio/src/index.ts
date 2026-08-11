@@ -32,12 +32,23 @@ export {
   createAudioIntentBackend,
 } from './audio-intent';
 export {
+  type AudioSimulationState,
   audioTickSystem,
+  captureAudioSimulationState,
   createClipResolver,
   detectEdge,
   detectRemovedEntities,
   type EdgeAction,
   listenerPoseFromWorldMatrix,
+  recordAudioBusMute,
+  recordAudioBusVolume,
+  recordAudioIntent,
+  recordAudioListenerPose,
+  restoreAudioSimulationState,
 } from './audio-tick-system';
 export { AudioListener, AudioSource } from './components';
 export { AUDIO_TICK_SYSTEM_NAME, audioPlugin } from './plugin-factory';
+export {
+  type AudioSimulationParticipantOptions,
+  createAudioSimulationParticipant,
+} from './simulation-participant';

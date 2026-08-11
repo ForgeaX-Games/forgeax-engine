@@ -21,6 +21,7 @@ export type ProjectilePresentation = {
   readonly bulletHalfHeight: number;
   readonly projectileMesh: Handle<'MeshAsset', 'shared'>;
   readonly projectileMaterial: Handle<'MaterialAsset', 'shared'>;
+  readonly hostileProjectileMaterial: Handle<'MaterialAsset', 'shared'>;
   readonly customProjectile: CustomProjectileMesh | undefined;
   readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
   readonly flashMaterial: Handle<'MaterialAsset', 'shared'>;
@@ -62,6 +63,13 @@ export async function createProjectilePresentation(args: ProjectilePresentationA
     emissiveIntensity: 5,
   }));
   const bulletMeshResult = createCapsuleGeometry(bulletRadius, bulletHalfHeight * 2, 6, 12);
+  const hostileProjectileMaterial = args.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({
+    baseColor: [1, 0.12, 0.02, 1],
+    roughness: 0.32,
+    metallic: 0.05,
+    emissive: [1, 0.05, 0.01],
+    emissiveIntensity: 7,
+  }));
   const bulletMesh = bulletMeshResult.ok ? args.world.allocSharedRef('MeshAsset', bulletMeshResult.value) : HANDLE_SPHERE;
   const customProjectile = args.host?.renderer === undefined
     ? undefined
@@ -136,6 +144,7 @@ export async function createProjectilePresentation(args: ProjectilePresentationA
     bulletHalfHeight,
     projectileMesh,
     projectileMaterial,
+    hostileProjectileMaterial,
     customProjectile,
     spriteAtlasLoop,
     flashMaterial,

@@ -77,7 +77,10 @@ export async function createGameplayTargetFeatures(
     toggleTargetProfile(world, targetProfile);
     return targetProfileSnapshot(targetProfile);
   };
-  const guidedFbxTarget = comparisonEvidenceMode ? undefined : primaryTarget();
+  // Render-evidence mode adds comparison mesh owners, but the authored relay
+  // still needs its FBX companion on RedBox. Keep that guided presentation
+  // target-bound in every mode; the comparison swaps remain independent.
+  const guidedFbxTarget = primaryTarget();
   const physics = world.hasResource('PhysicsWorld') ? world.getResource<PhysicsWorld>('PhysicsWorld') : undefined;
   const fbxSkinnedTarget = await createFbxSkinnedTarget(
     guidedFbxTarget === undefined

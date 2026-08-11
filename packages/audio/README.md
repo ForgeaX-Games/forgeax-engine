@@ -103,3 +103,18 @@ Each error carries 4-field structured surface: `.code` / `.expected` / `.hint` /
 - [`@forgeax/engine-ecs`](../ecs) -- `defineComponent`, World, Entity, System, Resource
 - [`@forgeax/engine-app`](../app) -- `createApp({ plugins: [audioPlugin()] })` injection
 - [`@forgeax/engine-types`](../types) -- `AudioErrorCode`, `AudioError`, `AudioClipAsset` type definitions SSOT
+
+## Simulation participant boundary
+
+The realm-neutral audio package may contribute a ready participant whose state
+is portable data. ECS remains the single owner of `record`, `restore`, `trace`,
+comparison `report`, numeric `tolerance`, and closed `error` values.
+
+Use the minimum path with a source World and a fresh target. Compare semantic
+audio intent counts and cleanup invariants; never serialize `AudioContext`,
+`AudioBuffer`, source nodes, or a host consumer. The Web Audio package remains
+Host-owned and consumes intents after the simulation boundary.
+
+When restore or comparison fails, switch on the returned code and follow its
+`expected`, `hint`, and `detail`; do not parse messages or silently drop audio.
+This seam is not RHI tape replay and does not define a game replay format.

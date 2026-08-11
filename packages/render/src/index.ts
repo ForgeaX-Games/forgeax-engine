@@ -87,6 +87,19 @@ export {
   type FrameObservationSource,
   observeCurrentFrame,
 } from './record/frame-observation';
+export {
+  createMembershipTiming,
+  MEMBERSHIP_TIMING_REASON_CODES,
+  MEMBERSHIP_TIMING_REASON_MAPPING,
+  MEMBERSHIP_TIMING_REASON_SCHEMA,
+  type MembershipTimingController,
+  MembershipTimingError,
+  type MembershipTimingGpuOutputSource,
+  type MembershipTimingGpuReport,
+  type MembershipTimingOptions,
+  type MembershipTimingReasonCode,
+  type MembershipTimingReport,
+} from './record/membership-timing';
 export type {
   AddBloomPassesOptions,
   AddFullscreenPassOptions,

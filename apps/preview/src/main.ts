@@ -21,10 +21,11 @@ import {
   loadGame,
 } from '@forgeax/engine-app';
 import { audioPlugin } from '@forgeax/engine-audio';
+import type { SimulationError } from '@forgeax/engine-ecs';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
-import { createPreviewInspection } from './preview-inspection';
+import { consumeSimulationError, createPreviewInspection } from './preview-inspection';
 import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -146,6 +147,11 @@ function reportCreateError(err: CanvasAppError): {
     console.error(`[preview] EngineEnvironmentError: webgpu inner=${code}`);
     return { code: 'engine-environment', detail: `webgpu inner=${code}` };
   }
+  if (isSimulationError(err)) {
+    const surface = consumeSimulationError(err, 'unavailable-before-app-world');
+    console.error(`[preview] SimulationError ${surface.code}: ${surface.hint}`);
+    return { code: surface.code, detail: surface.hint };
+  }
   if (isAppError(err)) {
     switch (err.code) {
       case 'app-not-started':
@@ -183,6 +189,10 @@ function reportCreateError(err: CanvasAppError): {
     }
   }
   return { code: 'unknown', detail: String(err) };
+}
+
+function isSimulationError(err: CanvasAppError): err is SimulationError {
+  return 'code' in err && typeof err.code === 'string' && err.code.startsWith('simulation-');
 }
 
 function reportLoadError(err: unknown): void {

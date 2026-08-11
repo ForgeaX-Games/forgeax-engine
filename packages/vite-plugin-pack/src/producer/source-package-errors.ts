@@ -1,12 +1,33 @@
 import type { ImportError } from '@forgeax/engine-types';
 
-export type SourcePackageErrorCode =
-  | 'source-package-meta-invalid'
-  | 'source-package-importer-missing'
-  | 'source-package-conversion-failed'
-  | 'source-package-ddc-failed'
-  | 'source-package-publication-invalid'
-  | 'source-package-guid-closure-mismatch';
+const SOURCE_PACKAGE_ERROR_POLICY = {
+  'source-package-meta-invalid': {
+    expected: 'a valid source Meta declaration with complete GUID topology',
+    hint: 'repair the Meta declaration, then rebuild or cold-cook the source package',
+  },
+  'source-package-importer-missing': {
+    expected: 'a registered importer for the source Meta importer key',
+    hint: 'register the named importer, then rebuild or cold-cook the source package',
+  },
+  'source-package-conversion-failed': {
+    expected: 'the configured importer to convert the source successfully',
+    hint: 'repair the source or importer, then rebuild or cold-cook the source package',
+  },
+  'source-package-ddc-failed': {
+    expected: 'a readable persistent DDC entry with matching integrity evidence',
+    hint: 'discard the invalid derived entry, then rebuild or cold-cook the source package',
+  },
+  'source-package-publication-invalid': {
+    expected: 'a complete Pack body, refs, artifacts, and route integrity',
+    hint: 'repair the missing product bytes, then rebuild or cold-cook the source package',
+  },
+  'source-package-guid-closure-mismatch': {
+    expected: 'exactly one produced asset for every declared GUID',
+    hint: 'repair the Meta topology or importer output, then rebuild the whole source package',
+  },
+} as const;
+
+export type SourcePackageErrorCode = keyof typeof SOURCE_PACKAGE_ERROR_POLICY;
 
 export type SourcePackageErrorStage =
   | 'meta'
@@ -39,40 +60,16 @@ export interface SourcePackageError {
   readonly detail: SourcePackageErrorDetail;
 }
 
-const EXPECTED: Readonly<Record<SourcePackageErrorCode, string>> = {
-  'source-package-meta-invalid': 'a valid source Meta declaration with complete GUID topology',
-  'source-package-importer-missing': 'a registered importer for the source Meta importer key',
-  'source-package-conversion-failed': 'the configured importer to convert the source successfully',
-  'source-package-ddc-failed': 'a readable persistent DDC entry with matching integrity evidence',
-  'source-package-publication-invalid':
-    'a complete Pack body, refs, artifacts, and route integrity',
-  'source-package-guid-closure-mismatch': 'exactly one produced asset for every declared GUID',
-};
-
-const HINT: Readonly<Record<SourcePackageErrorCode, string>> = {
-  'source-package-meta-invalid':
-    'repair the Meta declaration, then rebuild or cold-cook the source package',
-  'source-package-importer-missing':
-    'register the named importer, then rebuild or cold-cook the source package',
-  'source-package-conversion-failed':
-    'repair the source or importer, then rebuild or cold-cook the source package',
-  'source-package-ddc-failed':
-    'discard the invalid derived entry, then rebuild or cold-cook the source package',
-  'source-package-publication-invalid':
-    'repair the missing product bytes, then rebuild or cold-cook the source package',
-  'source-package-guid-closure-mismatch':
-    'repair the Meta topology or importer output, then rebuild the whole source package',
-};
-
 export function sourcePackageError(
   code: SourcePackageErrorCode,
   context: SourcePackageErrorContext,
   detail: Omit<SourcePackageErrorDetail, keyof SourcePackageErrorContext>,
 ): SourcePackageError {
+  const policy = SOURCE_PACKAGE_ERROR_POLICY[code];
   return {
     code,
-    expected: EXPECTED[code],
-    hint: HINT[code],
+    expected: policy?.expected as string,
+    hint: policy?.hint as string,
     detail: { ...context, ...detail },
   };
 }

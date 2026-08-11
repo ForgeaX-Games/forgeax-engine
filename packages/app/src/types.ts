@@ -11,7 +11,13 @@
 
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import type { Result, TimePolicy, World } from '@forgeax/engine-ecs';
+import type {
+  Result,
+  SimulationError,
+  SimulationParticipant,
+  TimePolicy,
+  World,
+} from '@forgeax/engine-ecs';
 import type {
   ActionConfig,
   InputBackend,
@@ -21,7 +27,12 @@ import type {
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { PluginError, PluginSource } from '@forgeax/engine-plugin';
 import type { Profiler } from '@forgeax/engine-profiler';
-import type { Renderer, RendererError, RenderFeature } from '@forgeax/engine-render';
+import type {
+  MembershipTimingOptions,
+  Renderer,
+  RendererError,
+  RenderFeature,
+} from '@forgeax/engine-render';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { ImportTransport } from '@forgeax/engine-types';
@@ -141,6 +152,10 @@ export interface AppAssembleArgs {
   readonly drawSource?: DrawSource;
   /** Explicit profiler capability shared by the host and renderer. */
   readonly profiler?: Profiler;
+  /** Explicit opt-in for Render-owned HDRP membership timing evidence. */
+  readonly membershipTiming?: MembershipTimingOptions;
+  /** Already-created, ready simulation owners registered with the World. */
+  readonly simulationParticipants?: readonly SimulationParticipant[];
 }
 
 /**
@@ -165,6 +180,8 @@ export interface CreateAppOptions {
   readonly features?: readonly RenderFeature<unknown>[];
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: readonly PluginSource[];
+  /** Already-created, ready simulation owners registered with the canvas World. */
+  readonly simulationParticipants?: readonly SimulationParticipant[];
   /**
    * A host-owned input backend for this canvas. When supplied, createApp inserts
    * it into the World instead of attaching a second browser listener set. The
@@ -245,6 +262,8 @@ export interface CreateAppOptions {
   readonly drawSource?: DrawSource;
   /** Explicit profiler capability shared by the host and renderer. */
   readonly profiler?: Profiler;
+  /** Explicit opt-in for Render-owned HDRP membership timing evidence. */
+  readonly membershipTiming?: MembershipTimingOptions;
 }
 
 /**
@@ -314,12 +333,21 @@ export interface App {
   /** Host-side lifecycle and immutable diagnostics for the selected execution tier. */
   readonly execution: ExecutionControl;
   /**
+   * Pause frame submission and relinquish the renderer presentation surface
+   * without replacing World, Renderer, AssetRegistry, plugins, or history.
+   */
+  releaseSurfacePreserveWorld(): Promise<Result<void, RhiError>>;
+  /** Restore the same surface and resume only when release paused a running App. */
+  restoreSurface(): Promise<Result<void, RhiError>>;
+  /**
    * Plugin registry produced by runPlugins() —— Map<string, Plugin>.
    * The caller passes this to wireDefaultInspectors context so the
    * inspector's 'plugins' RPC method can enumerate loaded plugins.
    * Always present after a successful createApp call.
    */
   readonly pluginRegistry: Map<string, import('@forgeax/engine-plugin').Plugin>;
+  /** Read-only World-owned simulation diagnostics; App does not own record/schema state. */
+  readonly simulationInspection: () => import('./internal/simulation-participants').SimulationInspectionSummary;
   /** InputBackend handle when input attach is enabled; undefined otherwise. */
   readonly input?: InputBackend;
   /** AudioBackend handle when audio attach is enabled; undefined otherwise. */
@@ -449,7 +477,7 @@ export type ExecutionApp = Pick<
  * (duplicate-plugin / plugin-build-failed) since runPlugins now drives the
  * assemble-form wiring and can fail with a structured plugin error.
  */
-export type AssembleAppError = AppError | RhiError | PluginError;
+export type AssembleAppError = AppError | RhiError | PluginError | SimulationError;
 
 /**
  * Error union returned by the canvas-form thin wrapper. Extends

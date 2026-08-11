@@ -891,8 +891,35 @@
        "MeshRenderer": {
         "materials": [
          5
-        ]
-       }
+       ]
+      }
+     }
+     },
+     {
+      "localId": 35,
+      "components": {
+       "Name": { "value": "Sentinel" },
+       "Transform": { "pos": [0, 0.9, 8], "scale": [1, 1.8, 1] },
+       "MeshFilter": { "assetHandle": 0 },
+       "MeshRenderer": { "materials": [19] }
+      }
+     },
+     {
+      "localId": 36,
+      "components": {
+       "Name": { "value": "ProjectileCoverLeft" },
+       "Transform": { "pos": [-2, 0.9, 4.6], "scale": [1.6, 1.8, 0.6] },
+       "MeshFilter": { "assetHandle": 0 },
+       "MeshRenderer": { "materials": [1] }
+      }
+     },
+     {
+      "localId": 37,
+      "components": {
+       "Name": { "value": "ProjectileCoverRight" },
+       "Transform": { "pos": [2, 0.9, 4.6], "scale": [1.6, 1.8, 0.6] },
+       "MeshFilter": { "assetHandle": 0 },
+       "MeshRenderer": { "materials": [1] }
       }
      }
     ],
@@ -936,7 +963,8 @@
     "d9f2a000-0002-5000-8000-000000000002",
     "d9f2a000-0003-5000-8000-000000000003",
     "0f20e111-5b2f-5a77-9a02-2f5d1e9c7a11",
-    "019f7000-0000-7000-8000-000000000025"
+    "019f7000-0000-7000-8000-000000000025",
+    "019f7f31-93d6-7c65-b688-2389096fb8e1"
    ],
    "artifacts": {}
   },
@@ -1487,6 +1515,33 @@
      "emissiveIntensity": 2.2,
      "metallic": 0.05,
      "roughness": 0.32
+    }
+   },
+   "refs": [],
+   "artifacts": {}
+  },
+  {
+   "guid": "019f7f31-93d6-7c65-b688-2389096fb8e1",
+   "kind": "material",
+   "payload": {
+    "passes": [
+     {
+      "name": "Forward",
+      "program": { "module": "forgeax::default-standard-pbr" },
+      "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 }
+     },
+     {
+      "name": "ShadowCaster",
+      "program": { "module": "forgeax::default-shadow-caster" },
+      "renderState": { "tags": { "LightMode": "ShadowCaster" } }
+     }
+    ],
+    "values": {
+     "baseColor": [0.62, 0.12, 0.04, 1],
+     "emissive": [1, 0.18, 0.02],
+     "emissiveIntensity": 0.35,
+     "metallic": 0.7,
+     "roughness": 0.28
     }
    },
    "refs": [],

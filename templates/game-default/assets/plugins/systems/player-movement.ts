@@ -1,5 +1,5 @@
 import { CharacterController, type PhysicsWorld } from '@forgeax/engine-physics';
-import { Time, type EntityHandle, type World, Update } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { quat } from '@forgeax/engine-runtime';
@@ -20,13 +20,12 @@ export type PlayerMovementSystemContext = {
 
 /** Owns player intent, CharacterController integration, and ECS pose writes. */
 export function installPlayerMovementSystem(ctx: PlayerMovementSystemContext): void {
-  ctx.world.addSystem(Update, {
+  ctx.world.addSystem(FixedUpdate, {
     name: 'game-player-movement',
     runIf: inState(GameState, 'Play'),
-    after: ['game-camera-input'],
     queries: [],
     fn: () => {
-      const dt = ctx.world.getResource(Time).delta;
+      const dt = ctx.world.getResource(FixedTime).delta;
       const config = ctx.world.getResource<GameplayConfig>(GAME_DEFAULT_GAMEPLAY_CONFIG);
       const snap = ctx.readInput();
       const motionResult = ctx.world.get(ctx.root, PlayerMotion);

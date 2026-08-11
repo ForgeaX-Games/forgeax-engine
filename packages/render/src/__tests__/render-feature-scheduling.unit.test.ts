@@ -9,6 +9,7 @@ const caps = {
   backendKind: 'null',
   compute: true,
   timestampQuery: true,
+  timestampPeriodNanoseconds: null,
   indirectDrawing: true,
   textureCompressionBc: false,
   textureCompressionEtc2: false,

@@ -14,6 +14,10 @@ export type EntityFieldKind =
   | { readonly kind: 'entity'; readonly isArray: false }
   | { readonly kind: 'entity'; readonly isArray: true };
 
+export interface EntityRemapOptions {
+  readonly missing?: 'identity' | 'error';
+}
+
 /**
  * Classify a schema field type to determine whether it carries entity references
  * and whether it's a scalar or array form. Uses reflection metadata (arrayMeta)
@@ -88,10 +92,20 @@ export function remapEntityFieldValue(
  */
 export function createEntityRemap(
   mapping: Uint32Array | readonly number[],
+  options: EntityRemapOptions = {},
 ): (entity: number) => number {
   return (entity: number): number => {
-    if (entity < 0 || entity >= mapping.length) return entity;
+    if (entity < 0 || entity >= mapping.length) {
+      if (options.missing === 'error') {
+        throw new Error(`Entity mapping is missing source entity ${entity}.`);
+      }
+      return entity;
+    }
     const mapped = mapping[entity];
-    return mapped !== undefined ? mapped : entity;
+    if (mapped !== undefined) return mapped;
+    if (options.missing === 'error') {
+      throw new Error(`Entity mapping is missing source entity ${entity}.`);
+    }
+    return entity;
   };
 }

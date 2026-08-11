@@ -266,3 +266,20 @@ This is a JSON-safe reflection boundary, not a component registry in remote.
 Remote production has no imports from ECS, render, or runtime and adds no RPC,
 CLI, or MCP method. Camera, picking, lifecycle, assets, and VFX shadow policy
 remain out of scope.
+
+## Simulation read root
+
+Remote discovers `simulation.inspect` through the existing `introspect` and
+`eval` paths. The value is the JSON-safe inspection summary described by the
+[App schema](../app/schema/simulation-inspection.schema.json): participants,
+version/schema owners, baseline fingerprint, trace counts, report domains, and
+tolerance metadata.
+
+Only read/eval consumption is public. Do not add `simulation.restore` or
+`simulation.replay` methods, and never return World, Rapier WASM/native values,
+AudioContext, AudioBuffer, or source nodes. The simulation owner remains in ECS
+and App; Remote only transports a projection.
+
+For a failed read, switch on the structured `code`, then use `expected`, `hint`,
+and `detail`. Repair the owner or fresh target at its source and query again.
+RHI tape replay and game replay are separate producer-owned surfaces.

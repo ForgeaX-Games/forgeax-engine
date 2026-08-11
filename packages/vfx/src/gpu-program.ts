@@ -62,6 +62,7 @@ export interface VfxGpuProgramReflection {
 
 export interface VfxGpuEmitterProgram {
   readonly id: string;
+  readonly module: string;
   readonly capacity: number;
   readonly backend: ParticleEmitterSourceV2['backend'];
   readonly space: ParticleEmitterSourceV2['space'];
@@ -82,5 +83,6 @@ export interface VfxGpuProgram {
 }
 
 export interface VfxGpuEffectAsset extends ParticleEffectAsset {
+  readonly guid: string;
   readonly program: VfxGpuProgram;
 }

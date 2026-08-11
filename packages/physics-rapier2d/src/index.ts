@@ -3,10 +3,24 @@
 // Re-exports the RapierPhysicsWorld2D class, WASM loader, and three-phase tick
 // systems.
 
+export type { Rapier2DCollisionEvent } from './rapier-physics-world-2d';
 export {
   createRapier2DPhysicsWorld,
+  PhysicsCollisionSync2D,
+  PhysicsStepSimulation2D,
+  PhysicsSyncBackend2D,
+  PhysicsWriteback2D,
   RapierPhysicsWorld2D,
   registerPhysicsSystems2D,
 } from './rapier-physics-world-2d';
+export type {
+  Rapier2DKinematicControllerState,
+  Rapier2DSimulationBody,
+  Rapier2DSimulationCollider,
+  Rapier2DSimulationJoint,
+  Rapier2DSimulationParticipantOptions,
+  Rapier2DSimulationState,
+} from './simulation-participant';
+export { createRapier2DSimulationParticipant } from './simulation-participant';
 export type { Rapier2DModule } from './wasm-loader';
 export { loadRapier2D } from './wasm-loader';

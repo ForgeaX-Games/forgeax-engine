@@ -132,6 +132,7 @@ import type {
   Handle,
   MaterialColorParameterSchema,
   MaterialParameter,
+  MaterialPass,
   MaterialRenderState,
   MaterialTextureCoordinates,
   MaterialTextureValue,
@@ -952,6 +953,45 @@ export function sortDispatchByQueue<E extends { readonly queue: number }>(
 ): E[] {
   // Array.prototype.sort is stable per ES2019 spec (V8 7.0+ / Node 12+).
   return entries.slice().sort((a, b) => a.queue - b.queue);
+}
+
+function appendMaterialDispatchEntries(
+  pendingDispatch: DispatchEntry[],
+  passes: readonly MaterialPass[],
+  entity: EntityHandle,
+  materialHandle: number,
+  renderableIndex: number,
+  layer: number,
+  paramSnapshot: Readonly<Record<string, number | number[] | string>> | undefined,
+): void {
+  const matchedPasses = selectPasses(passes, {});
+  for (let pIdx = 0; pIdx < matchedPasses.length; pIdx++) {
+    const pass = matchedPasses[pIdx];
+    if (pass === undefined) continue;
+    const passState = (pass.renderState ?? {}) as MaterialRenderState & {
+      readonly tags?: Record<string, string>;
+      readonly queue?: number;
+      readonly stencilReference?: number;
+    };
+    pendingDispatch.push({
+      entityIndex: entity,
+      materialHandle,
+      renderableIndex,
+      passIndex: pIdx,
+      queue: passState.queue ?? 2000,
+      layer,
+      tags: passState.tags ?? {},
+      renderState: pipelineRenderState(passState),
+      defines: pass.program.moduleSlots,
+      vertexEntry: pass.program.vertexEntry,
+      fragmentEntry: pass.program.fragmentEntry,
+      materialShaderId: runtimeMaterialShaderId(pass.program.module, pass.name),
+      paramSnapshot,
+      ...(passState.stencilReference !== undefined && {
+        stencilReference: passState.stencilReference,
+      }),
+    });
+  }
 }
 
 export interface ExtractedFrame {
@@ -3069,6 +3109,13 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   // (plan-strategy D-3). Entries built per-entity per-pass inside the
   // archetype walk, then sorted by queue at the end.
   let dispatch: DispatchEntry[] = [];
+  // Keep the derived material snapshot and its resolved passes local to this
+  // extraction. Shared handles are immutable inputs for the frame, while
+  // dispatch entries still need to be rebuilt for each entity.
+  const materialSnapshotCache = new Map<
+    number,
+    { readonly snapshot: MaterialSnapshot; readonly passes: readonly MaterialPass[] }
+  >();
 
   // tweak-20260611 M1: MeshRenderer renderable archetype walk routes
   // through one World-owned Query. K-2 sniffing scheme B
@@ -3321,9 +3368,27 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
       // i-th submesh draw.) -- feat-20260608 M5 amend / w11-a.
       const handleRaw = materialCount > 0 ? (materialsView?.[0] ?? 0) : 0;
 
+      const cachedMaterial =
+        handleRaw !== 0 && !hasSpriteRegionOverride && !hasSkin
+          ? materialSnapshotCache.get(handleRaw)
+          : undefined;
+
       let materialSnap: MaterialSnapshot;
 
-      if (handleRaw === 0 || assets === undefined || assets === null) {
+      if (cachedMaterial !== undefined) {
+        materialSnap = cachedMaterial.snapshot;
+        if (isRenderable) {
+          appendMaterialDispatchEntries(
+            pendingDispatch,
+            cachedMaterial.passes,
+            entity,
+            handleRaw,
+            renderables.length,
+            layerVal,
+            materialSnap.paramSnapshot,
+          );
+        }
+      } else if (handleRaw === 0 || assets === undefined || assets === null) {
         // case B: missing-spec sentinel -> mid-grey defaultMaterialSnapshot.
         materialSnap = defaultMaterialSnapshot(handleRaw);
       } else {
@@ -3769,41 +3834,21 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             transparent: firstPassTransparent,
           };
 
+          if (!hasSpriteRegionOverride && !hasSkin) {
+            materialSnapshotCache.set(handleRaw, { snapshot: materialSnap, passes: allPasses });
+          }
+
           // Build dispatch entries from resolved passes.
           if (isRenderable) {
-            const matchedPasses = selectPasses(allPasses, {});
-            for (let pIdx = 0; pIdx < matchedPasses.length; pIdx++) {
-              const pass = matchedPasses[pIdx];
-              if (!pass) continue;
-              // M2.5: stage into pendingDispatch; flushed into the shared
-              // `dispatch[]` at the renderable push site below only when
-              // the entity survives frustum cull. `renderableIndex` is a
-              // placeholder here — the flush rewrites it to the actual slot
-              // (renderables.length at push time).
-              const passState = (pass.renderState ?? {}) as MaterialRenderState & {
-                readonly tags?: Record<string, string>;
-                readonly queue?: number;
-                readonly stencilReference?: number;
-              };
-              pendingDispatch.push({
-                entityIndex: entity,
-                materialHandle: handleRaw,
-                renderableIndex: renderables.length,
-                passIndex: pIdx,
-                queue: passState.queue ?? 2000,
-                layer: layerVal,
-                tags: passState.tags ?? {},
-                renderState: pipelineRenderState(passState),
-                defines: pass.program.moduleSlots,
-                vertexEntry: pass.program.vertexEntry,
-                fragmentEntry: pass.program.fragmentEntry,
-                materialShaderId: runtimeMaterialShaderId(pass.program.module, pass.name),
-                paramSnapshot: paramSnap,
-                ...(passState.stencilReference !== undefined && {
-                  stencilReference: passState.stencilReference,
-                }),
-              });
-            }
+            appendMaterialDispatchEntries(
+              pendingDispatch,
+              allPasses,
+              entity,
+              handleRaw,
+              renderables.length,
+              layerVal,
+              paramSnap,
+            );
           }
         }
       }

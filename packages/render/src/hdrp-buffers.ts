@@ -50,6 +50,7 @@ import {
 import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
 import {
   GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_COPY_SRC,
   GPU_BUFFER_USAGE_STORAGE,
   GPU_BUFFER_USAGE_UNIFORM,
 } from './gpu-usage';
@@ -369,6 +370,8 @@ export function getOrCreateHdrpBuffers(
     : clusterUniformBytes;
   const lightIndexListBytes = storageBuffer ? LIGHT_INDEX_LIST_CAPACITY * 4 : clusterUniformBytes;
   const lightBoundsBytes = MAX_LIGHTS * 6 * 4;
+  const membershipReadbackUsage =
+    runtime.membershipTiming?.mode === 'gpu' ? GPU_BUFFER_USAGE_COPY_SRC : 0;
 
   const lightData = device.createBuffer({
     label: 'hdrp-light-data',
@@ -387,7 +390,8 @@ export function getOrCreateHdrpBuffers(
     size: clusterGridBytes,
     usage:
       (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST,
+      GPU_BUFFER_USAGE_COPY_DST |
+      membershipReadbackUsage,
     mappedAtCreation: false,
   });
   if (!clusterGrid.ok) {
@@ -399,7 +403,8 @@ export function getOrCreateHdrpBuffers(
     size: lightIndexListBytes,
     usage:
       (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST,
+      GPU_BUFFER_USAGE_COPY_DST |
+      membershipReadbackUsage,
     mappedAtCreation: false,
   });
   if (!lightIndexList.ok) {

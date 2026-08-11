@@ -1,4 +1,4 @@
-import { Time, Update } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate } from '@forgeax/engine-ecs';
 // @forgeax/engine-physics-rapier3d — RapierPhysicsWorld3D class and three-phase
 // tick systems (syncBackend / stepSimulation / writeback).
 //
@@ -34,6 +34,13 @@ import {
   registerColliderRemoveListener,
   rigidBodyTypeFromF32,
 } from '@forgeax/engine-physics';
+import type {
+  Rapier3DKinematicControllerState,
+  Rapier3DSimulationBody,
+  Rapier3DSimulationCollider,
+  Rapier3DSimulationJoint,
+  Rapier3DSimulationState,
+} from './simulation-participant';
 import type { Rapier3DModule } from './wasm-loader';
 
 /**
@@ -66,6 +73,12 @@ interface PhysicsCollider3D {
   readonly isSensor: number;
   readonly collisionGroups: number;
   readonly solverGroups: number;
+}
+
+export interface Rapier3DCollisionEvent {
+  readonly type: 'started' | 'stopped';
+  readonly entityA: number;
+  readonly entityB: number;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Rapier types from dynamically loaded module
@@ -127,7 +140,7 @@ function rapierBodyTypeToString(rapier: any, bodyType: number): string {
  */
 export class RapierPhysicsWorld3D implements PhysicsWorld {
   /** Rapier 3D World instance owning all bodies, colliders, and pipeline. */
-  readonly raw: RapierWorld;
+  raw: RapierWorld;
 
   private readonly rapierModule: Rapier3DModule;
 
@@ -138,7 +151,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   private readonly pendingTeleports = new Map<number, { x: number; y: number; z: number }>();
 
   /** Event queue for collision events. */
-  private readonly eventQueue: RapierEventQueue;
+  private eventQueue: RapierEventQueue;
 
   /**
    * Active overlap set per entity, maintained by draining the event queue each
@@ -148,6 +161,10 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * intersections (Rapier emits CollisionEvent for both).
    */
   private readonly collisionPairs = new Map<number, Set<number>>();
+
+  private readonly pendingCollisionEvents: Rapier3DCollisionEvent[] = [];
+
+  private readonly collisionEventHistory: Rapier3DCollisionEvent[] = [];
 
   private currentGravity: { x: number; y: number; z: number };
 
@@ -159,6 +176,8 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Rapier KinematicCharacterController from dynamic module
   readonly kccCache = new Map<number, any>();
+
+  private readonly kccOffsets = new Map<number, number>();
 
   /**
    * ECS World + components wired in by `registerPhysicsSystems`, so
@@ -255,7 +274,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     void deltaTime;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.step
     (this.raw as any).step(this.eventQueue);
-    this.drainCollisionEvents();
+    this.drainRapierCollisionEvents();
   }
 
   /**
@@ -265,16 +284,18 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * pair. This is what populates `CollidingEntities` for sensor pickup + contact
    * queries (the queue is otherwise drained-on-overflow and never observed).
    */
-  private drainCollisionEvents(): void {
+  private drainRapierCollisionEvents(): void {
     this.eventQueue.drainCollisionEvents((handle1: number, handle2: number, started: boolean) => {
       const a = this.colliderHandleToEntity(handle1);
       const b = this.colliderHandleToEntity(handle2);
       if (a === undefined || b === undefined) return;
-      if (started) {
-        this.addPair(a, b);
-      } else {
-        this.removePair(a, b);
-      }
+      const changed = started ? this.addPair(a, b) : this.removePair(a, b);
+      if (!changed) return;
+      this.pushCollisionEvent({
+        type: started ? 'started' : 'stopped',
+        entityA: a,
+        entityB: b,
+      });
     });
   }
 
@@ -292,12 +313,13 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     return body.userData;
   }
 
-  private addPair(a: number, b: number): void {
+  private addPair(a: number, b: number): boolean {
     let setA = this.collisionPairs.get(a);
     if (!setA) {
       setA = new Set<number>();
       this.collisionPairs.set(a, setA);
     }
+    if (setA.has(b)) return false;
     setA.add(b);
     let setB = this.collisionPairs.get(b);
     if (!setB) {
@@ -305,11 +327,22 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       this.collisionPairs.set(b, setB);
     }
     setB.add(a);
+    return true;
   }
 
-  private removePair(a: number, b: number): void {
-    this.collisionPairs.get(a)?.delete(b);
-    this.collisionPairs.get(b)?.delete(a);
+  private removePair(a: number, b: number): boolean {
+    const removedA = this.collisionPairs.get(a)?.delete(b) ?? false;
+    const removedB = this.collisionPairs.get(b)?.delete(a) ?? false;
+    return removedA || removedB;
+  }
+
+  private pushCollisionEvent(event: Rapier3DCollisionEvent): void {
+    const ordered =
+      event.entityA <= event.entityB
+        ? event
+        : { ...event, entityA: event.entityB, entityB: event.entityA };
+    this.pendingCollisionEvents.push(ordered);
+    this.collisionEventHistory.push(ordered);
   }
 
   /**
@@ -325,6 +358,370 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       if (!world.get(handle, collidingComponent).ok) continue;
       world.set(handle, collidingComponent, { entities: [...others] });
     }
+  }
+
+  drainCollisionEvents(): Rapier3DCollisionEvent[] {
+    return this.pendingCollisionEvents.splice(0);
+  }
+
+  getCollisionPairs(): Map<number, Set<number>> {
+    return new Map([...this.collisionPairs].map(([entity, others]) => [entity, new Set(others)]));
+  }
+
+  getCollisionEventHistory(): readonly Rapier3DCollisionEvent[] {
+    return [...this.collisionEventHistory];
+  }
+
+  getPendingTeleports(): readonly [
+    number,
+    { readonly x: number; readonly y: number; readonly z: number },
+  ][] {
+    return [...this.pendingTeleports].map(([entity, target]) => [entity, { ...target }]);
+  }
+
+  getKinematicControllerStates(): readonly Rapier3DKinematicControllerState[] {
+    return [...this.kccOffsets]
+      .sort(([first], [second]) => first - second)
+      .map(([entity, offset]) => ({ entity, offset }));
+  }
+
+  captureSimulationState(
+    entityMapper?: (entity: number) => number | undefined,
+  ): Rapier3DSimulationState {
+    const mapEntity = (entity: number): number => {
+      if (entityMapper === undefined) return entity;
+      const mapped = entityMapper(entity);
+      if (mapped === undefined) throw new Error('simulation entity mapping is missing');
+      return mapped;
+    };
+    const mapEvent = (event: Rapier3DCollisionEvent): Rapier3DCollisionEvent => ({
+      type: event.type,
+      entityA: mapEntity(event.entityA),
+      entityB: mapEntity(event.entityB),
+    });
+    const bodies: Rapier3DSimulationBody[] = [];
+    (this.raw as RapierWorld).forEachRigidBody((body: RapierRigidBody) => {
+      const colliders: Rapier3DSimulationCollider[] = [];
+      for (let index = 0; index < body.numColliders(); index += 1) {
+        const collider = body.collider(index);
+        const shapeType = collider.shapeType();
+        colliders.push({
+          shapeType,
+          translation: { ...collider.translation() },
+          rotation: { ...collider.rotation() },
+          density: collider.density(),
+          friction: collider.friction(),
+          restitution: collider.restitution(),
+          sensor: collider.isSensor(),
+          enabled: collider.isEnabled(),
+          collisionGroups: Number(collider.collisionGroups()),
+          solverGroups: Number(collider.solverGroups()),
+          activeEvents: Number(collider.activeEvents()),
+          activeCollisionTypes: Number(collider.activeCollisionTypes()),
+          ...(shapeType === this.rapierModule.ShapeType.Ball
+            ? { radius: collider.radius() }
+            : shapeType === this.rapierModule.ShapeType.Cuboid
+              ? { halfExtents: { ...collider.halfExtents() } }
+              : shapeType === this.rapierModule.ShapeType.Capsule
+                ? { halfHeight: collider.halfHeight(), radius: collider.radius() }
+                : {}),
+        });
+      }
+      bodies.push({
+        entity: mapEntity(body.userData),
+        bodyType: body.bodyType(),
+        translation: { ...body.translation() },
+        rotation: { ...body.rotation() },
+        nextTranslation: { ...body.nextTranslation() },
+        nextRotation: { ...body.nextRotation() },
+        linearVelocity: { ...body.linvel() },
+        angularVelocity: { ...body.angvel() },
+        gravityScale: body.gravityScale(),
+        linearDamping: body.linearDamping(),
+        angularDamping: body.angularDamping(),
+        ccdEnabled: body.isCcdEnabled(),
+        sleeping: body.isSleeping(),
+        enabled: body.isEnabled(),
+        userForce: { ...body.userForce() },
+        userTorque: { ...body.userTorque() },
+        colliders,
+      });
+    });
+    return {
+      version: 1,
+      gravity: { ...this.currentGravity },
+      bodies,
+      joints: this.captureSimulationJoints(mapEntity),
+      kinematicControllers: this.getKinematicControllerStates().map((controller) => ({
+        ...controller,
+        entity: mapEntity(controller.entity),
+      })),
+      pendingTeleports: this.getPendingTeleports().map(([entity, target]) => [
+        mapEntity(entity),
+        target,
+      ]),
+      collisionPairs: [...this.collisionPairs].map(([entity, others]) => [
+        mapEntity(entity),
+        [...others].map(mapEntity).sort(),
+      ]),
+      collisionEvents: this.getCollisionEventHistory().map(mapEvent),
+      pendingCollisionEvents: this.pendingCollisionEvents.map(mapEvent),
+    };
+  }
+
+  private captureSimulationJoints(
+    entityMapper?: (entity: number) => number,
+  ): Rapier3DSimulationJoint[] {
+    const mapEntity = entityMapper ?? ((entity: number) => entity);
+    const joints: Rapier3DSimulationJoint[] = [];
+    (this.raw as RapierWorld).impulseJoints.forEach((joint: RapierWorld) => {
+      if (!joint?.isValid()) return;
+      joints.push({
+        type: joint.type(),
+        body1Entity: mapEntity(joint.body1().userData),
+        body2Entity: mapEntity(joint.body2().userData),
+        anchor1: { ...joint.anchor1() },
+        anchor2: { ...joint.anchor2() },
+        contactsEnabled: joint.contactsEnabled(),
+      });
+    });
+    return joints;
+  }
+
+  createRestoreCandidate(): RapierPhysicsWorld3D {
+    return new RapierPhysicsWorld3D(this.rapierModule);
+  }
+
+  loadSimulationState(state: Rapier3DSimulationState): void {
+    this.setGravity(new Float32Array([state.gravity.x, state.gravity.y, state.gravity.z]) as never);
+    const byEntity = new Map<number, RapierRigidBody>();
+    for (const bodyState of state.bodies) {
+      const body = (this.raw as RapierWorld).createRigidBody(
+        this.rigidBodyDescFromState(bodyState),
+      ) as RapierRigidBody;
+      body.userData = bodyState.entity;
+      this.registerBody(bodyState.entity, body.handle);
+      byEntity.set(bodyState.entity, body);
+      for (const colliderState of bodyState.colliders) {
+        (this.raw as RapierWorld).createCollider(this.colliderDescFromState(colliderState), body);
+      }
+      body.setTranslation(bodyState.translation, false);
+      body.setRotation(bodyState.rotation, false);
+      const isKinematic =
+        bodyState.bodyType === this.rapierModule.RigidBodyType.KinematicPositionBased ||
+        bodyState.bodyType === this.rapierModule.RigidBodyType.KinematicVelocityBased;
+      if (isKinematic) {
+        body.setNextKinematicTranslation(bodyState.nextTranslation);
+        body.setNextKinematicRotation(bodyState.nextRotation);
+      }
+      body.setLinvel(bodyState.linearVelocity, false);
+      body.setAngvel(bodyState.angularVelocity, false);
+      body.setGravityScale(bodyState.gravityScale, false);
+      body.addForce(bodyState.userForce, false);
+      body.addTorque(bodyState.userTorque, false);
+    }
+    for (const jointState of state.joints) {
+      const body1 = byEntity.get(jointState.body1Entity);
+      const body2 = byEntity.get(jointState.body2Entity);
+      if (!body1 || !body2) throw new Error('joint body mapping is missing');
+      const joint = (this.raw as RapierWorld).createImpulseJoint(
+        this.jointDataFromState(jointState),
+        body1,
+        body2,
+        true,
+      );
+      joint.setContactsEnabled(jointState.contactsEnabled);
+    }
+    for (const controllerState of state.kinematicControllers) {
+      if (!byEntity.has(controllerState.entity)) {
+        throw new Error('kinematic controller body mapping is missing');
+      }
+      this.ensureKcc(controllerState.entity, controllerState.offset);
+    }
+    for (const [entity, target] of state.pendingTeleports)
+      this.pendingTeleports.set(entity, { ...target });
+    for (const [entity, others] of state.collisionPairs) {
+      this.collisionPairs.set(entity, new Set(others));
+    }
+    this.collisionEventHistory.push(...(state.collisionEvents as Rapier3DCollisionEvent[]));
+    this.pendingCollisionEvents.push(...(state.pendingCollisionEvents as Rapier3DCollisionEvent[]));
+  }
+
+  private rigidBodyDescFromState(state: Rapier3DSimulationBody): RapierWorld {
+    const RAPIER = this.rapierModule;
+    const factories = new Map<number, () => RapierWorld>([
+      [RAPIER.RigidBodyType.Dynamic, () => RAPIER.RigidBodyDesc.dynamic()],
+      [RAPIER.RigidBodyType.Fixed, () => RAPIER.RigidBodyDesc.fixed()],
+      [
+        RAPIER.RigidBodyType.KinematicPositionBased,
+        () => RAPIER.RigidBodyDesc.kinematicPositionBased(),
+      ],
+      [
+        RAPIER.RigidBodyType.KinematicVelocityBased,
+        () => RAPIER.RigidBodyDesc.kinematicVelocityBased(),
+      ],
+    ]);
+    const factory = factories.get(state.bodyType);
+    if (!factory) throw new Error('unsupported body type');
+    return factory()
+      .setTranslation(state.translation.x, state.translation.y, state.translation.z)
+      .setRotation(state.rotation)
+      .setLinvel(state.linearVelocity.x, state.linearVelocity.y, state.linearVelocity.z)
+      .setAngvel(state.angularVelocity.x, state.angularVelocity.y, state.angularVelocity.z)
+      .setGravityScale(state.gravityScale)
+      .setLinearDamping(state.linearDamping)
+      .setAngularDamping(state.angularDamping)
+      .setCcdEnabled(state.ccdEnabled)
+      .setSleeping(state.sleeping)
+      .setEnabled(state.enabled);
+  }
+
+  private colliderDescFromState(state: Rapier3DSimulationCollider): RapierWorld {
+    const RAPIER = this.rapierModule;
+    const halfExtents = state.halfExtents;
+    const desc =
+      state.shapeType === RAPIER.ShapeType.Ball
+        ? RAPIER.ColliderDesc.ball(state.radius)
+        : state.shapeType === RAPIER.ShapeType.Cuboid && halfExtents !== undefined
+          ? RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+          : state.shapeType === RAPIER.ShapeType.Capsule
+            ? RAPIER.ColliderDesc.capsule(state.halfHeight, state.radius)
+            : undefined;
+    if (!desc) throw new Error('unsupported collider shape');
+    return desc
+      .setTranslation(state.translation.x, state.translation.y, state.translation.z)
+      .setRotation(state.rotation)
+      .setDensity(state.density)
+      .setFriction(state.friction)
+      .setRestitution(state.restitution)
+      .setSensor(state.sensor)
+      .setEnabled(state.enabled)
+      .setCollisionGroups(state.collisionGroups)
+      .setSolverGroups(state.solverGroups)
+      .setActiveEvents(state.activeEvents)
+      .setActiveCollisionTypes(state.activeCollisionTypes);
+  }
+
+  private jointDataFromState(state: Rapier3DSimulationJoint): RapierWorld {
+    const RAPIER = this.rapierModule;
+    if (state.type === RAPIER.JointType.Revolute) {
+      return RAPIER.JointData.revolute(state.anchor1, state.anchor2, { x: 0, y: 1, z: 0 });
+    }
+    if (state.type === RAPIER.JointType.Fixed) {
+      return RAPIER.JointData.fixed(state.anchor1, { x: 0, y: 0, z: 0, w: 1 }, state.anchor2, {
+        x: 0,
+        y: 0,
+        z: 0,
+        w: 1,
+      });
+    }
+    throw new Error('unsupported joint type');
+  }
+
+  commitRestoreCandidate(
+    candidate: RapierPhysicsWorld3D,
+    entityMap?: ReadonlyMap<number, number>,
+  ): void {
+    if (entityMap !== undefined) candidate.remapEntities(entityMap);
+    const previousRaw = this.raw;
+    const previousEventQueue = this.eventQueue;
+    this.raw = candidate.raw;
+    this.eventQueue = candidate.eventQueue;
+    this.currentGravity = { ...candidate.currentGravity };
+    this.entityMap.clear();
+    for (const [entity, record] of candidate.entityMap) this.entityMap.set(entity, record);
+    this.pendingTeleports.clear();
+    for (const [entity, target] of candidate.pendingTeleports) {
+      this.pendingTeleports.set(entity, { ...target });
+    }
+    this.collisionPairs.clear();
+    for (const [entity, others] of candidate.collisionPairs) {
+      this.collisionPairs.set(entity, new Set(others));
+    }
+    this.pendingCollisionEvents.splice(
+      0,
+      this.pendingCollisionEvents.length,
+      ...candidate.pendingCollisionEvents,
+    );
+    this.collisionEventHistory.splice(
+      0,
+      this.collisionEventHistory.length,
+      ...candidate.collisionEventHistory,
+    );
+    this.kccCache.clear();
+    for (const [entity, controller] of candidate.kccCache) {
+      this.kccCache.set(entity, controller);
+    }
+    this.kccOffsets.clear();
+    for (const [entity, offset] of candidate.kccOffsets) {
+      this.kccOffsets.set(entity, offset);
+    }
+    if (previousRaw !== this.raw && typeof previousRaw.free === 'function') previousRaw.free();
+    if (previousEventQueue !== this.eventQueue && typeof previousEventQueue.free === 'function') {
+      previousEventQueue.free();
+    }
+  }
+
+  private remapEntities(entityMap: ReadonlyMap<number, number>): void {
+    const remap = (entity: number): number => {
+      const mapped = entityMap.get(entity);
+      if (mapped === undefined) throw new Error('simulation entity mapping is missing');
+      return mapped;
+    };
+    (this.raw as RapierWorld).forEachRigidBody((body: RapierRigidBody) => {
+      body.userData = remap(body.userData);
+    });
+    const entityRecords = [...this.entityMap].map(
+      ([entity, record]) => [remap(entity), record] as const,
+    );
+    this.entityMap.clear();
+    for (const [entity, record] of entityRecords) this.entityMap.set(entity, record);
+
+    const teleports = [...this.pendingTeleports].map(
+      ([entity, target]) => [remap(entity), target] as const,
+    );
+    this.pendingTeleports.clear();
+    for (const [entity, target] of teleports) this.pendingTeleports.set(entity, target);
+
+    const pairs = [...this.collisionPairs].map(
+      ([entity, others]) => [remap(entity), new Set([...others].map(remap))] as const,
+    );
+    this.collisionPairs.clear();
+    for (const [entity, others] of pairs) this.collisionPairs.set(entity, others);
+
+    const remapEvent = (event: Rapier3DCollisionEvent): Rapier3DCollisionEvent => ({
+      ...event,
+      entityA: remap(event.entityA),
+      entityB: remap(event.entityB),
+    });
+    this.pendingCollisionEvents.splice(
+      0,
+      this.pendingCollisionEvents.length,
+      ...this.pendingCollisionEvents.map(remapEvent),
+    );
+    this.collisionEventHistory.splice(
+      0,
+      this.collisionEventHistory.length,
+      ...this.collisionEventHistory.map(remapEvent),
+    );
+
+    const kccOffsets = [...this.kccOffsets].map(
+      ([entity, offset]) => [remap(entity), offset] as const,
+    );
+    this.kccOffsets.clear();
+    for (const [entity, offset] of kccOffsets) this.kccOffsets.set(entity, offset);
+    const kccCache = [...this.kccCache].map(
+      ([entity, controller]) => [remap(entity), controller] as const,
+    );
+    this.kccCache.clear();
+    for (const [entity, controller] of kccCache) this.kccCache.set(entity, controller);
+  }
+
+  dispose(): void {
+    if (typeof this.raw.free === 'function') this.raw.free();
+    if (typeof this.eventQueue.free === 'function') this.eventQueue.free();
+    this.kccCache.clear();
+    this.kccOffsets.clear();
   }
 
   getBodyCount(): number {
@@ -491,6 +888,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCharacterController
     const ctrl = (this.raw as any).createCharacterController(offset);
     this.kccCache.set(entity, ctrl);
+    this.kccOffsets.set(entity, offset);
     return ctrl;
   }
 
@@ -500,6 +898,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    */
   removeKccController(entity: number): void {
     const ctrl = this.kccCache.get(entity);
+    this.kccOffsets.delete(entity);
     if (!ctrl) return;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.removeCharacterController
     (this.raw as any).removeCharacterController(ctrl);
@@ -786,6 +1185,12 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   removeEntity(entity: number): void {
     const record = this.entityMap.get(entity);
     if (!record) return;
+    const ownPairs = [...(this.collisionPairs.get(entity) ?? [])];
+    for (const other of ownPairs) {
+      if (this.removePair(entity, other)) {
+        this.pushCollisionEvent({ type: 'stopped', entityA: entity, entityB: other });
+      }
+    }
     this.removeKccController(entity); // D-3: clear cached KCC before body removal
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.removeRigidBody
     (this.raw as any).removeRigidBody({ handle: record.bodyHandle } as RapierRigidBody);
@@ -931,7 +1336,7 @@ function resolveTransform(): Component | undefined {
 export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_SYNC_BACKEND,
   queries: [],
-  after: ['propagateTransforms'],
+  after: ['propagateTransformsFixed'],
   fn: (world) => {
     const transformComponent = resolveTransform();
     if (transformComponent === undefined) return;
@@ -1169,7 +1574,7 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
 /**
  * `physicsStepSimulation` system token (M2 — full resource-ification, D-4).
  *
- * After physicsSyncBackend — read Time.delta and call pw.step() with dt-gating.
+ * After physicsSyncBackend — read FixedTime.delta and call pw.step() with dt-gating.
  */
 export const PhysicsStepSimulation: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_STEP_SIMULATION,
@@ -1183,7 +1588,7 @@ export const PhysicsStepSimulation: SystemHandle<readonly []> = defineSystem({
       return; // C-2: safe early out
     }
 
-    const dt = world.getResource(Time).delta;
+    const dt = world.getResource(FixedTime).delta;
     if (dt <= 0 || dt > PHYSICS_DT_MAX) return; // D-4: skip abnormal delta
 
     pw.step(dt);
@@ -1276,7 +1681,7 @@ export function registerPhysicsSystems(world: World): void {
     // CharacterController schema defaults until a later registration wires it.
   }
 
-  world.addSystems(Update, PhysicsSet, [
+  world.addSystems(FixedUpdate, PhysicsSet, [
     PhysicsSyncBackend,
     PhysicsStepSimulation,
     PhysicsWriteback,

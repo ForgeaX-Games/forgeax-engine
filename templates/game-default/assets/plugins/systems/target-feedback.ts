@@ -1,5 +1,5 @@
 import { MeshRenderer } from '@forgeax/engine-render';
-import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { inState } from '@forgeax/engine-state';
 import type { GameplayAudio } from '../gameplay-audio';
@@ -13,13 +13,12 @@ import type { WorldScoreTextHandle } from '../world-score-text';
 import type { MatHandle } from '../scene-runtime';
 import { activeScoringTargetEntities, scoringPoints, type ScoringTargetQuery, ScoringTarget } from '../scoring-target';
 import { GameState } from '../gameplay-state';
-import { HitFlash, Projectile } from '../components/gameplay';
+import { HitFlash } from '../components/gameplay';
 import type { TargetRelayHandle } from '../target-relay';
 
 export type TargetFeedbackSystemContext = {
   readonly world: World;
   readonly targetQuery: ScoringTargetQuery;
-  readonly projectileEntities: () => readonly EntityHandle[];
   readonly targetProfile: TargetProfileLoop | undefined;
   readonly onProfileHit?: () => void;
   readonly targetRelay: TargetRelayHandle;
@@ -46,63 +45,52 @@ export function resolveTargetImpactPoints(points: number, impactScale: number): 
   return Math.round(points * Math.max(1, impactScale));
 }
 
-/** Resolves projectile hits and owns the transient HitFlash component lifecycle. */
+/** Apply one contact already admitted by the shared CollidingEntities owner. */
+export function admitTargetImpact(
+  ctx: TargetFeedbackSystemContext,
+  entity: EntityHandle,
+  projectileEntity: EntityHandle,
+  impactScale: number,
+): void {
+  const target = ctx.world.get(entity, ScoringTarget);
+  const transform = ctx.world.get(entity, Transform);
+  if (!target.ok || !transform.ok) return;
+  const fx = transform.value.pos[0] ?? 0;
+  const fy = transform.value.pos[1] ?? 0;
+  const fz = transform.value.pos[2] ?? 0;
+  ctx.onTargetImpact?.(entity, impactScale);
+  const relayWasActive = ctx.targetRelay.snapshot().status === 'active';
+  if (ctx.spriteAtlasLoop?.recordHit(projectileEntity)) ctx.onAtlasHit?.();
+  if (recordTargetProfileHit(ctx.targetProfile, entity)) ctx.onProfileHit?.();
+  const basePoints = scoringPoints(ctx.world, entity);
+  const points = basePoints === undefined
+    ? undefined
+    : resolveTargetImpactPoints(targetProfilePoints(ctx.targetProfile, basePoints), impactScale);
+  if (points !== undefined) {
+    const award = ctx.hitStreak?.recordHit(points) ?? { points, hits: 0, multiplier: 1 };
+    ctx.changeDetection.recordHit(entity, award.points);
+    ctx.damageTarget(entity, award.points);
+    ctx.spawnPopup(`+${award.points}`, fx, fy + 0.8, fz);
+    if (ctx.worldScoreText?.snapshot().fontSource === 'ttf-plugin' && ctx.spriteAtlasLoop?.active !== true) ctx.onFontScore?.();
+    ctx.onVideoHit?.();
+    ctx.onFbxHit?.(entity);
+    ctx.gameplayAudio?.triggerHit();
+    ctx.vfxHitLoop.trigger();
+  }
+  if (relayWasActive && ctx.targetRelay.recordHit(entity)) ctx.onRelayHit?.();
+  const flash = ctx.world.get(entity, HitFlash);
+  if (!flash.ok || flash.value.remaining <= 0) ctx.triggerFlash(entity);
+}
+
+/** Own the transient HitFlash lifecycle; physical admission lives in projectile-impact. */
 export function installTargetFeedbackSystem(ctx: TargetFeedbackSystemContext): void {
-  const hitRadiusSquared = 0.9 * 0.9;
-  ctx.world.addSystem(Update, {
+  ctx.world.addSystem(FixedUpdate, {
     name: 'game-target-feedback',
     runIf: inState(GameState, 'Play'),
     after: ['game-projectile-simulation'],
     queries: [],
     fn: () => {
-      const dt = ctx.world.getResource(Time).delta;
-      for (const projectileEntity of ctx.projectileEntities()) {
-        const projectileTransform = ctx.world.get(projectileEntity, Transform);
-        const projectile = ctx.world.get(projectileEntity, Projectile);
-        if (!projectileTransform.ok || !projectile.ok) continue;
-        for (const entity of activeScoringTargetEntities(ctx.targetQuery)) {
-          const target = ctx.world.get(entity, ScoringTarget);
-          if (!target.ok || target.value.slot >= 32) continue;
-          const mask = 1 << target.value.slot;
-          if ((projectile.value.hitMask & mask) !== 0) continue;
-          const transform = ctx.world.get(entity, Transform);
-          if (!transform.ok) continue;
-          const fx = transform.value.pos[0] ?? 0;
-          const fy = transform.value.pos[1] ?? 0;
-          const fz = transform.value.pos[2] ?? 0;
-          const dx = (projectileTransform.value.pos[0] ?? 0) - fx;
-          const dy = (projectileTransform.value.pos[1] ?? 0) - fy;
-          const dz = (projectileTransform.value.pos[2] ?? 0) - fz;
-          if (dx * dx + dy * dy + dz * dz >= hitRadiusSquared) continue;
-          const hitMask = projectile.value.hitMask | mask;
-          ctx.world.set(projectileEntity, Projectile, { hitMask });
-          ctx.onTargetImpact?.(entity, projectile.value.impactScale);
-          const relayWasActive = ctx.targetRelay.snapshot().status === 'active';
-          if (ctx.spriteAtlasLoop?.recordHit(projectileEntity)) ctx.onAtlasHit?.();
-          if (recordTargetProfileHit(ctx.targetProfile, entity)) ctx.onProfileHit?.();
-          const basePoints = scoringPoints(ctx.world, entity);
-          const points = basePoints === undefined
-            ? undefined
-            : resolveTargetImpactPoints(
-              targetProfilePoints(ctx.targetProfile, basePoints),
-              projectile.value.impactScale,
-            );
-          if (points !== undefined) {
-            const award = ctx.hitStreak?.recordHit(points) ?? { points, hits: 0, multiplier: 1 };
-            ctx.changeDetection.recordHit(entity, award.points);
-            ctx.damageTarget(entity, award.points);
-            ctx.spawnPopup('+' + award.points, fx, fy + 0.8, fz);
-            if (ctx.worldScoreText?.snapshot().fontSource === 'ttf-plugin' && ctx.spriteAtlasLoop?.active !== true) ctx.onFontScore?.();
-            ctx.onVideoHit?.();
-            ctx.onFbxHit?.(entity);
-            ctx.gameplayAudio?.triggerHit();
-            ctx.vfxHitLoop.trigger();
-          }
-          if (relayWasActive && ctx.targetRelay.recordHit(entity)) ctx.onRelayHit?.();
-          const flash = ctx.world.get(entity, HitFlash);
-          if (!flash.ok || flash.value.remaining <= 0) ctx.triggerFlash(entity);
-        }
-      }
+      const dt = ctx.world.getResource(FixedTime).delta;
       for (const entity of activeScoringTargetEntities(ctx.targetQuery)) {
         const flash = ctx.world.get(entity, HitFlash);
         if (!flash.ok || flash.value.remaining <= 0) continue;

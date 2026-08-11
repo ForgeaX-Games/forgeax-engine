@@ -1,8 +1,7 @@
-import { Update, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedUpdate, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import {
   Collider,
   ColliderShapeValue,
-  CollidingEntities,
   RigidBody,
   RigidBodyTypeValue,
   type PhysicsWorld,
@@ -11,11 +10,8 @@ import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { inState } from '@forgeax/engine-state';
 import type { Handle } from '@forgeax/engine-types';
-import { Projectile } from './components/gameplay';
 import { DamageHazard } from './counterattack';
 import { GameState } from './gameplay-state';
-
-const PROJECTILE_BARRIER_HIT_MASK = 0x80000000;
 
 export const BarrierRoute = defineComponent('GameDefaultBarrierRoute', {
   active: { type: 'bool', default: false },
@@ -65,10 +61,10 @@ export type BarrierRouteSnapshot = {
 export type BarrierRouteHandle = {
   readonly installSystem: (ctx: {
     readonly physics: PhysicsWorld | undefined;
-    readonly projectileEntities: () => readonly EntityHandle[];
     readonly isUnlocked: () => boolean;
     readonly onImpact: (result: BarrierImpactResult, position: readonly [number, number, number]) => void;
   }) => void;
+  readonly admitImpact: (impactScale: number) => BarrierImpactResult;
   readonly reset: () => void;
   readonly snapshot: () => BarrierRouteSnapshot;
   readonly dispose: () => void;
@@ -100,6 +96,7 @@ export function createBarrierRoute(
     retainedMaterials.push(material);
   }
   let physics: PhysicsWorld | undefined;
+  let reportImpact: ((result: BarrierImpactResult, position: readonly [number, number, number]) => void) | undefined;
   let disposed = false;
 
   const state = () => world.get(authored.emitter, BarrierRoute);
@@ -173,14 +170,33 @@ export function createBarrierRoute(
     component: Collider,
     data: { shape: ColliderShapeValue.cuboid, halfExtents: [0.45, 0.8, 0.45], isSensor: true },
   }).unwrap();
-  world.addComponent(authored.emitter, { component: CollidingEntities, data: { entities: [] } }).unwrap();
-  world.addComponent(authored.barrier, { component: CollidingEntities, data: { entities: [] } }).unwrap();
   reset();
+
+  const admitImpact = (impactScale: number): BarrierImpactResult => {
+    const current = state();
+    const result = resolveBarrierImpact({
+      active: current.ok && current.value.active,
+      projectileContact: true,
+      impactScale,
+    });
+    if (!current.ok) return result;
+    if (result === 'ordinary') {
+      world.set(authored.emitter, BarrierRoute, { ordinaryHits: current.value.ordinaryHits + 1 });
+    } else if (result === 'already-open') {
+      world.set(authored.emitter, BarrierRoute, { alreadyOpenHits: current.value.alreadyOpenHits + 1 });
+    } else if (result === 'open') {
+      world.set(authored.emitter, BarrierRoute, { active: false, opens: current.value.opens + 1 });
+      setInactiveProjection();
+    }
+    reportImpact?.(result, position());
+    return result;
+  };
 
   return {
     installSystem: (ctx) => {
       physics = ctx.physics;
-      world.addSystem(Update, {
+      reportImpact = ctx.onImpact;
+      world.addSystem(FixedUpdate, {
         name: 'game-barrier-route',
         runIf: inState(GameState, 'Play'),
         after: ['physicsCollisionSync', 'game-projectile-simulation'],
@@ -194,35 +210,10 @@ export function createBarrierRoute(
             setActiveProjection();
             current = state();
           }
-          if (!current.ok || (!current.value.active && current.value.opens === 0)) return;
-          for (const projectileEntity of ctx.projectileEntities()) {
-            const projectile = world.get(projectileEntity, Projectile);
-            const contacts = world.get(projectileEntity, CollidingEntities);
-            if (!projectile.ok || !contacts.ok || !contacts.value.entities.includes(authored.emitter)) continue;
-            if ((projectile.value.hitMask & PROJECTILE_BARRIER_HIT_MASK) !== 0) continue;
-            world.set(projectileEntity, Projectile, {
-              hitMask: (projectile.value.hitMask | PROJECTILE_BARRIER_HIT_MASK) >>> 0,
-            });
-            const latest = state();
-            if (!latest.ok) continue;
-            const result = resolveBarrierImpact({
-              active: latest.value.active,
-              projectileContact: true,
-              impactScale: projectile.value.impactScale,
-            });
-            if (result === 'ordinary') {
-              world.set(authored.emitter, BarrierRoute, { ordinaryHits: latest.value.ordinaryHits + 1 });
-            } else if (result === 'already-open') {
-              world.set(authored.emitter, BarrierRoute, { alreadyOpenHits: latest.value.alreadyOpenHits + 1 });
-            } else if (result === 'open') {
-              world.set(authored.emitter, BarrierRoute, { active: false, opens: latest.value.opens + 1 });
-              setInactiveProjection();
-            }
-            ctx.onImpact(result, position());
-          }
         },
       }).unwrap();
     },
+    admitImpact,
     reset,
     snapshot,
     dispose: () => {

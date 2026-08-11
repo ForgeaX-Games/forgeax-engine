@@ -73,6 +73,7 @@ import { makeRhiQueue, type RawQueueLike } from './queue';
  * dedicated class.
  */
 const TEXTURE_DESTROYED_MAP: WeakMap<Texture, { destroyed: boolean }> = new WeakMap();
+const QUERY_SET_DESTROYED_MAP: WeakMap<QuerySet, { destroyed: boolean }> = new WeakMap();
 
 /**
  * Minimal shape of a wgpu-wasm or navigator.gpu device handle the TS shim
@@ -237,7 +238,11 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       // promised by the RHI contract instead of entering the command-encoder
       // shim's historical no-op compute pass.
       compute: false,
-      timestampQuery: hasFeature('timestamp-query'),
+      // The current wgpu-wasm target is the WebGL2 fallback. WebGL2 has no
+      // timestamp-query contract, even if a translated feature name appears
+      // in the raw feature set.
+      timestampQuery: false,
+      timestampPeriodNanoseconds: null,
       indirectDrawing: true,
       textureCompressionBc: hasFeature('texture-compression-bc'),
       textureCompressionEtc2: hasFeature('texture-compression-etc2'),
@@ -390,6 +395,19 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       if (typeof rawTex.destroy === 'function') {
         rawTex.destroy();
       }
+    } catch (e) {
+      return webgpuRuntimeError(e);
+    }
+    if (marker !== undefined) marker.destroyed = true;
+    return ok(undefined);
+  }
+
+  destroyQuerySet(querySet: QuerySet): Result<void, RhiError> {
+    const marker = QUERY_SET_DESTROYED_MAP.get(querySet);
+    if (marker?.destroyed) return doubleDestroy('GPU query set has already been destroyed');
+    const rawQuery = querySet as unknown as { destroy?: () => void };
+    try {
+      if (typeof rawQuery.destroy === 'function') rawQuery.destroy();
     } catch (e) {
       return webgpuRuntimeError(e);
     }
@@ -553,7 +571,9 @@ class RhiWgpuDeviceImpl implements RhiDevice {
         }),
       );
     }
-    return this.wrap<QuerySet>(this.raw.createQuerySet, desc);
+    const result = this.wrap<QuerySet>(this.raw.createQuerySet, desc);
+    if (result.ok) QUERY_SET_DESTROYED_MAP.set(result.value, { destroyed: false });
+    return result;
   }
 }
 

@@ -39,8 +39,7 @@ import { flattenPluginSources, runPlugins } from '@forgeax/engine-plugin';
 import type { RendererError } from '@forgeax/engine-render';
 import { CAMERA_PROJECTION_PERSPECTIVE, Camera, type Renderer } from '@forgeax/engine-render';
 import { createDebugDrawOnReady } from '@forgeax/engine-render/internal';
-import type { RhiInstance } from '@forgeax/engine-rhi';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
+import { RhiError, type RhiInstance } from '@forgeax/engine-rhi';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
 import * as engineRuntimeModule from '@forgeax/engine-runtime';
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -67,6 +66,11 @@ import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
 import { attachInputAuto } from './internal/input-attach';
 import { resolveRemoteServeFlag } from './internal/remote-serve-flag';
 import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
+import {
+  createSimulationInspection,
+  registerSimulationParticipants,
+  type SimulationParticipantAssembly,
+} from './internal/simulation-participants';
 import { inputPlugin } from './plugin-factories';
 import type {
   App,
@@ -230,6 +234,9 @@ async function createAppFromCanvas(
   }
   if (opts?.profiler !== undefined) {
     Object.assign(rendererOpts, { profiler: opts.profiler });
+  }
+  if (opts?.membershipTiming !== undefined) {
+    Object.assign(rendererOpts, { membershipTiming: opts.membershipTiming });
   }
   if (opts?.features !== undefined) {
     Object.assign(rendererOpts, { features: opts.features });
@@ -542,6 +549,11 @@ async function createAppFromCanvas(
   // Step 3: new World() -- the canvas form owns world lifetime, in
   // contrast to the assemble form where the host owns it.
   const world = new World(opts?.time !== undefined ? { time: opts.time } : {});
+  const simulationAssembly = registerSimulationParticipants(
+    world,
+    opts?.simulationParticipants ?? [],
+  );
+  if (!simulationAssembly.ok) return err(simulationAssembly.error);
 
   // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
   // plugins consume via pre-injected world resources.
@@ -642,12 +654,16 @@ async function createAppFromCanvas(
     },
   );
 
+  const simulationInspection = createSimulationInspection(world, simulationAssembly.value);
+
   // Step 3.3: Remote eval server auto-start (deferred from Step 2.4 so
   // World is available). Dynamic import keeps @forgeax/engine-app free
   // of static dep on @forgeax/engine-remote. Component reflection crosses
   // this boundary as JSON-safe host data; app does not own any component.
   const remoteHandle = shouldStartRemote
-    ? await startRemoteServer(world, renderer, _debugAdapter, opts?.profiler, executionControl)
+    ? await startRemoteServer(world, renderer, _debugAdapter, opts?.profiler, executionControl, {
+        inspect: simulationInspection,
+      })
     : undefined;
 
   const buildArgs: BuildAppArgs = {
@@ -655,6 +671,7 @@ async function createAppFromCanvas(
     world,
     pluginRegistry: pluginResult.value,
     executionControl,
+    simulationAssembly: simulationAssembly.value,
     ...(inputBackend !== undefined ? { inputBackend } : {}),
     ...(inputHandle !== undefined
       ? {
@@ -876,6 +893,7 @@ async function startRemoteServer(
   debugAdapter: unknown | undefined,
   profiler: import('@forgeax/engine-profiler').Profiler | undefined,
   execution: ExecutionControl,
+  simulation: unknown | undefined,
 ): Promise<{ readonly port: number; close(): Promise<void> } | undefined> {
   try {
     const remoteServerMod = (await import(
@@ -891,6 +909,7 @@ async function startRemoteServer(
         introspection?: readonly unknown[];
         profiler?: unknown;
         execution?: unknown;
+        simulation?: unknown;
       }) => Promise<{
         ok: boolean;
         value?: { port: number; close(): Promise<void> };
@@ -906,6 +925,7 @@ async function startRemoteServer(
       ...(debugAdapter !== undefined ? { debugAdapter } : {}),
       ...(profiler !== undefined ? { profiler } : {}),
       execution,
+      ...(simulation !== undefined ? { simulation } : {}),
     });
     if (serverResult.ok && serverResult.value !== undefined) {
       return { port: serverResult.value.port, close: serverResult.value.close };
@@ -969,8 +989,23 @@ async function createAppFromAssemble(
       }),
     },
   );
+  const simulationAssembly = registerSimulationParticipants(
+    args.world,
+    args.simulationParticipants ?? [],
+  );
+  if (!simulationAssembly.ok) {
+    return err(simulationAssembly.error);
+  }
+  const simulationInspection = createSimulationInspection(args.world, simulationAssembly.value);
   const remoteHandle = shouldStartRemote
-    ? await startRemoteServer(args.world, args.renderer, undefined, args.profiler, executionControl)
+    ? await startRemoteServer(
+        args.world,
+        args.renderer,
+        undefined,
+        args.profiler,
+        executionControl,
+        { inspect: simulationInspection },
+      )
     : undefined;
 
   const buildArgs: BuildAppArgs = {
@@ -978,6 +1013,7 @@ async function createAppFromAssemble(
     world: args.world,
     pluginRegistry: pluginResult.value,
     executionControl,
+    simulationAssembly: simulationAssembly.value,
     ...(remoteHandle !== undefined ? { remoteHandle } : {}),
   };
 
@@ -1056,6 +1092,7 @@ interface BuildAppArgs {
     | undefined;
   readonly profiler?: import('@forgeax/engine-profiler').Profiler;
   readonly executionControl?: import('./execution/control').LocalExecutionControl;
+  readonly simulationAssembly: SimulationParticipantAssembly;
 }
 
 /**
@@ -1081,6 +1118,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     debugDraw,
     remoteHandle,
     profiler,
+    simulationAssembly,
   } = args;
 
   // M2 plugin-system-unify (D-1 / D-4): audio resource injection,
@@ -1210,6 +1248,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   // unsubscribe runs only on stop / device-lost cleanup (charter P3:
   // device-lost is a terminal lifecycle signal, not a transient blip).
   let rendererUnsubscribe: (() => void) | undefined;
+  let resumeAfterSurfaceRestore = false;
 
   function subscribeRendererErrors(): void {
     if (rendererUnsubscribe !== undefined) {
@@ -1256,7 +1295,50 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     renderer,
     world,
     execution,
+    async releaseSurfacePreserveWorld(): Promise<Result<void, RhiError>> {
+      if (loop.getState() === 'running') {
+        const paused = loop.pause();
+        if (!paused.ok) {
+          return err(
+            new RhiError({
+              code: 'rhi-not-available',
+              expected: 'running App pauses before releasing its presentation surface',
+              hint: paused.error.hint,
+            }),
+          );
+        }
+        resumeAfterSurfaceRestore = true;
+        execution.setEngineHealth('idle');
+      }
+      const released = renderer.releaseSurface();
+      if (!released.ok && resumeAfterSurfaceRestore) {
+        loop.resume();
+        resumeAfterSurfaceRestore = false;
+        execution.setEngineHealth('running');
+      }
+      return released.ok ? ok(undefined) : err(released.error);
+    },
+    async restoreSurface(): Promise<Result<void, RhiError>> {
+      const restored = renderer.restoreSurface();
+      if (!restored.ok) return err(restored.error);
+      if (resumeAfterSurfaceRestore) {
+        const resumed = loop.resume();
+        if (!resumed.ok) {
+          return err(
+            new RhiError({
+              code: 'rhi-not-available',
+              expected: 'paused App resumes after restoring its presentation surface',
+              hint: resumed.error.hint,
+            }),
+          );
+        }
+        resumeAfterSurfaceRestore = false;
+        execution.setEngineHealth('running');
+      }
+      return ok(undefined);
+    },
     pluginRegistry: args.pluginRegistry,
+    simulationInspection: createSimulationInspection(world, simulationAssembly),
     ...(inputBackend !== undefined ? { input: inputBackend } : {}),
     ...(audioBackend !== undefined ? { audio: audioBackend } : {}),
     get physics():
@@ -1287,6 +1369,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       // restart -- which will create a NEW App with a NEW listener -- is
       // not double-counted by the renderer's listener registry.
       cleanupFunnel({ reason: 'stop' });
+      simulationAssembly.dispose();
       unsubscribeRendererErrors();
       return r;
     },

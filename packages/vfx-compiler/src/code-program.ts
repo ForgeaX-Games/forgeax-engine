@@ -605,6 +605,7 @@ export interface ParticleCodeProgramReflection {
 
 export interface CookedParticleCodeEmitter {
   readonly id: string;
+  readonly module: string;
   readonly capacity: number;
   readonly backend: ParticleEmitterSourceV2['backend'];
   readonly space: 'local' | 'world';
@@ -836,6 +837,7 @@ async function compileEmitter(
   }
   return ok({
     id: emitter.id,
+    module: moduleId,
     capacity: emitter.capacity,
     backend: emitter.backend,
     space: emitter.space,

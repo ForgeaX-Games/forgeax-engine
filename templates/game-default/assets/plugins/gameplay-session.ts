@@ -23,6 +23,7 @@ import {
   GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN,
   installDefaultGameplayConfig,
   installGameplayCommandCounters,
+  recordGameplayCommand,
 } from './resources/gameplay';
 import { installGameplayInputMap } from './resources/input';
 import { PLAYER_Y } from './scene-runtime';
@@ -37,6 +38,11 @@ import { createRepairCache, type RepairCacheHandle } from './repair-cache';
 import { createEnergyCoreExtraction, type EnergyCoreExtractionHandle } from './energy-core-extraction';
 import { createRewardChoice, type RewardChoiceHandle } from './reward-choice';
 import { createBarrierRoute, type BarrierRouteHandle } from './barrier-route';
+import { createSentinelRangedThreat, type SentinelRangedThreat } from './sentinel-ranged-threat';
+import {
+  readSentinelEncounterReadiness,
+  type SentinelEncounterReadiness,
+} from './sentinel-authorship';
 
 export type GameplaySession = {
   readonly cameraController: CameraController;
@@ -61,6 +67,9 @@ export type GameplaySession = {
   readonly extraction: EnergyCoreExtractionHandle | undefined;
   readonly rewardChoice: RewardChoiceHandle | undefined;
   readonly barrierRoute: BarrierRouteHandle | undefined;
+  readonly sentinel: SentinelRangedThreat | undefined;
+  readonly sentinelReadiness: () => SentinelEncounterReadiness;
+  readonly consumeProjectile: (entity: EntityHandle) => void;
 };
 
 /** Build the one gameplay session that systems consume; no feature state stays in bootstrap. */
@@ -180,8 +189,16 @@ export async function createGameplaySession(
   });
 
   const projectileQuery = world.query({ with: [Projectile, Transform] }).unwrap();
-  const projectileEntities = (): EntityHandle[] => [...projectileQuery].map((row) => row.entity);
+  const projectileEntities = (): EntityHandle[] => [
+    ...new Set([...projectileQuery].map((row) => row.entity)),
+  ];
   installGameplayCommandCounters(world);
+  const consumeProjectile = (entity: EntityHandle): void => {
+    if (!world.get(entity, Projectile).ok) return;
+    projectilePresentation.spriteAtlasLoop?.untrack(entity);
+    world.despawn(entity).unwrap();
+    recordGameplayCommand(world, 'despawned');
+  };
   for (const entity of targets.targetEntities()) {
     const transform = world.get(entity, Transform);
     if (!transform.ok) continue;
@@ -195,6 +212,23 @@ export async function createGameplaySession(
     });
   }
   const physics = world.hasResource('PhysicsWorld') ? world.getResource<PhysicsWorld>('PhysicsWorld') : undefined;
+  const sentinelReadiness = (): SentinelEncounterReadiness => readSentinelEncounterReadiness(
+    targets.sentinel,
+    physics,
+  );
+  const sentinel = targets.player === undefined || !targets.sentinel.available
+    ? undefined
+    : createSentinelRangedThreat({
+        world,
+        entity: targets.sentinel.identity.sentinel,
+        player: targets.player,
+        extraction,
+        readiness: sentinelReadiness,
+        presentation: projectilePresentation,
+        projectileEntities,
+        consumeProjectile,
+        onSpawn: () => recordGameplayCommand(world, 'spawned'),
+      });
   const debugAxes = installDebugAxes({
     world,
     camera,
@@ -228,6 +262,7 @@ export async function createGameplaySession(
     extraction,
     rewardChoice,
     barrierRoute,
+    sentinel,
     changeDetection,
     depthOfField,
     chromaticAberration,
@@ -262,6 +297,7 @@ export async function createGameplaySession(
   const gameplayState = installGameplayState({
     world,
     reset: resetGameplay,
+    onTerminal: () => sentinel?.cleanupHostileProjectiles(),
     onPhaseChange: cameraController.hud.setPhase,
   });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
@@ -289,5 +325,8 @@ export async function createGameplaySession(
     extraction,
     rewardChoice,
     barrierRoute,
+    sentinel,
+    sentinelReadiness,
+    consumeProjectile,
   };
 }

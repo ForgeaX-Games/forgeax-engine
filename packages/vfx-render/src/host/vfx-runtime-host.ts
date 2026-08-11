@@ -6,9 +6,10 @@ import type {
   VfxDataInterfaceProvider,
   VfxDataInterfaceRequirement,
   VfxDataInterfaceResolution,
+  VfxGpuPlayerInspectSnapshot,
+  VfxGpuRuntimeDiagnostic,
 } from '@forgeax/engine-vfx';
 import {
-  createVfxInspectSnapshot,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
   vfxGpuEffectPackLoader,
@@ -40,7 +41,7 @@ export interface VfxRuntimeHostError {
 export interface VfxRuntimeHost {
   readonly feature: ReturnType<typeof gpuParticleRenderFeature>;
   readonly dataInterfaces: VfxDataInterfaceRegistry;
-  inspect(world: World): ReturnType<typeof createVfxInspectSnapshot> | undefined;
+  inspect(world: World): VfxRuntimeHostInspectSnapshot | undefined;
   resolveDataInterfaces(input: {
     readonly requirements: readonly VfxDataInterfaceRequirement[];
     readonly generation: number;
@@ -54,6 +55,12 @@ export interface VfxRuntimeHost {
   }): Result<{ readonly state: 'detached' | 'not-attached' }, VfxRuntimeHostError>;
 }
 
+export interface VfxRuntimeHostInspectSnapshot {
+  readonly generation: number;
+  readonly players: readonly VfxGpuPlayerInspectSnapshot[];
+  readonly diagnostics: readonly VfxGpuRuntimeDiagnostic[];
+}
+
 function failure(
   code: VfxRuntimeHostError['code'],
   expected: string,
@@ -65,20 +72,24 @@ function failure(
 
 export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntimeHost {
   const registries = new WeakSet<AssetRegistry>();
-  const worlds = new WeakMap<World, AssetRegistry>();
+  const worlds = new WeakMap<
+    World,
+    { readonly assets: AssetRegistry; readonly generation: number }
+  >();
+  let nextGeneration = 1;
   const dataInterfaces = createVfxDataInterfaceRegistry(options.providers);
   const feature = gpuParticleRenderFeature({
     camera: options.camera,
     dataInterfaces,
     material: {
       read: (world, guid) => {
-        const asset = worlds.get(world)?.lookup(guid);
+        const asset = worlds.get(world)?.assets.lookup(guid);
         return asset?.kind === 'material' ? (asset as MaterialAsset) : undefined;
       },
     },
     mesh: {
       read: (world, guid) => {
-        const asset = worlds.get(world)?.lookup(guid);
+        const asset = worlds.get(world)?.assets.lookup(guid);
         return asset?.kind === 'mesh' ? asset : undefined;
       },
     },
@@ -87,16 +98,14 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
     feature,
     dataInterfaces,
     inspect: (world) => {
+      const attached = worlds.get(world);
+      if (attached === undefined || !world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY))
+        return undefined;
       const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
-      const intent = runtime.snapshot().at(-1) ?? [...runtime.diagnostics()].at(-1);
-      if (intent === undefined || !('emitter' in intent)) return undefined;
-      return createVfxInspectSnapshot({
-        layoutFingerprint:
-          intent.emitter.reflection.layout?.fingerprint ?? intent.programFingerprint,
-        parameterGeneration: intent.instanceGeneration,
-        patchCount: intent.instancePatchCount,
-        channels: runtime.eventCounters(intent.player),
-        renderers: { topology: intent.emitter.renderers.map((renderer) => renderer.kind) },
+      return Object.freeze({
+        generation: attached.generation,
+        players: runtime.inspectPlayers(),
+        diagnostics: runtime.diagnostics(),
       });
     },
     resolveDataInterfaces: ({ requirements, generation }) =>
@@ -131,7 +140,7 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
           ),
         );
       }
-      worlds.set(world, assets);
+      worlds.set(world, { assets, generation: nextGeneration++ });
       return ok({ state: 'attached' });
     },
     detachWorld: ({ world }) => {

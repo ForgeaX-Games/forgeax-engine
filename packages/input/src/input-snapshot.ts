@@ -698,6 +698,33 @@ export function snapshotFromSample(
     gesture,
     gestureEvents: gestureEvts,
   };
+  (snapshot as unknown as Record<string, unknown>)._simulationInputFacts = {
+    raw: {
+      downKeys: [...heldKeys],
+      upKeys: [...upEdges],
+      downCodes: [...heldCodes],
+      upCodes: [...upCodeEdges],
+      buttons: [...buttons],
+      movementX: sample.movementX,
+      movementY: sample.movementY,
+      mouseX: sample.mouseX,
+      mouseY: sample.mouseY,
+      wheelDelta: sample.wheelDelta,
+      pointerLocked: sample.pointerLocked,
+      gamepads: sample.gamepads,
+      capabilities: sample.capabilities,
+      pointers: sample.pointers,
+      pointerEvents: sample.pointerEvents,
+      virtualAxes: sample.virtualAxes,
+      gestures: sample.gestures,
+      gestureEvents: sample.gestureEvents,
+    },
+    justPressedKeys: [...justPressedKeys],
+    justPressedCodes: [...justPressedCodes],
+    justPressedButtons: [...justPressedButtons],
+    justReleasedButtons: [...justReleasedButtons],
+    actionStates,
+  };
   (snapshot as unknown as Record<string, unknown>)._actionStates = actionStates;
   (snapshot as unknown as Record<string, unknown>)._inputMap = inputMap;
   return Object.freeze(snapshot);

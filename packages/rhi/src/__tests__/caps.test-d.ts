@@ -64,6 +64,7 @@ describe('RhiCaps — field shape', () => {
     type ReadonlyKeys = {
       readonly compute: boolean;
       readonly timestampQuery: boolean;
+      readonly timestampPeriodNanoseconds: number | null;
       readonly indirectDrawing: boolean;
       readonly textureCompressionBc: boolean;
       readonly textureCompressionEtc2: boolean;

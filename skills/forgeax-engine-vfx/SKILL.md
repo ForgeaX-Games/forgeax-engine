@@ -20,7 +20,17 @@ Read [`packages/vfx/README.md`](../../packages/vfx/README.md) for the author ABI
 
 Switch on structured error codes and use `detail` plus `hint`. Unknown source fields fail closed. Batch B accepts executable billboard advanced fields and independent ribbon, trail, and beam topologies. It does not add CPU fallback, runtime compilation, raw author bindings, CPU particle mirrors, gameplay readback, graph authoring, or VFX RPC.
 
-Inspect with `host.inspect(world)` and recover through the owning generation/LKG path. For asset changes, run `node scripts/asset-cook-contract.mjs`; a package-local scripts path is invalid. Verify with:
+For editor/tool inspection, narrow registry payloads with `isVfxGpuEffectAsset`
+and project them through `describeVfxGpuEffect`. The immutable descriptor owns
+the emitter tree, timeline, dependencies and executable/partial/unavailable
+capability truth without exposing compiler objects or raw WGSL bytes.
+
+Inspect runtime state with `host.inspect(world)`. The aggregate is keyed by host
+generation, player handle, asset GUID and emitter ID; do not collapse it back to
+one latest intent or treat a realm-local handle as cross-World identity. Recover
+through the owning generation/LKG path. For asset changes, run
+`node scripts/asset-cook-contract.mjs`; a package-local scripts path is invalid.
+Verify with:
 
 ```sh
 pnpm --filter @forgeax/hello-boss-lightning smoke:browser

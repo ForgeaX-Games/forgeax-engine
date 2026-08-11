@@ -39,6 +39,17 @@ async function main() {
 
   // Create a minimal in-process World stand-in for eval context.
   const worldStub = {
+    simulationInspection() {
+      return {
+        formatVersion: 1,
+        recordOwner: '@forgeax/engine-ecs',
+        schemaOwner: '@forgeax/engine-ecs',
+        baselineFingerprint: 'simulation-v1:remote-e2e',
+        participants: [],
+        trace: { recordTick: 0, sampleCount: 0 },
+        report: { verdict: 'match', entries: [] },
+      };
+    },
     spawn() {
       return { ok: true, value: 1 };
     },
@@ -49,6 +60,7 @@ async function main() {
       return { ok: true };
     },
   };
+  const simulationRoot = { inspect: () => worldStub.simulationInspection() };
 
   const tmpRoot = await mkdtemp(join(tmpdir(), 'remote-e2e-'));
   try {
@@ -56,6 +68,7 @@ async function main() {
       port: 0,
       host: '127.0.0.1',
       world: worldStub,
+      simulation: simulationRoot,
     });
     if (!serverResult.ok) {
       console.error('e2e-cli: startServer failed:', serverResult.error);
@@ -97,7 +110,18 @@ async function main() {
         }
       }
 
-      // Case 3: script-syntax-error surfaces as structured error.
+      // Case 3: read-only simulation inspection travels through the existing eval path.
+      {
+        try {
+          const v = await client.eval('simulation.inspect()');
+          const ok = v?.formatVersion === 1 && v?.recordOwner === '@forgeax/engine-ecs';
+          logCase('simulation-inspection-read', ok, { value: v });
+        } catch (e) {
+          logCase('simulation-inspection-read', false, { error: e?.message ?? String(e) });
+        }
+      }
+
+      // Case 4: script-syntax-error surfaces as structured error.
       {
         try {
           await client.eval('world.}{');
@@ -108,7 +132,7 @@ async function main() {
         }
       }
 
-      // Case 4: script-runtime-error surfaces as structured error.
+      // Case 5: script-runtime-error surfaces as structured error.
       {
         try {
           await client.eval('world.nonExistentMethod()');

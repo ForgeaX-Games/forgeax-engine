@@ -36,6 +36,7 @@ export interface GameplayStateHandle {
 export interface GameplayStateContext {
   world: World;
   reset: () => void;
+  onTerminal?: () => void;
   onPhaseChange?: (phase: GameplayPhase) => void;
 }
 
@@ -67,10 +68,12 @@ export function installGameplayState(ctx: GameplayStateContext): GameplayStateHa
   ctx.onPhaseChange?.('Play');
   addOnEnter(GameState, 'Play', () => ctx.onPhaseChange?.('Play'));
   addOnEnter(GameState, 'Victory', () => {
+    ctx.onTerminal?.();
     patchWitness({ victoryTransitions: witness().victoryTransitions + 1 });
     ctx.onPhaseChange?.('Victory');
   });
   addOnEnter(GameState, 'Defeat', () => {
+    ctx.onTerminal?.();
     patchWitness({ defeatTransitions: witness().defeatTransitions + 1 });
     ctx.onPhaseChange?.('Defeat');
   });

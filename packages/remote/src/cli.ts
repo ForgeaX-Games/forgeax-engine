@@ -78,6 +78,7 @@ export const FORGEAX_CLI_SPEC: SubcommandSpec = defineSubcommand({
     'eval is full read/write access to the live world/renderer/assets/debugAdapter; the only security boundary is whether the host started the server.',
     'Plugin discovery via PATH-prefix removed in M2 (routing layer deletion).',
     'See also: packages/remote/README.md (eval API, live roots, security model) + AI User Charter.',
+    'Simulation inspection is read-only through eval; restore and replay are not Remote or CLI actions.',
   ],
 });
 

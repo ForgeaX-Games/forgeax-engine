@@ -3220,11 +3220,8 @@
       "evidence": [
         "packages/vfx-compiler/README.md",
         "packages/vfx-compiler/src/index.ts",
-        "packages/vfx-compiler/src/cook.ts",
-        "packages/vfx-compiler/src/importer.ts",
-        "packages/vfx-compiler/src/__tests__/cook-determinism.property.test.ts",
-        "packages/vfx-compiler/src/__tests__/importer-contract.integration.test.ts",
-        "packages/vfx-compiler/src/__tests__/backend-policy.unit.test.ts",
+        "packages/vfx-compiler/src/code-program.ts",
+        "packages/vfx-compiler/src/__tests__/code-program.integration.test.ts",
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
         "apps/hello/boss-lightning/vite.config.ts",

@@ -48,6 +48,7 @@ export {
 export type {
   VfxRuntimeHost,
   VfxRuntimeHostError,
+  VfxRuntimeHostInspectSnapshot,
   VfxRuntimeHostOptions,
 } from './host/vfx-runtime-host.js';
 export { createVfxRuntimeHost } from './host/vfx-runtime-host.js';

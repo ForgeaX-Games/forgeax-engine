@@ -111,7 +111,7 @@ export function installHud(opts: {
     if (mission) mission.textContent = currentPhase === 'Victory'
       ? `Victory · Final score ${currentScore} · R to replay`
       : currentPhase === 'Defeat'
-        ? `Defeat · BouncyBall counterattack · R to replay`
+        ? `Defeat · incoming attack · R to replay`
       : currentPhase === 'Reset'
         ? 'Replay reset · returning to Play'
         : currentScore < GAME_DEFAULT_TARGET_PROFILE_UNLOCK_SCORE

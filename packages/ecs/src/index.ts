@@ -240,6 +240,13 @@ export {
   TimeConfigInvalidError,
   TimeDeltaInvalidError,
 } from './errors';
+export {
+  createSimulationError,
+  type SimulationError,
+  type SimulationErrorCode,
+  type SimulationErrorDetailMap,
+  type SimulationErrorFor,
+} from './errors/simulation-errors';
 export type {
   KernelDispatchFailure,
   KernelDispatchResult,
@@ -646,7 +653,52 @@ export {
 // ────────────────────────────────────────────────────────────────────────────
 
 export { ENTITY_MAX_GENERATION, ENTITY_MAX_INDEX, ENTITY_NULL_RAW } from './entity-handle';
-
+export type { RecoverableResourceDescriptor } from './resource';
+export { defineRecoverableResource } from './resource';
+export { simulationCompare } from './simulation/compare';
+export { SimulationParticipantRegistry } from './simulation/coordinator';
+// Public simulation seam: record, restore, trace, and reports share one ECS owner.
+export {
+  createSimulationRecordV1,
+  simulationRecordFingerprint,
+  validateSimulationRecordV1,
+} from './simulation/record';
+export {
+  createSimulationTrace,
+  replaySimulationTrace,
+  type SimulationTrace,
+  type SimulationTraceRecorder,
+  validateSimulationTrace,
+} from './simulation/trace';
+export type {
+  SimulationClockProjection,
+  SimulationComparisonDomain,
+  SimulationComparisonDomainSummary,
+  SimulationComparisonEntry,
+  SimulationComparisonFact,
+  SimulationComparisonInput,
+  SimulationComparisonReport,
+  SimulationComponentProjection,
+  SimulationEntityProjection,
+  SimulationEvidenceReport,
+  SimulationParticipant,
+  SimulationParticipantRecord,
+  SimulationParticipantStage,
+  SimulationRecordContext,
+  SimulationRecordInput,
+  SimulationRecordV1,
+  SimulationResourceProjection,
+  SimulationRestoreContext,
+  SimulationTraceSample,
+  SimulationWorldProjection,
+} from './simulation/types';
+export {
+  SIMULATION_COMPARISON_DOMAINS,
+  SIMULATION_ERROR_CODES,
+  SIMULATION_RECORD_FORMAT_VERSION,
+  type SimulationRecordFormatVersion,
+} from './simulation/types';
+export { registerFixedTickHook } from './world-scheduling';
 // ────────────────────────────────────────────────────────────────────────────
 // Externalization (shared projection/remap kernel)
 // ────────────────────────────────────────────────────────────────────────────

@@ -47,6 +47,7 @@ export * from './record/frame-snapshot';
 export * from './record/frame-targets';
 export * from './record/index';
 export * from './record/main-pass-material';
+export * from './record/membership-timing';
 export * from './record/skybox-post-pass';
 export * from './record/view-ubo';
 export * from './render-data';

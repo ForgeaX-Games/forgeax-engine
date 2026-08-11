@@ -11,12 +11,14 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./schema/simulation-inspection.schema.json": "./schema/simulation-inspection.schema.json",
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "schema",
     "src",
     "README.md",
     "LICENSE"

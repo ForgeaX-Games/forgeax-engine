@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schemas/features/deferred-membership-timing/webkit-subset.schema.json",
+  "title": "Deferred membership timing WebKit declared subset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generation",
+    "artifactKind",
+    "evidenceKind",
+    "sourceHead",
+    "corpusId",
+    "subsetOf",
+    "subsetKind",
+    "attempts",
+    "references",
+    "exact"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generation": { "const": 4 },
+    "artifactKind": { "const": "declared-subset" },
+    "evidenceKind": { "const": "real" },
+    "sourceHead": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "corpusId": { "type": "string", "minLength": 1 },
+    "subsetOf": { "const": "deferred-membership-timing-generation-4" },
+    "subsetKind": { "const": "webkit-deferred-membership-control-refusal" },
+    "attempts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/attempt" }
+    },
+    "references": { "const": [] },
+    "exact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topLevel",
+        "nested",
+        "acceptedGpu",
+        "acceptedControl",
+        "refused",
+        "acceptedGpuByLights",
+        "referencesByKind"
+      ],
+      "properties": {
+        "topLevel": { "const": 2 },
+        "nested": { "const": 0 },
+        "acceptedGpu": { "const": 0 },
+        "acceptedControl": { "const": 1 },
+        "refused": { "const": 1 },
+        "acceptedGpuByLights": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["32", "64", "128", "256"],
+          "properties": {
+            "32": { "const": 0 },
+            "64": { "const": 0 },
+            "128": { "const": 0 },
+            "256": { "const": 0 }
+          }
+        },
+        "referencesByKind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu-membership", "timing-omitted-pixel"],
+          "properties": { "cpu-membership": { "const": 0 }, "timing-omitted-pixel": { "const": 0 } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptId",
+        "route",
+        "lights",
+        "expectedStatus",
+        "expectedProducer",
+        "expectedReason"
+      ],
+      "properties": {
+        "attemptId": { "type": "string", "minLength": 1 },
+        "route": { "enum": ["webkit-cpu-control", "webkit-gpu-refused"] },
+        "lights": { "const": 128 },
+        "expectedStatus": { "enum": ["accepted-control", "refused"] },
+        "expectedProducer": { "const": "cpu" },
+        "expectedReason": {
+          "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }]
+        }
+      }
+    }
+  }
+}

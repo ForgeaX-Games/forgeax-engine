@@ -137,7 +137,25 @@ export {
   installGamePluginProducers,
   loadGamePluginModules,
 } from './game-plugins';
+export type {
+  SimulationInspectionSummary,
+  SimulationParticipantAssembly,
+  SimulationParticipantInspection,
+} from './internal/simulation-participants';
 export { inputPlugin } from './plugin-factories';
+export type {
+  SimulationInspectionError,
+  SimulationInspectionManifest,
+  SimulationInspectionManifestParticipant,
+  SimulationManifestInvalidError,
+} from './simulation-manifest';
+export {
+  SIMULATION_INSPECTION_ERROR_FIELDS,
+  SIMULATION_INSPECTION_MANIFEST_VERSION,
+  SIMULATION_INSPECTION_RECORD_OWNER,
+  SIMULATION_INSPECTION_SCHEMA_OWNER,
+  validateSimulationInspectionManifest,
+} from './simulation-manifest';
 
 import {
   isLoadGameError,

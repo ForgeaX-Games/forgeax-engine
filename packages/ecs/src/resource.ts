@@ -20,6 +20,24 @@ export interface ResourceStore {
   readonly entries: Map<string, ResourceEntry>;
 }
 
+export interface RecoverableResourceDescriptor<T = unknown> {
+  readonly key: string;
+  readonly classification: 'recoverable';
+  readonly schemaFingerprint: string;
+  readonly clone: (value: T) => T;
+}
+
+export function defineRecoverableResource<T = unknown>(
+  key: string,
+  descriptor: Omit<RecoverableResourceDescriptor<T>, 'key' | 'classification'>,
+): RecoverableResourceDescriptor<T> {
+  if (key.length === 0) throw new Error('Recoverable resource key must not be empty.');
+  if (descriptor.schemaFingerprint.length === 0) {
+    throw new Error(`Recoverable resource '${key}' requires a schema fingerprint.`);
+  }
+  return Object.freeze({ key, classification: 'recoverable' as const, ...descriptor });
+}
+
 /** Create a fresh resource store. */
 export function createResourceStore(): ResourceStore {
   return { entries: new Map() };

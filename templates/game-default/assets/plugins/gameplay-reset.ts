@@ -44,6 +44,7 @@ import type { RepairCacheHandle } from './repair-cache';
 import type { EnergyCoreExtractionHandle } from './energy-core-extraction';
 import type { RewardChoiceHandle } from './reward-choice';
 import type { BarrierRouteHandle } from './barrier-route';
+import type { SentinelRangedThreat } from './sentinel-ranged-threat';
 
 type ResetGameplayArgs = {
   readonly world: World;
@@ -69,6 +70,7 @@ type ResetGameplayArgs = {
   readonly extraction: EnergyCoreExtractionHandle | undefined;
   readonly rewardChoice: RewardChoiceHandle | undefined;
   readonly barrierRoute: BarrierRouteHandle | undefined;
+  readonly sentinel: SentinelRangedThreat | undefined;
   readonly depthOfField: DepthOfFieldHandle;
   readonly chromaticAberration: ChromaticAberrationHandle;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
@@ -138,6 +140,7 @@ export function createGameplayReset(args: ResetGameplayArgs): () => void {
     args.barrierRoute?.reset();
     args.visibilityLoop.reset();
     args.targetHealth.reset();
+    args.sentinel?.reset();
     args.depthOfField.reset();
     args.chromaticAberration.reset();
     args.worldScoreText?.reset();

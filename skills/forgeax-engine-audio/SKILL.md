@@ -89,3 +89,14 @@ Inspect decode failure through `backend.getState().lastError` or `app.execution.
 | Host decode/cache/node implementation | [`packages/audio-webaudio/README.md`](../../packages/audio-webaudio/README.md) |
 | App execution selection and report | [`forgeax-engine-app`](../forgeax-engine-app/SKILL.md) |
 | Asset GUID loading | [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md) |
+
+## Simulation participant
+
+Use the realm-neutral audio participant for portable intent/state evidence. ECS
+owns `record`, `restore`, fixed-tick `trace`, semantic `report`, numeric
+`tolerance`, and closed `error` values. The Host consumer still owns
+`AudioContext`, `AudioBuffer`, source nodes, and cleanup.
+
+Expose only the inspection summary through App, Preview, or Remote. Diagnose by
+`code`/`expected`/`hint`/`detail`, then retry with a fresh target. This is not an
+RHI tape or game replay surface.

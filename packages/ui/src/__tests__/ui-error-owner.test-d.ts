@@ -1,6 +1,7 @@
 import type { ImportDiagnostic } from '@forgeax/engine-types';
 import { expectTypeOf, test } from 'vitest';
-import type { UiError, UiErrorCode } from '../index.js';
+import { uiError } from '../errors.js';
+import type { UiError, UiErrorCode, UiResult } from '../index.js';
 
 type ExpectedUiErrorCode =
   | 'invalid-environment'
@@ -20,6 +21,9 @@ type ExpectedUiErrorCode =
 
 expectTypeOf<UiErrorCode>().toEqualTypeOf<ExpectedUiErrorCode>();
 expectTypeOf<UiErrorCode>().toEqualTypeOf<UiError['code']>();
+expectTypeOf(uiError).parameter(0).toEqualTypeOf<UiErrorCode>();
+expectTypeOf(uiError).parameter(1).toEqualTypeOf<string>();
+expectTypeOf(uiError).returns.toEqualTypeOf<UiResult<never>>();
 
 test('rejects a code outside the exact public vocabulary', () => {
   // @ts-expect-error Unknown UI error codes are not assignable.

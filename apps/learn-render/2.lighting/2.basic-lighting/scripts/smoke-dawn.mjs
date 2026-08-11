@@ -41,6 +41,7 @@ const FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM =
 const FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET =
   process.env.FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET ?? '';
 const FALSIFY_MATERIAL_METALLIC_CHANNEL = process.env.FALSIFY_MATERIAL_METALLIC_CHANNEL ?? '';
+const FALSIFY_MATERIAL_ROUGHNESS_CHANNEL = process.env.FALSIFY_MATERIAL_ROUGHNESS_CHANNEL ?? '';
 const FALSIFY_MATERIAL_EMISSIVE = process.env.FALSIFY_MATERIAL_EMISSIVE ?? '';
 const FALSIFY_MATERIAL_EMISSIVE_INTENSITY = process.env.FALSIFY_MATERIAL_EMISSIVE_INTENSITY ?? '';
 const FALSIFY_MATERIAL_EMISSIVE_TEXTURE = process.env.FALSIFY_MATERIAL_EMISSIVE_TEXTURE ?? '';
@@ -147,6 +148,12 @@ if (FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' && FALSIFY_MATERIAL_METALLIC_CHANNE
   );
   process.exit(1);
 }
+if (FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== '' && FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== 'blue') {
+  console.error(
+    `[smoke] FAIL - unsupported FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=${FALSIFY_MATERIAL_ROUGHNESS_CHANNEL}; expected blue`,
+  );
+  process.exit(1);
+}
 if (
   FALSIFY_MATERIAL_METALLIC_CHANNEL !== '' &&
   [
@@ -199,6 +206,59 @@ if (
 ) {
   console.error(
     '[smoke] FAIL - FALSIFY_MATERIAL_METALLIC_CHANNEL cannot be combined with another material or PointLight falsifier',
+  );
+  process.exit(1);
+}
+if (
+  FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== '' &&
+  [
+    FALSIFY_POINT_LIGHT_INTENSITY,
+    FALSIFY_POINT_LIGHT_RANGE,
+    FALSIFY_POINT_LIGHT_COLOR,
+    FALSIFY_POINT_LIGHT_POSITION,
+    FALSIFY_MATERIAL_METALLIC,
+    FALSIFY_MATERIAL_ROUGHNESS,
+    FALSIFY_MATERIAL_BASE_COLOR,
+    FALSIFY_MATERIAL_BASE_COLOR_TEXTURE,
+    FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE,
+    FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER,
+    FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM,
+    FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET,
+    FALSIFY_MATERIAL_METALLIC_CHANNEL,
+    FALSIFY_MATERIAL_EMISSIVE,
+    FALSIFY_MATERIAL_EMISSIVE_INTENSITY,
+    FALSIFY_MATERIAL_EMISSIVE_TEXTURE,
+    FALSIFY_MATERIAL_EMISSIVE_TEXTURE_SAMPLER,
+    FALSIFY_MATERIAL_EMISSIVE_TEXTURE_UV_TRANSFORM,
+    FALSIFY_MATERIAL_EMISSIVE_TEXTURE_UV_SET,
+    FALSIFY_MATERIAL_CLEARCOAT,
+    FALSIFY_MATERIAL_NORMAL_SCALE,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_UV_SET,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_UV_TRANSFORM,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_MAG_FILTER,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_MIN_FILTER,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_MIPMAP_FILTER,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_U,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_V,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_W,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_LOD_MIN_CLAMP,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_LOD_MAX_CLAMP,
+    FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_MAX_ANISOTROPY,
+    FALSIFY_MATERIAL_OCCLUSION_STRENGTH,
+    FALSIFY_MATERIAL_OCCLUSION_TEXTURE_SAMPLER,
+    FALSIFY_MATERIAL_OCCLUSION_TEXTURE_UV_TRANSFORM,
+    FALSIFY_MATERIAL_OCCLUSION_TEXTURE_UV_SET,
+    FALSIFY_MATERIAL_SPECULAR_TINT,
+    FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE,
+    FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_SAMPLER,
+    FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_TRANSFORM,
+    FALSIFY_MATERIAL_SPECULAR_TINT_TEXTURE_UV_SET,
+  ].some((value) => value !== '')
+) {
+  console.error(
+    '[smoke] FAIL - FALSIFY_MATERIAL_ROUGHNESS_CHANNEL cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
@@ -2190,7 +2250,8 @@ const metallicRoughnessTextureHandle = FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTU
   FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER === '' &&
   FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_TRANSFORM === '' &&
   FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET === '' &&
-  FALSIFY_MATERIAL_METALLIC_CHANNEL === ''
+  FALSIFY_MATERIAL_METALLIC_CHANNEL === '' &&
+  FALSIFY_MATERIAL_ROUGHNESS_CHANNEL === ''
   ? undefined
   : unwrapHandle(
       world.allocSharedRef('TextureAsset', {
@@ -2218,7 +2279,9 @@ const metallicRoughnessTextureHandle = FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTU
               0, 255, 0, 255,
               0, 0, 255, 255,
             ])
-            : FALSIFY_MATERIAL_METALLIC_CHANNEL === 'red'
+            : FALSIFY_MATERIAL_ROUGHNESS_CHANNEL === 'blue'
+              ? new Uint8Array([0, 0, 255, 255])
+              : FALSIFY_MATERIAL_METALLIC_CHANNEL === 'red'
               ? new Uint8Array([255, 255, 0, 255])
               : new Uint8Array([0, 0, 255, 255]),
         colorSpace: 'linear',
@@ -2553,7 +2616,7 @@ const standardMaterial = Materials.standard({
                 : {}),
           },
           metallicChannel: FALSIFY_MATERIAL_METALLIC_CHANNEL === 'red' ? 0 : 2,
-          roughnessChannel: 1,
+          roughnessChannel: FALSIFY_MATERIAL_ROUGHNESS_CHANNEL === 'blue' ? 2 : 1,
         }),
     metallic: metallicRoughnessTextureHandle === undefined ? OBJECT_METALLIC : 0.5,
     roughness: OBJECT_ROUGHNESS,
@@ -2884,6 +2947,12 @@ const metallicChannelMaterialWitness =
   cubeCenter[0] > cubeCenter[1] * 1.7 &&
   cubeCenter[1] > cubeCenter[2] * 1.5 &&
   distance(cubeCenter, [0.2039215686, 0.0823529412, 0.0352941176]) > 0.001;
+const roughnessChannelMaterialWitness =
+  FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== '' &&
+  cubeCenter[0] > 0.05 &&
+  cubeCenter[0] > cubeCenter[1] * 1.7 &&
+  cubeCenter[1] > cubeCenter[2] * 1.5 &&
+  distance(cubeCenter, [0.2039215686, 0.0823529412, 0.0352941176]) > 0.001;
 const metallicRoughnessTextureSamplerMaterialWitness =
   FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_SAMPLER !== '' &&
   cubeCenter[0] > 0.05 &&
@@ -3003,6 +3072,8 @@ const algorithmWitness = FALSIFY_MATERIAL_METALLIC === 'metal'
       ? metallicRoughnessTextureMaterialWitness
     : FALSIFY_MATERIAL_METALLIC_CHANNEL !== ''
       ? metallicChannelMaterialWitness
+    : FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== ''
+      ? roughnessChannelMaterialWitness
     : FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_W !== ''
       ? normalTextureAddressModeWMaterialWitness
     : FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
@@ -3083,6 +3154,8 @@ const oracleName = FALSIFY_MATERIAL_METALLIC === 'metal'
       ? 'metallic-roughness-texture-direct-point-light'
     : FALSIFY_MATERIAL_METALLIC_CHANNEL !== ''
       ? 'metallic-channel-direct-point-light'
+    : FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== ''
+      ? 'roughness-channel-direct-point-light'
     : FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_W !== ''
       ? 'normal-texture-address-mode-w-direct-point-light'
     : FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
@@ -3165,6 +3238,8 @@ const pointLightFalsifier = FALSIFY_NO_LIGHT
                 ? 'material-metallic-roughness-texture-blue'
               : FALSIFY_MATERIAL_METALLIC_CHANNEL !== ''
                 ? 'material-metallic-channel-red'
+              : FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== ''
+                ? 'material-roughness-channel-blue'
               : FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_W !== ''
                 ? 'material-normal-texture-address-mode-w-repeat'
               : FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''
@@ -3265,6 +3340,8 @@ if (!algorithmWitness) {
       ? `(e) metallic-roughness texture response rejected cubeCenter=${JSON.stringify(cubeCenter)}; expected the visible blue-metallic/green-roughness profile to differ from the direct PointLight baseline`
       : FALSIFY_MATERIAL_METALLIC_CHANNEL !== ''
         ? `(e) metallic-channel response rejected cubeCenter=${JSON.stringify(cubeCenter)}; expected the red channel-selected metallic profile to differ from the direct PointLight baseline`
+      : FALSIFY_MATERIAL_ROUGHNESS_CHANNEL !== ''
+        ? `(e) roughness-channel response rejected cubeCenter=${JSON.stringify(cubeCenter)}; expected the blue channel-selected roughness profile to differ from the direct PointLight baseline`
       : FALSIFY_MATERIAL_NORMAL_TEXTURE_ADDRESS_MODE_W !== ''
         ? `(e) normal-texture address-mode-w response rejected cubeCenter=${JSON.stringify(cubeCenter)}; expected the direct PointLight lit witness`
       : FALSIFY_MATERIAL_NORMAL_TEXTURE_SAMPLER_LOD_MIN_CLAMP !== ''

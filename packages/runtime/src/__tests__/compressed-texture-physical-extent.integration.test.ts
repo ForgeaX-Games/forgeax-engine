@@ -16,6 +16,7 @@ const caps: RhiCaps = {
   backendKind: 'webgpu',
   compute: true,
   timestampQuery: false,
+  timestampPeriodNanoseconds: null,
   indirectDrawing: false,
   textureCompressionBc: true,
   textureCompressionEtc2: false,

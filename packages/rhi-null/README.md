@@ -36,7 +36,7 @@ The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstan
 |:--|:--|:--|
 | `backendKind` | `'null'` | 4th union member alongside `'webgpu'` / `'wgpu-native'` / `'wgpu-webgl2'` |
 | `compute` | `true` | |
-| `timestampQuery` | `true` | |
+| `timestampQuery` | `false` | Structural backend; GPU timing is refused |
 | `indirectDrawing` | `true` | |
 | `textureCompressionBc` | `false` | headless has no compression hardware (AC-06) |
 | `textureCompressionEtc2` | `false` | headless has no compression hardware (AC-06) |
@@ -52,6 +52,12 @@ The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstan
 | `rg11b10ufloatRenderable` | `true` | |
 | `float32Filterable` | `true` | |
 | `maxColorAttachments` | `8` | >= 4 (HDRP deferred minimum) |
+
+> [!WARNING]
+> RhiNull is deliberately non-timing. Timestamp query creation returns a
+> structured feature error and membership timing must terminate as
+> `timestamp-query-unsupported`; do not turn the structural ledger into fake
+> GPU evidence.
 
 `device.features` returns an empty `ReadonlySet`; `device.limits` returns an empty `Record`. Capability planning reads `caps` booleans, not the feature set.
 

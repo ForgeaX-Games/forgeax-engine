@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/simulation-inspection-v1.json",
+  "title": "ForgeaX Simulation Inspection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "formatVersion",
+    "recordOwner",
+    "schemaOwner",
+    "baselineFingerprint",
+    "participants",
+    "errors",
+    "trace",
+    "report"
+  ],
+  "properties": {
+    "formatVersion": { "const": 1 },
+    "recordOwner": { "const": "@forgeax/engine-ecs" },
+    "schemaOwner": { "const": "@forgeax/engine-ecs" },
+    "baselineFingerprint": { "type": "string", "minLength": 1 },
+    "participants": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/participant" }
+    },
+    "errors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codes", "fields"],
+      "properties": {
+        "codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/errorCode" }
+        },
+        "fields": { "const": ["code", "expected", "hint", "detail"] }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordTick", "sampleCount"],
+      "properties": {
+        "recordTick": { "type": "integer", "minimum": 0 },
+        "sampleCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "domains", "tolerance", "entries"],
+      "properties": {
+        "verdict": { "enum": ["match", "mismatch"] },
+        "domains": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["world", "collision", "audio", "cleanup", "final-invariant"]
+          },
+          "allOf": [
+            { "contains": { "const": "world" } },
+            { "contains": { "const": "collision" } },
+            { "contains": { "const": "audio" } },
+            { "contains": { "const": "cleanup" } },
+            { "contains": { "const": "final-invariant" } }
+          ]
+        },
+        "tolerance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required", "fields"],
+          "properties": {
+            "required": { "const": true },
+            "fields": {
+              "type": "object",
+              "additionalProperties": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/comparisonEntry" }
+        }
+      }
+    },
+    "error": { "$ref": "#/$defs/structuredError" }
+  },
+  "$defs": {
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "schemaFingerprint", "ready"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "schemaFingerprint": { "type": "string", "minLength": 1 },
+        "ready": { "type": "boolean" }
+      }
+    },
+    "errorCode": {
+      "enum": [
+        "simulation-record-invalid",
+        "simulation-state-unsupported",
+        "simulation-resource-invalid",
+        "simulation-entity-unmapped",
+        "simulation-participant-duplicate",
+        "simulation-participant-missing",
+        "simulation-participant-version-mismatch",
+        "simulation-participant-schema-mismatch",
+        "simulation-participant-not-ready",
+        "simulation-participant-prepare-failed",
+        "simulation-trace-invalid",
+        "simulation-compare-invalid",
+        "simulation-target-not-fresh"
+      ]
+    },
+    "structuredError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "expected", "hint", "detail"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "expected": { "type": "string", "minLength": 1 },
+        "hint": { "type": "string", "minLength": 1 },
+        "detail": {}
+      }
+    },
+    "comparisonEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "path", "expected", "actual", "verdict"],
+      "properties": {
+        "domain": {
+          "enum": ["world", "collision", "audio", "cleanup", "final-invariant"]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "expected": {},
+        "actual": {},
+        "tolerance": { "type": "number", "minimum": 0 },
+        "verdict": { "enum": ["match", "mismatch"] },
+        "difference": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

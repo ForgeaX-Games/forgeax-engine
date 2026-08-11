@@ -1,8 +1,8 @@
-// @forgeax/engine-app -- AppError + closed AppErrorCode union (6 members) +
+// @forgeax/engine-app -- AppError + closed AppErrorCode union (12 members) +
 // APP_ERROR_HINTS / APP_EXPECTED + discriminated AppErrorDetail per code.
 //
 // Shape:
-//   - AppErrorCode = closed union 6 members (charter P4 closed-union
+//   - AppErrorCode = closed union 12 members (charter P4 closed-union
 //     exhaustive switch needs no default fallback; tsc strict mode guards
 //     completeness; AGENTS.md "Errors are structured" + AC-07).
 //     Members:
@@ -36,11 +36,9 @@
 //     non-canonical fields like `{ state: 'running' }` on the
 //     'app-already-running' arm.
 //
-//   - APP_ERROR_HINTS / APP_EXPECTED are 6-key Records keyed by AppErrorCode;
-//     bidirectional 6/6 assertion in __tests__/errors-pointer-lock-failed.test.ts
-//     asserts that every code has a non-empty entry on each table (forward) and
-//     that every key is one of the 6 members (reverse). Adding / dropping a
-//     member without updating both tables fails the unit test (AC-07).
+//   - APP_ERROR_HINTS / APP_EXPECTED are 12-key Records keyed by AppErrorCode;
+//     one private policy owner supplies both projections. The focused policy-owner
+//     proof asserts that every code has the exact expected and hint strings.
 //
 // Related: requirements AC-07 / AC-04 / AC-09; plan-strategy section 2 D-3
 // (6-member lock) + D-4 ('app-system-update-failed' detail = { cause,
@@ -54,7 +52,7 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
 
 /**
- * Closed AppErrorCode union (6 members).
+ * Closed AppErrorCode union (12 members).
  *
  * | code | trigger |
  * |:--|:--|
@@ -344,69 +342,79 @@ export const AppError: AppErrorConstructor = AppErrorClass as unknown as AppErro
  * code surfaces. AI users read this as the L2 detail (charter F2 priority
  * text); `.hint` carries the recovery action.
  *
- * 6 keys; bidirectional assertion in `__tests__/errors-pointer-lock-failed.test.ts`
+ * 12 keys; the focused policy-owner proof locks the exact key set and values.
  * locks the count and non-emptiness of every entry.
  */
-export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = {
-  'app-not-started':
-    'state must be "running" or "paused" to accept stop/pause/resume; "idle" / "stopped" terminal sinks reject',
-  'app-already-running':
-    'state must be "idle" or "paused" to start; "running" handles ignore subsequent start() calls',
-  'app-canvas-detached': 'canvas.isConnected === true at createApp(canvas) entry',
-  'app-paused-while-stop':
-    'state must be "running" to stop; paused handles must resume() before stop()',
-  'app-system-update-failed':
-    'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(Update, name) returns Result.ok during cleanup',
-  'app-pointer-lock-failed':
-    'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
-  'app-execution-tier-unavailable':
-    'the explicitly requested execution tier has every required observed capability and the shipped shared evidence gate',
-  'app-execution-bootstrap-failed':
-    'the bootstrap URL imports a module whose default export completes as a BootstrapEntry in the selected Engine Realm',
-  'app-execution-deadline-exceeded':
-    'the execution startup, handshake or frame completes within its configured bounded deadline',
-  'app-execution-kernel-failed':
-    'a shared kernel completes every dispatched shard without leaving a possibly partial World write',
-  'app-execution-stale-world':
-    'every execution message targets the currently active World identity before it can write',
-  'app-execution-rebuild-failed':
-    'explicit rebuild disposes the poisoned World and bootstraps a fresh World identity in the surviving Engine Realm',
-};
+type AppErrorPolicy = { readonly expected: string; readonly hint: string };
 
-/**
- * `hint` table — actionable recovery guidance per code (charter P3 +
- * proposition 3: machine-readable hint > prose; AGENTS.md "Errors are
- * structured").
- *
- * 6 keys; bidirectional assertion in `__tests__/errors-pointer-lock-failed.test.ts`
- * locks the count and non-emptiness of every entry.
- */
-export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = {
-  'app-not-started':
-    'check getState() before calling stop/pause/resume; rebuild the handle via createApp({...}) when the previous one terminated on device-lost',
-  'app-already-running':
-    'call stop() first or audit start() call sites; the second start() is a no-op so state is preserved',
-  'app-canvas-detached':
-    'append the canvas to the document tree before calling createApp(canvas), or use the assemble entry createApp({ renderer, world }) when the host already manages canvas lifetime',
-  'app-paused-while-stop':
-    'call resume() then stop(), or treat stop-while-paused as a host bug and audit the lifecycle',
-  'app-system-update-failed':
-    'inspect detail.cause for the original thrown value (EcsError / RhiError / host system bug); detail.systemName names the offending system when the call site can supply it',
-  'app-pointer-lock-failed':
-    'remain in unlocked state; the next trusted click will automatically retry the lock request. inspect detail.path ("w3c" or "provider") and detail.cause to determine the root cause',
-  'app-execution-tier-unavailable':
-    'inspect detail.missingCapabilities and detail.sharedEvidencePassed; use tier="auto" only when an observed fallback is acceptable',
-  'app-execution-bootstrap-failed':
-    'inspect detail.phase, moduleUrl and cause; export one default BootstrapEntry that creates only realm-local engine state',
-  'app-execution-deadline-exceeded':
-    'inspect detail.phase and timeoutMs; the timed-out Worker has been terminated, so fix startup or frame work before creating a new App',
-  'app-execution-kernel-failed':
-    'do not retry or draw the poisoned World; inspect detail.kernelName and cause, then call app.execution.rebuild()',
-  'app-execution-stale-world':
-    'discard the late message and keep the current World; inspect expectedIdentity, receivedIdentity and messageKind',
-  'app-execution-rebuild-failed':
-    'inspect detail.cause; this App remains stopped, so fix the bootstrap failure or create a new App explicitly',
-};
+const appErrorPolicy = {
+  'app-not-started': {
+    expected:
+      'state must be "running" or "paused" to accept stop/pause/resume; "idle" / "stopped" terminal sinks reject',
+    hint: 'check getState() before calling stop/pause/resume; rebuild the handle via createApp({...}) when the previous one terminated on device-lost',
+  },
+  'app-already-running': {
+    expected:
+      'state must be "idle" or "paused" to start; "running" handles ignore subsequent start() calls',
+    hint: 'call stop() first or audit start() call sites; the second start() is a no-op so state is preserved',
+  },
+  'app-canvas-detached': {
+    expected: 'canvas.isConnected === true at createApp(canvas) entry',
+    hint: 'append the canvas to the document tree before calling createApp(canvas), or use the assemble entry createApp({ renderer, world }) when the host already manages canvas lifetime',
+  },
+  'app-paused-while-stop': {
+    expected: 'state must be "running" to stop; paused handles must resume() before stop()',
+    hint: 'call resume() then stop(), or treat stop-while-paused as a host bug and audit the lifecycle',
+  },
+  'app-system-update-failed': {
+    expected:
+      'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(Update, name) returns Result.ok during cleanup',
+    hint: 'inspect detail.cause for the original thrown value (EcsError / RhiError / host system bug); detail.systemName names the offending system when the call site can supply it',
+  },
+  'app-pointer-lock-failed': {
+    expected:
+      'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
+    hint: 'remain in unlocked state; the next trusted click will automatically retry the lock request. inspect detail.path ("w3c" or "provider") and detail.cause to determine the root cause',
+  },
+  'app-execution-tier-unavailable': {
+    expected:
+      'the explicitly requested execution tier has every required observed capability and the shipped shared evidence gate',
+    hint: 'inspect detail.missingCapabilities and detail.sharedEvidencePassed; use tier="auto" only when an observed fallback is acceptable',
+  },
+  'app-execution-bootstrap-failed': {
+    expected:
+      'the bootstrap URL imports a module whose default export completes as a BootstrapEntry in the selected Engine Realm',
+    hint: 'inspect detail.phase, moduleUrl and cause; export one default BootstrapEntry that creates only realm-local engine state',
+  },
+  'app-execution-deadline-exceeded': {
+    expected:
+      'the execution startup, handshake or frame completes within its configured bounded deadline',
+    hint: 'inspect detail.phase and timeoutMs; the timed-out Worker has been terminated, so fix startup or frame work before creating a new App',
+  },
+  'app-execution-kernel-failed': {
+    expected:
+      'a shared kernel completes every dispatched shard without leaving a possibly partial World write',
+    hint: 'do not retry or draw the poisoned World; inspect detail.kernelName and cause, then call app.execution.rebuild()',
+  },
+  'app-execution-stale-world': {
+    expected:
+      'every execution message targets the currently active World identity before it can write',
+    hint: 'discard the late message and keep the current World; inspect expectedIdentity, receivedIdentity and messageKind',
+  },
+  'app-execution-rebuild-failed': {
+    expected:
+      'explicit rebuild disposes the poisoned World and bootstraps a fresh World identity in the surviving Engine Realm',
+    hint: 'inspect detail.cause; this App remains stopped, so fix the bootstrap failure or create a new App explicitly',
+  },
+} satisfies Record<AppErrorCode, AppErrorPolicy>;
+
+export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = Object.fromEntries(
+  Object.entries(appErrorPolicy).map(([code, policy]) => [code, policy.expected]),
+) as Readonly<Record<AppErrorCode, string>>;
+
+export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = Object.fromEntries(
+  Object.entries(appErrorPolicy).map(([code, policy]) => [code, policy.hint]),
+) as Readonly<Record<AppErrorCode, string>>;
 
 /**
  * Type guard for narrowing `CanvasAppError`-compatible mixed signals to AppError.

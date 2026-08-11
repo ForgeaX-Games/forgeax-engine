@@ -139,6 +139,34 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('render-system-extract consumer migration (w9, AC-07 / AC-15)', () => {
+    it('reuses one frame-local material snapshot for repeated shared handles', () => {
+      const world = new World();
+      spawnCamera(world);
+      const assets = new AssetRegistry(makeMockShaderRegistry());
+      const mesh = registerMesh(world);
+      const material = registerMaterial(world);
+
+      for (let index = 0; index < 64; index++) {
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { ...identity(), pos: [0, 0, -index - 2] },
+            },
+            { component: MeshFilter, data: { assetHandle: mesh } },
+            { component: MeshRenderer, data: { materials: [material] } },
+          )
+          .unwrap();
+      }
+
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
+      expect(frame.renderables).toHaveLength(64);
+      const first = frame.renderables[0]?.material;
+      expect(first).toBeDefined();
+      expect(new Set(frame.renderables.map((renderable) => renderable.material)).size).toBe(1);
+      for (const renderable of frame.renderables) expect(renderable.material).toBe(first);
+    });
+
     it('mesh-walk: RenderableSnapshot.transform.world is the resolved world mat4 (parent x child), zero per-snapshot compose', () => {
       const world = new World();
       world

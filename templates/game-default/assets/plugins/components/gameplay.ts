@@ -6,8 +6,35 @@ export const Projectile = defineComponent('GameDefaultProjectile', {
   velocityX: 'f32',
   velocityY: 'f32',
   velocityZ: 'f32',
+  life: { type: 'f32', default: 1.5 },
   impactScale: { type: 'f32', default: 1 },
-  hitMask: { type: 'u32', default: 0 },
+  source: { type: 'entity' },
+  allegiance: 'u32',
+}, { transient: true });
+
+export const PROJECTILE_ALLEGIANCE_PLAYER = 0;
+export const PROJECTILE_ALLEGIANCE_HOSTILE = 1;
+export type ProjectileAllegiance = 'player' | 'hostile';
+
+export function projectileAllegianceFromValue(value: number): ProjectileAllegiance {
+  return value === PROJECTILE_ALLEGIANCE_HOSTILE ? 'hostile' : 'player';
+}
+
+/** Semantic authored blocker consumed by the shared projectile impact owner. */
+export const ProjectileCover = defineComponent('GameDefaultProjectileCover', {});
+
+/** Fixed-tick behavior state attached to the authored Sentinel. */
+export const Sentinel = defineComponent('GameDefaultSentinel', {
+  mode: 'u32',
+  ticks: 'u32',
+  aimX: 'f32',
+  aimY: 'f32',
+  aimZ: 'f32',
+  shotsFired: 'u32',
+  coverBlocked: 'u32',
+  playerHits: 'u32',
+  shieldBlocks: 'u32',
+  refused: 'u32',
 }, { transient: true });
 
 /** Variable-rate player intent and collision state; Transform remains the pose owner. */

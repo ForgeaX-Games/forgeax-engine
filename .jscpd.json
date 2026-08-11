@@ -739,6 +739,13 @@
     },
     {
       "files": [
+        "packages/physics-rapier2d/src/simulation-participant.ts",
+        "packages/physics-rapier3d/src/simulation-participant.ts"
+      ],
+      "rationale": "feat-20260807-simulation-record-restore-seam M4 follow-up: the 2D and 3D simulation participants intentionally keep the same entity-reference validation walk beside their dimension-specific state DTOs. The walk covers bodies, joints, kinematic controllers, teleports, collision pairs, and pending/history events; extracting it into an ECS generic would hide the backend-owned field map and weaken the single-file participant contract. This is the same dual-implementation symmetry already whitelisted for the Rapier world adapters above."
+    },
+    {
+      "files": [
         "packages/physics-rapier2d/src/rapier-physics-world-2d.ts",
         "packages/runtime/src/systems/advance-animation-player.ts"
       ],

@@ -1,4 +1,4 @@
-import { Update, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedUpdate, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import {
   Collider,
@@ -274,7 +274,7 @@ export function createRewardChoice(
       physics = ctx.physics;
       available = ctx.isAvailable;
       onChange = ctx.onChange;
-      world.addSystem(Update, {
+      world.addSystem(FixedUpdate, {
         name: 'game-reward-choice',
         runIf: inState(GameState, 'Play'),
         after: ['game-energy-core-extraction'],

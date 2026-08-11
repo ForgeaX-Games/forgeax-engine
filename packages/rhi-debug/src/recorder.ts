@@ -26,6 +26,7 @@ import type {
   ComputePipeline,
   ComputePipelineDescriptor,
   PipelineLayoutDescriptor,
+  QuerySet,
   QuerySetDescriptor,
   RenderPipeline,
   RenderPipelineDescriptor,
@@ -2725,6 +2726,10 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           pushEvent(s, { kind: 'destroyBuffer', handleId: hId });
         }
         return res;
+      },
+
+      destroyQuerySet(querySet: QuerySet) {
+        return realDevice.destroyQuerySet(querySet);
       },
 
       destroyTexture(tex: Texture) {

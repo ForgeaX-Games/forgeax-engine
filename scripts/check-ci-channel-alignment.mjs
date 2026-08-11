@@ -103,6 +103,8 @@ const FORBIDDEN_IN_PORTABILITY = [
   'check-shader-',
   'jscpd',
   'dup-check',
+  'simulation.restore',
+  'simulation.replay',
 ];
 
 function extractJobBlock(text, jobName) {

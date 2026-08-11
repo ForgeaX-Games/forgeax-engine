@@ -130,6 +130,23 @@ identity; its kinematic sensor is attached to the host's single `PhysicsWorld`. 
 movement direction but never decides a hit. Each admitted attacker contact removes exactly one heart
 and arms that attacker's 1.2-second cooldown; contact during the window is harmless.
 
+The north-arena Sentinel extends that risk loop without creating another projectile or health family.
+`assets/scene.pack.json` owns the visible Sentinel at local ID 35 and cover pieces 36-37. The first
+real EnergyCore collection wakes a 45-`FixedUpdate` frozen-aim telegraph; after it fires, the existing
+`Projectile` component, collider, CCD motion, lifetime, cleanup, and inspection path carries the distinct
+red/orange hostile shot. `assets/plugins/projectile-impact.ts` is the one contact arbiter: cover wins,
+player shots can reach the charged barrier or active scored targets, hostile shots can reach only the
+player, and every admitted or refused non-source collision consumes the shot exactly once.
+
+Hostile-player contact delegates to `Counterattack.admitDamage`, so Shield, cooldown, hearts, HUD/audio/VFX,
+and typed Defeat retain their existing owners. Ordinary and charged player fire neutralizes the Sentinel
+through the same `TargetHealth.damage → TargetDisabling.disable` route as every scored target. Disabled,
+Victory, and Defeat clear source-keyed hostile shots; the sole `R` transaction restores full Sentinel health,
+dormant cadence/material, both unchanged covers, zero counters, and no projectiles before returning to Play.
+The read-only `game-default.snapshot` reports the authored identities, PhysicsWorld readiness, mode/ticks,
+frozen aim, health, Disabled state, impact counters, and player/hostile projectile counts; no inspection action
+can synthesize wake, contact, damage, score, or terminal state.
+
 `assets/plugins/barrier-route.ts` composes that same risk owner into an authored route. Scene local IDs
 33 and 34 are the visible emitter and energy barrier guarding `EnergyCoreAlpha`. The barrier stays
 dormant until the existing target relay reaches `complete`, then arms without adding another unlock
@@ -186,6 +203,8 @@ pnpm --filter @forgeax/preview smoke:charged-barrier
 pnpm --filter @forgeax/preview smoke:charged-barrier-production
 pnpm --filter @forgeax/preview smoke:mission-progression
 pnpm --filter @forgeax/preview smoke:mission-progression-production
+pnpm --filter @forgeax/preview smoke:sentinel-ranged-threat
+pnpm --filter @forgeax/preview smoke:sentinel-ranged-threat-production
 ```
 
 Both runs use only keyboard/mouse input and the read-only `game-default.snapshot`. They prove a

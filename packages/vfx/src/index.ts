@@ -2,6 +2,18 @@
 
 export type { ParticleEffectAsset, ParticleEmitterDefinition } from '@forgeax/engine-types';
 export type {
+  VfxAuthoringCapabilityDescriptor,
+  VfxAuthoringDependencyDescriptor,
+  VfxAuthoringDescriptor,
+  VfxAuthoringEmitterDescriptor,
+  VfxAuthoringFieldDescriptor,
+  VfxAuthoringNodeDescriptor,
+  VfxAuthoringNodeRole,
+  VfxAuthoringTimelineDescriptor,
+  VfxAuthoringValue,
+} from './authoring-descriptor.js';
+export { describeVfxGpuEffect, isVfxGpuEffectAsset } from './authoring-descriptor.js';
+export type {
   ParticleBoundsSource,
   ParticleChannelOverflowPolicy,
   ParticleChannelSource,
@@ -62,6 +74,8 @@ export type {
 } from './gpu-program.js';
 export { VFX_GPU_PROGRAM_ARTIFACT_KEY, VFX_GPU_PROGRAM_FORMAT } from './gpu-program.js';
 export type {
+  VfxGpuEmitterInspectSnapshot,
+  VfxGpuPlayerInspectSnapshot,
   VfxGpuRuntimeDiagnostic,
   VfxGpuRuntimeOptions,
   VfxGpuTickIntent,

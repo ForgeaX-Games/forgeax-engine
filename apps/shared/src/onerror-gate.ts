@@ -60,6 +60,10 @@ export function onerrorGate(sectionName: string, importSut: () => Promise<unknow
       delete (globalThis as unknown as { __learnRenderErrors?: unknown }).__learnRenderErrors;
     });
 
+    // Headed Chrome Beta on lavapipe can spend several seconds creating the
+    // first WebGPU device after neighboring browser groups close. Keep the
+    // gate's assertion budget above that cold-start cost while retaining a
+    // bounded failure rather than inheriting Vitest's 15s default.
     it('SUT bootstrap fires no SUT-attributable renderer.onError', async () => {
       if (typeof navigator.gpu === 'undefined') {
         throw new Error(
@@ -89,6 +93,6 @@ export function onerrorGate(sectionName: string, importSut: () => Promise<unknow
 
       const sutErrors = errors.filter((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
       expect(sutErrors).toEqual([]);
-    });
+    }, 30_000);
   });
 }

@@ -1,5 +1,62 @@
 import type { Component, ComponentSchema, FieldReflection } from '../component';
 
+export class TimeDeltaInvalidError extends Error {
+  override readonly name = 'TimeDeltaInvalidError';
+  readonly code = 'time-delta-invalid' as const;
+  readonly expected = 'a finite delta greater than or equal to 0';
+  readonly hint = 'Call world.update(deltaSeconds) with a finite non-negative delta.';
+  readonly detail: { readonly received: number };
+
+  constructor(received: number) {
+    super(
+      `Invalid world.update delta: ${received}.\n  expected: a finite delta greater than or equal to 0\n  hint: Call world.update(deltaSeconds) with a finite non-negative delta.`,
+    );
+    this.detail = { received };
+  }
+}
+
+export class TimeConfigInvalidError extends Error {
+  override readonly name = 'TimeConfigInvalidError';
+  readonly code = 'time-config-invalid' as const;
+  readonly expected: string;
+  readonly hint = 'Increase maxDeltaSeconds or decrease maxStepsPerUpdate or fixedDeltaSeconds.';
+  readonly detail: {
+    readonly fixedDeltaSeconds: number;
+    readonly maxStepsPerUpdate: number;
+    readonly maxDeltaSeconds: number;
+  };
+
+  constructor(detail: TimeConfigInvalidError['detail']) {
+    const expected = 'maxDeltaSeconds >= (maxStepsPerUpdate + 1) * fixedDeltaSeconds';
+    super(
+      `Invalid World time policy.\n  expected: ${expected}\n  hint: Increase maxDeltaSeconds or decrease maxStepsPerUpdate or fixedDeltaSeconds.`,
+    );
+    this.expected = expected;
+    this.detail = detail;
+  }
+}
+
+export class ScheduleScopeMismatchError extends Error {
+  override readonly name = 'ScheduleScopeMismatchError';
+  readonly code = 'schedule-scope-mismatch' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: {
+    readonly sourceSchedule: string;
+    readonly targetSchedule: string;
+    readonly reference?: string;
+  };
+
+  constructor(sourceSchedule: string, targetSchedule: string, reference?: string) {
+    const expected = `a reference owned by ${sourceSchedule}`;
+    const hint = `The referenced item belongs to ${targetSchedule}; register and order it in ${sourceSchedule}.`;
+    super(`Schedule scope mismatch.\n  expected: ${expected}\n  hint: ${hint}`);
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { sourceSchedule, targetSchedule, ...(reference ? { reference } : {}) };
+  }
+}
+
 /**
  * Returned when a closed enum field receives a value outside its reflected
  * labels. The write owner runs this before any archetype or column mutation.

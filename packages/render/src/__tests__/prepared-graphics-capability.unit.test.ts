@@ -13,6 +13,7 @@ const supportedCaps: Readonly<RhiCaps> = {
   backendKind: 'null',
   compute: true,
   timestampQuery: false,
+  timestampPeriodNanoseconds: null,
   indirectDrawing: false,
   textureCompressionBc: false,
 } as RhiCaps;

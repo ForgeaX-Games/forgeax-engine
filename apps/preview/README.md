@@ -189,3 +189,16 @@ Branch on `error.code`, then read `expected`, `hint`, and the narrowed `detail`.
 
 Do not parse `message`, silently skip a scenario, mount to `document.body`, add a duplicate UI manager, or use a custom mesh/stand-in to hide an engine asset failure.
 </details>
+
+## Simulation inspection read
+
+Preview consumes `simulation.inspect` as a read-only projection from the App
+owner. The result follows the [simulation inspection schema](../../packages/app/schema/simulation-inspection.schema.json)
+and contains only format/owner metadata, participant readiness, baseline
+fingerprint, trace counts, report domains/tolerance, and structured errors.
+
+Use it to diagnose source/fresh-target agreement and fixed-tick evidence. Do
+not implement restore/replay actions in Preview, pass raw World or native
+physics/audio objects, or use pixels as the simulation oracle. Recover from a
+failure by reading `code`, `expected`, `hint`, and `detail`, then retry the
+owner-level path with a fresh target.

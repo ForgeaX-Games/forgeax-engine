@@ -50,6 +50,30 @@ generic RenderFeature host, prepared graphics resolver, pipeline readiness
 contract, and structured renderer errors; it does not own VFX simulation or
 particle asset authoring.
 
+## Deferred membership timing
+
+Render owns the opt-in `membershipTiming` contract for the real
+`hdrp-cluster-membership` compute pass. App and Runtime only forward the option;
+they do not define a second profiler or reason vocabulary.
+
+| Mode | Work | Result |
+|:--|:--|:--|
+| omitted | No query set, resolve buffer, map, or queue wait | No timing record |
+| `cpu-control` | Existing CPU binner remains the control path | Accepted control record with `gpu: null` |
+| `gpu` | Bounded timestamp query, resolve, async queue completion, and map | GPU ticks plus backend period, or a terminal refusal/error |
+
+> [!IMPORTANT]
+> A GPU request is refused when the backend does not advertise timestamp
+> queries or a positive timestamp period. RhiNull and the wgpu WebGL2 path are
+> intentionally non-timing backends. They never synthesize GPU duration.
+
+The controller timestamps immediately around the existing membership dispatch,
+keeps GPU ticks separate from CPU encode/submit and async readback, and
+terminalizes captures on timeout, submit failure, queue completion failure,
+readback failure, device recovery, or disposal. The closed
+`MembershipTimingReasonCode` union and its exhaustive mapping live in
+[`src/record/membership-timing.ts`](src/record/membership-timing.ts).
+
 > [!IMPORTANT]
 > Render consumes the effective MaterialAsset snapshot produced by extract. Each texture slot carries its own coordinate set and transform into the built-in PBR binding layout; render records do not reinterpret authoring fields or manufacture shader artifacts. The effective `passes` are already validated.
 
@@ -306,6 +330,12 @@ Use `renderer.renderFeatureDiagnostics()` for a read-only snapshot. Call
 switch keeps the feature registration list and rebuilds the active graph.
 The host still uses `renderer.registerPipeline(id, pipeline)` for a full
 pipeline change.
+
+For a temporary presentation-owner handoff, call `renderer.releaseSurface()`.
+It unconfigures the canvas and makes `draw()` fail closed without disposing the
+Renderer, AssetRegistry, or GPU declarations. After the temporary owner is
+gone, `renderer.restoreSurface()` re-enables lazy surface configuration on the
+next draw. Both calls are idempotent; `dispose()` remains the terminal path.
 
 For the complete declaration shape, read
 [`features/types.ts`](src/features/types.ts) and

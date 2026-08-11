@@ -36,6 +36,7 @@ describe('code-first VFX program cook', () => {
     const emitter = result.value.program.emitters.at(0);
     expect(emitter).toBeDefined();
     if (emitter === undefined) return;
+    expect(emitter.module).toBe('sparks.vfx.wgsl');
     expect(emitter.reflection.hooks).toEqual(['vfx_spawn', 'vfx_update']);
     expect(emitter.reflection.entryPoints).toEqual([
       'forgeax_vfx_spawn_main',

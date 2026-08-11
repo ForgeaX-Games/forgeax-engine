@@ -1,4 +1,4 @@
-import { Time, Update, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate, defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { inState } from '@forgeax/engine-state';
 import type { HudHandle } from './hud';
 import { GameState } from './gameplay-state';
@@ -46,7 +46,7 @@ function label(snapshot: Pick<HitStreakSnapshot, 'hits' | 'multiplier' | 'elapse
 
 /** Install expiry on Update; hit awarding remains owned by target feedback. */
 export function installHitStreakSystem(ctx: HitStreakSystemContext): void {
-  ctx.world.addSystem(Update, {
+  ctx.world.addSystem(FixedUpdate, {
     name: 'game-hit-streak',
     runIf: inState(GameState, 'Play'),
     after: ['game-charge-shot'],
@@ -55,7 +55,7 @@ export function installHitStreakSystem(ctx: HitStreakSystemContext): void {
     fn: () => {
       const state = ctx.world.get(ctx.player, HitStreak);
       if (!state.ok || state.value.hits === 0) return;
-      const elapsed = Math.max(0, state.value.elapsed - ctx.world.getResource(Time).delta);
+      const elapsed = Math.max(0, state.value.elapsed - ctx.world.getResource(FixedTime).delta);
       if (elapsed === 0) {
         ctx.world.set(ctx.player, HitStreak, { hits: 0, elapsed: 0, multiplier: 1 });
         ctx.hud.setComboStatus('Combo expired · land another hit', 'expired');

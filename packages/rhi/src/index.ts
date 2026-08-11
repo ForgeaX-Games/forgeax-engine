@@ -827,6 +827,8 @@ export interface RhiCaps {
   readonly compute: boolean;
   /** Whether timestamp queries are supported. */
   readonly timestampQuery: boolean;
+  /** Backend-owned nanoseconds represented by one timestamp tick, or null when unavailable. */
+  readonly timestampPeriodNanoseconds: number | null;
   /** Whether indirect drawing is supported. */
   readonly indirectDrawing: boolean;
   /**
@@ -1414,6 +1416,15 @@ export interface RhiDevice {
    *   }
    */
   destroyBuffer(buf: Buffer): Result<void, RhiError>;
+  /**
+   * Destroy a GPU query set obtained from `createQuerySet`.
+   *
+   * Query sets are device-owned resources even though the WebGPU surface does
+   * not expose them through the Buffer/Texture families. The explicit RHI
+   * seam lets Render release timestamp query sets exactly once after queue
+   * completion, including failure and disposal paths.
+   */
+  destroyQuerySet(querySet: QuerySet): Result<void, RhiError>;
   /**
    * Destroy a GPU texture obtained from `createTexture`.
    *

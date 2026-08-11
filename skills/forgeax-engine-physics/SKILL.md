@@ -116,3 +116,12 @@ app.start();
 - `PhysicsErrorCode` 9 成员闭集（**勿抄**）：`packages/types/src/index.ts`；详见 AGENTS.md §Error model
 - rapier WASM 后端实现：源码 `packages/physics-rapier2d/src/` · `packages/physics-rapier3d/src/`
 - `createApp` 物理 auto-attach 入口：源码 `packages/app/src/create-app.ts`；app 引导见 [`forgeax-engine-app`](../forgeax-engine-app/SKILL.md)
+
+## Simulation participant
+
+Register one ready physics participant with the ECS World when deterministic
+source/fresh-target evidence must include portable physics state. Let ECS own
+the record, restore transaction, trace, report, tolerance, and error contract.
+Keep Rapier handles and native values inside the backend; never expose them to
+App, Preview, or Remote. Recover by switching on the error code and following
+its `expected`, `hint`, and `detail`.

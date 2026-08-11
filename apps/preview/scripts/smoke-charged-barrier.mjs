@@ -4,10 +4,12 @@ import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import { visibleTargetCandidates } from './smoke-visible-target.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const MODE = process.env.FORGEAX_CHARGED_BARRIER_MODE ?? 'dev';
 const PORT = Number.parseInt(process.env.FORGEAX_CHARGED_BARRIER_PORT ?? '5243', 10);
+const CYCLE_COUNT = Number.parseInt(process.env.FORGEAX_CHARGED_BARRIER_CYCLES ?? '2', 10);
 const ARTIFACT_DIR = resolve(process.env.FORGEAX_CHARGED_BARRIER_DIR ?? resolve(ROOT, `.forgeax-debug/charged-barrier-${MODE}`));
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 mkdirSync(ARTIFACT_DIR, { recursive: true });
@@ -29,6 +31,12 @@ const badResponses = [];
 const cycles = [];
 let browser;
 let page;
+const EMITTER_WORLD_POSITION = [-4.2, 0.7, -1.5];
+const RELAY_TARGET_POSITIONS = {
+  BlueBall: [4.5, 0.8, 1.5],
+  RedBox: [3, 0.5, -2],
+  YellowPillar: [2, 0.75, 3.5],
+};
 
 const hudHost = () => page.locator('[data-ui-asset]').filter({ has: page.locator('[data-ui-slot="mission"]') }).first();
 const readScore = async () => Number.parseInt(
@@ -37,9 +45,36 @@ const readScore = async () => Number.parseInt(
 );
 const readSnapshot = async () => {
   const result = await page.evaluate(() => globalThis.__forgeaxPreviewInspection?.read('game-default.snapshot'));
-  if (!result?.ok) throw new Error(`snapshot unavailable: ${JSON.stringify(result)}`);
+  if (!result?.ok) {
+    const context = await page.evaluate(() => ({
+      readyState: document.readyState,
+      url: location.href,
+      hasInspection: globalThis.__forgeaxPreviewInspection !== undefined,
+      reads: globalThis.__forgeaxPreviewInspection?.list?.().reads?.map(({ id }) => id) ?? [],
+    }));
+    throw new Error(`snapshot unavailable after read: ${JSON.stringify({ result, context })}`);
+  }
   return result.value;
 };
+const readRenderEvidence = () => page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence?.snapshot());
+const projectWorld = async (position) => {
+  const evidence = await readRenderEvidence();
+  const camera = evidence?.cameraPosition;
+  const fov = evidence?.cameraPerspectiveFov;
+  if (!Array.isArray(camera) || camera.length !== 3 || typeof fov !== 'number' || !(fov > 0)) return undefined;
+  const dx = position[0] - camera[0];
+  const dy = position[1] - camera[1];
+  const dz = position[2] - camera[2];
+  const pitch = -Math.atan2(13, 9);
+  const sinPitch = Math.sin(pitch);
+  const cosPitch = Math.cos(pitch);
+  const cameraY = cosPitch * dy + sinPitch * dz;
+  const depth = sinPitch * dy - cosPitch * dz;
+  if (!(depth > 0)) return undefined;
+  const focal = 540 / (2 * Math.tan(fov / 2));
+  return [480 + dx * focal / depth, 270 - cameraY * focal / depth];
+};
+const projectEmitter = () => projectWorld(EMITTER_WORLD_POSITION);
 const holdKey = async (key, duration) => {
   await page.keyboard.down(key);
   await page.waitForTimeout(duration);
@@ -63,7 +98,11 @@ const reset = async () => {
     { timeout: 5_000, polling: 50 },
   );
   await page.waitForTimeout(300);
-  return readSnapshot();
+  const snapshot = await readSnapshot();
+  const characterController = await page.evaluate(
+    () => globalThis.__forgeaxGameDefaultRenderEvidence?.characterController?.(),
+  );
+  return { ...snapshot, characterController };
 };
 const screenshot = (name) => page.screenshot({ path: resolve(ARTIFACT_DIR, `${name}.png`) });
 
@@ -118,21 +157,111 @@ async function unlockBarrier(label) {
     await fireAt(point);
     if ((await readSnapshot()).targetRelay.status === 'active') break;
   }
-  const hitRelayTarget = async (points, acceptedBefore) => {
-    for (let pass = 0; pass < 3; pass++) {
-      for (const point of points) {
+  const hitVisibleRelayTarget = async (colors, acceptedBefore, targetName, options = {}) => {
+    const before = await readSnapshot();
+    const targetPosition = RELAY_TARGET_POSITIONS[targetName];
+    const offsets = [[0, 0], [-12, -12], [12, -12], [-12, 12], [12, 12]];
+    const attempted = [];
+    const retryDeadline = Date.now() + 45_000;
+    let noCandidatePasses = 0;
+    let lastSnapshot = before;
+    const witnessHit = (point, snapshot) => {
+      if (snapshot.targetRelay.acceptedHits <= acceptedBefore) {
+        if (snapshot.targetRelay.activeTargetName !== targetName) {
+          throw new Error(`${label} relay target changed without an accepted ${targetName} hit: ${JSON.stringify({ point, snapshot })}`);
+        }
+        return undefined;
+      }
+      if (snapshot.targetRelay.activeTargetName === targetName) {
+        throw new Error(`${label} relay accepted ${targetName} without advancing: ${JSON.stringify({ point, snapshot })}`);
+      }
+      return { point, snapshot };
+    };
+    for (let pass = 0; pass < 18 && Date.now() < retryDeadline; pass++) {
+      const current = await readSnapshot();
+      lastSnapshot = current;
+      if (current.state.phase !== 'Play') {
+        throw new Error(`${label} relay ${targetName} entered ${current.state.phase} before accepted hit: ${JSON.stringify({ current, pass, attempted })}`);
+      }
+      if (current.targetRelay.activeTargetName !== targetName) {
+        throw new Error(`${label} relay target changed before ${targetName}: ${JSON.stringify({ current, pass, attempted })}`);
+      }
+      // The camera follows the player and the dynamic BlueBall can move after
+      // a reset. Re-project the authored target for every shot rather than
+      // carrying one screen coordinate through the whole firing sweep.
+      for (const [offsetX, offsetY] of offsets) {
+        const projected = targetPosition === undefined ? undefined : await projectWorld(targetPosition);
+        if (projected === undefined) break;
+        const point = [projected[0] + offsetX, projected[1] + offsetY];
         await fireAt(point);
-        if ((await readSnapshot()).targetRelay.acceptedHits > acceptedBefore) return;
+        const snapshot = await readSnapshot();
+        lastSnapshot = snapshot;
+        const hit = witnessHit(point, snapshot);
+        if (hit !== undefined) return hit;
+      }
+      const projected = targetPosition === undefined ? undefined : await projectWorld(targetPosition);
+      const screenshot = await page.screenshot();
+      const candidates = colors
+        .flatMap((color) => visibleTargetCandidates(screenshot, color))
+        .filter(({ y }) => y >= (options.minY ?? Number.NEGATIVE_INFINITY) && y <= (options.maxY ?? Number.POSITIVE_INFINITY))
+        // Keep only a short history. A moving target can legitimately return
+        // near an earlier pixel, and permanent suppression turns a bounded
+        // aiming retry into an unbounded no-candidate stall.
+        .filter(({ x, y }) => attempted.slice(-6).every((previous) => Math.hypot(previous.x - x, previous.y - y) > 18))
+        .sort((left, right) => {
+          if (options.preferRectangular === true) {
+            const shape = (candidate) => Math.min(candidate.width, candidate.height) >= 12
+              && Math.max(candidate.width, candidate.height) >= 20
+              ? Math.max(candidate.width / candidate.height, candidate.height / candidate.width) : 0;
+            if (shape(left) !== shape(right)) return shape(right) - shape(left);
+          }
+          if (projected !== undefined) {
+            return Math.hypot(left.x - projected[0], left.y - projected[1])
+              - Math.hypot(right.x - projected[0], right.y - projected[1]);
+          }
+          const leftScore = left.pixels / (1 + Math.hypot(left.x - 480, left.y - 270) * 0.02);
+          const rightScore = right.pixels / (1 + Math.hypot(right.x - 480, right.y - 270) * 0.02);
+          return rightScore - leftScore;
+        });
+      const candidate = candidates[0];
+      if (candidate === undefined) {
+        noCandidatePasses += 1;
+        if (noCandidatePasses >= 6) {
+          throw new Error(`${label} ${targetName} relay produced no live aim candidate: ${JSON.stringify({ pass, noCandidatePasses, attempted: attempted.slice(-6), snapshot: lastSnapshot, projected })}`);
+        }
+        await page.waitForTimeout(100);
+        continue;
+      }
+      noCandidatePasses = 0;
+      attempted.push(candidate);
+      if (attempted.length > 12) attempted.shift();
+      console.log(`[charged-barrier] ${label} relay ${targetName} reacquire ${pass + 1}: ${candidate.x},${candidate.y} (${candidate.width}x${candidate.height}, ${candidate.pixels}px)`);
+      for (const [offsetX, offsetY] of offsets) {
+        const point = [candidate.x + offsetX, candidate.y + offsetY];
+        await fireAt(point);
+        const snapshot = await readSnapshot();
+        lastSnapshot = snapshot;
+        const hit = witnessHit(point, snapshot);
+        if (hit !== undefined) return hit;
       }
     }
-    throw new Error(`${label} relay hit ${acceptedBefore + 1} failed: ${JSON.stringify(await readSnapshot())}`);
+    const after = await readSnapshot();
+    throw new Error(`${label} visible ${targetName} relay hit failed within bounded retry: ${JSON.stringify({ before, after, lastSnapshot, attempts: attempted.slice(-12), noCandidatePasses, retryMs: 45_000 })}`);
   };
-  await hitRelayTarget([[627, 297], [617, 297], [637, 297], [627, 287], [627, 307]], 0);
-  await hitRelayTarget(precisionAimPoints, 1);
-  await hitRelayTarget([
-    [520, 420], [540, 420], [500, 420], [520, 400], [520, 440],
-    [556, 339], [546, 339], [566, 339], [556, 329], [556, 349],
-  ], 2);
+  await hitVisibleRelayTarget(['blue'], 0, 'BlueBall', { minY: 160, maxY: 420 });
+  await drivePlayerTo([3, 0], `${label} RedBox firing lane`, 12_000);
+  await screenshot(`${label.replaceAll(' ', '-')}-red-lane`);
+  await hitVisibleRelayTarget(['red', 'yellow'], 1, 'RedBox', { preferRectangular: true });
+  await drivePlayerTo([5, 0], `${label} YellowPillar approach`);
+  await drivePlayerTo([5, 3.5], `${label} YellowPillar firing lane`);
+  await screenshot(`${label.replaceAll(' ', '-')}-yellow-lane`);
+  const relayBeforeYellow = await readSnapshot();
+  await hitVisibleRelayTarget(['yellow', 'red'], relayBeforeYellow.targetRelay.acceptedHits, 'YellowPillar', { preferRectangular: true });
+  const yellowHit = await readSnapshot();
+  if (yellowHit.targetRelay.acceptedHits !== relayBeforeYellow.targetRelay.acceptedHits + 1) {
+    throw new Error(`${label} visible YellowPillar hit failed: ${JSON.stringify({ before: relayBeforeYellow, after: yellowHit })}`);
+  }
+  await drivePlayerTo([5, 0], `${label} core-safe return`);
   await drivePlayerTo([0, 0], `${label} emitter aim baseline`);
   return waitForSnapshot(
     (snapshot) => snapshot.targetRelay.status === 'complete' && snapshot.barrierRoute.physicsReady === true,
@@ -160,20 +289,60 @@ async function prepareActive(label) {
 }
 
 async function findEmitterAim(cycle) {
-  const points = [
-    [365, 233], [355, 233], [375, 233], [365, 223], [365, 243],
-    [345, 213], [385, 213], [345, 253], [385, 253],
+  const baseline = (await readSnapshot()).barrierRoute.ordinaryHits;
+  const offsets = [
+    [0, 0], [-16, -16], [0, -16], [16, -16], [-16, 0], [16, 0],
+    [-16, 16], [0, 16], [16, 16],
   ];
-  for (const point of points) {
+  for (const [offsetX, offsetY] of offsets) {
+    const projected = await projectEmitter();
+    if (projected === undefined) break;
+    const point = [projected[0] + offsetX, projected[1] + offsetY];
     await page.mouse.click(point[0], point[1]);
-    await page.waitForTimeout(340);
+    await page.waitForTimeout(260);
     const snapshot = await readSnapshot();
-    if (snapshot.barrierRoute.ordinaryHits > 0) return { point, snapshot };
+    if (snapshot.barrierRoute.ordinaryHits > baseline) return { point, snapshot };
+  }
+  const attempted = [];
+  for (let pass = 0; pass < 18; pass++) {
+    const projected = await projectEmitter();
+    const screenshot = await page.screenshot();
+    const candidates = ['blue', 'green']
+      .flatMap((color) => visibleTargetCandidates(screenshot, color))
+      .filter(({ y }) => y >= 190 && y <= 460)
+      .filter(({ x, y }) => attempted.every((previous) => Math.hypot(previous.x - x, previous.y - y) > 18))
+      .sort((left, right) => {
+        if (projected !== undefined) {
+          return Math.hypot(left.x - projected[0], left.y - projected[1])
+            - Math.hypot(right.x - projected[0], right.y - projected[1]);
+        }
+        return right.pixels - left.pixels;
+      });
+    const candidate = candidates[0];
+    if (candidate === undefined) {
+      await page.waitForTimeout(100);
+      continue;
+    }
+    attempted.push(candidate);
+    for (const [offsetX, offsetY] of offsets) {
+      const point = [candidate.x + offsetX, candidate.y + offsetY];
+      console.log(`[charged-barrier] cycle ${cycle} emitter attempt ${pass + 1}: ${point[0]},${point[1]} (${candidate.width}x${candidate.height}, ${candidate.pixels}px)`);
+      await page.mouse.click(point[0], point[1]);
+      await page.waitForTimeout(260);
+      const snapshot = await readSnapshot();
+      if (snapshot.barrierRoute.ordinaryHits > baseline) return { point, snapshot };
+    }
   }
   throw new Error(`cycle ${cycle} could not hit the authored emitter: ${JSON.stringify(await readSnapshot())}`);
 }
 
-async function drivePlayerTo(target, label, timeout = 12_000) {
+async function drivePlayerTo(target, label, timeout = 15_000, tolerance = 0.42) {
+  for (const key of ['w', 'a', 's', 'd']) await page.keyboard.up(key);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let stalledPulses = 0;
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const snapshot = await readSnapshot();
@@ -181,17 +350,34 @@ async function drivePlayerTo(target, label, timeout = 12_000) {
     if (snapshot.barrierRoute.acceptedDamageHits > 0 || snapshot.state.phase !== 'Play') return snapshot;
     const dx = target[0] - position[0];
     const dz = target[1] - position[2];
-    if (Math.hypot(dx, dz) <= 0.14) return snapshot;
+    const distance = Math.hypot(dx, dz);
+    if (distance <= tolerance) return snapshot;
+    if (distance + 0.025 < bestDistance) {
+      bestDistance = distance;
+      stalledPulses = 0;
+    } else {
+      stalledPulses += 1;
+    }
     const keys = [];
-    if (dx < -0.16) keys.push('a');
-    if (dx > 0.16) keys.push('d');
-    if (dz < -0.16) keys.push('w');
-    if (dz > 0.16) keys.push('s');
+    const deadband = stalledPulses > 0 ? 0.04 : 0.16;
+    if (Math.abs(dx) >= Math.abs(dz)) {
+      if (dx < -deadband) keys.push('a');
+      if (dx > deadband) keys.push('d');
+      if (stalledPulses === 0 && Math.abs(dz) > deadband) keys.push(dz < 0 ? 'w' : 's');
+    } else {
+      if (dz < -deadband) keys.push('w');
+      if (dz > deadband) keys.push('s');
+      if (stalledPulses === 0 && Math.abs(dx) > deadband) keys.push(dx < 0 ? 'a' : 'd');
+    }
+    if (keys.length === 0) {
+      throw new Error(`${label} stalled before arrival: ${JSON.stringify({ target, position, distance, bestDistance, stalledPulses })}`);
+    }
+    const pulse = Math.max(18, Math.min(90, Math.round(Math.max(distance - tolerance, 0.05) / 6 * 1_000 * (stalledPulses > 0 ? 0.55 : 0.7))));
     for (const key of keys) await page.keyboard.down(key);
-    await page.waitForTimeout(80);
+    await page.waitForTimeout(pulse);
     for (const key of keys) await page.keyboard.up(key);
   }
-  throw new Error(`${label} timed out: ${JSON.stringify(await readSnapshot())}`);
+  throw new Error(`${label} timed out without bounded progress: ${JSON.stringify({ target, bestDistance, stalledPulses, snapshot: await readSnapshot() })}`);
 }
 
 async function chargedImpact(point) {
@@ -200,6 +386,62 @@ async function chargedImpact(point) {
   await page.mouse.click(point[0], point[1]);
   await page.waitForTimeout(80);
   await page.keyboard.up('c');
+  await page.waitForTimeout(340);
+}
+
+async function chargedImpactUntilOpen(point, cycle) {
+  const offsets = [[0, 0], [-10, -10], [10, -10], [-10, 10], [10, 10]];
+  for (const [offsetX, offsetY] of offsets) {
+    const projected = await projectEmitter();
+    const firstPoint = projected ?? point;
+    const aim = [firstPoint[0] + offsetX, firstPoint[1] + offsetY];
+    await chargedImpact(aim);
+    const snapshot = await readSnapshot();
+    if (snapshot.barrierRoute.opens === 1) return { aim, snapshot };
+  }
+  throw new Error(`cycle ${cycle} charged emitter sweep failed: ${JSON.stringify(await readSnapshot())}`);
+}
+
+async function chargedImpactUntilAlreadyOpen(point, cycle, opened) {
+  const baseline = opened.barrierRoute.alreadyOpenHits;
+  const offsets = [
+    [0, 0], [-16, -16], [0, -16], [16, -16], [-16, 0], [16, 0],
+    [-16, 16], [0, 16], [16, 16],
+  ];
+  for (const [offsetX, offsetY] of offsets) {
+    const projected = await projectEmitter();
+    const firstPoint = projected ?? point;
+    const aim = [firstPoint[0] + offsetX, firstPoint[1] + offsetY];
+    await chargedImpact(aim);
+    await page.waitForTimeout(340);
+    const snapshot = await readSnapshot();
+    if (snapshot.barrierRoute.alreadyOpenHits === baseline + 1) return { aim, snapshot };
+  }
+  const attempted = [];
+  for (let pass = 0; pass < 24; pass++) {
+    const screenshot = await page.screenshot();
+    const candidates = ['blue', 'green']
+      .flatMap((color) => visibleTargetCandidates(screenshot, color))
+      .filter(({ y }) => y >= 190 && y <= 460)
+      .filter(({ x, y }) => attempted.every((previous) => Math.hypot(previous.x - x, previous.y - y) > 18));
+    const candidate = candidates[0];
+    if (candidate === undefined) {
+      await page.waitForTimeout(100);
+      continue;
+    }
+    attempted.push(candidate);
+    for (const [offsetX, offsetY] of offsets) {
+      const aim = [candidate.x + offsetX, candidate.y + offsetY];
+      console.log(`[charged-barrier] cycle ${cycle} duplicate attempt ${pass + 1}: ${aim[0]},${aim[1]} (${candidate.width}x${candidate.height}, ${candidate.pixels}px)`);
+      await chargedImpact(aim);
+      await page.waitForTimeout(340);
+      const snapshot = await readSnapshot();
+      if (snapshot.barrierRoute.alreadyOpenHits === baseline + 1) {
+        return { aim, snapshot };
+      }
+    }
+  }
+  throw new Error(`cycle ${cycle} duplicate charged emitter sweep failed: ${JSON.stringify(await readSnapshot())}`);
 }
 
 async function runCycle(cycle) {
@@ -228,7 +470,11 @@ async function runCycle(cycle) {
   await screenshot(`${cycle}-reckless-contact`);
 
   await prepareActive(`cycle ${cycle} charged`);
-  await chargedImpact(normal.point);
+  // Reset/re-entry rebuilds the camera and physics scene. Re-acquire the
+  // authored emitter with normal input instead of reusing a stale screen
+  // coordinate from the previous scene instance.
+  const chargedAim = await findEmitterAim(cycle);
+  const openedBy = await chargedImpactUntilOpen(chargedAim.point, cycle);
   const opened = await waitForSnapshot(
     (snapshot) => snapshot.barrierRoute.opens === 1 && snapshot.barrierRoute.active === false,
     `cycle ${cycle} charged opening`,
@@ -238,18 +484,20 @@ async function runCycle(cycle) {
   }
   await screenshot(`${cycle}-charged-open`);
 
-  await chargedImpact(normal.point);
-  const duplicate = await waitForSnapshot(
-    (snapshot) => snapshot.barrierRoute.alreadyOpenHits === 1,
-    `cycle ${cycle} duplicate charged refusal`,
-  );
-  if (duplicate.barrierRoute.opens !== 1 || duplicate.barrierRoute.active) {
+  // Opening removes the barrier projection and can shift the orbit camera by
+  // a few pixels. Re-acquire the still-authored emitter with bounded fresh
+  // charged points rather than trusting the pre-open coordinate.
+  const duplicateBy = await chargedImpactUntilAlreadyOpen(openedBy.aim, cycle, opened);
+  const duplicate = duplicateBy.snapshot;
+  if (duplicate.barrierRoute.opens !== 1 || duplicate.barrierRoute.active
+    || duplicate.barrierRoute.alreadyOpenHits !== 1
+    || duplicate.barrierRoute.ordinaryHits !== opened.barrierRoute.ordinaryHits) {
     throw new Error(`cycle ${cycle} duplicate charged hit changed the opened route: ${JSON.stringify(duplicate)}`);
   }
 
   const restored = await reset();
   assertDormant(restored, `cycle ${cycle} replay`);
-  cycles.push({ cycle, aim: normal.point, normal: normal.snapshot, damaged, cooldown, opened, duplicate, restored });
+  cycles.push({ cycle, aim: normal.point, chargedAim: chargedAim.point, openedBy: openedBy.aim, duplicateAim: duplicateBy.aim, normal: normal.snapshot, damaged, cooldown, opened, duplicate, restored });
 }
 
 function writeReport(status, extra = {}) {
@@ -272,12 +520,11 @@ try {
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(`${message.text()} @ ${message.location().url}`); });
   page.on('response', (response) => { if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) badResponses.push(`${response.status()} ${response.url()}`); });
-  await page.goto(`${ORIGIN}/?game=game-default`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto(`${ORIGIN}/?game=game-default&render-evidence`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForFunction(() => globalThis.__forgeaxPreviewInspection?.list().reads.some(({ id }) => id === 'game-default.snapshot') ?? false, undefined, { timeout: 60_000, polling: 100 });
   await page.waitForFunction(async () => (await globalThis.__forgeaxPreviewInspection?.read('game-default.snapshot'))?.value?.state?.phase === 'Play', undefined, { timeout: 60_000, polling: 100 });
   await page.waitForTimeout(500);
-  await runCycle(1);
-  await runCycle(2);
+  for (let cycle = 1; cycle <= CYCLE_COUNT; cycle++) await runCycle(cycle);
   const rendererHealth = await page.evaluate(() => globalThis.__forgeaxPreviewInspection?.renderer.health());
   if (rendererHealth?.reason !== 'alive') {
     throw new Error(`renderer health failed: ${JSON.stringify(rendererHealth)}`);

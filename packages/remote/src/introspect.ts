@@ -14,6 +14,8 @@ export interface RemoteRootValues {
   readonly debugAdapter?: unknown;
   readonly profiler?: unknown;
   readonly execution?: unknown;
+  /** Read-only World-owned simulation summary; no restore/replay operation. */
+  readonly simulation?: unknown;
   readonly introspection?: readonly ComponentIntrospectionDescriptor[];
 }
 
@@ -75,6 +77,11 @@ function projectRoot(name: string, value: unknown): RootProjection {
     execution: {
       type: 'ExecutionReportProvider',
       description: 'The host execution report provider for tier, health, performance, and fault.',
+    },
+    simulation: {
+      type: 'SimulationInspection',
+      description:
+        'A read-only World-owned simulation record, participant, trace, and report summary.',
     },
   };
   const descriptor = descriptions[name] ?? { type: 'unknown', description: 'A live eval root.' };

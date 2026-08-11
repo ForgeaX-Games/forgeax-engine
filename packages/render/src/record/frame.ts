@@ -236,7 +236,8 @@ export function recordFrame(
           pointLights,
           spotLights,
           profilePhase,
-          pipelineState.hdrpClusterMembershipPipeline !== null,
+          pipelineState.hdrpClusterMembershipPipeline !== null &&
+            internals.membershipTiming?.usesCpuControl() !== true,
           pipelineState.hdrpClusterMembershipBindGroupLayout,
         );
       });

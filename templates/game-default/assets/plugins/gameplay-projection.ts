@@ -1,8 +1,9 @@
 import { Camera } from '@forgeax/engine-render';
 import type { BootstrapContext, GameProjectionValue } from '@forgeax/engine-app';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { Disabled, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-scene';
 import type { GameplayStateHandle } from './gameplay-state';
-import type { TargetHealthHandle } from './target-health';
+import { TargetHealth, type TargetHealthHandle } from './target-health';
 import type { TargetDisablingHandle } from './target-disabling';
 import type { VisibilityLoopHandle } from './visibility-loop';
 import type { JpegTextureSwap } from './jpeg-texture-swap';
@@ -27,8 +28,13 @@ import type { RepairCacheHandle } from './repair-cache';
 import type { EnergyCoreExtractionHandle } from './energy-core-extraction';
 import type { RewardChoiceHandle } from './reward-choice';
 import type { BarrierRouteHandle } from './barrier-route';
+import type {
+  SentinelEncounterReadiness,
+  SentinelIdentityResolution,
+} from './sentinel-authorship';
+import type { SentinelRangedThreat } from './sentinel-ranged-threat';
 import { GAME_DEFAULT_COMMAND_COUNTERS, type GameplayCommandCounters } from './resources/gameplay';
-import { Projectile } from './components/gameplay';
+import { Projectile, projectileAllegianceFromValue } from './components/gameplay';
 
 const COUNTERATTACK_BASELINE = deriveCounterattackPressure(0);
 
@@ -70,6 +76,9 @@ export type GameplayProjectionContext = {
   readonly extraction: EnergyCoreExtractionHandle | undefined;
   readonly rewardChoice: RewardChoiceHandle | undefined;
   readonly barrierRoute: BarrierRouteHandle | undefined;
+  readonly sentinelIdentity: SentinelIdentityResolution;
+  readonly sentinelReadiness: () => SentinelEncounterReadiness;
+  readonly sentinel: SentinelRangedThreat | undefined;
   readonly projectileEntities: () => readonly EntityHandle[];
 };
 
@@ -99,6 +108,29 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
       description: 'Read phase, camera mode, shared player damage, charged barrier, authored pickup, extraction, reward lifecycle, and target counts.',
       read: (): GameProjectionValue => {
         const cameraData = args.world.get(args.camera, Camera);
+        const sentinelIdentity = args.sentinelIdentity.available ? args.sentinelIdentity.identity : undefined;
+        const sentinelReadiness = args.sentinelReadiness();
+        const sentinelSnapshot = args.sentinel?.snapshot();
+        const sentinelHealth = sentinelIdentity === undefined
+          ? undefined
+          : args.world.get(sentinelIdentity.sentinel, TargetHealth);
+        const position = (entity: EntityHandle): readonly [number, number, number] => {
+          const transform = args.world.get(entity, Transform);
+          return transform.ok
+            ? [transform.value.pos[0] ?? 0, transform.value.pos[1] ?? 0, transform.value.pos[2] ?? 0]
+            : [0, 0, 0];
+        };
+        const projectileRows = args.projectileEntities().flatMap((entity) => {
+          const projectile = args.world.get(entity, Projectile);
+          return projectile.ok
+            ? [{
+                entity,
+                source: projectile.value.source,
+                allegiance: projectileAllegianceFromValue(projectile.value.allegiance),
+                impactScale: projectile.value.impactScale,
+              }]
+            : [];
+        });
         return asProjection({
           state: args.gameplayState.snapshot(),
           viewMode: args.getMode(),
@@ -123,7 +155,7 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
             patrolSpeed: COUNTERATTACK_BASELINE.patrolSpeed,
             chaseSpeed: COUNTERATTACK_BASELINE.chaseSpeed,
             pursuitRadius: COUNTERATTACK_BASELINE.pursuitRadius,
-            cooldown: 0, acceptedHits: 0,
+            cooldown: 0, acceptedHits: 0, lastShieldedHealth: null,
           },
           healthPickup: args.healthPickup?.snapshot() ?? {
             pickups: [],
@@ -153,12 +185,40 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
             damageCooldown: 0, acceptedDamageHits: 0,
             opens: 0, ordinaryHits: 0, alreadyOpenHits: 0,
           },
+          sentinel: {
+            available: sentinelReadiness.available,
+            unavailableReason: sentinelReadiness.unavailableReason,
+            authoredLocalId: 35,
+            entity: sentinelIdentity?.sentinel ?? null,
+            position: sentinelIdentity === undefined ? null : position(sentinelIdentity.sentinel),
+            mode: sentinelSnapshot?.mode ?? 'dormant',
+            ticks: sentinelSnapshot?.ticks ?? 0,
+            frozenAim: sentinelSnapshot?.frozenAim ?? null,
+            health: sentinelHealth?.ok === true ? sentinelHealth.value.current : 0,
+            maxHealth: sentinelHealth?.ok === true ? sentinelHealth.value.max : 0,
+            disabled: sentinelIdentity === undefined
+              ? false
+              : args.world.get(sentinelIdentity.sentinel, Disabled).ok,
+            physicsReady: sentinelReadiness.sentinelBodyReady,
+            shotsFired: sentinelSnapshot?.shotsFired ?? 0,
+            coverBlocked: sentinelSnapshot?.coverBlocked ?? 0,
+            playerHits: sentinelSnapshot?.playerHits ?? 0,
+            shieldBlocks: sentinelSnapshot?.shieldBlocks ?? 0,
+            refused: sentinelSnapshot?.refused ?? 0,
+            covers: sentinelIdentity === undefined
+              ? []
+              : sentinelIdentity.covers.map((cover, index) => ({
+                  entity: cover.entity,
+                  authoredLocalId: cover.localId,
+                  position: position(cover.entity),
+                  physicsReady: sentinelReadiness.coverBodiesReady[index] ?? false,
+                })),
+          },
           projectiles: {
-            active: args.projectileEntities().length,
-            impactScales: args.projectileEntities().flatMap((entity) => {
-              const projectile = args.world.get(entity, Projectile);
-              return projectile.ok ? [projectile.value.impactScale] : [];
-            }),
+            active: projectileRows.length,
+            playerActive: projectileRows.filter((row) => row.allegiance === 'player').length,
+            hostileActive: projectileRows.filter((row) => row.allegiance === 'hostile').length,
+            entries: projectileRows,
             ...args.world.getResource<GameplayCommandCounters>(GAME_DEFAULT_COMMAND_COUNTERS),
           },
         });

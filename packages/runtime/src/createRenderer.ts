@@ -22,6 +22,9 @@ export async function createRenderer(
             : { rawDeviceForContextConfigure: options.rawDeviceForContextConfigure }),
           ...(options.features === undefined ? {} : { features: options.features }),
           ...(options.profiler === undefined ? {} : { profiler: options.profiler }),
+          ...(options.membershipTiming === undefined
+            ? {}
+            : { membershipTiming: options.membershipTiming }),
         };
   try {
     return await constructRenderer(canvas, rendererOptions, bundler);

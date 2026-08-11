@@ -26,5 +26,11 @@ export {
   createHostAudioConsumer,
   createWebAudioBackend,
   type HostAudioConsumer,
+  type HostAudioSimulationSource,
+  type HostAudioSimulationState,
 } from './host-audio-consumer';
+export {
+  createHostAudioSimulationParticipant,
+  type HostAudioSimulationParticipantOptions,
+} from './simulation-participant';
 export { WebAudioEngine } from './web-audio-engine';

@@ -35,6 +35,12 @@ export type GameplayConfig = {
     readonly life: number;
     readonly shootCooldown: number;
   };
+  readonly sentinel: {
+    readonly telegraphTicks: number;
+    readonly cooldownTicks: number;
+    readonly projectileSpeed: number;
+    readonly projectileLife: number;
+  };
 };
 
 export type DefaultGameplayConfigArgs = {
@@ -67,6 +73,12 @@ export function installDefaultGameplayConfig(world: World, args: DefaultGameplay
       speed: 24,
       life: 1.5,
       shootCooldown: 0.18,
+    },
+    sentinel: {
+      telegraphTicks: 45,
+      cooldownTicks: 90,
+      projectileSpeed: 10,
+      projectileLife: 2.5,
     },
   });
 }

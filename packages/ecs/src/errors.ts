@@ -6,6 +6,14 @@
 
 import type { QuerySpanUnavailableReason } from './errors/query-and-component-errors';
 
+export {
+  createSimulationError,
+  type SimulationError,
+  type SimulationErrorCode,
+  type SimulationErrorDetailMap,
+  type SimulationErrorFor,
+} from './errors/simulation-errors';
+
 // ────────────────────────────────────────────────────────────────────────────
 // Re-exports from split error sub-files (w3-b — package cohesion split)
 // ────────────────────────────────────────────────────────────────────────────
@@ -38,10 +46,19 @@ export {
   CardinalityExceededError,
   ComponentFieldInvalidValueError,
   ResourceInvalidValueError,
+  ScheduleScopeMismatchError,
   SpawnLightInvalidBoundsError,
   SpriteAnimationInvalidError,
+  TimeConfigInvalidError,
+  TimeDeltaInvalidError,
   validateEnumFieldValues,
 } from './errors/validation-errors';
+
+export {
+  SharedKernelEligibilityError,
+  SharedKernelFailureError,
+  WorldPoisonedError,
+} from './execution/shared-kernel-errors';
 
 /**
  * Thrown when an attempt is made to encode an entity index that does not fit
@@ -1006,63 +1023,6 @@ export class ManagedArrayElementTypeNotAllowedError extends Error {
 // Order is grouped (legacy SCREAMING_SNAKE first, then closed-set kebab) but
 // not load-bearing — TS unions are unordered.
 // ────────────────────────────────────────────────────────────────────────────
-
-export class TimeDeltaInvalidError extends Error {
-  override readonly name = 'TimeDeltaInvalidError';
-  readonly code = 'time-delta-invalid' as const;
-  readonly expected = 'a finite delta greater than or equal to 0';
-  readonly hint = 'Call world.update(deltaSeconds) with a finite non-negative delta.';
-  readonly detail: { readonly received: number };
-
-  constructor(received: number) {
-    super(
-      `Invalid world.update delta: ${received}.\n  expected: a finite delta greater than or equal to 0\n  hint: Call world.update(deltaSeconds) with a finite non-negative delta.`,
-    );
-    this.detail = { received };
-  }
-}
-
-export class TimeConfigInvalidError extends Error {
-  override readonly name = 'TimeConfigInvalidError';
-  readonly code = 'time-config-invalid' as const;
-  readonly expected: string;
-  readonly hint = 'Increase maxDeltaSeconds or decrease maxStepsPerUpdate or fixedDeltaSeconds.';
-  readonly detail: {
-    readonly fixedDeltaSeconds: number;
-    readonly maxStepsPerUpdate: number;
-    readonly maxDeltaSeconds: number;
-  };
-
-  constructor(detail: TimeConfigInvalidError['detail']) {
-    const expected = 'maxDeltaSeconds >= (maxStepsPerUpdate + 1) * fixedDeltaSeconds';
-    super(
-      `Invalid World time policy.\n  expected: ${expected}\n  hint: Increase maxDeltaSeconds or decrease maxStepsPerUpdate or fixedDeltaSeconds.`,
-    );
-    this.expected = expected;
-    this.detail = detail;
-  }
-}
-
-export class ScheduleScopeMismatchError extends Error {
-  override readonly name = 'ScheduleScopeMismatchError';
-  readonly code = 'schedule-scope-mismatch' as const;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: {
-    readonly sourceSchedule: string;
-    readonly targetSchedule: string;
-    readonly reference?: string;
-  };
-
-  constructor(sourceSchedule: string, targetSchedule: string, reference?: string) {
-    const expected = `a reference owned by ${sourceSchedule}`;
-    const hint = `The referenced item belongs to ${targetSchedule}; register and order it in ${sourceSchedule}.`;
-    super(`Schedule scope mismatch.\n  expected: ${expected}\n  hint: ${hint}`);
-    this.expected = expected;
-    this.hint = hint;
-    this.detail = { sourceSchedule, targetSchedule, ...(reference ? { reference } : {}) };
-  }
-}
 
 /** Closed union of every `.code` literal carried by EcsError instances. */
 export type EcsErrorCode =

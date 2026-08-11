@@ -82,6 +82,65 @@ export type UiResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: UiError };
 
+const uiErrorPolicy = {
+  'invalid-environment': {
+    expected: 'a browser-like DOM environment',
+    hint: 'Call mountUi in a browser-like DOM environment.',
+  },
+  'invalid-root': {
+    expected: 'an HTMLElement root owned by the caller',
+    hint: 'Provide an HTMLElement root owned by the caller.',
+  },
+  'invalid-asset': {
+    expected: 'a UiAsset with non-empty guid, html, and css strings',
+    hint: 'Load a UiAsset with non-empty guid, html, and css strings.',
+  },
+  'invalid-layer': {
+    expected: 'a non-negative integer layer',
+    hint: 'Layer must be a non-negative integer.',
+  },
+  'invalid-preview-rect': {
+    expected: 'a finite preview rectangle with positive width and height',
+    hint: 'Provide finite x/y values and positive width/height.',
+  },
+  'preview-invalid-transition': {
+    expected: 'a legal preview session state transition',
+    hint: 'Call the operation from its documented session state.',
+  },
+  'preview-disposed': {
+    expected: 'a preview session that has not been disposed',
+    hint: 'Create a new preview session after disposal.',
+  },
+  'preview-stale-completion': {
+    expected: 'the current preview generation',
+    hint: 'Ignore stale async work and await the current generation.',
+  },
+  'preview-load-failed': {
+    expected: 'the preview GUID to load successfully',
+    hint: 'Repair the imported asset, then call retry().',
+  },
+  'preview-scenario-failed': {
+    expected: 'the scenario prepare hook to complete successfully',
+    hint: 'Fix the scenario prepare hook before retrying.',
+  },
+  'preview-scenario-missing-part': {
+    expected: 'all parts declared by the scenario',
+    hint: 'Restore the required data-ui-part element before retrying.',
+  },
+  'preview-scenario-timeout': {
+    expected: 'the scenario to report ready before its timeout',
+    hint: 'Make scenario.prepare resolve ready or increase scenarioTimeoutMs.',
+  },
+  'capture-not-ready': {
+    expected: 'all capture readiness gates to be satisfied',
+    hint: 'Satisfy every reported readiness fact, then capture again.',
+  },
+  'capture-failed': {
+    expected: 'the browser screenshot operation to succeed',
+    hint: 'Inspect the reported capture stage and retry in the same browser.',
+  },
+} satisfies Record<UiErrorCode, { expected: string; hint: string }>;
+
 function detailFor(code: UiErrorCode, message: string): UiError['detail'] {
   switch (code) {
     case 'invalid-environment':
@@ -114,43 +173,16 @@ function detailFor(code: UiErrorCode, message: string): UiError['detail'] {
 }
 
 export function uiError(code: UiErrorCode, detail: string): UiResult<never> {
-  const expected: Record<UiErrorCode, string> = {
-    'invalid-environment': 'a browser-like DOM environment',
-    'invalid-root': 'an HTMLElement root owned by the caller',
-    'invalid-asset': 'a UiAsset with non-empty guid, html, and css strings',
-    'invalid-layer': 'a non-negative integer layer',
-    'invalid-preview-rect': 'a finite preview rectangle with positive width and height',
-    'preview-invalid-transition': 'a legal preview session state transition',
-    'preview-disposed': 'a preview session that has not been disposed',
-    'preview-stale-completion': 'the current preview generation',
-    'preview-load-failed': 'the preview GUID to load successfully',
-    'preview-scenario-failed': 'the scenario prepare hook to complete successfully',
-    'preview-scenario-missing-part': 'all parts declared by the scenario',
-    'preview-scenario-timeout': 'the scenario to report ready before its timeout',
-    'capture-not-ready': 'all capture readiness gates to be satisfied',
-    'capture-failed': 'the browser screenshot operation to succeed',
-  };
-  const hints: Record<UiErrorCode, string> = {
-    'invalid-environment': 'Call mountUi in a browser-like DOM environment.',
-    'invalid-root': 'Provide an HTMLElement root owned by the caller.',
-    'invalid-asset': 'Load a UiAsset with non-empty guid, html, and css strings.',
-    'invalid-layer': 'Layer must be a non-negative integer.',
-    'invalid-preview-rect': 'Provide finite x/y values and positive width/height.',
-    'preview-invalid-transition': 'Call the operation from its documented session state.',
-    'preview-disposed': 'Create a new preview session after disposal.',
-    'preview-stale-completion': 'Ignore stale async work and await the current generation.',
-    'preview-load-failed': 'Repair the imported asset, then call retry().',
-    'preview-scenario-failed': 'Fix the scenario prepare hook before retrying.',
-    'preview-scenario-missing-part': 'Restore the required data-ui-part element before retrying.',
-    'preview-scenario-timeout':
-      'Make scenario.prepare resolve ready or increase scenarioTimeoutMs.',
-    'capture-not-ready': 'Satisfy every reported readiness fact, then capture again.',
-    'capture-failed': 'Inspect the reported capture stage and retry in the same browser.',
-  };
   const narrowedDetail = detailFor(code, detail);
+  const policy = uiErrorPolicy[code];
   return {
     ok: false,
-    error: { code, expected: expected[code], hint: hints[code], detail: narrowedDetail } as UiError,
+    error: {
+      code,
+      expected: policy.expected,
+      hint: policy.hint,
+      detail: narrowedDetail,
+    } as UiError,
   };
 }
 

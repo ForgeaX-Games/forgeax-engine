@@ -11,6 +11,7 @@ import { Rotatable } from './rotating-target';
 import { ScoringTarget } from './scoring-target';
 import { cloneWithClearcoat } from './clearcoat-material';
 import { BouncyBallHazard, DamageHazard, PlayerHealth } from './counterattack';
+import { ProjectileCover, Sentinel } from './components/gameplay';
 
 export type MatHandle = Handle<'MaterialAsset', 'shared'>;
 export type GameContext = {
@@ -32,6 +33,9 @@ export type ScenePhysics = {
 
 export const SCENE_GUID = '1036f6f0-d3c2-5f31-9593-3432942d4c93';
 export const PLAYER_Y = 0.75;
+// Collision groups stay broad for impact classification; only solver response excludes covers from supporting the dynamic relay target.
+export const YELLOW_TARGET_SOLVER_GROUPS = 0x0001_0001;
+export const PROJECTILE_COVER_SOLVER_GROUPS = 0x0002_ffff;
 
 type NestedSceneAsset = Pick<SceneAsset, 'entities' | 'mounts'>;
 
@@ -213,8 +217,16 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
         break;
       }
       case 'YellowPillar':
-        dynamic();
-        box(0.2);
+        kinematic();
+        // The visible pillar rotates around Y, so its gameplay hit volume must not collapse edge-on with the rendered cuboid.
+        world.addComponent(entity, { component: Collider, data: {
+          shape: ColliderShapeValue.capsule,
+          radius: 0.3,
+          halfHeight: 0.45,
+          restitution: 0.2,
+          friction: 0.7,
+          solverGroups: YELLOW_TARGET_SOLVER_GROUPS,
+        } });
         world.addComponent(entity, { component: Rotatable, data: { speed: 0.3 } });
         const materials = materialsOf(entity);
         props.push({ e: entity, materials });
@@ -234,6 +246,22 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
         box(0.25);
         props.push({ e: entity, materials: materialsOf(entity) });
         world.addComponent(entity, { component: ScoringTarget, data: { points: 20 } });
+        break;
+      case 'Sentinel':
+        staticBody();
+        box(0);
+        world.addComponent(entity, { component: CollidingEntities, data: { entities: [] } });
+        world.addComponent(entity, { component: ScoringTarget, data: { points: 20 } });
+        world.addComponent(entity, { component: Sentinel, data: {} });
+        props.push({ e: entity, materials: materialsOf(entity) });
+        break;
+      case 'ProjectileCoverLeft':
+      case 'ProjectileCoverRight':
+        staticBody();
+        box(0);
+        world.set(entity, Collider, { solverGroups: PROJECTILE_COVER_SOLVER_GROUPS });
+        world.addComponent(entity, { component: CollidingEntities, data: { entities: [] } });
+        world.addComponent(entity, { component: ProjectileCover, data: {} });
         break;
       default:
         if (name.startsWith('Crate')) { dynamic(); box(0.1); props.push({ e: entity, materials: materialsOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 5 } }); }

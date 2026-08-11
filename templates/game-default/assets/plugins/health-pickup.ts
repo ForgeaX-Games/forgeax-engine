@@ -1,5 +1,5 @@
 import {
-  Update,
+  FixedUpdate,
   defineComponent,
   type EntityHandle,
   type World,
@@ -226,10 +226,10 @@ export function createHealthPickups(
   return {
     installSystem: (ctx) => {
       physics = ctx.physics;
-      world.addSystem(Update, {
+      world.addSystem(FixedUpdate, {
         name: 'game-health-pickup-collection',
         runIf: inState(GameState, 'Play'),
-        after: ['physicsCollisionSync', 'game-player-movement', 'game-target-feedback'],
+        after: ['physicsCollisionSync', 'game-player-movement'],
         before: ['game-counterattack'],
         queries: [],
         fn: (_world, _results, commands) => {

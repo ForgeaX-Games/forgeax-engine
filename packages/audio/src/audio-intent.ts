@@ -6,6 +6,12 @@ import type {
   AudioState,
   BusName,
 } from './audio-backend';
+import {
+  recordAudioBusMute,
+  recordAudioBusVolume,
+  recordAudioIntent,
+  recordAudioListenerPose,
+} from './audio-tick-system';
 
 export type AudioIntent =
   | {
@@ -39,7 +45,7 @@ export function createAudioIntentBackend(options: AudioIntentBackendOptions): Au
   const emit = (intent: AudioIntent): void => {
     if (!destroyed || intent.kind === 'destroy') options.emit(intent);
   };
-  return {
+  const backend: AudioBackend = {
     play(entityId: number, clip: AudioClipAsset, playOptions: AudioPlayOptions): void {
       const firstPublish = !publishedSources.has(clip.sourceKey);
       publishedSources.add(clip.sourceKey);
@@ -53,18 +59,33 @@ export function createAudioIntentBackend(options: AudioIntentBackendOptions): Au
     },
     stop: (entityId) => emit({ kind: 'stop', entityId }),
     setVolume: (entityId, volume) => emit({ kind: 'set-volume', entityId, volume }),
-    setBusVolume: (bus, volume) => emit({ kind: 'set-bus-volume', bus, volume }),
-    setBusMute: (bus, muted) => emit({ kind: 'set-bus-mute', bus, muted }),
-    setListenerPose: (pose) => emit({ kind: 'set-listener-pose', pose }),
+    setBusVolume: (bus, volume) => {
+      const intent = { kind: 'set-bus-volume', bus, volume } as const;
+      emit(intent);
+      recordAudioBusVolume(backend, bus, volume);
+    },
+    setBusMute: (bus, muted) => {
+      const intent = { kind: 'set-bus-mute', bus, muted } as const;
+      emit(intent);
+      recordAudioBusMute(backend, bus, muted);
+    },
+    setListenerPose: (pose) => {
+      const intent = { kind: 'set-listener-pose', pose } as const;
+      emit(intent);
+      recordAudioListenerPose(backend, pose);
+    },
     getState: () => options.state?.() ?? DISCONNECTED_AUDIO_STATE,
     getActiveSourceCount: () => (options.state?.() ?? DISCONNECTED_AUDIO_STATE).activeSourceCount,
     destroy(): void {
       if (destroyed) return;
-      emit({ kind: 'destroy' });
+      const intent = { kind: 'destroy' } as const;
+      emit(intent);
+      recordAudioIntent(backend, intent);
       destroyed = true;
       publishedSources.clear();
     },
   };
+  return backend;
 }
 
 export function audioIntentErrorState(error: AudioError): AudioState {

@@ -29,12 +29,18 @@ import type { CanvasAppError } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import {
+  Camera,
+  MeshFilter,
+  MeshRenderer,
+  type MembershipTimingOptions,
+} from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import { PointLight } from '@forgeax/engine-render';
+import { createProfileClock, createProfiler } from '@forgeax/engine-profiler';
 
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -45,7 +51,7 @@ const DEFAULT_NUM_LIGHTS = 32;
 const NUM_LIGHTS = (() => {
   if (typeof window !== 'undefined') {
     const requested = Number(new URL(window.location.href).searchParams.get('lights'));
-    if (Number.isInteger(requested) && requested >= 1 && requested <= 128) {
+    if (Number.isInteger(requested) && requested >= 1 && requested <= 256) {
       return requested;
     }
   }
@@ -116,6 +122,22 @@ const FALSIFY = (() => {
   return '';
 })();
 
+const MEMBERSHIP_TIMING: MembershipTimingOptions | undefined = (() => {
+  if (typeof window === 'undefined') return undefined;
+  const mode = new URL(window.location.href).searchParams.get('membershipTiming');
+  if (mode === 'gpu') return { mode: 'gpu', maxPendingCaptures: 2 };
+  if (mode === 'cpu-control') return { mode: 'cpu-control' };
+  return undefined;
+})();
+
+const MEMBERSHIP_PROFILE = (() => {
+  if (typeof window === 'undefined') return false;
+  return new URL(window.location.href).searchParams.get('membershipProfile') === '1';
+})();
+const PROFILER = MEMBERSHIP_PROFILE
+  ? createProfiler({ clock: createProfileClock(() => performance.now()) })
+  : undefined;
+
 // 3. bootstrap
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -134,7 +156,14 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const appRes = await createApp(target, {}, forgeaxBundlerAdapter());
+  const appRes = await createApp(
+    target,
+    {
+      ...(MEMBERSHIP_TIMING === undefined ? {} : { membershipTiming: MEMBERSHIP_TIMING }),
+      ...(PROFILER === undefined ? {} : { profiler: PROFILER }),
+    },
+    forgeaxBundlerAdapter(),
+  );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
@@ -148,6 +177,24 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 5.8 deferred] renderer.ready failed:', ready.error.code, ready.error.hint);
     return;
   }
+
+  const evidenceWindow = window as unknown as {
+    __forgeaxDeferredMembershipEvidence?: Record<string, unknown>;
+  };
+  evidenceWindow.__forgeaxDeferredMembershipEvidence = {
+    backendKind: app.renderer.device.caps.backendKind,
+    compute: app.renderer.device.caps.compute,
+    timestampQuery: app.renderer.device.caps.timestampQuery,
+    timestampPeriodNanoseconds: app.renderer.device.caps.timestampPeriodNanoseconds ?? null,
+    adapter: app.renderer.device.caps.backendKind,
+    environment: typeof navigator === 'undefined' ? 'browser-unknown' : navigator.userAgent,
+    actualProducer:
+      MEMBERSHIP_TIMING?.mode === 'gpu' && app.renderer.device.caps.compute
+        ? 'gpu'
+        : 'cpu',
+    mode: MEMBERSHIP_TIMING?.mode ?? 'omitted',
+    frames: 0,
+  };
 
   // Wire the __learnRenderErrors bus for onerror-gate coverage.
   const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
@@ -262,6 +309,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
+  if (PROFILER !== undefined) {
+    const profileStart = PROFILER.startCapture({ frameLimit: 300, eventLimit: 40_000, detail: 'owner' });
+    if (!profileStart.ok) console.error(`[learn-render 5.8 deferred] profiler start failed: ${profileStart.error.code}`);
+  }
   const startRes = app.start();
   if (!startRes.ok) {
     reportAppError(startRes.error);
@@ -281,16 +332,57 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 function installCaptureHook(app: App, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureDeferred?: CaptureHook };
+  const profileWindow = window as unknown as {
+    __forgeaxDeferredMembershipProfile?: unknown;
+    __forgeaxDeferredProfileReady?: () => boolean;
+  };
+  profileWindow.__forgeaxDeferredProfileReady = () => {
+    const capture = PROFILER?.latestCapture();
+    return (
+      capture?.completeness.status === 'complete' && capture.completeness.droppedEventCount === 0
+    );
+  };
   const renderer = app.renderer;
   win.__captureDeferred = async (): Promise<Uint8Array> => {
+    const timing = renderer.membershipTiming;
+    let timingStarted = false;
+    let timingEvidence: unknown = null;
+    try {
+      const started = timing?.start();
+      if (started?.ok === true) {
+        timingStarted = true;
+      } else if (started !== undefined) {
+        timingEvidence = { code: started.error.code, detail: started.error.hint };
+      }
+    } catch (error) {
+      timingEvidence = {
+        code: 'terminal-record-incomplete',
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
     world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
+    if (timing !== undefined && timingStarted) {
+      const finished = await timing.finish();
+      timingEvidence = finished.ok ? finished.value : { code: finished.error.code, detail: finished.error.hint };
+    } else if (timing !== undefined) {
+      // A refused request still traverses the terminal finish seam so the
+      // consumer exercises the same frame lifecycle as the control route.
+      try {
+        await timing.finish();
+      } catch {
+        // Preserve the start refusal as the authoritative terminal reason.
+      }
+    }
+    const evidenceWindow = window as unknown as { __forgeaxDeferredMembershipTiming?: unknown };
+    evidenceWindow.__forgeaxDeferredMembershipTiming = timingEvidence;
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(
         `[learn-render 5.8 deferred] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
+    profileWindow.__forgeaxDeferredMembershipProfile = PROFILER?.latestCapture() ?? null;
     return r.value;
   };
 }
@@ -309,5 +401,9 @@ declare global {
   interface Window {
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
     __captureDeferred?: () => Promise<Uint8Array>;
+    __forgeaxDeferredMembershipEvidence?: Record<string, unknown>;
+    __forgeaxDeferredMembershipTiming?: unknown;
+    __forgeaxDeferredMembershipProfile?: unknown;
+    __forgeaxDeferredProfileReady?: () => boolean;
   }
 }

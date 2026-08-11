@@ -80,6 +80,8 @@ function validEmitter(value: unknown): value is VfxGpuEmitterProgram {
   return (
     record(value) &&
     typeof value.id === 'string' &&
+    typeof value.module === 'string' &&
+    value.module.length > 0 &&
     Number.isInteger(value.capacity) &&
     (value.capacity as number) > 0 &&
     record(value.backend) &&
@@ -193,6 +195,7 @@ export const vfxGpuEffectPackLoader = {
     }
     return ok(
       Object.freeze({
+        guid: input.guid,
         kind: 'particle-effect',
         schemaVersion: 2,
         programFingerprint: actualFingerprint,

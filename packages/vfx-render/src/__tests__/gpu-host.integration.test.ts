@@ -47,6 +47,7 @@ describe('GPU VFX public host', () => {
       player,
       emitter: {
         id,
+        module: `${id}.vfx.wgsl`,
         capacity: 4,
         backend: { required: 'gpu' },
         space: 'local',
@@ -178,5 +179,17 @@ describe('GPU VFX public host', () => {
       generation: 1,
     });
     expect(result).toMatchObject({ ok: true, value: { readiness: 'ready' } });
+  });
+
+  it('returns an empty keyed inspection aggregate before a player is present', async () => {
+    const world = new World();
+    const assets = {
+      loaders: { registerPackLoader: () => {} },
+      lookup: () => undefined,
+    };
+    const host = createVfxRuntimeHost({ camera: { read: () => undefined } });
+    await host.attachWorld({ world, assets: assets as never });
+
+    expect(host.inspect(world)).toEqual({ generation: 1, players: [], diagnostics: [] });
   });
 });

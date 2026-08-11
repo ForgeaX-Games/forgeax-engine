@@ -33,6 +33,8 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { audioLoader } from '../audio-loader';
+import { createHostAudioConsumer } from '../host-audio-consumer';
+import { createHostAudioSimulationParticipant } from '../simulation-participant';
 import { WebAudioEngine } from '../web-audio-engine';
 
 describe('M6 Pack v2 audio loader contract', () => {
@@ -307,5 +309,56 @@ describe('M5 browser — multi-backend AudioContext non-monotonic (AC-16)', () =
       expect(state.contextState).toBe('closed');
       expect(state.activeSourceCount).toBe(0);
     }
+  });
+});
+
+describe('M5 browser — Host audio simulation first tick', () => {
+  it('cold-rebuilds one active source and does not replay it on the first tick', async () => {
+    class SimulationEngine extends WebAudioEngine {
+      playCount = 0;
+
+      override decode(_bytes: Uint8Array): Promise<AudioBuffer> {
+        return Promise.resolve(createShortSilentBuffer(0.05));
+      }
+
+      override play(
+        entityId: number,
+        buffer: AudioBuffer,
+        options: Parameters<WebAudioEngine['play']>[2],
+      ): void {
+        this.playCount += 1;
+        super.play(entityId, buffer, options);
+      }
+    }
+
+    const sourceEngine = new SimulationEngine();
+    const sourceConsumer = createHostAudioConsumer(sourceEngine);
+    sourceConsumer.consume({
+      kind: 'play',
+      entityId: 101,
+      sourceKey: 'simulation-browser-tone',
+      bytes: Uint8Array.of(1, 2, 3),
+      options: { loop: true, volume: 0.1, spatialBlend: 0, bus: 'sfx' },
+    });
+    const sourceParticipant = createHostAudioSimulationParticipant(sourceConsumer);
+    const record = sourceParticipant.recordState?.();
+    expect(record?.ok).toBe(true);
+    if (!record?.ok) return;
+
+    const targetEngine = new SimulationEngine();
+    const targetConsumer = createHostAudioConsumer(targetEngine);
+    const participant = createHostAudioSimulationParticipant(targetConsumer);
+    const prepared = participant.prepareRestore(record.value);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    participant.commitRestore(prepared.value);
+    await Promise.resolve();
+    expect(targetEngine.playCount).toBe(1);
+
+    targetConsumer.consume({ kind: 'stop', entityId: 101 });
+    targetConsumer.consume({ kind: 'stop', entityId: 101 });
+    expect(targetEngine.getActiveSourceCount()).toBe(0);
+    sourceConsumer.dispose();
+    targetConsumer.dispose();
   });
 });

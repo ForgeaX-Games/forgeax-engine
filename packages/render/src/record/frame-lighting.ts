@@ -663,6 +663,8 @@ export function writeHdrpClusterAndSsaoBuffers(
     gpuMembership = frameState.hdrpClusterMembershipBindGroup !== null;
   }
 
+  let attemptedTotal = 0;
+  let overflow = false;
   const { clusterGrid, gridX, gridY, gridZ, clusterGridBuf, lightIndexListBuf, lightIndexCount } =
     runHdrpClusterProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster/binner', () => {
       const binnerProfile: ClusterBinProfileRunner | undefined =
@@ -783,6 +785,8 @@ export function writeHdrpClusterAndSsaoBuffers(
         clusterGridBuf.fill(0);
       }
 
+      attemptedTotal = binResult.ok ? binResult.value : binResult.error.detail.actual;
+      overflow = !binResult.ok;
       return {
         clusterGrid,
         gridX,
@@ -793,6 +797,21 @@ export function writeHdrpClusterAndSsaoBuffers(
         lightIndexCount: binResult.ok ? binResult.value : 0,
       };
     });
+
+  if (internals.membershipTiming?.usesCpuControl() === true) {
+    const clusterValueCount = gridX * gridY * gridZ * 2;
+    internals.membershipTiming.recordMembershipOutput({
+      schemaVersion: 1,
+      lightCount: effectiveLightCount,
+      grid: { x: gridX, y: gridY, z: gridZ },
+      clusterOffsetsAndCounts: Array.from(clusterGridBuf.subarray(0, clusterValueCount)),
+      attemptedTotal,
+      writtenTotal: lightIndexCount,
+      capacity: LIGHT_INDEX_LIST_CAPACITY,
+      overflow,
+      lightIndexPrefix: Array.from(lightIndexListBuf.subarray(0, lightIndexCount)),
+    });
+  }
 
   const hdrpPayload = runHdrpClusterProfilePhase(
     profilePhase,
@@ -864,6 +883,20 @@ export function writeHdrpClusterAndSsaoBuffers(
   runHdrpClusterProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster/buffer-upload', () => {
     if (hdrpPayload !== null) {
       const { hdrpBuffers, lightDataUploadPayload, clusterUniformPayload } = hdrpPayload;
+      if (gpuMembership) {
+        internals.membershipTiming?.recordGpuMembershipSource({
+          clusterGridBuffer: hdrpBuffers.clusterGridBuffer,
+          clusterGridBytes: gridX * gridY * gridZ * 2 * 4,
+          lightIndexListBuffer: hdrpBuffers.lightIndexListBuffer,
+          lightIndexListBytes: Math.max(4, lightIndexCount * 4),
+          lightCount: effectiveLightCount,
+          grid: { x: gridX, y: gridY, z: gridZ },
+          attemptedTotal,
+          writtenTotal: lightIndexCount,
+          capacity: LIGHT_INDEX_LIST_CAPACITY,
+          overflow,
+        });
+      }
       const lightDataUpload = internals.device.queue.writeBuffer(
         hdrpBuffers.lightDataBuffer,
         0,

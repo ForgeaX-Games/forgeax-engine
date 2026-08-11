@@ -27,6 +27,10 @@ import type { RenderFeature, RenderFeatureDiagnostics } from './features/types';
 import type { PipelineError } from './pipeline-errors';
 import type { PostProcessError } from './post-process-errors';
 import type { FrameObservation, FrameObservationOptions } from './record/frame-observation';
+import type {
+  MembershipTimingController,
+  MembershipTimingOptions,
+} from './record/membership-timing';
 import type { RenderPipeline } from './render-pipeline';
 
 export type RenderResult<T, E> =
@@ -259,6 +263,8 @@ export interface RendererOptions {
   readonly features?: readonly RenderFeature<unknown>[] | undefined;
   /** Explicit profiler capability shared by App and Render. */
   readonly profiler?: Profiler | undefined;
+  /** Explicit, Render-owned membership timing capability. Omitted means zero timing work. */
+  readonly membershipTiming?: MembershipTimingOptions | undefined;
   // feat-20260608-create-app-param-surface-trim / M1 / AC-02: `clearColor`
   // was deleted as a one-cut breaking change (AGENTS.md Change stance +
   // requirements constraint #1: no deprecation window, no shim). Scene
@@ -449,6 +455,8 @@ export interface Renderer {
    *   if (!r.ok) console.error(r.error);
    */
   readonly ready: Promise<RenderResult<void, RhiError>>;
+  /** Backend-aware membership timing, present only when explicitly requested. */
+  readonly membershipTiming?: MembershipTimingController;
   /**
    * Draw one frame for the supplied World (D-S2 + K-4 rewrite).
    *
@@ -547,6 +555,14 @@ export interface Renderer {
    * Future RHI-level readback abstraction tracked separately.
    */
   readPixels(): Promise<RenderResult<Uint8Array, RhiError>>;
+  /**
+   * Relinquish the canvas presentation surface while preserving the Renderer,
+   * AssetRegistry, and CPU-side render declarations. Idempotent. Draws fail
+   * closed until restoreSurface() succeeds.
+   */
+  releaseSurface(): RenderResult<void, RhiError>;
+  /** Re-enable presentation on the same canvas/device after releaseSurface(). */
+  restoreSurface(): RenderResult<void, RhiError>;
   /**
    * Release renderer-owned resources + detach listeners. Idempotent.
    *

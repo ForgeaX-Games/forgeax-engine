@@ -30,9 +30,10 @@ import {
   INPUT_BACKEND_KEY,
   type InputBackend,
 } from '@forgeax/engine-input';
-import { type RendererLostListener } from '@forgeax/engine-render';
+import { Camera, perspective, type RendererLostListener } from '@forgeax/engine-render';
 import { RhiError } from '@forgeax/engine-runtime';
 import type { RendererErrorListener } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createApp, inputPlugin } from '../src/index';
@@ -299,6 +300,16 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
+        // The canvas form owns a real renderer, so give its first frame the
+        // minimum valid scene. Without a Camera the render path reports
+        // render-system-no-camera and can leave headed WebGPU waiting for the
+        // frame-loop timeout before stop() reaches the cleanup assertion.
+        app.world
+          .spawn(
+            { component: Transform, data: { pos: [0, 0, 2] } },
+            { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: 1 }) },
+          )
+          .unwrap();
         const disposeSpy = vi.spyOn(app.renderer, 'dispose').mockImplementation(() => {});
         // Replace renderer's onError with a controllable one before start
         // is not possible here -- the real renderer is wired. Instead, we

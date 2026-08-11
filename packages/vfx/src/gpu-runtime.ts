@@ -75,6 +75,42 @@ export interface VfxGpuTickIntent {
   readonly eventCounters: VfxChannelCounters;
 }
 
+export interface VfxGpuEmitterInspectSnapshot {
+  readonly id: string;
+  readonly module: string;
+  readonly capacity: number;
+  readonly visible: boolean;
+  readonly tick: number | null;
+  readonly spawnCount: number;
+  readonly firstParticleId: number;
+  readonly reset: boolean;
+  readonly schedule: VfxGpuEmitterProgram['schedule'];
+  readonly bounds: VfxGpuEmitterProgram['bounds'];
+  readonly simulationWhenCulled: VfxGpuEmitterProgram['simulationWhenCulled'];
+  readonly renderers: readonly {
+    readonly index: number;
+    readonly kind: VfxGpuEmitterProgram['renderers'][number]['kind'];
+    readonly enabled: boolean;
+  }[];
+  readonly stages: readonly string[];
+  readonly dataInterfaces: readonly string[];
+}
+
+export interface VfxGpuPlayerInspectSnapshot {
+  readonly player: EntityHandle;
+  readonly assetGuid: string;
+  readonly programFingerprint: string;
+  readonly playing: boolean;
+  readonly values: {
+    readonly layoutFingerprint: string;
+    readonly generation: number;
+    readonly pendingPatchCount: number;
+  };
+  readonly channels: VfxChannelCounters;
+  readonly emitters: readonly VfxGpuEmitterInspectSnapshot[];
+  readonly diagnostics: readonly VfxGpuRuntimeDiagnostic[];
+}
+
 export interface VfxGpuRuntimeDiagnostic {
   readonly code:
     | 'vfx-intent-queue-overflow'
@@ -88,6 +124,9 @@ export interface VfxGpuRuntimeDiagnostic {
 
 interface PlayerState {
   effect: Handle<'ParticleEffectAsset', 'shared'>;
+  assetGuid: string;
+  programFingerprint: string;
+  emitters: readonly VfxGpuEmitterProgram[];
   seed: number;
   playing: boolean;
   sessionPlaying: boolean;
@@ -134,6 +173,7 @@ export class VfxGpuRuntime {
   readonly #intents: VfxGpuTickIntent[] = [];
   readonly #diagnostics: VfxGpuRuntimeDiagnostic[] = [];
   readonly #lastCommitted = new Map<EntityHandle, VfxGpuTickIntent>();
+  readonly #lastCommittedByEmitter = new Map<EntityHandle, Map<string, VfxGpuTickIntent>>();
   readonly #eventCounters = new Map<EntityHandle, VfxChannelCounters>();
   readonly #visibility = new Map<string, boolean>();
   readonly #replayRequests = new Set<EntityHandle>();
@@ -154,6 +194,80 @@ export class VfxGpuRuntime {
 
   lastCommitted(player: EntityHandle): VfxGpuTickIntent | undefined {
     return this.#lastCommitted.get(player);
+  }
+
+  inspectPlayers(): readonly VfxGpuPlayerInspectSnapshot[] {
+    return Object.freeze(
+      [...this.#players.keys()]
+        .sort((left, right) => Number(left) - Number(right))
+        .flatMap((player) => {
+          const snapshot = this.inspectPlayer(player);
+          return snapshot === undefined ? [] : [snapshot];
+        }),
+    );
+  }
+
+  inspectPlayer(player: EntityHandle): VfxGpuPlayerInspectSnapshot | undefined {
+    const state = this.#players.get(player);
+    if (state === undefined) return undefined;
+    const instance = this.#instances.get(player);
+    const latest = state.emitters.map((emitter) => this.#latestIntent(player, emitter.id));
+    const lastIntent = latest.reduce<VfxGpuTickIntent | undefined>(
+      (current, intent) =>
+        intent !== undefined && (current === undefined || intent.sequence > current.sequence)
+          ? intent
+          : current,
+      undefined,
+    );
+    const layoutFingerprint =
+      state.emitters.find((emitter) => emitter.reflection.layout !== undefined)?.reflection.layout
+        ?.fingerprint ?? state.programFingerprint;
+    return Object.freeze({
+      player,
+      assetGuid: state.assetGuid,
+      programFingerprint: state.programFingerprint,
+      playing: state.playing,
+      values: Object.freeze({
+        layoutFingerprint,
+        generation: instance?.generation ?? lastIntent?.instanceGeneration ?? 0,
+        pendingPatchCount: instance?.pendingPatchCount ?? 0,
+      }),
+      channels: this.eventCounters(player),
+      emitters: Object.freeze(
+        state.emitters.map((emitter, index) => {
+          const intent = latest[index];
+          return Object.freeze({
+            id: emitter.id,
+            module: emitter.module,
+            capacity: emitter.capacity,
+            visible: this.#visibility.get(`${player}:${emitter.id}`) ?? true,
+            tick: intent?.tick ?? null,
+            spawnCount: intent?.spawnCount ?? 0,
+            firstParticleId: intent?.firstParticleId ?? 0,
+            reset: intent?.reset ?? false,
+            schedule: emitter.schedule,
+            bounds: emitter.bounds,
+            simulationWhenCulled: emitter.simulationWhenCulled,
+            renderers: Object.freeze(
+              emitter.renderers.map((renderer, rendererIndex) =>
+                Object.freeze({
+                  index: rendererIndex,
+                  kind: renderer.kind,
+                  enabled: renderer.enabled ?? true,
+                }),
+              ),
+            ),
+            stages: Object.freeze((emitter.reflection.stages ?? []).map((stage) => stage.id)),
+            dataInterfaces: Object.freeze(
+              (emitter.reflection.dataInterfaces ?? []).map((requirement) => requirement.token),
+            ),
+          });
+        }),
+      ),
+      diagnostics: Object.freeze(
+        this.#diagnostics.filter((diagnostic) => diagnostic.detail.player === player),
+      ),
+    });
   }
 
   eventCounters(player: EntityHandle): VfxChannelCounters {
@@ -230,6 +344,12 @@ export class VfxGpuRuntime {
       const state = this.#players.get(intent.player);
       if (state !== undefined) state.hasCommitted = true;
       this.#lastCommitted.set(intent.player, intent);
+      let emitters = this.#lastCommittedByEmitter.get(intent.player);
+      if (emitters === undefined) {
+        emitters = new Map();
+        this.#lastCommittedByEmitter.set(intent.player, emitters);
+      }
+      emitters.set(intent.emitter.id, intent);
       committedPlayers.add(intent.player);
     }
     const retained = this.#intents.findIndex((intent) => intent.sequence > sequence);
@@ -245,6 +365,7 @@ export class VfxGpuRuntime {
     this.#instances.delete(player);
     this.#replayRequests.delete(player);
     this.#lastCommitted.delete(player);
+    this.#lastCommittedByEmitter.delete(player);
     this.#eventCounters.delete(player);
     this.#replayInputs.delete(player);
     const prefix = `${player}:`;
@@ -322,6 +443,9 @@ export class VfxGpuRuntime {
       const state = restart
         ? {
             effect: input.effect,
+            assetGuid: resolved.value.guid,
+            programFingerprint: resolved.value.program.fingerprint,
+            emitters: resolved.value.program.emitters,
             seed: input.seed,
             playing: input.playing,
             sessionPlaying,
@@ -483,6 +607,17 @@ export class VfxGpuRuntime {
       });
       return undefined;
     }
+  }
+
+  #latestIntent(player: EntityHandle, emitterId: string): VfxGpuTickIntent | undefined {
+    let latest = this.#lastCommittedByEmitter.get(player)?.get(emitterId);
+    for (let index = this.#intents.length - 1; index >= 0; index -= 1) {
+      const intent = this.#intents[index];
+      if (intent?.player !== player || intent.emitter.id !== emitterId) continue;
+      if (latest === undefined || intent.sequence > latest.sequence) latest = intent;
+      break;
+    }
+    return latest;
   }
 }
 

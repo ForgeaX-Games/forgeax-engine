@@ -38,7 +38,12 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
-import { AudioListener, AudioSource, audioPlugin } from '@forgeax/engine-audio';
+import {
+  AudioListener,
+  AudioSource,
+  audioPlugin,
+  captureAudioSimulationState,
+} from '@forgeax/engine-audio';
 import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
@@ -53,8 +58,16 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
+import {
+  createStandaloneRuntimeAssetBinding,
+  type AudioClipAsset,
+  type Handle,
+} from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+
+const runtimeBinding = createStandaloneRuntimeAssetBinding(
+  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'hello-audio',
+);
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.html');
@@ -63,7 +76,10 @@ if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.ht
 // signals the app layer to auto-create the WebAudioBackend before runPlugins.
 const appRes = await createApp(canvas, {
   plugins: [audioPlugin(), physicsPlugin('rapier-3d')],
-}, { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() });
+}, {
+  ...forgeaxBundlerAdapter(),
+  importTransport: createDevImportTransport(runtimeBinding),
+});
 if (!appRes.ok) {
   if (appRes.error instanceof EngineEnvironmentError) {
     console.error('[hello-audio] EngineEnvironmentError creating renderer');
@@ -85,7 +101,7 @@ if (!ready.ok) {
 // both dev and build lookup plus Web Audio decoding; demos never inspect the
 // pack-index row or fetch the source URL themselves.
 const assets = app.renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+assets.configureRuntimeBinding(runtimeBinding);
 
 const world = app.world;
 
@@ -186,7 +202,6 @@ const overlayEl = document.querySelector<HTMLDivElement>('#overlay');
 const listenerEntity = cameraEntity;
 const emitterEntityId = emitterEntity;
 const audioEngine = world.getResource<WebAudioEngine>('AudioEngine');
-let previousActiveSourceCount = 0;
 let audioStarts = 0;
 let collisionDetected = false;
 let collisionAudioStarted = false;
@@ -204,10 +219,9 @@ world
     fn: () => {
       const _dt = world.getResource(Time).delta;
       const audioState = audioEngine.getState();
-      if (audioState.activeSourceCount > previousActiveSourceCount) {
-        audioStarts += audioState.activeSourceCount - previousActiveSourceCount;
-      }
-      previousActiveSourceCount = audioState.activeSourceCount;
+      audioStarts = captureAudioSimulationState(audioEngine).intents.filter(
+        (intent) => intent.kind === 'play',
+      ).length;
       // Re-read clip handle in case asset loaded after boot.
   const currentClip = sfxClipHandleLoaded();
 

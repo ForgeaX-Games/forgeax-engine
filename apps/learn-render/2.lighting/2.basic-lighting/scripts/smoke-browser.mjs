@@ -38,6 +38,7 @@ const materialMetallicRoughnessTextureUvTransform =
 const materialMetallicRoughnessTextureUvSet =
   process.env.VITE_FALSIFY_MATERIAL_METALLIC_ROUGHNESS_TEXTURE_UV_SET ?? '';
 const materialMetallicChannel = process.env.VITE_FALSIFY_MATERIAL_METALLIC_CHANNEL ?? '';
+const materialRoughnessChannel = process.env.VITE_FALSIFY_MATERIAL_ROUGHNESS_CHANNEL ?? '';
 const materialEmissive = process.env.VITE_FALSIFY_MATERIAL_EMISSIVE ?? '';
 const materialEmissiveIntensity = process.env.VITE_FALSIFY_MATERIAL_EMISSIVE_INTENSITY ?? '';
 const materialEmissiveTexture = process.env.VITE_FALSIFY_MATERIAL_EMISSIVE_TEXTURE ?? '';
@@ -142,6 +143,12 @@ if (materialMetallicChannel !== '' && materialMetallicChannel !== 'red') {
   );
   process.exit(1);
 }
+if (materialRoughnessChannel !== '' && materialRoughnessChannel !== 'blue') {
+  console.error(
+    `[smoke-browser] FAIL - unsupported VITE_FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=${materialRoughnessChannel}; expected blue`,
+  );
+  process.exit(1);
+}
 if (
   materialMetallicChannel !== '' &&
   [
@@ -194,6 +201,62 @@ if (
 ) {
   console.error(
     '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_METALLIC_CHANNEL cannot be combined with another material or PointLight falsifier',
+  );
+  process.exit(1);
+}
+if (
+  materialRoughnessChannel !== '' &&
+  [
+    pointLightIntensity,
+    pointLightRange,
+    pointLightColor,
+    pointLightPosition,
+    materialMetallic,
+    materialRoughness,
+    materialBaseColor,
+    materialBaseColorTexture,
+    materialBaseColorTextureSampler,
+    materialBaseColorTextureUvTransform,
+    materialBaseColorTextureUvSet,
+    materialMetallicRoughnessTexture,
+    materialMetallicRoughnessTextureSampler,
+    materialMetallicRoughnessTextureUvTransform,
+    materialMetallicRoughnessTextureUvSet,
+    materialMetallicChannel,
+    materialEmissive,
+    materialEmissiveIntensity,
+    materialEmissiveTexture,
+    materialEmissiveTextureSampler,
+    materialEmissiveTextureUvTransform,
+    materialEmissiveTextureUvSet,
+    materialClearcoat,
+    materialNormalScale,
+    materialNormalTexture,
+    materialNormalTextureUvSet,
+    materialNormalTextureSampler,
+    materialNormalTextureUvTransform,
+    materialNormalTextureMagFilter,
+    materialNormalTextureMinFilter,
+    materialNormalTextureMipmapFilter,
+    materialNormalTextureAddressModeU,
+    materialNormalTextureAddressModeV,
+    materialNormalTextureAddressModeW,
+    materialNormalTextureSamplerLodMinClamp,
+    materialNormalTextureSamplerLodMaxClamp,
+    materialNormalTextureSamplerMaxAnisotropy,
+    materialOcclusionStrength,
+    materialOcclusionTextureSampler,
+    materialOcclusionTextureUvTransform,
+    materialOcclusionTextureUvSet,
+    materialSpecularTint,
+    materialSpecularTintTexture,
+    materialSpecularTintTextureSampler,
+    materialSpecularTintTextureUvTransform,
+    materialSpecularTintTextureUvSet,
+  ].some((value) => value !== '')
+) {
+  console.error(
+    '[smoke-browser] FAIL - VITE_FALSIFY_MATERIAL_ROUGHNESS_CHANNEL cannot be combined with another material or PointLight falsifier',
   );
   process.exit(1);
 }
@@ -1772,7 +1835,7 @@ await verifyDemoCapture({
   liveHook: '__captureBasicLighting',
   rtIdx: 0,
   appDir: dirname(here),
-  assertTape: pointLightIntensity === '' && pointLightRange === '' && pointLightColor === '' && pointLightPosition === '' && materialMetallic === '' && materialRoughness === '' && materialBaseColor === '' && materialBaseColorTexture === '' && materialBaseColorTextureSampler === '' && materialBaseColorTextureUvTransform === '' && materialBaseColorTextureUvSet === '' && materialMetallicRoughnessTexture === '' && materialMetallicRoughnessTextureSampler === '' && materialMetallicRoughnessTextureUvTransform === '' && materialMetallicRoughnessTextureUvSet === '' && materialMetallicChannel === '' && materialEmissive === '' && materialEmissiveIntensity === '' && materialEmissiveTexture === '' && materialEmissiveTextureSampler === '' && materialEmissiveTextureUvTransform === '' && materialEmissiveTextureUvSet === '' && materialClearcoat === '' && materialNormalScale === '' && materialNormalTexture === '' && materialNormalTextureUvSet === '' && materialNormalTextureSampler === '' && materialNormalTextureUvTransform === '' && materialNormalTextureMagFilter === '' && materialNormalTextureMinFilter === '' && materialNormalTextureMipmapFilter === '' && materialNormalTextureAddressModeU === '' && materialNormalTextureAddressModeV === '' && materialNormalTextureAddressModeW === '' && materialNormalTextureSamplerLodMinClamp === '' && materialNormalTextureSamplerLodMaxClamp === '' && materialNormalTextureSamplerMaxAnisotropy === '' && materialOcclusionStrength === '' && materialOcclusionTextureSampler === '' && materialOcclusionTextureUvTransform === '' && materialOcclusionTextureUvSet === '' && materialSpecularTint === '' && materialSpecularTintTexture === '' && materialSpecularTintTextureSampler === '' && materialSpecularTintTextureUvTransform === '' && materialSpecularTintTextureUvSet === ''
+  assertTape: pointLightIntensity === '' && pointLightRange === '' && pointLightColor === '' && pointLightPosition === '' && materialMetallic === '' && materialRoughness === '' && materialBaseColor === '' && materialBaseColorTexture === '' && materialBaseColorTextureSampler === '' && materialBaseColorTextureUvTransform === '' && materialBaseColorTextureUvSet === '' && materialMetallicRoughnessTexture === '' && materialMetallicRoughnessTextureSampler === '' && materialMetallicRoughnessTextureUvTransform === '' && materialMetallicRoughnessTextureUvSet === '' && materialMetallicChannel === '' && materialRoughnessChannel === '' && materialEmissive === '' && materialEmissiveIntensity === '' && materialEmissiveTexture === '' && materialEmissiveTextureSampler === '' && materialEmissiveTextureUvTransform === '' && materialEmissiveTextureUvSet === '' && materialClearcoat === '' && materialNormalScale === '' && materialNormalTexture === '' && materialNormalTextureUvSet === '' && materialNormalTextureSampler === '' && materialNormalTextureUvTransform === '' && materialNormalTextureMagFilter === '' && materialNormalTextureMinFilter === '' && materialNormalTextureMipmapFilter === '' && materialNormalTextureAddressModeU === '' && materialNormalTextureAddressModeV === '' && materialNormalTextureAddressModeW === '' && materialNormalTextureSamplerLodMinClamp === '' && materialNormalTextureSamplerLodMaxClamp === '' && materialNormalTextureSamplerMaxAnisotropy === '' && materialOcclusionStrength === '' && materialOcclusionTextureSampler === '' && materialOcclusionTextureUvTransform === '' && materialOcclusionTextureUvSet === '' && materialSpecularTint === '' && materialSpecularTintTexture === '' && materialSpecularTintTextureSampler === '' && materialSpecularTintTextureUvTransform === '' && materialSpecularTintTextureUvSet === ''
     ? undefined
     : ({ tape }) => {
         const pointLightsBuffer = tape.events.find(
@@ -2190,6 +2253,56 @@ await verifyDemoCapture({
             }
             console.log(
               `[learn-render 2.2 basic-lighting] tape materialMetallicChannel=${materialMetallicChannel} payload=${JSON.stringify(expectedBytes)} colorSpace=linear engineManagedRegion=metallicRoughnessTexture bindings=3/4 materialUBO metallic=0.5 metallicChannel=red roughnessChannel=green byteOffsets=16,24,28`,
+            );
+          }
+          if (materialRoughnessChannel !== '') {
+            const materialChannels = [materialFloats[4], materialFloats[6], materialFloats[7]];
+            const expectedChannels = [0.5, 2, 2];
+            if (materialChannels.some((value, index) => Math.abs(value - expectedChannels[index]) > 1e-6)) {
+              throw new Error(
+                `capture tape roughnessChannel material=${JSON.stringify(materialChannels)}; expected metallic=0.5, metallicChannel=2, roughnessChannel=2 at global byte offsets 16,24,28`,
+              );
+            }
+            const expectedBytes = [0, 0, 255, 255];
+            const texture = tape.events.find((event) => {
+              if (
+                event.kind !== 'createTexture' ||
+                event.desc?.format !== 'rgba8unorm' ||
+                event.desc?.size?.width !== 1 ||
+                event.desc?.size?.height !== 1
+              ) {
+                return false;
+              }
+              const seed = tape.events.find(
+                (candidate) => candidate.kind === 'initialData' && candidate.handleId === event.handleId,
+              );
+              const data = seed === undefined ? undefined : tape.blobPool.get(seed.dataHash);
+              const bytes = data === undefined ? undefined : new Uint8Array(data);
+              return bytes !== undefined && bytes.length === expectedBytes.length && bytes.every((value, index) => value === expectedBytes[index]);
+            });
+            if (texture === undefined) {
+              throw new Error(
+                'capture tape is missing the blue 1x1 roughnessChannel initialData payload',
+              );
+            }
+            const view = tape.events.find(
+              (event) => event.kind === 'createTextureView' && event.sourceHandleId === texture.handleId,
+            );
+            const binding = tape.events.find(
+              (event) =>
+                event.kind === 'createBindGroup' &&
+                event.entries.some((entry) => entry.binding === 3 && entry.resourceKind === 'sampler') &&
+                event.entries.some((entry) => entry.binding === 4 && entry.resourceKind === 'textureView') &&
+                view !== undefined &&
+                event.resourceHandleIds.includes(view.resultHandleId),
+            );
+            if (binding === undefined) {
+              throw new Error(
+                'capture tape is missing the engine-managed roughnessChannel texture bindings at 3/4',
+              );
+            }
+            console.log(
+              `[learn-render 2.2 basic-lighting] tape materialRoughnessChannel=${materialRoughnessChannel} payload=${JSON.stringify(expectedBytes)} colorSpace=linear engineManagedRegion=metallicRoughnessTexture bindings=3/4 materialUBO metallic=0.5 metallicChannel=blue roughnessChannel=blue byteOffsets=16,24,28`,
             );
           }
           if (materialMetallicRoughnessTexture !== '') {

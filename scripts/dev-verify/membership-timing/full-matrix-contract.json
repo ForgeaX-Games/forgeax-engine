@@ -1,0 +1,18 @@
+{
+  "generation": 4,
+  "topLevel": 20,
+  "nested": 32,
+  "acceptedGpu": 16,
+  "acceptedControl": 2,
+  "refused": 2,
+  "acceptedGpuByLights": {
+    "32": 5,
+    "64": 5,
+    "128": 5,
+    "256": 1
+  },
+  "referencesByKind": {
+    "cpu-membership": 16,
+    "timing-omitted-pixel": 16
+  }
+}

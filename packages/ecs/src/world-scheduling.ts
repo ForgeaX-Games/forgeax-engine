@@ -62,6 +62,24 @@ import type {
 const FIXED_ANCHOR_NAME = FixedUpdate.name;
 type ResourceKey = string | { readonly name: string };
 
+export type FixedTickHook = (world: World, tick: number) => void;
+
+const fixedTickHooks = new WeakMap<World, Set<FixedTickHook>>();
+
+/** Register work that runs at the fixed boundary after tick growth. */
+export function registerFixedTickHook(world: World, hook: FixedTickHook): () => void {
+  let hooks = fixedTickHooks.get(world);
+  if (hooks === undefined) {
+    hooks = new Set<FixedTickHook>();
+    fixedTickHooks.set(world, hooks);
+  }
+  hooks.add(hook);
+  return () => {
+    hooks?.delete(hook);
+    if (hooks?.size === 0) fixedTickHooks.delete(world);
+  };
+}
+
 function resourceName(key: ResourceKey): string {
   return typeof key === 'string' ? key : key.name;
 }
@@ -225,6 +243,10 @@ function runFixed(world: World, fixed: FixedTimeResource, accumulator: { value: 
     accumulator.value = Math.round((accumulator.value - fixed.delta) * 1e12) / 1e12;
     fixed.overstep = accumulator.value;
     fixed.tick += 1;
+    const hooks = fixedTickHooks.get(world);
+    if (hooks !== undefined) {
+      for (const hook of [...hooks]) hook(world, fixed.tick);
+    }
     runSchedule(fixedSchedule, world, world._getErrorHandler());
     steps += 1;
   }

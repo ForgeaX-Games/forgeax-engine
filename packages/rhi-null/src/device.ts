@@ -52,7 +52,8 @@ import type {
   TextureView,
   TextureViewDescriptor,
 } from '@forgeax/engine-rhi';
-import { ok } from '@forgeax/engine-types';
+import { RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
+import { err, ok } from '@forgeax/engine-types';
 import { Bookkeeper } from './bookkeeping';
 
 /** Monotonic device-id source so each RhiNullDevice owns a distinct id; the id
@@ -112,7 +113,8 @@ export class RhiNullDevice implements RhiDevice {
     return {
       backendKind: 'null',
       compute: true,
-      timestampQuery: true,
+      timestampQuery: false,
+      timestampPeriodNanoseconds: null,
       indirectDrawing: true,
       textureCompressionBc: false,
       textureCompressionEtc2: false,
@@ -165,6 +167,10 @@ export class RhiNullDevice implements RhiDevice {
     return this.internalBookkeeper.destroy(buf);
   }
 
+  destroyQuerySet(querySet: QuerySet): Result<void, RhiErrorType> {
+    return this.internalBookkeeper.destroy(querySet);
+  }
+
   destroyTexture(tex: Texture): Result<void, RhiErrorType> {
     return this.internalBookkeeper.destroy(tex);
   }
@@ -200,7 +206,16 @@ export class RhiNullDevice implements RhiDevice {
     return ok(this.makePipeline<ComputePipeline>('ComputePipeline'));
   }
 
-  createQuerySet(_desc: QuerySetDescriptor): Result<QuerySet, RhiErrorType> {
+  createQuerySet(desc: QuerySetDescriptor): Result<QuerySet, RhiErrorType> {
+    if (desc.type === 'timestamp') {
+      return err(
+        new RhiErrorClass({
+          code: 'feature-not-enabled',
+          expected: 'caps.timestampQuery === true (timestamp-query feature)',
+          hint: 'RhiNull is structural-only and cannot produce GPU timestamp ticks',
+        }),
+      );
+    }
     return ok(this.internalBookkeeper.register('QuerySet') as unknown as QuerySet);
   }
 

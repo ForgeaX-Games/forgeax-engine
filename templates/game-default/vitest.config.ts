@@ -22,6 +22,8 @@ export default defineProject({
       '__tests__/energy-core-extraction.test.ts',
       '__tests__/reward-choice.test.ts',
       '__tests__/barrier-route.test.ts',
+      '__tests__/sentinel-ranged-threat.test.ts',
+      '__tests__/simulation-evidence.integration.test.ts',
     ],
     exclude: ['**/node_modules/**'],
   },

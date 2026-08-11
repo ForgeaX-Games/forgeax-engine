@@ -230,6 +230,7 @@ interface PassState {
 /** WeakMap that tracks raw GPUQuerySet for createQuerySet handles so the shim
  *  can read `.count` for queryIndex bounds checking (research §2.1 step 2). */
 const QUERY_SET_RAW_MAP: WeakMap<QuerySet, GPUQuerySet> = new WeakMap();
+const QUERY_SET_DESTROYED_MAP: WeakMap<QuerySet, { destroyed: boolean }> = new WeakMap();
 
 /**
  * WeakMap that tracks Buffer metadata (size + usage) so resolveQuerySet (and
@@ -397,6 +398,7 @@ function deriveCaps(
     backendKind: 'webgpu' as const,
     compute: true, // WebGPU spec mandates compute-pipeline support.
     timestampQuery: has('timestamp-query'),
+    timestampPeriodNanoseconds: has('timestamp-query') ? 1 : null,
     indirectDrawing: true, // WebGPU spec mandates drawIndirect / drawIndexedIndirect.
     textureCompressionBc,
     textureCompressionEtc2,
@@ -1716,6 +1718,7 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
         // Register raw handle so the RPE / encoder paths can read `.count` /
         // `.type` for bounds + alignment checks (research §2.1 + §2.3).
         QUERY_SET_RAW_MAP.set(handle, out);
+        QUERY_SET_DESTROYED_MAP.set(handle, { destroyed: false });
         return ok(handle);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -1727,6 +1730,35 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
           }),
         );
       }
+    },
+    destroyQuerySet(querySet: QuerySet): Result<void, RhiError> {
+      const marker = QUERY_SET_DESTROYED_MAP.get(querySet);
+      if (marker?.destroyed) {
+        return err(
+          new RhiErrorClass({
+            code: 'destroy-after-destroy',
+            expected: 'GPU query-set handle has not been destroyed yet',
+            hint: 'object already destroyed; release each timestamp QuerySet exactly once',
+          }),
+        );
+      }
+      const rawQuery = QUERY_SET_RAW_MAP.get(querySet) as
+        | (GPUQuerySet & { destroy?: () => void })
+        | undefined;
+      try {
+        if (rawQuery !== undefined && typeof rawQuery.destroy === 'function') rawQuery.destroy();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return err(
+          new RhiErrorClass({
+            code: 'webgpu-runtime-error',
+            expected: 'underlying GPUQuerySet.destroy() to succeed',
+            hint: `destroy raised: ${message}`,
+          }),
+        );
+      }
+      if (marker !== undefined) marker.destroyed = true;
+      return ok(undefined);
     },
     createCommandEncoder(
       desc?: CommandEncoderDescriptor | undefined,

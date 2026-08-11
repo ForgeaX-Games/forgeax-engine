@@ -6,7 +6,7 @@
 // as the import function from the calling module scope is injected.
 //
 // CONTRACT (the one an AI user holds): the script IS the body of an async
-// function with `world` / `renderer` / `assets` / `debugAdapter` / `_import`
+// function with `world` / `renderer` / `assets` / `debugAdapter` / `simulation` / `_import`
 // in scope. So all of these Just Work, un-wrapped:
 //   - a bare expression:            `renderer.backend`            -> auto-returned
 //   - top-level await:              `await _import('@forgeax/engine-ecs')`
@@ -47,6 +47,7 @@ export type ExecuteContext = {
   readonly debugAdapter?: unknown;
   readonly profiler?: unknown;
   readonly execution?: unknown;
+  readonly simulation?: unknown;
   readonly importModule?: (specifier: string) => Promise<unknown>;
 };
 
@@ -69,6 +70,7 @@ function compile(script: string): FunctionConstructor['prototype'] {
     'debugAdapter',
     'profiler',
     'execution',
+    'simulation',
     '_import',
   ] as const;
   try {
@@ -112,6 +114,7 @@ export async function executeScript(script: string, ctx: ExecuteContext): Promis
       ctx.debugAdapter,
       ctx.profiler,
       ctx.execution,
+      ctx.simulation,
       ctx.importModule ?? _import,
     );
 

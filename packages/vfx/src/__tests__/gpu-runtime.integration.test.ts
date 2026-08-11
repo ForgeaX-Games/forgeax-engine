@@ -13,6 +13,7 @@ import { ParticleEffectInstance } from '../instance.js';
 import { ParticleEffectPlayer } from '../player.js';
 
 const effect: VfxGpuEffectAsset = {
+  guid: 'effect-guid',
   kind: 'particle-effect',
   schemaVersion: 2,
   programFingerprint: 'sha256:test',
@@ -23,6 +24,7 @@ const effect: VfxGpuEffectAsset = {
     emitters: [
       {
         id: 'sparks',
+        module: 'sparks.vfx.wgsl',
         capacity: 100_000,
         backend: { required: 'gpu' },
         space: 'world',
@@ -230,6 +232,66 @@ describe('GPU VFX fixed-tick intents', () => {
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     expect(runtime.snapshot()).toHaveLength(2);
     expect(runtime.snapshot().map((intent) => intent.player)).toContain(first);
+  });
+
+  it('inspects every player and emitter by stable runtime identity', async () => {
+    const multiEmitter = structuredClone(effect) as VfxGpuEffectAsset;
+    const firstEmitter = multiEmitter.program.emitters[0];
+    expect(firstEmitter).toBeDefined();
+    if (firstEmitter === undefined) return;
+    const secondEmitter = {
+      ...firstEmitter,
+      id: 'smoke',
+      module: 'smoke.vfx.wgsl',
+      capacity: 64,
+      renderers: [
+        { kind: 'trail' as const, material: 'smoke-material', historyLength: 4, capacity: 64 },
+      ],
+    };
+    (multiEmitter.program.emitters as VfxGpuEffectAsset['program']['emitters'][number][]).push(
+      secondEmitter,
+    );
+    (multiEmitter.emitters as { id: string; capacity: number }[]).push({
+      id: 'smoke',
+      capacity: 64,
+    });
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', multiEmitter);
+    const first = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 1, timeScale: 1 },
+      })
+      .unwrap();
+    const second = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 2, timeScale: 1 },
+      })
+      .unwrap();
+    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    world.update(1 / 60).unwrap();
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+
+    expect(runtime.inspectPlayers()).toEqual([
+      expect.objectContaining({
+        player: first,
+        assetGuid: 'effect-guid',
+        programFingerprint: 'sha256:test',
+        emitters: [
+          expect.objectContaining({ id: 'sparks', module: 'sparks.vfx.wgsl', visible: true }),
+          expect.objectContaining({ id: 'smoke', module: 'smoke.vfx.wgsl', visible: true }),
+        ],
+      }),
+      expect.objectContaining({ player: second }),
+    ]);
+
+    runtime.setEmitterVisibility(first, 'smoke', false);
+    expect(runtime.inspectPlayer(first)?.emitters[1]).toMatchObject({
+      id: 'smoke',
+      visible: false,
+    });
+    expect(runtime.inspectPlayer(999 as never)).toBeUndefined();
   });
 
   it('clears player and effect diagnostics after authored state recovers', async () => {

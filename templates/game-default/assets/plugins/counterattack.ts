@@ -1,7 +1,7 @@
 import {
   Disabled,
-  Time,
-  Update,
+  FixedTime,
+  FixedUpdate,
   defineComponent,
   type EntityHandle,
   type World,
@@ -103,10 +103,15 @@ export type CounterattackSnapshot = {
   readonly pursuitRadius: number;
   readonly cooldown: number;
   readonly acceptedHits: number;
+  readonly lastShieldedHealth: number | null;
 };
 
 export type CounterattackHandle = {
   readonly arm: () => boolean;
+  readonly admitDamage: (roles: {
+    readonly hazardEntity: EntityHandle;
+    readonly feedbackEntity: EntityHandle;
+  }) => CounterattackContactResult;
   readonly reset: () => void;
   readonly snapshot: () => CounterattackSnapshot;
   readonly installSystem: (ctx: CounterattackSystemContext) => void;
@@ -130,8 +135,10 @@ export function createCounterattack(
   const damageHazards = world.query({ with: [DamageHazard] }).unwrap();
   const activeEntities = (): EntityHandle[] => [...activeHazards].map((row) => row.entity);
   const disabledEntities = (): EntityHandle[] => [...disabledHazards].map((row) => row.entity);
+  let lastShieldedHealth: number | null = null;
 
   const reset = (): void => {
+    lastShieldedHealth = null;
     world.set(player, PlayerHealth, { current: PLAYER_MAX_HEALTH, max: PLAYER_MAX_HEALTH });
     const disabled = disabledEntities();
     const hazards = [...activeEntities(), ...disabled];
@@ -147,24 +154,55 @@ export function createCounterattack(
     ? undefined
     : world.get(entity, DamageHazard);
   const damageEntities = (): EntityHandle[] => [...damageHazards].map((row) => row.entity);
-  const resetDamageCooldown = (entity: EntityHandle): void => {
+  const setDamageCooldown = (entity: EntityHandle, cooldown: number): void => {
     const source = world.get(entity, DamageHazard);
-    if (source.ok) world.set(entity, DamageHazard, { cooldown: 0 });
+    if (source.ok) world.set(entity, DamageHazard, { cooldown });
   };
-  const decrementDamageCooldowns = (dt: number): void => {
+  const decrementDamageCooldowns = (dt: number, shieldReady: boolean): void => {
     for (const entity of damageEntities()) {
       const source = world.get(entity, DamageHazard);
+      if (source.ok && shieldReady && world.get(entity, BouncyBallHazard).ok) {
+        world.set(entity, DamageHazard, { cooldown: COUNTERATTACK_COOLDOWN_SECONDS });
+        continue;
+      }
       if (source.ok && source.value.cooldown > 0) {
         world.set(entity, DamageHazard, { cooldown: Math.max(0, source.value.cooldown - dt) });
       }
     }
   };
   const arm = (): boolean => {
-    const entity = disabledEntities()[0];
-    if (entity === undefined) return activeEntities().length > 0;
-    world.removeComponent(entity, Disabled).unwrap();
-    resetDamageCooldown(entity);
+    const disabled = disabledEntities()[0];
+    const entity = disabled ?? activeEntities()[0];
+    if (entity === undefined) return false;
+    if (disabled !== undefined) world.removeComponent(disabled, Disabled).unwrap();
+    setDamageCooldown(entity, COUNTERATTACK_COOLDOWN_SECONDS);
     return true;
+  };
+  let consequenceContext: CounterattackSystemContext | undefined;
+  const admitDamage = (roles: { readonly hazardEntity: EntityHandle; readonly feedbackEntity: EntityHandle }): CounterattackContactResult => {
+    const hazard = world.get(roles.hazardEntity, DamageHazard);
+    const health = world.get(player, PlayerHealth);
+    if (!hazard.ok || !health.ok || consequenceContext === undefined) {
+      return resolveCounterattackContact({ health: health.ok ? health.value.current : 0, cooldown: 1 });
+    }
+    const result = resolveCounterattackContact({
+      health: health.value.current,
+      cooldown: hazard.value.cooldown,
+      shieldReady: consequenceContext.rewardChoice?.snapshot().state === 'shield-ready',
+    });
+    if (!result.admitted) return result;
+    if (result.shieldConsumed) {
+      consequenceContext.rewardChoice?.consumeShield();
+      lastShieldedHealth = result.health;
+    }
+    world.set(player, PlayerHealth, { current: result.health });
+    world.set(roles.hazardEntity, DamageHazard, {
+      cooldown: result.cooldown,
+      acceptedHits: hazard.value.acceptedHits + 1,
+    });
+    consequenceContext.onHit(roles.feedbackEntity, result.health, result.shieldConsumed);
+    if (result.defeated) consequenceContext.requestDefeat();
+    return result;
   };
 
   const snapshot = (): CounterattackSnapshot => {
@@ -202,18 +240,23 @@ export function createCounterattack(
       pursuitRadius: pressure.pursuitRadius,
       cooldown: hazardDamage?.ok === true ? hazardDamage.value.cooldown : 0,
       acceptedHits: hazardDamage?.ok === true ? hazardDamage.value.acceptedHits : 0,
+      lastShieldedHealth,
     };
   };
 
   const installSystem = (ctx: CounterattackSystemContext): void => {
-    world.addSystem(Update, {
+    consequenceContext = ctx;
+    world.addSystem(FixedUpdate, {
       name: 'game-counterattack',
       runIf: inState(GameState, 'Play'),
-      after: ['physicsCollisionSync', 'game-player-movement', 'game-target-feedback'],
+      after: ['physicsCollisionSync', 'game-player-movement'],
       queries: [],
       fn: () => {
-        const dt = world.getResource(Time).delta;
-        decrementDamageCooldowns(dt);
+        // Counterattack pressure is proven against FixedTime. A long host
+        // frame must not turn one variable-rate Update into a movement jump
+        // larger than one simulation step.
+        const dt = world.getResource(FixedTime).delta;
+        decrementDamageCooldowns(dt, ctx.rewardChoice?.snapshot().state === 'shield-ready');
         const playerTransform = world.get(player, Transform);
         if (!playerTransform.ok) return;
         const playerX = playerTransform.value.pos[0] ?? 0;
@@ -255,25 +298,12 @@ export function createCounterattack(
           const attacker = entity as EntityHandle;
           if (ctx.physics?.hasBody(attacker) !== true) continue;
           if (world.get(attacker, Disabled).ok) continue;
-          const hazard = world.get(attacker, DamageHazard);
-          const health = world.get(player, PlayerHealth);
-          if (!hazard.ok || !health.ok) continue;
-          const result = resolveCounterattackContact({
-            health: health.value.current,
-            cooldown: hazard.value.cooldown,
-            shieldReady: ctx.rewardChoice?.snapshot().state === 'shield-ready',
-          });
-          if (!result.admitted) continue;
-          if (result.shieldConsumed) ctx.rewardChoice?.consumeShield();
-          world.set(player, PlayerHealth, { current: result.health });
-          world.set(attacker, DamageHazard, { cooldown: result.cooldown, acceptedHits: hazard.value.acceptedHits + 1 });
-          ctx.onHit(attacker, result.health, result.shieldConsumed);
-          if (result.defeated) ctx.requestDefeat();
+          admitDamage({ hazardEntity: attacker, feedbackEntity: attacker });
         }
       },
     }).unwrap();
   };
 
   reset();
-  return { arm, reset, snapshot, installSystem };
+  return { arm, admitDamage, reset, snapshot, installSystem };
 }

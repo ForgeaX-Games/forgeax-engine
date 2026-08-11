@@ -46,6 +46,8 @@ import type {
   RemoveEssentialComponentError,
   ScheduleMutationError,
   ScheduleScopeMismatchError,
+  SharedKernelEligibilityError,
+  SharedKernelFailureError,
   SpawnLightInvalidBoundsError,
   StaleEntityError,
   SystemSetNotRegisteredError,
@@ -53,13 +55,9 @@ import type {
   TimeDeltaInvalidError,
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
+  WorldPoisonedError,
 } from './errors';
 import { ChangeEpochExhaustedError } from './errors';
-import type {
-  SharedKernelEligibilityError,
-  SharedKernelFailureError,
-  WorldPoisonedError,
-} from './execution/shared-kernel-errors';
 import {
   createWorldIdentity,
   healthyWorldExecutionState,
@@ -69,6 +67,7 @@ import {
 } from './execution/world-health';
 import type { QueryDescriptor } from './query/query';
 import { createQuery, type Query, type QueryCreationError } from './query/query';
+import type { RecoverableResourceDescriptor } from './resource';
 import { createResourceStore, type ResourceStore } from './resource';
 import {
   createSchedule,
@@ -81,6 +80,15 @@ import {
 } from './schedule';
 import { FixedUpdate, FrameEnd, Update } from './schedule-token';
 import { SharedRefStore } from './shared-ref-store';
+import {
+  captureSimulationRecord,
+  restoreSimulationRecord,
+  type SimulationError,
+  type SimulationParticipant,
+  SimulationParticipantRegistry,
+  type SimulationRecordV1,
+  simulationWorldFingerprint,
+} from './simulation';
 import type { Archetype } from './storage/archetype';
 import { type ArchetypeGraph, createArchetypeGraph } from './storage/archetype-graph';
 import {
@@ -89,8 +97,6 @@ import {
   markComponentsAdded,
   readComponentChange,
 } from './storage/change-detection';
-import type { FieldView } from './storage/column';
-import type { Table } from './storage/table';
 import {
   createFixedTimeResource,
   createTimeResource,
@@ -400,6 +406,8 @@ export class World {
   ]);
   /** Resource store: typed key-value global singletons. */
   private readonly resources: ResourceStore = createResourceStore();
+  private readonly simulationParticipantRegistry = new SimulationParticipantRegistry();
+  private readonly simulationResourceDescriptors = new Map<string, RecoverableResourceDescriptor>();
   /** Error handler for Layer 3 (defaults to matchSeverity — Panic throws). */
   private errorHandler: ErrorHandler = matchSeverity;
   /** Remainder carried between fixed-step runs. */
@@ -574,7 +582,7 @@ export class World {
 
   /** @internal Mark one contiguous component range with a single epoch. */
   _markComponentRangeChanged(
-    table: Table,
+    table: ArchetypeGraph['tables'][number],
     componentId: number,
     rowStart: number,
     rowCount: number,
@@ -645,6 +653,10 @@ export class World {
   }
   /** @internal */ _getResources(): ResourceStore {
     return this.resources;
+  }
+  /** @internal */
+  _getSimulationResourceDescriptors(): ReadonlyMap<string, RecoverableResourceDescriptor> {
+    return this.simulationResourceDescriptors;
   }
   /** @internal */ _getErrorHandler(): ErrorHandler {
     return this.errorHandler;
@@ -918,6 +930,34 @@ export class World {
     return worldScheduleData(this);
   }
 
+  registerSimulationParticipant(participant: SimulationParticipant): Result<void, SimulationError> {
+    return this.simulationParticipantRegistry.register(participant);
+  }
+
+  /** Return a snapshot of the World-owned simulation participant registry. */
+  simulationParticipants(): readonly SimulationParticipant[] {
+    return this.simulationParticipantRegistry.entries();
+  }
+
+  registerRecoverableResource<T>(descriptor: RecoverableResourceDescriptor<T>): void {
+    this.simulationResourceDescriptors.set(
+      descriptor.key,
+      descriptor as RecoverableResourceDescriptor,
+    );
+  }
+
+  simulationRecord(): Result<SimulationRecordV1, SimulationError> {
+    return captureSimulationRecord(this, this.simulationParticipantRegistry);
+  }
+
+  simulationRestore(record: SimulationRecordV1): Result<void, SimulationError> {
+    return restoreSimulationRecord(this, this.simulationParticipantRegistry, record);
+  }
+
+  simulationFingerprint(): string {
+    return simulationWorldFingerprint(this);
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Managed-ref public API (feat-20260528-rapier-physics M1 / t4)
   // ──────────────────────────────────────────────────────────────────────────
@@ -1038,7 +1078,7 @@ export class World {
     entity: EntityHandle,
     component: Component,
     fieldName: string,
-  ): FieldView | undefined {
+  ): ArrayLike<number> | undefined {
     return this.componentAccess._getArrayView(entity, component, fieldName);
   }
 

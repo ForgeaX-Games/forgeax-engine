@@ -307,6 +307,9 @@ export class WebAudioEngine {
   }
 
   destroy(): void {
+    if (this.closed) return;
+    this.closed = true;
+
     // Stop all active sources
     for (const entityId of this.sources.keys()) {
       this.stop(entityId);
@@ -334,7 +337,6 @@ export class WebAudioEngine {
       void this.ctx.close();
       this.ctx = undefined;
     }
-    this.closed = true;
   }
 
   // -----------------------------------------------------------------------

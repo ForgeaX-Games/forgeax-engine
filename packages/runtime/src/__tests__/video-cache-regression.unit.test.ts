@@ -85,6 +85,7 @@ const mockCaps: RhiCaps = {
   backendKind: 'webgpu',
   compute: true,
   timestampQuery: false,
+  timestampPeriodNanoseconds: null,
   indirectDrawing: false,
   textureCompressionBc: false,
   textureCompressionEtc2: false,

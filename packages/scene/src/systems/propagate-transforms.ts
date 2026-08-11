@@ -1,4 +1,4 @@
-import { Update } from '@forgeax/engine-ecs';
+import { FixedUpdate, Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-runtime - propagateTransforms system (root-down world mat4 derivation).
 //
 // Triggered by `registerPropagateTransforms(world)` which binds the system
@@ -83,6 +83,7 @@ import { projectHierarchy, type SceneHierarchySnapshot } from './hierarchy-proje
  * on dependent systems.
  */
 export const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
+export const PROPAGATE_TRANSFORMS_FIXED_SYSTEM = 'propagateTransformsFixed' as const;
 export const TransformSet = defineSystemSet({ name: 'transform' });
 
 interface GraphLike {
@@ -344,6 +345,13 @@ export const PropagateTransforms: SystemHandle<readonly []> = defineSystem({
   },
 });
 
+/** FixedUpdate copy used by simulation participants before fixed physics. */
+export const PropagateTransformsFixed: SystemHandle<readonly []> = defineSystem({
+  name: PROPAGATE_TRANSFORMS_FIXED_SYSTEM,
+  queries: [],
+  fn: PropagateTransforms.fn,
+});
+
 /**
  * Register `propagateTransforms` into the ECS schedule as the
  * 'pre-render' system (plan-strategy §D-P2).
@@ -385,4 +393,5 @@ export function registerPropagateTransforms(
     return;
   }
   world.addSystems(Update, TransformSet, [PropagateTransforms]);
+  world.addSystems(FixedUpdate, TransformSet, [PropagateTransformsFixed]);
 }

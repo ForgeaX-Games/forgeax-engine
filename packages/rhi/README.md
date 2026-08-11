@@ -118,7 +118,7 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 
 | Field | Type | Semantics |
 |:--|:--|:--|
-| `RhiCaps` | `readonly { compute / timestampQuery / indirectDrawing / textureCompressionBc / textureCompressionEtc2 / textureCompressionAstc / multiDrawIndirect / pushConstants / textureBindingArray / samplerAliasing / firstInstanceIndirect / storageBuffer / storageTexture: boolean }` | Hardware feature probe (proposition 5: `caps.X = false` is the same signal shape as a value field, no exception) |
+| `RhiCaps` | `readonly { compute / timestampQuery / timestampPeriodNanoseconds / indirectDrawing / textureCompressionBc / textureCompressionEtc2 / textureCompressionAstc / multiDrawIndirect / pushConstants / textureBindingArray / samplerAliasing / firstInstanceIndirect / storageBuffer / storageTexture }` | Hardware feature probe (proposition 5: `caps.X = false` is the same signal shape as a value field, no exception) |
 | `RhiFeatures` | `readonly Set<GPUFeatureName>` | Enabled feature set (a subset of capabilities) |
 | `RhiLimits` | `readonly GPUSupportedLimits` | Numeric limits (`maxBindGroups`, `maxBufferSize`, etc.) |
 
@@ -131,6 +131,7 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 |:--|:--|:--|:--|:--|:--|
 | `compute` | `boolean` | compute pipelines supported (W3C 13.2 GPUComputePipeline) | `true` (spec-mandated) | `false` (no compute) | `true` |
 | `timestampQuery` | `boolean` | `device.features.has('timestamp-query')` (W3C 21 query sets) | gated; off by default | `false` | gated |
+| `timestampPeriodNanoseconds` | `number | null` | Backend-owned timestamp unit; positive only when timestamp queries are supported | `1` when enabled, otherwise `null` | `null` | backend-owned |
 | `indirectDrawing` | `boolean` | `drawIndirect` / `drawIndexedIndirect` supported (W3C 22.4) | `true` (spec-mandated) | `false` (lacks the analogue) | `true` |
 | `textureCompressionBc` | `boolean` | `adapter.features.has('texture-compression-bc')` (BC1-BC7) | adapter-dependent | `false` | adapter-dependent |
 | `textureCompressionEtc2` | `boolean` | `adapter.features.has('texture-compression-etc2')` | adapter-dependent | `false` | adapter-dependent |
@@ -144,6 +145,10 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 | `storageTexture` | `boolean` | `device.limits.maxStorageTexturesPerShaderStage > 0` | `true` on real adapters | `false` (no storage texture binding) | `true` |
 
 AI users gate optional fast paths via `caps.X` instead of try / catch (`caps.X = false` is an explicit signal, never an exception — charter proposition 4). The 4 `@reserved-for-wgpu-native-only` fields (`multiDrawIndirect` / `pushConstants` / `textureBindingArray`) plus the JSDoc-`@note` annotated fields are sourced from the `RhiCaps` interface JSDoc — `LSP hover` over any cap surfaces the per-field rationale.
+
+Render membership timing consumes only this capability seam. It requests the
+timestamp feature for explicit GPU timing, uses the existing opaque timestamp
+operations, and refuses when the boolean or the positive period is absent.
 
 ## Placeholder methods (3) — return `'rhi-not-available'`
 
