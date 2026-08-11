@@ -43,9 +43,14 @@ export interface VfxHitLoop {
 export interface GameplayVfx extends VfxHitLoop {
   readonly beginTelegraph: (position: readonly [number, number, number]) => void;
   readonly flightPresentation: () => readonly ComponentData[];
+  readonly attackFlightPresentation: () => readonly ComponentData[];
   readonly attachFlight: (entity: EntityHandle) => void;
   readonly stopFlight: (entity: EntityHandle) => void;
+  readonly stopAttackFlight: (entity: EntityHandle) => void;
   readonly emitImpact: (position: readonly [number, number, number]) => void;
+  readonly emitAttackImpact: (position: readonly [number, number, number], overcharged: boolean) => void;
+  readonly stopAttackEffects: () => void;
+  readonly resetAttack: () => void;
   readonly stopHostile: () => void;
   readonly bossSnapshot: () => GameplayVfxSnapshot;
 }
@@ -82,7 +87,7 @@ export async function createGameplayVfx(options: {
 }): Promise<GameplayVfx> {
   const noop = (reason: string, hint: string): GameplayVfx => {
     const base = unavailable(reason, hint);
-    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => base, dispose: () => undefined, beginTelegraph: () => undefined, flightPresentation: () => [], attachFlight: () => undefined, stopFlight: () => undefined, emitImpact: () => undefined, stopHostile: () => undefined, bossSnapshot: () => ({ ...base, hostCount: 0, attachedWorlds: 0, installedFeatures: 0, suiteGuid: null, suiteEmitterCount: 0, rendererKinds: [], phase: 'dormant', eventSequence: 0, telegraphEvents: 0, flightEvents: 0, contactEvents: 0, activePlayers: 0, activeCarriers: 0, lastPosition: null }), };
+    return { trigger: () => undefined, beginCharge: () => undefined, endCharge: () => undefined, triggerCharge: () => undefined, reset: () => undefined, snapshot: () => base, dispose: () => undefined, beginTelegraph: () => undefined, flightPresentation: () => [], attackFlightPresentation: () => [], attachFlight: () => undefined, stopFlight: () => undefined, stopAttackFlight: () => undefined, emitImpact: () => undefined, emitAttackImpact: () => undefined, stopAttackEffects: () => undefined, resetAttack: () => undefined, stopHostile: () => undefined, bossSnapshot: () => ({ ...base, hostCount: 0, attachedWorlds: 0, installedFeatures: 0, suiteGuid: null, suiteEmitterCount: 0, rendererKinds: [], phase: 'dormant', eventSequence: 0, telegraphEvents: 0, flightEvents: 0, contactEvents: 0, activePlayers: 0, activeCarriers: 0, lastPosition: null }), };
   };
   const { world, assets, renderer, target, sentinel, camera } = options;
   if (assets === undefined || renderer === undefined || target === undefined) return noop('host-unavailable', 'VFX needs the Preview AssetRegistry, Renderer, and a scored target.');
@@ -105,7 +110,7 @@ export async function createGameplayVfx(options: {
   let seed = 0; let mode: VfxHitLoopMode = 'hit'; let playing = false; let triggers = 0; let disposed = false;
   let phase: BossVfxPhase = 'dormant'; let eventSequence = 0; let telegraphEvents = 0; let flightEvents = 0; let contactEvents = 0; let lastPosition: readonly [number, number, number] | null = null;
   let hostFailure: { readonly code: string; readonly hint: string } | null = null;
-  const flightEntities = new Set<EntityHandle>(); const impactCarriers = new Map<EntityHandle, number>();
+  const flightEntities = new Set<EntityHandle>(); const impactCarriers = new Map<EntityHandle, number>(); const attackImpactCarriers = new Map<EntityHandle, number>();
   const featureReady = (): boolean => {
     if (hostFailure !== null) return false;
     const diagnostic = renderer.renderFeatureDiagnostics().find((entry) => entry.identity === 'forgeax.vfx-render.gpu-particles');
@@ -119,6 +124,8 @@ export async function createGameplayVfx(options: {
       flightEntities.clear();
       for (const entity of impactCarriers.keys()) world.despawn(entity);
       impactCarriers.clear();
+      for (const entity of attackImpactCarriers.keys()) world.despawn(entity);
+      attackImpactCarriers.clear();
       phase = 'dormant'; lastPosition = null;
       return false;
     }
@@ -126,7 +133,7 @@ export async function createGameplayVfx(options: {
   };
   const writePlayer = (): void => { if (!disposed) world.set(target, ParticleEffectPlayer, { effect: mode === 'hit' ? hitEffect : chargeEffect, playing, seed, timeScale: 1 }); };
   const setEffect = (entity: EntityHandle, effect: typeof telegraphEffect, active: boolean, nextSeed: number): void => { if (!world.get(entity, Transform).ok && entity !== target) return; const existing = world.get(entity, ParticleEffectPlayer); if (existing.ok) world.set(entity, ParticleEffectPlayer, { effect, playing: active, seed: nextSeed, timeScale: 1 }); else world.addComponent(entity, { component: ParticleEffectPlayer, data: { effect, playing: active, seed: nextSeed, timeScale: 1 } }); };
-  world.addSystem(FixedUpdate, { name: 'gameplay-vfx-carrier-cleanup', queries: [], fn: (_world, _queries) => { const dt = world.getResource(FixedTime).delta; for (const [entity, ttl] of impactCarriers) { const next = ttl - dt; if (next > 0) impactCarriers.set(entity, next); else { world.despawn(entity); impactCarriers.delete(entity); } } if (phase === 'contact' && impactCarriers.size === 0 && flightEntities.size === 0) { phase = 'dormant'; lastPosition = null; } } }).unwrap();
+  world.addSystem(FixedUpdate, { name: 'gameplay-vfx-carrier-cleanup', queries: [], fn: (_world, _queries) => { const dt = world.getResource(FixedTime).delta; for (const [entity, ttl] of impactCarriers) { const next = ttl - dt; if (next > 0) impactCarriers.set(entity, next); else { world.despawn(entity); impactCarriers.delete(entity); } } for (const [entity, ttl] of attackImpactCarriers) { const next = ttl - dt; if (next > 0) attackImpactCarriers.set(entity, next); else { world.despawn(entity); attackImpactCarriers.delete(entity); } } if (phase === 'contact' && impactCarriers.size === 0 && attackImpactCarriers.size === 0 && flightEntities.size === 0) { phase = 'dormant'; lastPosition = null; } } }).unwrap();
   const snapshot = (): VfxHitLoopSnapshot => { featureReady(); const runtime = world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY) ? world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY) : undefined; const effect = mode === 'hit' ? hit : charge; const diagnostics = runtime?.diagnostics() ?? []; const error = diagnostics.at(-1); const kinds = effect.program.emitters.flatMap((entry) => entry.renderers.map((rendererEntry) => rendererEntry.kind)); if (hostFailure !== null) return unavailable(hostFailure.code, hostFailure.hint); return { available: true, mode, playing, seed, triggers, guid: mode === 'hit' ? GAME_DEFAULT_HIT_VFX_GUID : GAME_DEFAULT_CHARGE_VFX_GUID, emitterCount: effect.program.emitters.length, emitterStatuses: effect.program.emitters.map(() => 'gpu'), batchKinds: kinds, alive: 0, bucketCount: new Set(kinds).size, readiness: runtime?.hasPlayer(target) === true ? 'ready' : 'warming', errorCode: error?.code ?? null, errorHint: error?.hint ?? null }; };
   const bossSnapshot = (): GameplayVfxSnapshot => { const base = snapshot(); const suite = [telegraph, flight, contact]; const kinds = suite.flatMap((effect) => effect.program.emitters.flatMap((entry) => entry.renderers.map((rendererEntry) => rendererEntry.kind))); const unavailableHost = hostFailure !== null; const activeSentinelPlayer = phase === 'telegraph' ? 1 : 0; return { ...base, hostCount: unavailableHost ? 0 : 1, attachedWorlds: unavailableHost ? 0 : 1, installedFeatures: unavailableHost ? 0 : 1, suiteGuid: unavailableHost ? null : phase === 'telegraph' ? GAME_DEFAULT_BOSS_TELEGRAPH_VFX_GUID : phase === 'flight' ? GAME_DEFAULT_BOSS_FLIGHT_VFX_GUID : phase === 'contact' ? GAME_DEFAULT_BOSS_CONTACT_VFX_GUID : null, suiteEmitterCount: unavailableHost ? 0 : suite.reduce((sum, effect) => sum + effect.program.emitters.length, 0), rendererKinds: unavailableHost ? [] : [...new Set(kinds)], phase: unavailableHost ? 'dormant' : phase, eventSequence, telegraphEvents, flightEvents, contactEvents, activePlayers: unavailableHost ? 0 : activeSentinelPlayer + flightEntities.size, activeCarriers: unavailableHost ? 0 : impactCarriers.size, lastPosition: unavailableHost ? null : lastPosition }; };
   const api: GameplayVfx = {
@@ -139,10 +146,15 @@ export async function createGameplayVfx(options: {
     dispose: () => { if (disposed) return; disposed = true; api.stopHostile(); world.set(target, ParticleEffectPlayer, { playing: false }); host.detachWorld({ world }); },
     beginTelegraph: (position) => { if (disposed || !featureReady() || sentinel === undefined || world.get(sentinel, Transform).ok === false) return; seed = (seed + 1) >>> 0; phase = 'telegraph'; eventSequence += 1; telegraphEvents += 1; lastPosition = [...position]; setEffect(sentinel, telegraphEffect, true, seed); },
     flightPresentation: () => featureReady() ? [{ component: ParticleEffectPlayer, data: { effect: flightEffect, playing: true, seed: (seed + 1) >>> 0, timeScale: 1 } }] : [],
+    attackFlightPresentation: () => featureReady() ? [{ component: ParticleEffectPlayer, data: { effect: flightEffect, playing: true, seed: (seed + 1) >>> 0, timeScale: 1 } }] : [],
     attachFlight: (entity) => { if (disposed || !featureReady()) return; if (sentinel !== undefined && world.get(sentinel, ParticleEffectPlayer).ok) world.set(sentinel, ParticleEffectPlayer, { playing: false }); flightEntities.add(entity); flightEvents += 1; phase = 'flight'; eventSequence += 1; const transform = world.get(entity, Transform); if (transform.ok) lastPosition = [transform.value.pos[0] ?? 0, transform.value.pos[1] ?? 0, transform.value.pos[2] ?? 0]; },
     stopFlight: (entity) => { if (!flightEntities.delete(entity)) return; if (world.get(entity, ParticleEffectPlayer).ok) world.set(entity, ParticleEffectPlayer, { playing: false }); if (phase === 'flight') phase = 'dormant'; },
+    stopAttackFlight: (entity) => { if (world.get(entity, ParticleEffectPlayer).ok) world.set(entity, ParticleEffectPlayer, { playing: false }); },
     emitImpact: (position) => { if (disposed || !featureReady()) return; const carrier = world.spawn({ component: Transform, data: { pos: [...position] } }, { component: ParticleEffectPlayer, data: { effect: contactEffect, playing: true, seed: (seed + 1) >>> 0, timeScale: 1 } }); if (!carrier.ok) return; seed = (seed + 1) >>> 0; phase = 'contact'; eventSequence += 1; contactEvents += 1; lastPosition = [...position]; impactCarriers.set(carrier.value, 1.8); },
-    stopHostile: () => { if (sentinel !== undefined && world.get(sentinel, ParticleEffectPlayer).ok) world.set(sentinel, ParticleEffectPlayer, { playing: false }); for (const entity of flightEntities) if (world.get(entity, ParticleEffectPlayer).ok) world.set(entity, ParticleEffectPlayer, { playing: false }); flightEntities.clear(); for (const entity of impactCarriers.keys()) world.despawn(entity); impactCarriers.clear(); phase = 'dormant'; lastPosition = null; },
+    emitAttackImpact: (position, overcharged) => { if (disposed || !featureReady()) return; if (!overcharged) { seed = (seed + 1) >>> 0; triggers += 1; mode = 'hit'; playing = true; writePlayer(); return; } const carrier = world.spawn({ component: Transform, data: { pos: [...position] } }, { component: ParticleEffectPlayer, data: { effect: contactEffect, playing: true, seed: (seed + 1) >>> 0, timeScale: 1 } }); if (!carrier.ok) return; seed = (seed + 1) >>> 0; triggers += 1; mode = 'hit'; playing = true; attackImpactCarriers.set(carrier.value, 1.8); },
+    stopAttackEffects: () => { if (world.get(target, ParticleEffectPlayer).ok) world.set(target, ParticleEffectPlayer, { playing: false }); for (const entity of attackImpactCarriers.keys()) world.despawn(entity); attackImpactCarriers.clear(); },
+    resetAttack: () => { if (disposed) return; api.stopAttackEffects(); },
+    stopHostile: () => { if (sentinel !== undefined && world.get(sentinel, ParticleEffectPlayer).ok) world.set(sentinel, ParticleEffectPlayer, { playing: false }); for (const entity of flightEntities) if (world.get(entity, ParticleEffectPlayer).ok) world.set(entity, ParticleEffectPlayer, { playing: false }); flightEntities.clear(); for (const entity of impactCarriers.keys()) world.despawn(entity); impactCarriers.clear(); for (const entity of attackImpactCarriers.keys()) world.despawn(entity); attackImpactCarriers.clear(); phase = 'dormant'; lastPosition = null; },
     bossSnapshot,
   };
   return api;

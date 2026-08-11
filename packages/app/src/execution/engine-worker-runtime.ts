@@ -3,7 +3,6 @@ import {
   ASSET_REGISTRY_RESOURCE_KEY,
   AUDIO_ENGINE_RESOURCE_KEY,
   type AudioIntent,
-  audioPlugin,
   createAudioIntentBackend,
 } from '@forgeax/engine-audio';
 import type { SharedKernelExecutor } from '@forgeax/engine-ecs';
@@ -19,7 +18,11 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
 import { inputPlugin } from '../plugin-factories';
-import { runBootstrapEntry } from './bootstrap-entry';
+import {
+  type PreparedExecutionBootstrap,
+  prepareBootstrapEntry,
+  runPreparedBootstrap,
+} from './bootstrap-entry';
 import { createKernelPool, type KernelPool } from './kernel-pool';
 import type {
   EngineToHostMessage,
@@ -53,6 +56,7 @@ let engineCanvas: OffscreenCanvas | undefined;
 let kernelPool: KernelPool | undefined;
 let realmInit: ExecutionInitMessage | undefined;
 let pendingAudioIntents: AudioIntent[] = [];
+let realmCleanups: Array<() => void> = [];
 
 const lazyKernelExecutor: SharedKernelExecutor = {
   warmup(kernel) {
@@ -108,9 +112,51 @@ function postFault(
   });
 }
 
+function flushRealmCleanups(): void {
+  const pending = realmCleanups;
+  realmCleanups = [];
+  for (const cleanup of pending.reverse()) {
+    try {
+      cleanup();
+    } catch (cause) {
+      postFault(
+        'runtime',
+        'app-system-update-failed',
+        'execution bootstrap cleanup completes',
+        'inspect the realm-local cleanup callback',
+        cause,
+      );
+    }
+  }
+}
+
+function registerRealmCleanup(cleanup: () => void): () => void {
+  realmCleanups.push(cleanup);
+  return () => {
+    const index = realmCleanups.indexOf(cleanup);
+    if (index >= 0) realmCleanups.splice(index, 1);
+  };
+}
+
+function postBootstrapFault(error: {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: unknown;
+}): void {
+  postFault('bootstrap', error.code, error.expected, error.hint, error.detail);
+}
+
 async function createRealm(init: ExecutionInitMessage, keepRenderer = false): Promise<boolean> {
+  flushRealmCleanups();
   pendingAudioIntents = [];
   bootstrapUrl = init.bootstrapUrl;
+  const preparedResult = await prepareBootstrapEntry(init.bootstrapUrl, init.bootstrapData);
+  if (!preparedResult.ok) {
+    postBootstrapFault(preparedResult.error);
+    return false;
+  }
+  const prepared: PreparedExecutionBootstrap = preparedResult.value;
   const nextWorld = new World({
     ...(init.time !== undefined ? { time: init.time } : {}),
     storage: init.tier === 'shared' ? 'shared' : 'local',
@@ -126,7 +172,7 @@ async function createRealm(init: ExecutionInitMessage, keepRenderer = false): Pr
   if (!keepRenderer) {
     renderer = await createRenderer(
       init.canvas,
-      {},
+      prepared.features === undefined ? {} : { features: prepared.features },
       init.shaderManifestUrl === undefined
         ? undefined
         : { shaderManifestUrl: init.shaderManifestUrl },
@@ -139,19 +185,28 @@ async function createRealm(init: ExecutionInitMessage, keepRenderer = false): Pr
   }
   const plugins = await runPlugins(
     nextWorld,
-    [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin(), audioPlugin()],
-    [],
+    [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin()],
+    prepared.plugins ?? [],
   );
   if (!plugins.ok) throw plugins.error;
-  const bootstrapped = await runBootstrapEntry(init.bootstrapUrl, nextWorld);
+  if (renderer === undefined) throw new Error('execution Renderer is unavailable after readiness');
+  const bootstrapped = await runPreparedBootstrap(init.bootstrapUrl, prepared, {
+    world: nextWorld,
+    renderer,
+    assets: renderer.assets,
+    data: init.bootstrapData,
+    ...(init.bootstrapPort === undefined ? {} : { port: init.bootstrapPort }),
+    registerCleanup: registerRealmCleanup,
+    setPointerLockAllowed(allowed): void {
+      scope.postMessage({
+        kind: 'host-control',
+        command: 'set-pointer-lock-allowed',
+        allowed,
+      });
+    },
+  });
   if (!bootstrapped.ok) {
-    postFault(
-      'bootstrap',
-      bootstrapped.error.code,
-      bootstrapped.error.expected,
-      bootstrapped.error.hint,
-      bootstrapped.error.detail,
-    );
+    postBootstrapFault(bootstrapped.error);
     return false;
   }
   await kernelPool?.ready();
@@ -277,6 +332,8 @@ scope.onmessage = (event): void => {
   else if (message.kind === 'frame') runFrame(message);
   else if (message.kind === 'rebuild') void rebuild(message);
   else if (message.kind === 'dispose') {
+    flushRealmCleanups();
+    realmInit?.bootstrapPort?.close();
     renderer?.dispose();
     kernelPool?.dispose();
     scope.close();

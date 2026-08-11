@@ -31,13 +31,41 @@ The canvas form creates a World, renderer, default plugins, browser input backen
 
 ## Execution tiers
 
-`execution` moves the complete World, Renderer, and GPU owner into one Engine Worker. The Host keeps DOM input, frame credit, Web Audio, and inspection. `shared` adds a lazy persistent Kernel Worker pool over shared ECS numeric columns; it does not split the live World or render graph across realms.
+`execution` moves the complete World, Renderer, AssetRegistry, render features,
+and gameplay plugins into one Engine Worker. The Host keeps DOM input, frame
+credit, Web Audio, and inspection. `shared` adds a lazy persistent Kernel Worker
+pool over shared ECS numeric columns; it does not split the live World or render
+graph across realms.
+
+The bootstrap module is a two-step realm contract. Its default function first
+constructs renderer features and plugins inside the selected realm, then its
+`run` callback receives the ready, real owners. It never receives a remote World
+or a fake host App.
+
+```ts
+// game-bootstrap.ts
+import type { ExecutionBootstrapEntry } from '@forgeax/engine-app';
+import { audioPlugin } from '@forgeax/engine-audio';
+
+const bootstrap: ExecutionBootstrapEntry = (data) => ({
+  features: [createGameRenderFeature(data)],
+  plugins: [audioPlugin(), createGamePhysicsPlugin(data)],
+  async run({ world, renderer, assets, port, registerCleanup }) {
+    const session = await createGameSession({ world, renderer, assets, port });
+    registerCleanup(() => session.dispose());
+  },
+});
+
+export default bootstrap;
+```
 
 ```ts
 const result = await createApp(canvas, {
   execution: {
     tier: 'auto',
     bootstrap: new URL('./game-bootstrap.mjs', import.meta.url),
+    bootstrapData: { gameId: 'example' },
+    bootstrapPort: realmPort,
   },
 }, forgeaxBundlerAdapter());
 if (!result.ok) throw result.error;
@@ -55,10 +83,10 @@ if (report.world.health === 'poisoned') {
 
 ```mermaid
 flowchart LR
-    H["Host: DOM input, frame credit, Web Audio"] --> E["Engine Worker: World, Renderer, WebGPU"]
+    H["Host: DOM UI, input, frame credit, Web Audio"] <--> P["Typed MessagePort"]
+    P <--> E["Engine realm: World, Renderer, Assets, game bootstrap"]
     E --> K["Kernel Workers: eligible QuerySpan shards"]
     K --> E
-    E --> H
 ```
 
 | Requested tier | Runtime shape | Selection rule |
@@ -69,6 +97,20 @@ flowchart LR
 | `auto` | Best available proven tier | Reports the actual tier and reason; never disguises fallback |
 
 An explicit unavailable tier returns a structured `AppError`; only `auto` falls back. Serve `shared` with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` or `credentialless`, then verify the Worker-realm facts in `app.execution.report()`. Every SharedKernel module is imported and export-checked in every lane before the Engine Worker reports ready, so an invalid module fails before the first shared write. A partial Kernel write poisons the World, stops update/draw, and requires explicit rebuild to obtain a new World identity.
+
+`bootstrapData` must be structured-cloneable and is validated before a canvas is
+transferred. `bootstrapPort` is the realm side of a host-created
+`MessageChannel`; App transfers and closes it with the execution realm. Keep DOM
+UI on the Host side of that typed channel. `registerCleanup` is flushed in
+reverse order on Stop and before Worker rebuild. `setPointerLockAllowed` is the
+one built-in realm-to-Host control because browser input ownership remains on
+the Host.
+
+When `execution` is present, realm-bound `CreateAppOptions` (`features`,
+`plugins`, simulation participants, RHI injection, draw source, membership
+timing, and bundler import transport) are rejected instead of working only in a
+`main-serial` fallback. Construct them in the bootstrap module so `auto` has one
+game assembly path in every selected tier.
 
 The machine-readable report contract is [`schema/execution-report.schema.json`](./schema/execution-report.schema.json). Shared Kernel eligibility and storage rules are owned by [`@forgeax/engine-ecs`](../ecs). The production reference and benchmark commands are in [`hello/multithreaded-execution`](../../apps/hello/multithreaded-execution).
 

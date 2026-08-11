@@ -8,6 +8,7 @@ export const Projectile = defineComponent('GameDefaultProjectile', {
   velocityZ: 'f32',
   life: { type: 'f32', default: 1.5 },
   impactScale: { type: 'f32', default: 1 },
+  presentationVariant: { type: 'u32', default: 0 },
   source: { type: 'entity' },
   allegiance: 'u32',
 }, { transient: true });
@@ -64,6 +65,21 @@ export const ChargeShot = defineComponent('GameDefaultChargeShot', {
   release: { type: 'u32', default: 0 },
   elapsed: { type: 'f32', default: 0 },
   power: { type: 'f32', default: 1 },
+}, { transient: true });
+
+/** ECS-owned presentation facts for the player's authored charge and attack VFX. */
+export const AttackPresentation = defineComponent('GameDefaultAttackPresentation', {
+  charging: { type: 'u32', default: 0 },
+  chargeProgress: { type: 'f32', default: 0 },
+  chargePower: { type: 'f32', default: 1 },
+  shotsFired: { type: 'u32', default: 0 },
+  trailStarts: { type: 'u32', default: 0 },
+  impactBursts: { type: 'u32', default: 0 },
+  misses: { type: 'u32', default: 0 },
+  overchargeShots: { type: 'u32', default: 0 },
+  overchargeImpacts: { type: 'u32', default: 0 },
+  lastImpactScale: { type: 'f32', default: 1 },
+  lastVariant: { type: 'u32', default: 0 },
 }, { transient: true });
 
 /** Tunable FPS camera velocity; the free-camera helper operates on this ECS payload. */

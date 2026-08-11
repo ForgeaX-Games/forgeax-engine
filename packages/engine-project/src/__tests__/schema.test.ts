@@ -76,6 +76,18 @@ describe('GameProjectSchema — acceptance', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it('accepts an explicit realm-local execution entry', () => {
+    const result = GameProjectSchema.safeParse({
+      id: 'worker-game',
+      name: 'Worker Game',
+      schemaVersion: '1.0.0',
+      entry: 'main.ts',
+      executionEntry: 'runtime.ts',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.executionEntry).toBe('runtime.ts');
+  });
 });
 
 // ── GuidString refinement ───────────────────────────────────────────────────

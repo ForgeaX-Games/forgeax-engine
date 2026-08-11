@@ -133,7 +133,7 @@ export interface AppDetailExecutionTierUnavailable {
 }
 
 export interface AppDetailExecutionBootstrapFailed {
-  readonly phase: 'import' | 'export' | 'bootstrap';
+  readonly phase: 'import' | 'export' | 'prepare' | 'bootstrap' | 'data';
   readonly moduleUrl: string;
   readonly cause: unknown;
 }

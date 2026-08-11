@@ -50,3 +50,10 @@ Every failure returns a `GameProjectError` with `.code` / `.expected` / `.hint` 
 ## Schema as contract
 
 `GameProjectSchema` is the authoritative field list (charter P2) — read it instead of prose, and derive types via `import type { GameProject } from '@forgeax/engine-project'`.
+
+`entry` names the legacy combined game bootstrap. `executionEntry` opts a game
+into the realm-local `ExecutionBootstrapEntry` contract from
+`@forgeax/engine-app`; it is never inferred from filename conventions. A host
+may use `entry` for DOM-only presentation while the execution module owns the
+real World, Renderer, AssetRegistry, plugins, and render features. Games without
+`executionEntry` remain on the host assembly path.

@@ -3,7 +3,7 @@ import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { AnimatedMaterialTarget } from './animated-target-material';
 import { createAnimatedMaterialTarget } from './animated-target-material';
 import { createScoringTargetQuery, ScoringTarget, type ScoringTargetQuery } from './scoring-target';
-import { ChargeShot, HitFlash, FreeCameraMotion, GameplayInput, PlayerMotion, ProjectilePolicy, TargetPresentation } from './components/gameplay';
+import { AttackPresentation, ChargeShot, HitFlash, FreeCameraMotion, GameplayInput, PlayerMotion, ProjectilePolicy, TargetPresentation } from './components/gameplay';
 import {
   attachScenePhysics, expandLoadedScene, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
   spawnFallbackScene, spawnGroundCollider, type LoadedScene,
@@ -75,6 +75,7 @@ export async function assembleGameplayScene(world: World, host: BootstrapContext
         world.addComponent(player, { component: PlayerMotion, data: { jumpY: PLAYER_Y, freeY: PLAYER_Y } });
         world.addComponent(player, { component: GameplayInput, data: {} });
         world.addComponent(player, { component: ChargeShot, data: {} });
+        world.addComponent(player, { component: AttackPresentation, data: {} });
         world.addComponent(player, { component: FreeCameraMotion, data: {} });
         world.addComponent(player, { component: ProjectilePolicy, data: {} });
       }

@@ -38,6 +38,7 @@ describe('game-default authored VFX effects', () => {
   it('keeps scheduling declarative and behavior in reusable WGSL modules', () => {
     const charge = readEffect('charge-vfx-effect.pack.json').effect;
     expect(charge.emitters.map((emitter) => emitter.schedule.rate)).toEqual([14, 4]);
+    expect(charge.emitters.map((emitter) => emitter.schedule.loopDuration)).toEqual([0.9, 0.9]);
     expect(charge.emitters.map((emitter) => emitter.schedule.bursts?.[0]?.time)).toEqual([0, 0.15]);
     expect(charge.emitters.map((emitter) => emitter.program.module)).toEqual([
       'charge.vfx.wgsl',

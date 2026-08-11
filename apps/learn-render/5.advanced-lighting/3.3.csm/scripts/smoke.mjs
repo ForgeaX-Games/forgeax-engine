@@ -25,6 +25,8 @@
 //     shadowCascade* pass (proves the shadowCascade assertion can fail).
 //   - FALSIFY=force-csm-highlight-layer-2 : switch the existing overlay UBO to
 //     cascade 2 and require the final image to change from the all-bands image.
+//   - FALSIFY=force-csm-probe-depth-lit : replace the GPU probe factors with
+//     fully lit values; the sampled-depth contribution gate must turn red.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-3-3-csm] backend=<backend>`
@@ -520,6 +522,55 @@ async function readTightRgba(label) {
 }
 
 let tightRgba = await readTightRgba('cascadeBlend=0.2');
+
+// Read the same atlas through the renderer's producer-owned GPU probe. These
+// points cover the ground around the near cubes and farther cascade bands;
+// the returned factors are sampled depth evidence, not a CPU reconstruction.
+const csmProbePositions = [
+  [-8, -0.5, -1],
+  [-2, -0.5, -1],
+  [0, -0.5, -1],
+  [2, -0.5, -4],
+  [0, -0.5, -20],
+  [0, -0.5, -40],
+];
+const csmProbeResults = await app.renderer.debugSampleShadowFactor?.(csmProbePositions);
+if (csmProbeResults === null || csmProbeResults === undefined) {
+  console.error('[smoke] FAIL - CSM sampled-depth probe unavailable');
+  process.exit(1);
+}
+const csmProbeFactors = csmProbeResults.map(({ shadowFactor }) => shadowFactor);
+const gatedCsmProbeFactors = FALSIFY === 'force-csm-probe-depth-lit'
+  ? csmProbeFactors.map(() => 1)
+  : csmProbeFactors;
+if (FALSIFY === 'force-csm-probe-depth-lit') {
+  console.log('[smoke] FALSIFY=force-csm-probe-depth-lit -- replaced sampled factors with fully lit');
+}
+console.log(
+  `[smoke] CSM sampled-depth factors=${JSON.stringify(csmProbeFactors)}`,
+);
+const csmProbeExpectations = [
+  { label: 'outside-near', min: 0.9 },
+  { label: 'near-cube-shadow', max: 0.5 },
+  { label: 'near-lit-ground', min: 0.9 },
+  { label: 'second-cube-shadow', max: 0.5 },
+  { label: 'far-lit-ground', min: 0.9 },
+  { label: 'far-cube-shadow', max: 0.5 },
+];
+for (const [index, expectation] of csmProbeExpectations.entries()) {
+  const factor = gatedCsmProbeFactors[index];
+  if (
+    factor === undefined ||
+    (expectation.min !== undefined && factor < expectation.min) ||
+    (expectation.max !== undefined && factor >= expectation.max)
+  ) {
+    throw new Error(
+      `CSM sampled-depth contribution missing at ${expectation.label}: ` +
+        `factor=${factor} expected=${JSON.stringify(expectation)}`,
+    );
+  }
+}
+console.log('[smoke] CSM sampled-depth atlas resource contribution accepted: lit=3 shadowed=3');
 
 // Select one real cascade through the existing overlay mode UBO and prove the
 // selected-layer highlight changes the submitted color image. This is a

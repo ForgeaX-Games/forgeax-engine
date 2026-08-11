@@ -47,12 +47,14 @@ import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime'
 import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
-import { AppError } from './errors';
+import { APP_ERROR_HINTS, APP_EXPECTED, AppError } from './errors';
 import {
   createExecutionReport,
   type ExecutionControl,
+  type PreparedExecutionBootstrap,
+  prepareBootstrapEntry,
   probeExecutionCapabilities,
-  runBootstrapEntry,
+  runPreparedBootstrap,
   selectExecutionTier,
   unavailableExecutionCapabilities,
 } from './execution';
@@ -183,12 +185,44 @@ async function createAppFromCanvas(
   // resize remains visible to both rendering and camera policy.
   syncCanvasDrawingBuffer(canvas);
 
+  if (opts?.execution !== undefined) {
+    const realmBoundOption = [
+      ['features', opts.features],
+      ['plugins', opts.plugins],
+      ['simulationParticipants', opts.simulationParticipants],
+      ['rhi', opts.rhi],
+      ['rawDeviceForContextConfigure', opts.rawDeviceForContextConfigure],
+      ['drawSource', opts.drawSource],
+      ['membershipTiming', opts.membershipTiming],
+      ['bundler.importTransport', bundler?.importTransport],
+    ].find(([, value]) => value !== undefined)?.[0];
+    if (realmBoundOption !== undefined) {
+      const moduleUrl = new URL(opts.execution.bootstrap, globalThis.location?.href).href;
+      return err(
+        makeAppError(
+          'app-execution-bootstrap-failed',
+          APP_EXPECTED['app-execution-bootstrap-failed'],
+          APP_ERROR_HINTS['app-execution-bootstrap-failed'],
+          {
+            phase: 'prepare',
+            moduleUrl,
+            cause: new TypeError(
+              `${realmBoundOption} must be constructed by the execution bootstrap module`,
+            ),
+          },
+        ),
+      );
+    }
+  }
+
   let executionContext:
     | {
         readonly capabilities: import('./execution').ExecutionCapabilities;
         readonly selection: import('./execution').ExecutionSelection;
       }
     | undefined;
+  let preparedExecutionBootstrap: PreparedExecutionBootstrap | undefined;
+  let executionBootstrapUrl: string | undefined;
   if (opts?.execution !== undefined) {
     const capabilities = await probeExecutionCapabilities(canvas);
     const selected = selectExecutionTier({
@@ -207,6 +241,13 @@ async function createAppFromCanvas(
         selection: selected.value,
       });
     }
+    executionBootstrapUrl = new URL(opts.execution.bootstrap, globalThis.location?.href).href;
+    const prepared = await prepareBootstrapEntry(
+      executionBootstrapUrl,
+      opts.execution.bootstrapData,
+    );
+    if (!prepared.ok) return err(prepared.error);
+    preparedExecutionBootstrap = prepared.value;
   }
 
   // Step 2: createRenderer try/catch -> Result.err(EngineEnvironmentError)
@@ -238,8 +279,9 @@ async function createAppFromCanvas(
   if (opts?.membershipTiming !== undefined) {
     Object.assign(rendererOpts, { membershipTiming: opts.membershipTiming });
   }
-  if (opts?.features !== undefined) {
-    Object.assign(rendererOpts, { features: opts.features });
+  const rendererFeatures = preparedExecutionBootstrap?.features ?? opts?.features;
+  if (rendererFeatures !== undefined) {
+    Object.assign(rendererOpts, { features: rendererFeatures });
   }
 
   // m3-1: FORGEAX_ENGINE_RHI_DEBUG=1 RHI-debug recorder wiring.
@@ -587,7 +629,8 @@ async function createAppFromCanvas(
   // only does world-registration; the backend lifecycle stays in the app layer).
   // M3 (w15): opts.audio flag deleted — detection is by plugin name.
   let audioBackend: AudioBackend | undefined;
-  const userPlugins: readonly PluginSource[] = opts?.plugins ?? [];
+  const userPlugins: readonly PluginSource[] =
+    preparedExecutionBootstrap?.plugins ?? opts?.plugins ?? [];
   const hasAudioPlugin = flattenPluginSources(userPlugins).some((p) => p.name === 'audio');
   if (hasAudioPlugin) {
     audioBackend = createWebAudioBackend();
@@ -606,12 +649,56 @@ async function createAppFromCanvas(
   if (!pluginResult.ok) {
     return err(pluginResult.error);
   }
-  if (opts?.execution !== undefined) {
-    const bootstrapped = await runBootstrapEntry(
-      new URL(opts.execution.bootstrap, globalThis.location?.href).href,
-      world,
+  const executionBootstrapCleanups: Array<() => void> = [];
+  const registerExecutionBootstrapCleanup = (cleanup: () => void): (() => void) => {
+    executionBootstrapCleanups.push(cleanup);
+    return () => {
+      const index = executionBootstrapCleanups.indexOf(cleanup);
+      if (index >= 0) executionBootstrapCleanups.splice(index, 1);
+    };
+  };
+  const flushExecutionBootstrapCleanups = (onErrorDispatch?: (error: AppError) => void): void => {
+    for (const cleanup of executionBootstrapCleanups.splice(0).reverse()) {
+      try {
+        cleanup();
+      } catch (cause) {
+        onErrorDispatch?.(
+          new AppError({
+            code: 'app-system-update-failed',
+            expected: APP_EXPECTED['app-system-update-failed'],
+            hint: APP_ERROR_HINTS['app-system-update-failed'],
+            detail: { cause, systemName: 'execution-bootstrap-cleanup' },
+          }),
+        );
+      }
+    }
+    opts?.execution?.bootstrapPort?.close();
+  };
+  if (
+    opts?.execution !== undefined &&
+    preparedExecutionBootstrap !== undefined &&
+    executionBootstrapUrl !== undefined
+  ) {
+    const bootstrapped = await runPreparedBootstrap(
+      executionBootstrapUrl,
+      preparedExecutionBootstrap,
+      {
+        world,
+        renderer,
+        assets: renderer.assets,
+        data: opts.execution.bootstrapData,
+        ...(opts.execution.bootstrapPort === undefined
+          ? {}
+          : { port: opts.execution.bootstrapPort }),
+        registerCleanup: registerExecutionBootstrapCleanup,
+        setPointerLockAllowed: (allowed) => inputBackend?.setPointerLockAllowed?.(allowed),
+      },
     );
-    if (!bootstrapped.ok) return err(bootstrapped.error);
+    if (!bootstrapped.ok) {
+      flushExecutionBootstrapCleanups();
+      renderer.dispose();
+      return err(bootstrapped.error);
+    }
   }
 
   const executionControl = createLocalExecutionControl(
@@ -673,16 +760,21 @@ async function createAppFromCanvas(
     executionControl,
     simulationAssembly: simulationAssembly.value,
     ...(inputBackend !== undefined ? { inputBackend } : {}),
-    ...(inputHandle !== undefined
+    ...(inputHandle !== undefined || opts?.execution !== undefined
       ? {
           cleanup: (onErrorDispatch: (err: AppError) => void) => {
-            inputHandle.cleanup({ onError: onErrorDispatch });
+            inputHandle?.cleanup({ onError: onErrorDispatch });
+            flushExecutionBootstrapCleanups(onErrorDispatch);
           },
           // The auto-attached backend's lock failures use app.onError. A supplied
           // host backend owns its own failure/lifecycle channel.
-          wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
-            inputHandle.setOnErrorDispatch(dispatch);
-          },
+          ...(inputHandle === undefined
+            ? {}
+            : {
+                wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
+                  inputHandle.setOnErrorDispatch(dispatch);
+                },
+              }),
         }
       : {}),
   };

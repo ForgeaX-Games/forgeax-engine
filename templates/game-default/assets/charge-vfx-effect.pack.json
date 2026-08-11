@@ -14,7 +14,7 @@
             "capacity": 96,
             "backend": { "required": "gpu" },
             "space": "local",
-            "schedule": { "rate": 14, "bursts": [{ "time": 0, "count": 10 }] },
+            "schedule": { "rate": 14, "loopDuration": 0.9, "bursts": [{ "time": 0, "count": 10 }] },
             "bounds": { "kind": "sphere", "center": [0, 0, 0], "radius": 1.5 },
             "program": { "module": "charge.vfx.wgsl" },
             "renderers": [{ "kind": "billboard", "material": "019e9c00-0000-7000-8000-000000000011", "blend": "additive" }]
@@ -24,7 +24,7 @@
             "capacity": 48,
             "backend": { "required": "gpu" },
             "space": "world",
-            "schedule": { "rate": 4, "bursts": [{ "time": 0.15, "count": 6 }] },
+            "schedule": { "rate": 4, "loopDuration": 0.9, "bursts": [{ "time": 0.15, "count": 6 }] },
             "bounds": { "kind": "sphere", "center": [0, 0, 0], "radius": 2 },
             "program": { "module": "charge.vfx.wgsl" },
             "renderers": [{ "kind": "mesh", "material": "019e9c00-0000-7000-8000-000000000012", "mesh": "cbe42beb-8975-5096-b3a1-3dda4cb4c077" }]

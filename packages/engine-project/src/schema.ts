@@ -1,6 +1,7 @@
 // schema.ts — GameProjectSchema + GuidString refinement (D-4, D-7)
 //
 // D-4 fields: id:string / name:string / schemaVersion:string / entry?:string /
+// executionEntry?:string /
 // defaultScene?:GuidString / physics?:union(enum+bool) / pointerLock?:bool /
 // input?:string / preview?:nested-object. .strict() rejects unknown fields.
 //
@@ -68,6 +69,8 @@ export const GameProjectSchema = z
     schemaVersion: z.string(),
     /** Optional bootstrap hook: entry module relative to game root (e.g. "main.ts", "src/main.ts"). */
     entry: z.string().optional(),
+    /** Optional realm-local ExecutionBootstrapEntry module relative to game root. */
+    executionEntry: z.string().optional(),
     /** Optional GUID of the scene to load first; must be a real scene asset GUID (GuidString-validated). */
     defaultScene: GuidString.optional(),
     /** Optional physics backend: enum tag ('3d'/'2d'/'rapier-3d'/'rapier-2d') or boolean on/off. */

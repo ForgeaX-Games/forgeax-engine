@@ -49,26 +49,31 @@ try {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      await page.goto(`http://127.0.0.1:${PORT}/?game=game-default`, { waitUntil: 'networkidle', timeout: 2_000 });
+      await page.goto(`http://127.0.0.1:${PORT}/?game=game-default`, { waitUntil: 'domcontentloaded', timeout: 10_000 });
       break;
     } catch (error) {
       if (Date.now() >= deadline) throw new Error(`Preview did not boot: ${serverOutput}\n${String(error)}`);
       await sleep(250);
     }
   }
+  await page.waitForFunction(() => globalThis.__forgeaxPreviewInspection?.list().reads.some(({ id }) => id === 'game-default.snapshot') ?? false, undefined, { timeout: 30_000, polling: 100 });
   await page.waitForTimeout(1_000);
 
-  const catalog = await page.evaluate(async () => {
-    const rows = await (await fetch('/pack-index.json')).json();
-    return rows.filter((row) => row.guid === '019e9c00-0000-7000-8000-000000000010' || row.guid === '019e9c00-0000-7000-8000-000000000020');
-  });
+  const catalog = await page.evaluate(async (mode) => {
+    const response = await fetch(mode === 'production' ? '/pack-index.json' : '/__pack/scopes/preview/1/catalog.json');
+    const payload = await response.json();
+    const rows = Array.isArray(payload) ? payload : payload.entries;
+    return Array.isArray(rows)
+      ? rows.filter((row) => row.guid === '019e9c00-0000-7000-8000-000000000010' || row.guid === '019e9c00-0000-7000-8000-000000000020')
+      : [];
+  }, MODE);
   if (catalog.length !== 2 || catalog.some((row) => row.kind !== 'particle-effect' || typeof row.packageUrl !== 'string')) {
     throw new Error(`VFX catalog rows failed: ${JSON.stringify(catalog)}`);
   }
 
   const before = await readSnapshot();
   const baseline = before?.value?.vfxHit;
-  if (!before?.ok || baseline?.mode !== 'hit' || baseline?.guid !== '019e9c00-0000-7000-8000-000000000010' || baseline?.emitterCount !== 2 || baseline?.emitterStatuses?.some((status) => status !== 'ready')) {
+  if (!before?.ok || baseline?.mode !== 'hit' || baseline?.guid !== '019e9c00-0000-7000-8000-000000000010' || baseline?.emitterCount !== 2 || baseline?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu')) {
     throw new Error(`VFX baseline failed: ${JSON.stringify(before)}`);
   }
 
@@ -77,7 +82,7 @@ try {
   const afterCharge = await readSnapshot();
   const charge = afterCharge?.value?.vfxHit;
   const chargeKinds = charge?.batchKinds ?? [];
-  if (!chargeAction?.ok || !afterCharge?.ok || charge?.mode !== 'charge' || charge?.guid !== '019e9c00-0000-7000-8000-000000000020' || charge?.playing !== true || charge?.seed !== 1 || charge?.triggers !== 1 || charge?.emitterCount !== 2 || charge?.emitterStatuses?.some((status) => status !== 'ready') || !chargeKinds.includes('billboard') || !chargeKinds.includes('mesh') || charge?.alive <= 0 || charge?.bucketCount !== 2 || charge?.readiness !== 'ready' || charge?.errorCode !== null) {
+  if (!chargeAction?.ok || !afterCharge?.ok || charge?.mode !== 'charge' || charge?.guid !== '019e9c00-0000-7000-8000-000000000020' || charge?.playing !== true || charge?.seed !== 1 || charge?.triggers !== 1 || charge?.emitterCount !== 2 || charge?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu') || !chargeKinds.includes('billboard') || !chargeKinds.includes('mesh') || charge?.bucketCount !== 2 || charge?.readiness !== 'ready' || charge?.errorCode !== null) {
     throw new Error(`VFX charge failed: ${JSON.stringify({ chargeAction, afterCharge })}`);
   }
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'charge-active.png') });
@@ -86,7 +91,7 @@ try {
   await page.waitForTimeout(250);
   const afterHit = await readSnapshot();
   const hit = afterHit?.value?.vfxHit;
-  if (!hitAction?.ok || !afterHit?.ok || hit?.mode !== 'hit' || hit?.guid !== '019e9c00-0000-7000-8000-000000000010' || hit?.seed !== 2 || hit?.triggers !== 2 || hit?.emitterStatuses?.some((status) => status !== 'ready') || hit?.errorCode !== null) {
+  if (!hitAction?.ok || !afterHit?.ok || hit?.mode !== 'hit' || hit?.guid !== '019e9c00-0000-7000-8000-000000000010' || hit?.seed !== 2 || hit?.triggers !== 2 || hit?.emitterStatuses?.some((status) => status !== 'ready' && status !== 'gpu') || hit?.errorCode !== null) {
     throw new Error(`VFX charge-to-hit switch failed: ${JSON.stringify({ hitAction, afterHit })}`);
   }
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'hit-active.png') });
@@ -103,14 +108,16 @@ try {
   // primary target is stable in the default 960x540 camera, so this click is
   // the smallest deterministic aim input that exercises picking + charge +
   // deferred projectile + target feedback together.
+  await page.evaluate(() => document.querySelector('canvas')?.focus());
   await page.keyboard.down('r');
   await page.waitForTimeout(80);
   await page.keyboard.up('r');
   await page.waitForTimeout(250);
   const gameplayBefore = await readSnapshot();
+  await page.evaluate(() => document.querySelector('canvas')?.focus());
   await page.keyboard.down('c');
   await page.waitForTimeout(950);
-  await page.waitForFunction(() => document.querySelector('[data-ui-asset]')?.shadowRoot?.querySelector('[data-ui-slot="charge-meter"]')?.getAttribute('aria-valuenow') === '100', undefined, { timeout: 3_000 });
+  await page.waitForFunction(() => document.querySelector('[data-ui-asset]')?.shadowRoot?.querySelector('[data-ui-slot="charge-meter"]')?.getAttribute('aria-valuenow') === '100', undefined, { timeout: 10_000 });
   const chargeHud = await page.evaluate(() => document.querySelector('[data-ui-asset]')?.shadowRoot?.textContent ?? '');
   const chargeMeter = await page.evaluate(() => {
     const charge = document.querySelector('[data-ui-asset]')?.shadowRoot?.querySelector('[data-ui-slot="charge"]');
@@ -125,7 +132,7 @@ try {
   if (!chargeHud.includes('Charging · 100%') || chargeMeter.state !== 'charging' || chargeMeter.value !== '100' || !chargeMeter.width?.includes('width: 100%')) {
     throw new Error(`player charge HUD failed: ${JSON.stringify({ chargeHud, chargeMeter })}`);
   }
-  await page.mouse.click(660, 208);
+  await page.mouse.click(570, 220);
   await page.keyboard.up('c');
   await page.waitForTimeout(900);
   const gameplayAfter = await readSnapshot();

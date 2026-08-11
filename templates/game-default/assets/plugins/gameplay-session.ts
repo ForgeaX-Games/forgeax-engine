@@ -19,6 +19,7 @@ import { createProjectilePresentation, type ProjectilePresentation } from './pro
 import { createGameplayReset } from './gameplay-reset';
 import { installGameplayChangeDetection, type GameplayChangeDetectionHandle } from './change-detection';
 import { Projectile, ResetPose } from './components/gameplay';
+import { createAttackPresentation, type AttackPresentationHandle } from './systems/attack-presentation';
 import {
   GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN,
   installDefaultGameplayConfig,
@@ -49,6 +50,7 @@ export type GameplaySession = {
   readonly projectilePresentation: ProjectilePresentation;
   readonly vfxHitLoop: GameplayVfx;
   readonly gameplayVfx: GameplayVfx;
+  readonly attackPresentation: AttackPresentationHandle | undefined;
   readonly multiWorldOverlay: MultiWorldOverlay | undefined;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
   readonly changeDetection: GameplayChangeDetectionHandle;
@@ -195,9 +197,13 @@ export async function createGameplaySession(
   const projectileEntities = (): EntityHandle[] => [
     ...new Set([...projectileQuery].map((row) => row.entity)),
   ];
+  const attackPresentation = targets.player === undefined
+    ? undefined
+    : createAttackPresentation({ world, root: targets.player, vfx: gameplayVfx, projectileEntities });
   installGameplayCommandCounters(world);
   const consumeProjectile = (entity: EntityHandle): void => {
     if (!world.get(entity, Projectile).ok) return;
+    attackPresentation?.stopProjectile(entity);
     gameplayVfx.stopFlight(entity);
     projectilePresentation.spriteAtlasLoop?.untrack(entity);
     world.despawn(entity).unwrap();
@@ -289,6 +295,7 @@ export async function createGameplaySession(
     animatedMaterial: targets.animatedMaterial,
     vfxHitLoop,
     gameplayVfx,
+    attackPresentation,
     setProjectileVisual: projectilePresentation.setProjectileVisual,
     resetMission: () => {
       cameraController.hud.resetTransientFeedback();
@@ -303,7 +310,7 @@ export async function createGameplaySession(
   const gameplayState = installGameplayState({
     world,
     reset: resetGameplay,
-    onTerminal: () => { gameplayVfx.stopHostile(); sentinel?.cleanupHostileProjectiles(); },
+    onTerminal: () => { attackPresentation?.stop(); gameplayVfx.stopHostile(); sentinel?.cleanupHostileProjectiles(); },
     onPhaseChange: cameraController.hud.setPhase,
   });
   installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
@@ -313,6 +320,7 @@ export async function createGameplaySession(
     projectilePresentation,
     vfxHitLoop,
     gameplayVfx,
+    attackPresentation,
     multiWorldOverlay,
     worldScoreText,
     changeDetection,

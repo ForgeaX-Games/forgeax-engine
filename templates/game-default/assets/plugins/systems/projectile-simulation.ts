@@ -22,6 +22,7 @@ import {
 import { DamageHazard } from '../counterattack';
 import { GAME_DEFAULT_GAMEPLAY_CONFIG, type GameplayConfig } from '../resources/gameplay';
 import type { RewardChoiceHandle } from '../reward-choice';
+import type { AttackPresentationHandle } from './attack-presentation';
 
 export const OVERCHARGE_IMPACT_MULTIPLIER = 2;
 
@@ -34,6 +35,7 @@ export type SharedProjectileSpawn = {
   readonly velocity: readonly [number, number, number];
   readonly life: number;
   readonly impactScale: number;
+  readonly presentationVariant?: number;
   readonly radius: number;
   readonly halfHeight: number;
   readonly mesh: Handle<'MeshAsset', 'shared'>;
@@ -61,6 +63,7 @@ export function spawnSharedProjectile(commands: CommandBuffer, shot: SharedProje
         velocityZ: shot.velocity[2],
         life: shot.life,
         impactScale: shot.impactScale,
+        presentationVariant: shot.presentationVariant ?? 0,
         source: shot.source,
         allegiance: shot.allegiance === 'hostile' ? PROJECTILE_ALLEGIANCE_HOSTILE : PROJECTILE_ALLEGIANCE_PLAYER,
       },
@@ -108,7 +111,8 @@ export type ProjectileSimulationSystemContext = {
   readonly handleQuad: Handle<'MeshAsset', 'shared'>;
   readonly projectileEntities: () => readonly EntityHandle[];
   readonly rewardChoice: RewardChoiceHandle | undefined;
-  readonly onSpawn: () => void;
+  readonly attackPresentation: AttackPresentationHandle | undefined;
+  readonly onSpawn: (overcharged: boolean) => void;
   readonly consumeProjectile: (entity: EntityHandle) => void;
 };
 
@@ -197,17 +201,22 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
           velocity: [dirX * config.projectile.speed, dirY * config.projectile.speed, dirZ * config.projectile.speed],
           life: config.projectile.life,
           impactScale,
+          presentationVariant: spawnDecision.consumeOvercharge ? 1 : 0,
           radius: config.projectile.radius,
           halfHeight: config.projectile.halfHeight,
           mesh: shotMesh,
           material: shotMaterial,
           layer: useSprite ? 100 : 0,
-          presentation: spriteAnimationComponents,
+          presentation: [
+            ...(ctx.attackPresentation?.projectilePresentation() ?? []),
+            ...spriteAnimationComponents,
+          ],
         });
         if (spawnDecision.consumeOvercharge) ctx.rewardChoice?.consumeOvercharge();
         if (atlasActive) ctx.spriteAtlasLoop?.track(entity);
         if (chargedFire) ctx.world.set(ctx.root, ChargeShot, { release: 0 });
-        ctx.onSpawn();
+        ctx.attackPresentation?.onSpawn(spawnDecision.consumeOvercharge);
+        ctx.onSpawn(spawnDecision.consumeOvercharge);
       }
       for (const entity of ctx.projectileEntities()) {
         const transform = ctx.world.get(entity, Transform);
@@ -215,6 +224,7 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
         if (!transform.ok || !projectile.ok) continue;
         const age = projectile.value.age + dt;
         if (age > projectile.value.life) {
+          ctx.attackPresentation?.onExpired(entity);
           ctx.consumeProjectile(entity);
           continue;
         }

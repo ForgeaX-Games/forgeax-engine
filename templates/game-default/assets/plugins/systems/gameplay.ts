@@ -29,6 +29,7 @@ import { installCameraInputSystem } from './camera-input';
 import { installPlayerMovementSystem } from './player-movement';
 import { installChargeShotSystem } from './charge-shot';
 import { installProjectileSimulationSystem } from './projectile-simulation';
+import type { AttackPresentationHandle } from './attack-presentation';
 import { admitTargetImpact, installTargetFeedbackSystem, type TargetFeedbackSystemContext } from './target-feedback';
 import { installCameraFollowSystem } from './camera-follow';
 import type { TargetRelayHandle } from '../target-relay';
@@ -79,6 +80,7 @@ export type GameplaySystemsContext = {
   readonly spriteAtlasLoop: SpriteAtlasLoop | undefined;
   readonly worldScoreText: WorldScoreTextHandle | undefined;
   readonly vfxHitLoop: GameplayVfx;
+  readonly attackPresentation: AttackPresentationHandle;
   readonly toggleCustomProjectileMesh: (state: CustomProjectileMesh) => void;
   readonly resetMeshHandleSwap: (state: MeshHandleSwap | undefined) => void;
   readonly resetFbxMeshSwap: (state: FbxMeshSwap | undefined) => void;
@@ -150,7 +152,6 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     root: ctx.root,
     readInput: ctx.readInput,
     hud: ctx.hud,
-    vfxHitLoop: ctx.vfxHitLoop,
   });
   if (ctx.hitStreak !== undefined) {
     installHitStreakSystem({ world: ctx.world, player: ctx.root, hud: ctx.hud });
@@ -168,9 +169,11 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     handleQuad: ctx.handleQuad,
     projectileEntities: ctx.projectileEntities,
     rewardChoice: ctx.rewardChoice,
+    attackPresentation: ctx.attackPresentation,
     onSpawn: () => ctx.recordCommand('spawned'),
     consumeProjectile: ctx.consumeProjectile,
   });
+  ctx.attackPresentation.installSystem();
   const targetFeedback: TargetFeedbackSystemContext = {
     world: ctx.world,
     targetQuery: ctx.targetQuery,
@@ -345,8 +348,10 @@ export function installGameplaySystems(ctx: GameplaySystemsContext): void {
     },
     consume: ctx.consumeProjectile,
     onOutcome: (source, outcome, shielded) => ctx.sentinel?.recordOutcome(source, outcome, shielded),
-    onImpact: (source, position, outcome) => {
-      if (outcome !== 'refused' && source === ctx.sentinel?.entity) ctx.vfxHitLoop.emitImpact(position);
+    onImpact: (source, _projectile, position, outcome, impactScale, presentationVariant) => {
+      if (outcome === 'refused') return;
+      if (source === ctx.sentinel?.entity) ctx.vfxHitLoop.emitImpact(position);
+      if (source === ctx.root) ctx.attackPresentation.onImpact(position, presentationVariant !== 0, impactScale);
     },
     onTargetResolved: (target) => ctx.sentinel?.onTargetResolved(target),
     after: [

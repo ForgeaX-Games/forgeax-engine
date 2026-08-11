@@ -75,7 +75,6 @@ export function admitTargetImpact(
     ctx.onVideoHit?.();
     ctx.onFbxHit?.(entity);
     ctx.gameplayAudio?.triggerHit();
-    ctx.vfxHitLoop.trigger();
   }
   if (relayWasActive && ctx.targetRelay.recordHit(entity)) ctx.onRelayHit?.();
   const flash = ctx.world.get(entity, HitFlash);

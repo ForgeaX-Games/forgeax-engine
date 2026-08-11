@@ -118,11 +118,26 @@ export interface ExecutionReport {
 
 export interface ExecutionOptions {
   readonly tier?: ExecutionRequestedTier;
-  /** Absolute or import.meta.url-relative URL of a module whose default export is BootstrapEntry. */
+  /** Absolute or import.meta.url-relative URL of an ExecutionBootstrapEntry module. */
   readonly bootstrap: string | URL;
+  /** Structured-cloneable input supplied identically to main and Worker realms. */
+  readonly bootstrapData?: ExecutionBootstrapValue;
+  /**
+   * Realm side of an optional typed host/game channel. The engine transfers it
+   * to a Worker when needed and otherwise preserves the same port contract.
+   */
+  readonly bootstrapPort?: MessagePort;
   readonly startupTimeoutMs?: number;
   readonly frameTimeoutMs?: number;
 }
+
+export type ExecutionBootstrapValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ExecutionBootstrapValue[]
+  | { readonly [key: string]: ExecutionBootstrapValue };
 
 export interface ExecutionControl {
   report(): ExecutionReport;

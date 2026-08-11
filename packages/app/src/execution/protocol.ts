@@ -69,9 +69,17 @@ export interface ExecutionInitMessage {
   readonly kind: 'init';
   readonly canvas: OffscreenCanvas;
   readonly bootstrapUrl: string;
+  readonly bootstrapData?: import('./types').ExecutionBootstrapValue;
+  readonly bootstrapPort?: MessagePort;
   readonly shaderManifestUrl?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
   readonly tier: import('./types').ExecutionTier;
+}
+
+export interface ExecutionHostControlMessage {
+  readonly kind: 'host-control';
+  readonly command: 'set-pointer-lock-allowed';
+  readonly allowed: boolean;
 }
 
 export interface ExecutionReadyMessage {
@@ -113,4 +121,5 @@ export type EngineToHostMessage =
   | ExecutionReadyMessage
   | ExecutionFrameCompletion
   | ExecutionFaultMessage
-  | ExecutionRebuiltMessage;
+  | ExecutionRebuiltMessage
+  | ExecutionHostControlMessage;

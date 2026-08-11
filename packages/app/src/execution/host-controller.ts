@@ -79,6 +79,12 @@ export async function createWorkerExecutionApp(
   const started = await startEngineWorker({
     canvas: options.canvas,
     bootstrapUrl,
+    ...(executionOptions.bootstrapData === undefined
+      ? {}
+      : { bootstrapData: executionOptions.bootstrapData }),
+    ...(executionOptions.bootstrapPort === undefined
+      ? {}
+      : { bootstrapPort: executionOptions.bootstrapPort }),
     ...(options.bundler?.shaderManifestUrl !== undefined
       ? { shaderManifestUrl: options.bundler.shaderManifestUrl }
       : {}),
@@ -337,6 +343,10 @@ export async function createWorkerExecutionApp(
       };
       rebuildResolve?.(ok(cloneExecutionReport(report)));
       rebuildResolve = undefined;
+    } else if (message.kind === 'host-control') {
+      if (message.command === 'set-pointer-lock-allowed') {
+        input.setPointerLockAllowed?.(message.allowed);
+      }
     }
   });
 

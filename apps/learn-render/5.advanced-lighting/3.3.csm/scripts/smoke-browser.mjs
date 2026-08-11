@@ -251,6 +251,35 @@ function assertCsmTape({ tape }) {
   if (!viewGroup) {
     throw new Error('pbr-view bind group does not retain the cascade depth view');
   }
+  const sampledDepthBinding = viewBgl?.desc?.entries?.find((entry) => entry.binding === 3);
+  const comparisonSamplerBinding = viewBgl?.desc?.entries?.find((entry) => entry.binding === 4);
+  const sampledDepthViewId =
+    process.env.FALSIFY === 'force-csm-sampled-depth-resource' ? 'forced-wrong-depth-view' : depthViewId;
+  const comparisonSamplerId = viewGroup.resourceHandleIds[4];
+  const comparisonSampler = events.find(
+    (event) => event.kind === 'createSampler' && event.handleId === comparisonSamplerId,
+  );
+  if (
+    sampledDepthBinding?.texture?.sampleType !== 'depth' ||
+    sampledDepthBinding.texture.viewDimension !== '2d' ||
+    comparisonSamplerBinding?.sampler?.type !== 'comparison' ||
+    viewGroup.resourceHandleIds[3] !== sampledDepthViewId ||
+    typeof comparisonSampler?.desc?.compare !== 'string'
+  ) {
+    throw new Error(
+      `CSM sampled-depth resource lineage is incomplete: ${JSON.stringify({
+        sampledDepthBinding,
+        comparisonSamplerBinding,
+        atlas: viewGroup.resourceHandleIds[3],
+        expectedAtlas: sampledDepthViewId,
+        comparisonSampler: comparisonSampler?.desc,
+      })}`,
+    );
+  }
+  console.log(
+    `[csm] sampled-depth resource atlas=${depthViewId} sampler=${comparisonSamplerId} ` +
+      `compare=${comparisonSampler.desc.compare} accepted`,
+  );
   const cascadeIndexBufferId = viewGroup.resourceHandleIds[7];
   const cascadeIndexBuffer = events.find(
     (event) => event.kind === 'createBuffer' && event.handleId === cascadeIndexBufferId,

@@ -8,6 +8,7 @@ export default defineProject({
     // template's DOM tests are browser-owned elsewhere.
     include: [
       '__tests__/vfx-effect-assets.test.ts',
+      '__tests__/attack-presentation.test.ts',
       '__tests__/boss-lightning-vfx-assets.test.ts',
       '__tests__/ui-manifest.test.ts',
       '__tests__/asset-lab-actions.test.ts',

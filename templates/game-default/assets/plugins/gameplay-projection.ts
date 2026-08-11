@@ -15,6 +15,7 @@ import type { MultiWorldOverlay } from './multi-world-overlay';
 import type { WorldScoreTextHandle } from './world-score-text';
 import type { FbxSkinnedTarget } from './fbx-skinned-target';
 import type { GameplayVfx } from './gameplay-vfx';
+import type { AttackPresentationHandle, AttackPresentationSnapshot } from './systems/attack-presentation';
 import type { MeshHandleSwap } from './mesh-handle-swap';
 import type { FbxMeshSwap } from './fbx-mesh-swap';
 import type { GltfMeshSwap } from './gltf-mesh-swap';
@@ -59,6 +60,7 @@ export type GameplayProjectionContext = {
   readonly worldScoreText: WorldScoreTextHandle | undefined;
   readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
   readonly vfxHitLoop: GameplayVfx;
+  readonly attackPresentation: AttackPresentationHandle | undefined;
   readonly triggerFlash: () => void;
   readonly triggerScore: () => { readonly points: number | null };
   readonly resetMeshHandleSwap: (state: MeshHandleSwap | undefined) => void;
@@ -86,6 +88,7 @@ const EMPTY_VIDEO_TEXTURE = { available: false, active: 'original', swaps: 0, hi
 const EMPTY_MULTI_WORLD = { enabled: false, worldCount: 1, entityCount: 0, cameraOwner: 0, resourceOwner: 0 } as const;
 const EMPTY_WORLD_SCORE_TEXT = { available: false, baked: false, active: false, text: '', age: 0, position: [0, 0, 0], fontSource: 'legacy-pack', fontGuid: null, fontSize: 0, color: [1, 1, 1, 1], toggles: 0 } as const;
 const EMPTY_FBX_SKINNED_TARGET = { available: false, root: null, skinEntity: null, clipGuid: null, jointCount: 0, position: [0, 0, 0], scale: [1, 1, 1], worldMatrix: [], animationTime: 0, hitPulses: 0, companionActive: false, targetEntity: null } as const;
+const EMPTY_ATTACK_PRESENTATION: AttackPresentationSnapshot = { available: false, charging: false, chargeProgress: 0, chargePower: 1, shotsFired: 0, trailStarts: 0, impactBursts: 0, misses: 0, overchargeShots: 0, overchargeImpacts: 0, activeTrails: 0, lastImpactScale: 1, lastVariant: 'normal' };
 
 /** Keep the JSON boundary explicit while retaining typed snapshots internally. */
 function asProjection<T>(value: T): GameProjectionValue {
@@ -148,6 +151,7 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
           fbxSkinnedTarget: args.fbxSkinnedTarget?.snapshot() ?? EMPTY_FBX_SKINNED_TARGET,
           vfxHit: args.vfxHitLoop.snapshot(),
           bossVfx: args.vfxHitLoop.bossSnapshot(),
+          attackPresentation: args.attackPresentation?.snapshot() ?? EMPTY_ATTACK_PRESENTATION,
           hitStreak: args.hitStreak?.snapshot() ?? { hits: 0, elapsed: 0, multiplier: 1, state: 'ready' },
           counterattack: args.counterattack?.snapshot() ?? {
             playerHealth: 0, playerMaxHealth: 0, playerPosition: [0, 0, 0], hazardEntity: null,

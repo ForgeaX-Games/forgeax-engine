@@ -73,6 +73,8 @@ export {
   isAppError,
 } from './errors';
 export type {
+  ExecutionBootstrapEntry,
+  ExecutionBootstrapValue,
   ExecutionCapabilities,
   ExecutionCapabilityFact,
   ExecutionCapabilityName,
@@ -81,6 +83,7 @@ export type {
   ExecutionFault,
   ExecutionMeasurement,
   ExecutionOptions,
+  ExecutionRealmBootstrapContext,
   ExecutionReport,
   ExecutionRequestedTier,
   ExecutionSelection,
@@ -88,6 +91,7 @@ export type {
   ExecutionTier,
   ExecutionWorldHealth,
   KernelDispatchReason,
+  PreparedExecutionBootstrap,
 } from './execution';
 export {
   createExecutionReport,
@@ -98,10 +102,12 @@ export {
   isExecutionReport,
   loadBootstrapEntry,
   missingExecutionCapabilities,
+  prepareBootstrapEntry,
   probeExecutionCapabilities,
-  runBootstrapEntry,
+  runPreparedBootstrap,
   selectExecutionTier,
   unavailableExecutionCapabilities,
+  validateExecutionBootstrapData,
 } from './execution';
 export type {
   BootstrapContext,

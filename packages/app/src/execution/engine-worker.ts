@@ -1,5 +1,6 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { APP_ERROR_HINTS, APP_EXPECTED, AppError, type AppError as AppErrorType } from '../errors';
+import { validateExecutionBootstrapData } from './bootstrap-entry';
 import type {
   EngineToHostMessage,
   ExecutionFaultMessage,
@@ -19,6 +20,8 @@ export interface EngineWorkerSession {
 export interface StartEngineWorkerOptions {
   readonly canvas: HTMLCanvasElement;
   readonly bootstrapUrl: string;
+  readonly bootstrapData?: import('./types').ExecutionBootstrapValue;
+  readonly bootstrapPort?: MessagePort;
   readonly shaderManifestUrl?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
   readonly timeoutMs: number;
@@ -47,6 +50,8 @@ function startupFault(message: ExecutionFaultMessage, moduleUrl: string): AppErr
 export async function startEngineWorker(
   options: StartEngineWorkerOptions,
 ): Promise<Result<EngineWorkerSession, AppErrorType>> {
+  const validData = validateExecutionBootstrapData(options.bootstrapData, options.bootstrapUrl);
+  if (!validData.ok) return validData;
   const worker =
     options.workerFactory?.() ??
     new Worker(new URL('./engine-worker-runtime.mjs', import.meta.url), {
@@ -123,13 +128,18 @@ export async function startEngineWorker(
     kind: 'init',
     canvas: offscreen,
     bootstrapUrl: options.bootstrapUrl,
+    ...(options.bootstrapData === undefined ? {} : { bootstrapData: options.bootstrapData }),
+    ...(options.bootstrapPort === undefined ? {} : { bootstrapPort: options.bootstrapPort }),
     ...(options.shaderManifestUrl !== undefined
       ? { shaderManifestUrl: options.shaderManifestUrl }
       : {}),
     ...(options.time !== undefined ? { time: options.time } : {}),
     tier: options.tier,
   };
-  worker.postMessage(init, [offscreen]);
+  worker.postMessage(init, [
+    offscreen,
+    ...(options.bootstrapPort === undefined ? [] : [options.bootstrapPort]),
+  ]);
   const ready = await readyPromise;
   if (!ready.ok) return ready;
   return ok({

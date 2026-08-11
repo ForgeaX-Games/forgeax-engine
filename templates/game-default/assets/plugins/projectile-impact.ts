@@ -64,7 +64,7 @@ export type ProjectileImpactSystemContext = {
   readonly onCoverImpact: (cover: EntityHandle) => void;
   readonly consume: (projectile: EntityHandle) => void;
   readonly onOutcome: (source: EntityHandle, outcome: ProjectileImpactOutcome, shielded: boolean) => void;
-  readonly onImpact?: (source: EntityHandle, position: readonly [number, number, number], outcome: ProjectileImpactOutcome) => void;
+  readonly onImpact?: (source: EntityHandle, projectile: EntityHandle, position: readonly [number, number, number], outcome: ProjectileImpactOutcome, impactScale: number, presentationVariant: number) => void;
   readonly onTargetResolved: (target: EntityHandle, source: EntityHandle) => void;
   readonly after: readonly string[];
   readonly before: readonly string[];
@@ -120,7 +120,7 @@ export function installProjectileImpactSystem(ctx: ProjectileImpactSystemContext
         }
         if (resolved.outcome !== 'refused') {
           const transform = ctx.world.get(projectileEntity, Transform);
-          if (transform.ok) ctx.onImpact?.(source, [transform.value.pos[0] ?? 0, transform.value.pos[1] ?? 0, transform.value.pos[2] ?? 0], resolved.outcome);
+          if (transform.ok) ctx.onImpact?.(source, projectileEntity, [transform.value.pos[0] ?? 0, transform.value.pos[1] ?? 0, transform.value.pos[2] ?? 0], resolved.outcome, projectile.value.impactScale, projectile.value.presentationVariant);
         }
         ctx.onOutcome(source, resolved.outcome, shielded);
         ctx.consume(projectileEntity);
