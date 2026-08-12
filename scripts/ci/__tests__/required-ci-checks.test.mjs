@@ -6,7 +6,12 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { pickLatestPullRequestRun, REQUIRED_CHECK_NAMES } from '../required-ci-checks.mjs';
+import {
+  classifyRequiredContextAdmission,
+  pickLatestPullRequestRun,
+  REQUIRED_CHECK_NAMES,
+  REQUIRED_CONTEXT_ADMISSION_STATUSES,
+} from '../required-ci-checks.mjs';
 
 const scriptPath = fileURLToPath(new URL('../required-ci-checks.mjs', import.meta.url));
 const workflowPath = resolve(
@@ -43,6 +48,157 @@ test('returns null when ci.yml has no pull request run for the head SHA', () => 
   assert.equal(pickLatestPullRequestRun([run({ event: 'push' })]), null);
 });
 
+function runFixture(values = {}) {
+  return {
+    id: 42,
+    event: 'pull_request',
+    run_attempt: 1,
+    status: 'completed',
+    conclusion: 'success',
+    ...values,
+  };
+}
+
+function jobFixture(name, values = {}) {
+  return {
+    id: `${name}-job`,
+    name,
+    conclusion: 'success',
+    ...values,
+  };
+}
+
+function completeRoster() {
+  return REQUIRED_CHECK_NAMES.map((name) => jobFixture(name));
+}
+
+test('exposes the closed admission-status vocabulary', () => {
+  assert.deepEqual(REQUIRED_CONTEXT_ADMISSION_STATUSES, [
+    'path-filtered',
+    'ordinary-push-main',
+    'normal-ci-run',
+    'operational-skip',
+    'zero-job',
+    'api-error',
+    'partial-roster',
+    'genuine-failure',
+  ]);
+});
+
+test('permits fallback only when path-filter evidence is explicit', () => {
+  const proven = classifyRequiredContextAdmission({ pathFiltered: true });
+  assert.equal(proven.status, 'path-filtered');
+  assert.equal(proven.fallbackEligible, true);
+  assert.equal(proven.pathFilteredProven, true);
+
+  const unproven = classifyRequiredContextAdmission({});
+  assert.equal(unproven.status, 'path-filtered');
+  assert.equal(unproven.fallbackEligible, false);
+  assert.equal(unproven.pathFilteredProven, false);
+  assert.deepEqual(unproven.reasonCodes, ['path-filtered-unproven']);
+});
+
+test('admits a complete terminal ci.yml roster as normal-ci-run without fallback', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: completeRoster(),
+  });
+  assert.equal(result.status, 'normal-ci-run');
+  assert.equal(result.terminal, true);
+  assert.equal(result.complete, true);
+  assert.equal(result.fallbackEligible, false);
+  assert.deepEqual(result.observedContexts, REQUIRED_CHECK_NAMES);
+});
+
+test('keeps an in-progress ci.yml run authoritative without treating its roster as terminal', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ status: 'in_progress' }),
+  });
+  assert.equal(result.status, 'normal-ci-run');
+  assert.equal(result.terminal, false);
+  assert.equal(result.complete, false);
+  assert.equal(result.fallbackEligible, false);
+  assert.deepEqual(result.reasonCodes, ['run-not-terminal']);
+});
+
+test('keeps ordinary push/main evidence outside PR required-context fallback', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ event: 'push' }),
+    jobs: completeRoster(),
+  });
+  assert.equal(result.status, 'ordinary-push-main');
+  assert.equal(result.event, 'push');
+  assert.equal(result.fallbackEligible, false);
+});
+
+test('distinguishes the required-context skip and evidence-admission matrix', () => {
+  const cases = [
+    ['operational-skip', { run: runFixture({ conclusion: 'skipped' }) }],
+    ['zero-job', { run: runFixture(), jobs: [] }],
+    ['api-error', { apiError: new Error('fixture transport failure') }],
+    ['partial-roster', { run: runFixture(), jobs: completeRoster().slice(0, -1) }],
+    [
+      'partial-roster',
+      { run: runFixture(), jobs: [...completeRoster(), jobFixture(REQUIRED_CHECK_NAMES[0])] },
+    ],
+    [
+      'genuine-failure',
+      {
+        run: runFixture(),
+        jobs: completeRoster().map((job, index) =>
+          index === 0 ? { ...job, conclusion: 'failure' } : job,
+        ),
+      },
+    ],
+  ];
+  for (const [expectedStatus, input] of cases) {
+    const result = classifyRequiredContextAdmission(input);
+    assert.equal(result.status, expectedStatus);
+    assert.equal(result.fallbackEligible, false, expectedStatus);
+    assert.equal(result.terminal, expectedStatus !== 'api-error' || input.run !== undefined);
+  }
+});
+
+test('keeps an incomplete required job out of terminal coverage evidence', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: completeRoster().map((job, index) =>
+      index === 0 ? { ...job, conclusion: null, status: 'completed' } : job,
+    ),
+  });
+  assert.equal(result.status, 'api-error');
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.unknownContexts, [REQUIRED_CHECK_NAMES[0]]);
+});
+
+test('rejects a run whose event identity is missing', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ event: undefined }),
+    jobs: completeRoster(),
+  });
+  assert.equal(result.status, 'api-error');
+  assert.deepEqual(result.reasonCodes, ['run-event-missing']);
+});
+
+test('never admits a skipped required job as complete coverage', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: completeRoster().map((job, index) =>
+      index === 0 ? { ...job, conclusion: 'skipped', runner_id: null, runner_name: null } : job,
+    ),
+  });
+  assert.equal(result.status, 'operational-skip');
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.skippedContexts, [REQUIRED_CHECK_NAMES[0]]);
+});
+
+test('does not convert an API error into a path-filtered success', () => {
+  const result = classifyRequiredContextAdmission({ pathFiltered: true, apiError: 'rate limited' });
+  assert.equal(result.status, 'api-error');
+  assert.equal(result.fallbackEligible, false);
+  assert.deepEqual(result.reasonCodes, ['api-error']);
+});
+
 test('selects the newest pull request ci.yml run', () => {
   const newest = run({ createdAt: '2026-07-15T00:01:00Z' });
   assert.equal(
@@ -51,7 +207,13 @@ test('selects the newest pull request ci.yml run', () => {
   );
 });
 
-function runWithFakeGitHub(runs) {
+test('selects the newest API-shaped run using created_at', () => {
+  const oldest = run({ createdAt: undefined, created_at: '2026-07-15T00:00:00Z' });
+  const newest = run({ createdAt: undefined, created_at: '2026-07-15T00:01:00Z' });
+  assert.equal(pickLatestPullRequestRun([oldest, newest]), newest);
+});
+
+function runWithFakeGitHub(runs, extraEnvironment = {}) {
   const root = mkdtempSync(join(tmpdir(), 'required-ci-checks-'));
   const callLog = join(root, 'calls');
   const fakeGh = join(root, 'gh');
@@ -60,8 +222,8 @@ function runWithFakeGitHub(runs) {
     [
       '#!/bin/sh',
       'case " $* " in *" --repo "*) exit 1;; esac',
-      'if [ "$1" = "api" ] && [ "$3" = "GET" ]; then printf "{\\"workflow_runs\\":%s}" "$GH_RUN_LIST_JSON"; exit 0; fi',
-      'if [ "$1" = "api" ] && [ "$3" = "POST" ]; then printf "%s\\n" "$*" >> "$GH_CALL_LOG"; printf "{}"; exit 0; fi',
+      'if [ "$1" = "api" ] && [ "$3" = "GET" ]; then case "$4" in */attempts/*) printf "{\\"jobs\\":%s}" "$GH_JOB_LIST_JSON";; *) printf "{\\"workflow_runs\\":%s}" "$GH_RUN_LIST_JSON";; esac; exit 0; fi',
+      'printf "unexpected GitHub mutation: %s\\n" "$*" >> "$GH_CALL_LOG"; exit 99;',
       'exit 1',
       '',
     ].join('\n'),
@@ -74,10 +236,12 @@ function runWithFakeGitHub(runs) {
         ...process.env,
         CI_RUN_APPEAR_MS: '0',
         GH_CALL_LOG: callLog,
+        GH_JOB_LIST_JSON: '[]',
         GH_RUN_LIST_JSON: JSON.stringify(runs),
         GITHUB_REPOSITORY: 'ForgeaX-Games/forgeax-engine',
         PATH: `${root}:${process.env.PATH}`,
         PR_HEAD_SHA: 'deadbeef',
+        ...extraEnvironment,
       },
       stdio: 'pipe',
     });
@@ -92,19 +256,46 @@ function runWithFakeGitHub(runs) {
   }
 }
 
-test('does not create duplicate required contexts when ci.yml ran', () => {
-  assert.deepEqual(runWithFakeGitHub([run({})]), []);
+test('does not create fallback checks when a run is absent without path-filter proof', () => {
+  assert.throws(
+    () => runWithFakeGitHub([]),
+    (error) => {
+      assert.equal(error.status, 2);
+      assert.match(error.stderr.toString(), /path-filtered-unproven/);
+      return true;
+    },
+  );
 });
 
-test('creates one passed direct context for every required check when ci.yml was skipped', () => {
-  const calls = runWithFakeGitHub([]);
-  assert.equal(calls.length, REQUIRED_CHECK_NAMES.length);
-  for (const name of REQUIRED_CHECK_NAMES) {
-    assert.ok(
-      calls.some((call) => call.includes(`name=${name}`)),
-      `missing ${name}`,
-    );
-  }
+test('keeps a complete terminal run as the owner without mutating checks', () => {
+  assert.deepEqual(
+    runWithFakeGitHub([runFixture()], {
+      GH_JOB_LIST_JSON: JSON.stringify(completeRoster()),
+    }),
+    [],
+  );
+});
+
+test('rejects a terminal zero-job run before any fallback mutation', () => {
+  assert.throws(
+    () => runWithFakeGitHub([runFixture()], { GH_JOB_LIST_JSON: '[]' }),
+    (error) => {
+      assert.equal(error.status, 2);
+      assert.match(error.stderr.toString(), /zero-job/);
+      return true;
+    },
+  );
+});
+
+test('rejects an operationally skipped run without requesting or mutating checks', () => {
+  assert.throws(
+    () => runWithFakeGitHub([runFixture({ conclusion: 'skipped' })]),
+    (error) => {
+      assert.equal(error.status, 2);
+      assert.match(error.stderr.toString(), /operational-skip/);
+      return true;
+    },
+  );
 });
 
 test('installs the reporter prerequisites before running the required-context reporter', () => {

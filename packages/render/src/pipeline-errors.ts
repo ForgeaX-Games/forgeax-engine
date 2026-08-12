@@ -68,31 +68,27 @@ export type PipelineErrorDetailFor<C extends PipelineErrorCode> =
  */
 export type PipelineErrorDetail = PipelineErrorDetailFor<PipelineErrorCode>;
 
-const PIPELINE_EXPECTED: { readonly [C in PipelineErrorCode]: string } = {
-  'pipeline-already-registered': 'each pipeline id is registered at most once',
-  'pipeline-not-found': 'installPipeline receives a handle to a registered pipeline',
+const PIPELINE_POLICY: {
+  readonly [C in PipelineErrorCode]: {
+    readonly expected: string;
+    readonly hint: (detail: PipelineErrorDetail) => string;
+  };
+} = {
+  'pipeline-already-registered': {
+    expected: 'each pipeline id is registered at most once',
+    hint: (detail) =>
+      `pipeline id '${(detail as PipelinePreviouslyRegisteredDetail).id}' is already ` +
+      'registered; same-id re-register is forbidden. Pick a distinct id ' +
+      '(engine builtins use the forgeax:: prefix; user pipelines use <package>::<id>).',
+  },
+  'pipeline-not-found': {
+    expected: 'installPipeline receives a handle to a registered pipeline',
+    hint: (detail) =>
+      `no pipeline is registered for handle ${(detail as PipelineNotFoundDetail).handle}. ` +
+      'First registerPipeline(id, impl), then register a RenderPipelineAsset ' +
+      '{ kind:"render-pipeline", pipelineId: id } and install the returned handle.',
+  },
 };
-
-function pipelineHint(code: PipelineErrorCode, detail: PipelineErrorDetail): string {
-  switch (code) {
-    case 'pipeline-already-registered':
-      return (
-        `pipeline id '${(detail as PipelinePreviouslyRegisteredDetail).id}' is already ` +
-        'registered; same-id re-register is forbidden. Pick a distinct id ' +
-        '(engine builtins use the forgeax:: prefix; user pipelines use <package>::<id>).'
-      );
-    case 'pipeline-not-found':
-      return (
-        `no pipeline is registered for handle ${(detail as PipelineNotFoundDetail).handle}. ` +
-        'First registerPipeline(id, impl), then register a RenderPipelineAsset ' +
-        '{ kind:"render-pipeline", pipelineId: id } and install the returned handle.'
-      );
-    default: {
-      const exhaustive: never = code;
-      return exhaustive;
-    }
-  }
-}
 
 class PipelineErrorClass extends Error {
   readonly code: PipelineErrorCode;
@@ -101,11 +97,12 @@ class PipelineErrorClass extends Error {
   readonly detail: PipelineErrorDetail;
 
   constructor(args: { code: PipelineErrorCode; detail: PipelineErrorDetail }) {
-    const hint = pipelineHint(args.code, args.detail);
+    const policy = PIPELINE_POLICY[args.code];
+    const hint = policy.hint(args.detail);
     super(`pipeline: ${args.code} (${hint})`);
     this.name = 'PipelineError';
     this.code = args.code;
-    this.expected = PIPELINE_EXPECTED[args.code];
+    this.expected = policy.expected;
     this.hint = hint;
     this.detail = args.detail;
   }

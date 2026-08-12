@@ -81,6 +81,45 @@ describe('AppError policy owner', () => {
     }
   });
 
+  it('rejects unknown codes and narrows detail from the code discriminant', () => {
+    const acceptsCode = (code: AppErrorCode): AppErrorCode => code;
+    // @ts-expect-error -- the policy-derived closed union rejects unknown codes.
+    acceptsCode('app-invalid');
+
+    const readDetail = (error: AppErrorType): string => {
+      if (error.code === 'app-canvas-detached') {
+        expectTypeOf(error.detail).toEqualTypeOf<AppDetailCanvasDetached>();
+        return error.detail.canvasId ?? 'canvas';
+      }
+      if (error.code === 'app-execution-kernel-failed') {
+        expectTypeOf(error.detail).toEqualTypeOf<AppDetailExecutionKernelFailed>();
+        return error.detail.kernelName;
+      }
+      return error.code;
+    };
+
+    const canvasError = new AppError({
+      code: 'app-canvas-detached',
+      expected: APP_EXPECTED['app-canvas-detached'],
+      hint: APP_ERROR_HINTS['app-canvas-detached'],
+      detail: { canvasId: 'main' },
+    });
+    const kernelError = new AppError({
+      code: 'app-execution-kernel-failed',
+      expected: APP_EXPECTED['app-execution-kernel-failed'],
+      hint: APP_ERROR_HINTS['app-execution-kernel-failed'],
+      detail: {
+        kernelName: 'shared-query',
+        worldIdentity: 'world-1',
+        cause: new Error('partial write'),
+        partialWrite: true,
+        retryable: false,
+      },
+    });
+    expect(readDetail(canvasError)).toBe('main');
+    expect(readDetail(kernelError)).toBe('shared-query');
+  });
+
   it('preserves public record types and representative correlated AppError construction', () => {
     expectTypeOf(APP_EXPECTED).toEqualTypeOf<Readonly<Record<AppErrorCode, string>>>();
     expectTypeOf(APP_ERROR_HINTS).toEqualTypeOf<Readonly<Record<AppErrorCode, string>>>();

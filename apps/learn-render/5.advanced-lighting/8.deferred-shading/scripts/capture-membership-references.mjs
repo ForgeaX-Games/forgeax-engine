@@ -47,6 +47,11 @@ function runInvocation(label, extra) {
     FORGEAX_MEMBERSHIP_ARTIFACT_ROOT: outputRoot,
     FORGEAX_SOURCE_HEAD: sourceHead,
     FORGEAX_PROFILE_CAPTURE_PATH: join(recordDir, 'profile.capture.json'),
+    // Keep the deferred workload at 300 frames while the profile remains the
+    // bounded nested attribution window used by the immutable fingerprints.
+    FORGEAX_PROFILE_DETAIL: 'nested',
+    FORGEAX_PROFILE_FRAME_LIMIT: '90',
+    FORGEAX_PROFILE_SETTLE_MS: '25',
     FORGEAX_MEMBERSHIP_RECORD_DIR: recordDir,
     ...extra,
   };

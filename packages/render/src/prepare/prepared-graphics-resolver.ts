@@ -54,6 +54,8 @@ export type PreparedGraphicsResolvedResource =
 
 export interface PreparedGraphicsResolverInput {
   readonly device: RhiDevice;
+  /** Owning feature identity survives lookup failures for feature-local diagnostics. */
+  readonly featureIdentity?: string;
   readonly generation: number;
   readonly capabilityAvailable: boolean;
   readonly lookup: (reference: RenderFeaturePreparedRef) => PreparedGraphicsItem | undefined;
@@ -111,7 +113,7 @@ function preparationFailure(
   reason: string,
 ): RenderError {
   return new RenderFeaturePreparationFailedError(
-    item?.featureIdentity ?? 'unknown',
+    item?.featureIdentity ?? input.featureIdentity ?? 'unknown',
     input.featureOrder ?? -1,
     'resolve',
     kind,
@@ -137,7 +139,7 @@ function stateMismatch(
 ): RenderError {
   if (detail.reason === 'missing-prepared-state') {
     return new RenderFeaturePreparedStateMismatchError({
-      featureIdentity: 'unknown',
+      featureIdentity: input.featureIdentity ?? 'unknown',
       order: input.featureOrder ?? -1,
       stage: 'contribute',
       operation: 'resolve',
@@ -148,7 +150,7 @@ function stateMismatch(
     });
   }
   return new RenderFeaturePreparedStateMismatchError({
-    featureIdentity: 'unknown',
+    featureIdentity: input.featureIdentity ?? 'unknown',
     order: input.featureOrder ?? -1,
     stage: 'contribute',
     operation: 'resolve',

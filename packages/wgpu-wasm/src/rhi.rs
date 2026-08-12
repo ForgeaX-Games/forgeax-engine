@@ -3645,7 +3645,7 @@ mod tests {
     // ============================================================================
 
     #[wasm_bindgen_test]
-    fn test_shader_module_descriptor_round_trip() {
+    fn test_shader_module_descriptor_json_round_trip() {
         let desc: ShaderModuleDescriptorJs = serde_json::from_str(
             r#"{"code":"@vertex fn main() -> @builtin(position) vec4f { return vec4f(0.0); }"}"#
         ).unwrap();
@@ -3757,7 +3757,7 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn test_parse_pipeline_constants_round_trip() {
+    fn test_parse_pipeline_constant_values_round_trip() {
         let constants = js_obj(&[
             ("FOO", JsValue::from_f64(2.5)),
             ("BAR", JsValue::from_f64(-1.0)),
@@ -3798,7 +3798,7 @@ mod tests {
     // alive.
     // ========================================================================
     #[wasm_bindgen_test]
-    fn test_instance_survives_parse_err_then_ok() {
+    fn test_wasm_instance_survives_parse_error_then_success() {
         // Step 1: malformed vertex.buffers (plain {} -> missing arrayStride /
         // attributes). Must return Err, NOT trap.
         let malformed = js_array(&[js_obj(&[])]);

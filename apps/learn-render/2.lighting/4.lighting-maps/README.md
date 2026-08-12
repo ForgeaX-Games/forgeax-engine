@@ -5,7 +5,9 @@ LearnOpenGL section 2.4 (Lighting Maps) — demonstrates diffuse and specular te
 ```sh
 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:rhi-debug
 FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:rhi-debug
+FALSIFY_NO_SPECULAR_MAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:rhi-debug
 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:browser
+FALSIFY_NO_SPECULAR_MAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:browser
 ```
 
 The Dawn oracle uses the same Standard PBR material and diffuse/specular texture handles as the
@@ -13,3 +15,8 @@ producer scene, then requires warm non-clear cube samples with a brighter lit-cu
 `FALSIFY_NO_LIGHT=1` control keeps the lamp mesh and texture inputs but removes only its PointLight;
 the standard material must render black and reject the same witness. Browser smoke captures the
 real `__captureLightingMaps` frame, replays it on a fresh device, and compares pixel output.
+The `FALSIFY_NO_SPECULAR_MAP=1` control keeps the diffuse map and point light but removes only the
+`metallicRoughnessTexture` specular-map slot; the Dawn response must rise to the no-map profile and
+reject the specular-map response witness.
+The same environment flag on Browser navigation adds `?rhi-debug-no-specular-map=1`; the captured
+material group must retain the diffuse binding while no longer carrying the specular view at binding 4.

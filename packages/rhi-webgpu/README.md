@@ -40,6 +40,15 @@
 
 Real-GPU integration is in [`src/__tests__/dawn-real-gpu.dawn.test.ts`](./src/__tests__/dawn-real-gpu.dawn.test.ts) (4 describes, 4 codes triggered).
 
+## Timestamp write contract
+
+When `device.caps.timestampQuery` is true, `RhiCommandEncoder.writeTimestamp`
+must find and successfully call the raw `GPUCommandEncoder.writeTimestamp`
+with the mapped query set and index. A missing or throwing raw method throws a
+structured `RhiError` with code `webgpu-runtime-error`; the shim never treats
+that write as a no-op or synthesizes timestamp ticks. Capability-disabled
+devices retain the existing `feature-not-enabled` diagnostic path.
+
 ## Capabilities tri-layer
 
 `device.caps` (hardware probe) / `device.features` (enabled set) / `device.limits` (numeric upper bounds) — three independent `readonly` fields (charter proposition 5); `caps.X = false` is an explicit signal, never an exception (proposition 4).

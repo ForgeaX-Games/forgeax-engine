@@ -65,20 +65,7 @@ import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
  *
  * Plan-strategy D-4 locked the count at 6; device-lost rides RhiErrorCode.
  */
-export type AppErrorCode =
-  | 'app-not-started'
-  | 'app-already-running'
-  | 'app-canvas-detached'
-  | 'app-paused-while-stop'
-  | 'app-frame-step-invalid'
-  | 'app-system-update-failed'
-  | 'app-pointer-lock-failed'
-  | 'app-execution-tier-unavailable'
-  | 'app-execution-bootstrap-failed'
-  | 'app-execution-deadline-exceeded'
-  | 'app-execution-kernel-failed'
-  | 'app-execution-stale-world'
-  | 'app-execution-rebuild-failed';
+export type AppErrorCode = keyof typeof appErrorPolicy;
 
 /**
  * Detail variant for the `'app-canvas-detached'` arm.
@@ -421,7 +408,7 @@ const appErrorPolicy = {
       'explicit rebuild disposes the poisoned World and bootstraps a fresh World identity in the surviving Engine Realm',
     hint: 'inspect detail.cause; this App remains stopped, so fix the bootstrap failure or create a new App explicitly',
   },
-} satisfies Record<AppErrorCode, AppErrorPolicy>;
+} satisfies Record<string, AppErrorPolicy>;
 
 export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = Object.fromEntries(
   Object.entries(appErrorPolicy).map(([code, policy]) => [code, policy.expected]),

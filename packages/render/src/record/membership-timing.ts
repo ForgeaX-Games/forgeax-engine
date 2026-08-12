@@ -12,6 +12,7 @@ export const MEMBERSHIP_TIMING_REASON_CODES = [
   'invalid-options',
   'timestamp-query-unsupported',
   'timestamp-period-unavailable',
+  'timestamp-write-unavailable',
   'capture-capacity-exhausted',
   'capture-already-active',
   'queue-submit-failed',
@@ -39,6 +40,7 @@ export const MEMBERSHIP_TIMING_REASON_MAPPING = {
   'invalid-options': { api: 'refused', topLevel: 'incomplete', reference: 'incomplete' },
   'timestamp-query-unsupported': { api: 'refused', topLevel: 'refused', reference: 'refused' },
   'timestamp-period-unavailable': { api: 'refused', topLevel: 'refused', reference: 'refused' },
+  'timestamp-write-unavailable': { api: 'terminal', topLevel: 'refused', reference: 'refused' },
   'capture-capacity-exhausted': { api: 'refused', topLevel: 'incomplete', reference: 'incomplete' },
   'capture-already-active': { api: 'refused', topLevel: 'incomplete', reference: 'incomplete' },
   'queue-submit-failed': { api: 'terminal', topLevel: 'incomplete', reference: 'incomplete' },
@@ -464,11 +466,11 @@ export function createMembershipTiming(
       } finally {
         mapped.value.unmap();
       }
-      if (end < begin)
+      if (end <= begin)
         throw captureError(
           'timestamp-range-invalid',
-          'timestamp end tick is not below begin tick',
-          'discard the invalid GPU interval',
+          'timestamp end tick is greater than begin tick',
+          'discard the zero or reversed GPU interval',
         );
       const period = capture.device.caps.timestampPeriodNanoseconds;
       if (typeof period !== 'number' || !Number.isFinite(period) || period <= 0)
@@ -476,6 +478,14 @@ export function createMembershipTiming(
           'timestamp-period-unavailable',
           'timestamp period remains valid at readback',
           'discard the sample',
+        );
+      const deltaTicks = end - begin;
+      const durationNanoseconds = Number(deltaTicks) * period;
+      if (!Number.isFinite(durationNanoseconds) || durationNanoseconds <= 0)
+        throw captureError(
+          'timestamp-range-invalid',
+          'derived GPU duration is finite and positive',
+          'discard the GPU interval whose tick delta cannot be represented as a duration',
         );
       const source = capture.gpuSource;
       if (
@@ -505,9 +515,9 @@ export function createMembershipTiming(
           rawUnit: 'ticks',
           rawBeginTick: begin.toString(10),
           rawEndTick: end.toString(10),
-          deltaTicks: (end - begin).toString(10),
+          deltaTicks: deltaTicks.toString(10),
           timestampPeriodNanoseconds: period,
-          durationNanoseconds: Number(end - begin) * period,
+          durationNanoseconds,
         },
         membership: {
           schemaVersion: 1,
@@ -751,14 +761,20 @@ export function createMembershipTiming(
         encoder.writeTimestamp(capture.querySet, 0);
         capture.begun = true;
       } catch (cause) {
-        controller.markEncodeFailed(String(cause));
+        terminalizeIdle(
+          capture,
+          captureError(
+            'timestamp-write-unavailable',
+            'the timestamp begin write succeeds on the timestamp-capable encoder',
+            String(cause),
+          ),
+        );
       }
     },
     afterMembership(encoder) {
       const capture = current;
       if (capture === undefined || options.mode !== 'gpu' || !capture.begun || capture.ended)
         return;
-      capture.ended = true;
       try {
         if (
           capture.querySet === undefined ||
@@ -770,7 +786,20 @@ export function createMembershipTiming(
             'timestamp resources remain available',
             'capture resources are incomplete',
           );
-        encoder.writeTimestamp(capture.querySet, 1);
+        try {
+          encoder.writeTimestamp(capture.querySet, 1);
+        } catch (cause) {
+          settleError(
+            capture,
+            captureError(
+              'timestamp-write-unavailable',
+              'the timestamp end write succeeds on the timestamp-capable encoder',
+              String(cause),
+            ),
+          );
+          return;
+        }
+        capture.ended = true;
         const resolved = encoder.resolveQuerySet(capture.querySet, 0, 2, capture.resolveBuffer, 0);
         if (!resolved.ok)
           throw captureError(

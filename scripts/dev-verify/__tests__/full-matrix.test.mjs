@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   createFullMatrixManifest,
   validateFullMatrixManifest,
+  validateReference,
 } from '../membership-timing/full-matrix.mjs';
 
 const sourceHead = '3c170a2e7b97ebadfd8742ec74b1724b9ee79a85';
@@ -51,4 +52,56 @@ test('isolates each captured attempt before joining the corpus', () => {
     captureReferencesSource,
     /join\(attemptRoot, `\$\{attemptId\.replaceAll\('\/', '__'\)\}\.invocations\.json`\)/,
   );
+});
+
+test('keeps an independently captured CPU membership child for a refused GPU parent', () => {
+  const provenance = (timestampQuery, timestampPeriodNanoseconds) => ({
+    backendKind: 'webgpu',
+    compute: true,
+    timestampQuery,
+    timestampPeriodNanoseconds,
+    adapter: 'dawn-node',
+    environment: 'test',
+    configFingerprint: 'test',
+    seed: 13,
+    frameTarget: 300,
+    frames: 300,
+    dimensions: { width: 512, height: 512 },
+    lights: 32,
+    clusterGrid: { x: 16, y: 9, z: 24 },
+  });
+  const parent = {
+    recordKind: 'attempt',
+    status: 'refused',
+    reason: { code: 'timestamp-write-unavailable' },
+    sourceHead,
+    outputHashes: { membership: null, pixel: 'pixel-hash' },
+  };
+  const child = {
+    recordKind: 'reference',
+    referenceId: 'gpu-32-01/cpu-membership',
+    parentAttemptId: 'gpu-32-01',
+    referenceKind: 'cpu-membership',
+    terminal: { outcome: 'accepted-reference', reason: null },
+    actualProducer: 'cpu',
+    gpu: null,
+    references: [],
+    sourceHead,
+    provenance: provenance(false, null),
+    outputHashes: { membership: 'independent-membership-hash', pixel: null },
+    profile: { status: 'complete', droppedEventCount: 0 },
+  };
+  const errors = [];
+  validateReference(
+    child,
+    {
+      referenceId: child.referenceId,
+      parentAttemptId: child.parentAttemptId,
+      referenceKind: child.referenceKind,
+      expectedOutcome: 'accepted-reference',
+    },
+    { ...parent, provenance: provenance(true, 1) },
+    errors,
+  );
+  assert.deepEqual(errors, []);
 });

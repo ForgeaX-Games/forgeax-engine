@@ -74,6 +74,10 @@ readback failure, device recovery, or disposal. The closed
 `MembershipTimingReasonCode` union and its exhaustive mapping live in
 [`src/record/membership-timing.ts`](src/record/membership-timing.ts).
 
+Timestamp-capable backends must execute both raw timestamp writes. A missing or
+throwing write is a structured `timestamp-write-unavailable` refusal; Render
+never publishes a zero, reversed, or non-finite GPU interval as a report.
+
 > [!IMPORTANT]
 > Render consumes the effective MaterialAsset snapshot produced by extract. Each texture slot carries its own coordinate set and transform into the built-in PBR binding layout; render records do not reinterpret authoring fields or manufacture shader artifacts. The effective `passes` are already validated.
 

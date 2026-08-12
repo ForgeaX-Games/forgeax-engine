@@ -6,10 +6,27 @@
   "license": "Apache-2.0",
   "description": "M3 programmable rendering composition front door for custom material shaders, RenderGraph pipelines, and depth-aware post-processing.",
   "scripts": {
-    "smoke": "node scripts/smoke.mjs"
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:m10:dawn": "node scripts/smoke-m10-dawn.mjs",
+    "smoke:m10:browser": "node scripts/smoke-m10-browser.mjs"
   },
   "devDependencies": {
-    "pngjs": "^7.0.0"
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.71",
+    "playwright": "1.56.1",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.9.2",
+    "vite": "8.0.10"
+  },
+  "dependencies": {
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-m3-programmable-rendering smoke",
@@ -31,7 +48,7 @@
       "risks": ["baseline", "dynamic", "live", "fault", "recovery", "behavioral", "visual"],
       "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery"],
       "evidence": {
-        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-variant-selection", "browser-webgpu", "browser-composed-custom-post", "custom-pipeline-rhi", "custom-pipeline-rhi-variant", "custom-pipeline-rhi-live-variant", "rhi-debug"],
+        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-variant-selection", "browser-webgpu", "browser-composed-custom-post", "custom-pipeline-rhi", "custom-pipeline-rhi-variant", "custom-pipeline-rhi-live-variant", "rhi-debug", "m10-render-feature-fault-recovery"],
         "legs": ["live", "gpu", "behavioral", "recovery"]
       },
       "oracle": {
@@ -119,6 +136,8 @@
           "[m3-programmable] custom pipeline no-MSAA steady true inversion repeatability: PASS",
           "[m3-programmable] custom pipeline no-MSAA live post resolve repeatability: PASS",
           "[m3-programmable] custom pipeline live variant switch: PASS",
+          "[m3-programmable] M10 render feature Dawn fault recovery: PASS",
+          "[m3-programmable] M10 render feature browser fault recovery: PASS",
           "[m3-programmable] PASS - M3 programmable rendering gates GREEN"
         ]
       }

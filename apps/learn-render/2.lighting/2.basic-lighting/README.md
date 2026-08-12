@@ -49,12 +49,21 @@ FALSIFY_MATERIAL_METALLIC_CHANNEL=red pnpm --filter "@forgeax/app-learn-render-2
 # Standard PBR roughnessChannel witness: select the authored blue roughness channel
 # from the engine-managed metallic-roughness texture; expected green.
 FALSIFY_MATERIAL_ROUGHNESS_CHANNEL=blue pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
+
+# Standard PBR alpha-cutoff witness: lower the object alpha to 0.25 and
+# require alphaCutoff=0.5 to discard the cube on the live render path.
+FALSIFY_MATERIAL_ALPHA_CUTOFF=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-2-basic-lighting" smoke:rhi-debug
 ```
 
 The semantic smoke samples the cube center and requires a stable lit-orange channel ordering
 (`red > green > blue`) with a minimum brightness. The `FALSIFY_NO_LIGHT=1` control must reject the
 same witness; its non-zero exit is expected and proves the check is not merely a non-empty-pixel
 test.
+
+The alpha-cutoff control is mutually exclusive with the other material and PointLight controls. It
+proves the Standard PBR `alphaCutoff=0.5` UBO lane at byte offset 68, the authored object alpha
+`0.25`, and fragment discard by requiring the cube-center ROI to return to clear color without an
+RHI error.
 
 ## forgeax-vs-LearnOpenGL mapping
 

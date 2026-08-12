@@ -60,6 +60,8 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  *                                  the dev endpoint writes .forgeax-debug relative to vite cwd
  *                                  (= the package dir), so artifacts are resolved against this.
  * @property {number} [warmupMs]    rAF warmup before capture (default 3000)
+ * @property {'networkidle'|'domcontentloaded'} [navigationWaitUntil] page navigation
+ *                                  readiness policy (default 'networkidle')
  * @property {string} [urlSuffix]   query/hash suffix appended to the dev URL
  */
 
@@ -81,6 +83,7 @@ export async function verifyDemoCapture(opts) {
     assertPixels,
     appDir = REPO_ROOT,
     warmupMs = 3000,
+    navigationWaitUntil = 'networkidle',
     urlSuffix = '',
   } = opts;
 
@@ -144,7 +147,7 @@ export async function verifyDemoCapture(opts) {
   });
 
   const captureUrl = urlSuffix.length === 0 ? portUrl : new URL(urlSuffix, portUrl).toString();
-  await page.goto(captureUrl, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(captureUrl, { waitUntil: navigationWaitUntil, timeout: 30000 });
   await page.waitForTimeout(warmupMs);
 
   const hasCapture = await page.evaluate(

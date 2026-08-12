@@ -24,7 +24,14 @@
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
+import {
+  createCatalogSource,
+  type AssetRegistry,
+} from '@forgeax/engine-assets-runtime';
+import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
@@ -37,7 +44,7 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { type ReelGameBlob, REEL_GAME_LEVEL_1_GUID } from './reel-game-blob';
 import { reelGameBlobLoader } from './reel-game-blob-loader';
 
-const PACK_INDEX_URL = '/pack-index.json';
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-custom-importer');
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
@@ -59,7 +66,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
@@ -84,7 +91,57 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // mirror of the build-time importer; the engine carries zero knowledge of
   // 'reel-game-blob' -- the host owns both ends (AC-05 / OOS-1).
   assets.loaders.register(reelGameBlobLoader());
-  assets.configurePackIndex(PACK_INDEX_URL);
+  assets.configureRuntimeBinding(runtimeBinding);
+
+  const catalogClient = createCatalogClient(readCatalogRows, import.meta.hot);
+  assets.setCatalogSource(
+    createCatalogSource({
+      url: runtimeBinding.catalogUrl,
+      expectedScope: runtimeBinding,
+      subscribe: catalogClient.subscribe,
+    }),
+  );
+  let lastKnownGood: ReelGameBlob | undefined;
+  let catalogWork = Promise.resolve();
+  const stopCatalog = assets.subscribeCatalog((delta) => {
+    catalogWork = catalogWork
+      .then(() =>
+        handleCatalogDelta(
+          delta,
+          assets,
+          (blob) => {
+            lastKnownGood = blob;
+          },
+          () => lastKnownGood,
+        ),
+      )
+      .catch((error: unknown) => {
+        console.error('[custom-importer] catalog HMR transaction failed:', error);
+      });
+  });
+  const disposeCatalog = (): void => {
+    stopCatalog();
+    assets.clearCatalogSource();
+  };
+  import.meta.hot?.dispose(disposeCatalog);
+
+  const baseline = await assets.enumerateCatalog();
+  if (!baseline.ok) {
+    setAssetStatus(`catalog baseline failed code=${baseline.error.code}`);
+    console.error('[custom-importer] catalog baseline failed:', baseline.error);
+    disposeCatalog();
+    return;
+  }
+  const stableGuid = baseline.value.some(
+    (entry) => entry.guid.toLowerCase() === REEL_GAME_LEVEL_1_GUID,
+  );
+  if (!stableGuid) {
+    setAssetStatus('catalog baseline missing stable GUID');
+    console.error('[custom-importer] catalog baseline missing stable GUID');
+    disposeCatalog();
+    return;
+  }
+  console.warn(`[custom-importer] catalog baseline rows=${baseline.value.length} stableGuid=true`);
 
   // Step 4: loadByGuid<ReelGameBlob> resolves through the production fetch
   // chain: pack-index.json -> the importer-folded .pack.json -> the host
@@ -95,6 +152,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     setAssetStatus('load failed');
     console.error('[custom-importer] reel-game blob did not load; scene will be empty');
   } else {
+    lastKnownGood = blob;
     setAssetStatus(`loaded title=${blob.title} reels=${blob.reels.length}`);
     console.warn(
       `[custom-importer] loaded reel-game blob title=${JSON.stringify(blob.title)} reels=${blob.reels.length}`,
@@ -108,6 +166,56 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn('[custom-importer] running.');
+}
+
+async function readCatalogRows(): Promise<readonly CatalogEntry[]> {
+  const response = await fetch(runtimeBinding.catalogUrl);
+  if (!response.ok) return [];
+  const raw = (await response.json()) as unknown;
+  if (Array.isArray(raw)) return raw as CatalogEntry[];
+  if (raw !== null && typeof raw === 'object' && Array.isArray((raw as { entries?: unknown }).entries)) {
+    return (raw as { entries: CatalogEntry[] }).entries;
+  }
+  return [];
+}
+
+async function handleCatalogDelta(
+  delta: CatalogDelta,
+  assets: AssetRegistry,
+  commit: (blob: ReelGameBlob) => void,
+  readLastKnownGood: () => ReelGameBlob | undefined,
+): Promise<void> {
+  if (delta.authority === 'degraded') {
+    const diagnostic = delta.diagnostics?.[0];
+    const title = readLastKnownGood()?.title ?? 'none';
+    const code = diagnostic?.code ?? 'catalog-degraded';
+    setAssetStatus(`catalog rejected code=${code} retained title=${JSON.stringify(title)}`);
+    console.warn(`[custom-importer] catalog rejected code=${code} retained title=${JSON.stringify(title)}`);
+    return;
+  }
+  const row = [...delta.added, ...delta.changed].find(
+    (entry) => entry.guid.toLowerCase() === REEL_GAME_LEVEL_1_GUID,
+  );
+  if (row === undefined) return;
+
+  const recovered = await assets.reconcileCatalog();
+  if (!recovered.ok) {
+    setAssetStatus(`catalog recovery failed code=${recovered.error.code}`);
+    console.error('[custom-importer] catalog recovery failed:', recovered.error);
+    return;
+  }
+  assets.invalidate(row.guid);
+  const blob = await loadReelGameBlob(assets);
+  if (blob === undefined) {
+    const title = readLastKnownGood()?.title ?? 'none';
+    setAssetStatus(`catalog reload failed retained title=${JSON.stringify(title)}`);
+    return;
+  }
+  commit(blob);
+  setAssetStatus(`loaded title=${blob.title} reels=${blob.reels.length}`);
+  console.warn(
+    `[custom-importer] loaded reel-game blob title=${JSON.stringify(blob.title)} reels=${blob.reels.length}`,
+  );
 }
 
 async function loadReelGameBlob(assets: {

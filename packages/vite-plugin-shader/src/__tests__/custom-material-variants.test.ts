@@ -24,6 +24,59 @@ function mockContext(): { emitted: EmittedAsset[]; emitFile: (asset: EmittedAsse
 }
 
 describe('user material shader variant manifest', () => {
+  it('refreshes authored material entries when the provider switches active games', async () => {
+    const alphaPack = resolve(
+      repoRoot,
+      'apps/learn-render/4.advanced-opengl/3.blending/src/alpha-test.pack.json',
+    );
+    const blinnPhongPack = resolve(
+      repoRoot,
+      'apps/learn-render/5.advanced-lighting/1.advanced-lighting/src/blinn-phong.pack.json',
+    );
+    let activePack = alphaPack;
+    const plugin = forgeaxShader({
+      engineEntries: false,
+      materialPackagesProvider: () => [activePack],
+    });
+    const middleware: Array<(req: unknown, res: unknown, next: () => void) => Promise<void>> = [];
+    const server = {
+      config: { base: '/' },
+      middlewares: {
+        use(handler: (req: unknown, res: unknown, next: () => void) => Promise<void>) {
+          middleware.push(handler);
+        },
+      },
+      transformRequest: async () => null,
+    };
+    plugin.configureServer?.(server as never);
+    await plugin.buildStart?.call({} as never);
+
+    const readManifest = async (): Promise<{
+      materialShaders: Array<{ identifier: string }>;
+    }> => {
+      let body = '';
+      const response = {
+        setHeader() {},
+        end(value: string) {
+          body = value;
+        },
+      };
+      await middleware[0]?.({ url: '/shaders/manifest.json' }, response, () => {});
+      return JSON.parse(body) as { materialShaders: Array<{ identifier: string }> };
+    };
+
+    const first = await readManifest();
+    expect(first.materialShaders.map((entry) => entry.identifier)).toContain(
+      'learn_render::alpha_test',
+    );
+
+    activePack = blinnPhongPack;
+    const second = await readManifest();
+    expect(second.materialShaders.map((entry) => entry.identifier)).toEqual([
+      'learn_render::5_1_blinn_phong',
+    ]);
+  });
+
   it('compiles both WEBGL2_COMPAT branches and inlines them into materialShaders[]', async () => {
     const sourcePath = resolve(
       repoRoot,

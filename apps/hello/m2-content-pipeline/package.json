@@ -8,6 +8,7 @@
   "scripts": {
     "smoke": "node scripts/smoke.mjs",
     "smoke:source-reimport": "node scripts/source-reimport.mjs",
+    "smoke:browser-catalog-recovery": "node scripts/smoke-browser-catalog-recovery.mjs",
     "smoke:browser-font": "node scripts/smoke-browser-font.mjs"
   },
   "forgeax": {
@@ -24,7 +25,7 @@
         "legs": ["semantic", "recovery"]
       },
       "oracle": {
-        "stdoutIncludes": ["[m2-content] project manifest: PASS", "[m2-content] sidecar scan: PASS", "[m2-content] host importer delivery: PASS", "[smoke-browser] PASS - browser HMR reloaded changed host asset content", "[m2-content] browser HMR delivery: PASS", "[m2-content] image source reimport: PASS", "[m2-content] gltf source reimport: PASS", "[m2-content] FBX source reimport: PASS", "[m2-content] source reimport: PASS image+gltf+fbx semantic mutation with stable GUIDs", "[m2-content] FBX fixture reimport: PASS", "[m2-content] font fixture delivery: PASS", "[m2-content] font + FBX fixture delivery: PASS", "[m2-content] browser Worker font bake: PASS", "[m2-content] plain Node font bake + structured recovery: PASS", "[m2-content] GUID reimport: PASS", "[m2-content] codec round-trip: PASS", "[m2-content] PASS - M2 partial content pipeline gates GREEN"]
+        "stdoutIncludes": ["[m2-content] project manifest: PASS", "[m2-content] sidecar scan: PASS", "[m2-content] host importer delivery: PASS", "[smoke-browser] PASS - browser HMR reloaded changed host asset content", "[m2-content] browser HMR delivery: PASS", "[m2-catalog-recovery] PASS - baseline stable GUID, valid revision HMR, malformed LKG retention, same-process repair, pageLoads=1", "[m2-content] browser catalog recovery: PASS", "[m2-content] image source reimport: PASS", "[m2-content] gltf source reimport: PASS", "[m2-content] FBX source reimport: PASS", "[m2-content] source reimport: PASS image+gltf+fbx semantic mutation with stable GUIDs", "[m2-content] FBX fixture reimport: PASS", "[m2-content] font fixture delivery: PASS", "[m2-content] font + FBX fixture delivery: PASS", "[m2-content] browser Worker font bake: PASS", "[m2-content] plain Node font bake + structured recovery: PASS", "[m2-content] GUID reimport: PASS", "[m2-content] codec round-trip: PASS", "[m2-content] PASS - M2 partial content pipeline gates GREEN"]
       }
     },
     "metrics": {

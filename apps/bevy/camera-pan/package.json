@@ -10,13 +10,17 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
     "bevyExample": {
       "name": "pan_camera_controller",
       "category": "Camera",
       "status": "implemented"
+    },
+    "rhiDebug": {
+      "riskFamilies": ["camera-transform"]
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-camera-pan smoke",
     "metrics": {
@@ -53,6 +57,7 @@
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",

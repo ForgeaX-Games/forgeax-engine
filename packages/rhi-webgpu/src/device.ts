@@ -920,9 +920,9 @@ function makeCommandEncoder(
       // M5 / K-3 (research §2.4): timestamp-query feature gate. spec
       // writeTimestamp returns void; the forgeax form keeps the void shape
       // and fans out 'feature-not-enabled' through the engine onError
-      // channel rather than wrapping in Result (charter proposition 5
-      // consistent abstraction: AI users probe device.caps.timestampQuery
-      // BEFORE calling, the gate here is the safety net).
+      // channel rather than wrapping in Result. When the capability is true,
+      // a missing or throwing raw write is a structured runtime failure so a
+      // Render capture cannot publish a fabricated interval.
       const state = ENCODER_STATE.get(enc);
       throwIfFinished(state);
       if (caps.timestampQuery !== true) {
@@ -932,20 +932,30 @@ function makeCommandEncoder(
         );
         return;
       }
+      const rawQs = QUERY_SET_RAW_MAP.get(querySet) ?? (querySet as unknown as GPUQuerySet);
+      // @webgpu/types v0.1.69 declares writeTimestamp on GPUCommandEncoder
+      // when the timestamp-query feature is enabled. A capability-positive
+      // backend must expose and execute that raw operation; otherwise a
+      // Render capture could publish a fabricated zero interval.
+      const encoderWithTimestamp = rawEncoder as unknown as {
+        writeTimestamp?: (qs: GPUQuerySet, idx: number) => void;
+      };
+      if (typeof encoderWithTimestamp.writeTimestamp !== 'function') {
+        throw new RhiErrorClass({
+          code: 'webgpu-runtime-error',
+          expected: 'underlying GPUCommandEncoder.writeTimestamp to be callable',
+          hint: 'timestamp-query is advertised but the raw encoder has no writeTimestamp method',
+        });
+      }
       try {
-        const rawQs = QUERY_SET_RAW_MAP.get(querySet) ?? (querySet as unknown as GPUQuerySet);
-        // @webgpu/types v0.1.69 declares writeTimestamp on GPUCommandEncoder
-        // when the timestamp-query feature is enabled. Forward verbatim.
-        const encoderWithTimestamp = rawEncoder as unknown as {
-          writeTimestamp?: (qs: GPUQuerySet, idx: number) => void;
-        };
-        if (typeof encoderWithTimestamp.writeTimestamp === 'function') {
-          encoderWithTimestamp.writeTimestamp(rawQs, queryIndex);
-        }
-      } catch {
-        // Spec writeTimestamp returns void; runtime exceptions on the raw
-        // encoder are surfaced via the engine onError channel (silent-skip
-        // fan-out anchor, K-9). The forgeax form does not propagate.
+        encoderWithTimestamp.writeTimestamp(rawQs, queryIndex);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        throw new RhiErrorClass({
+          code: 'webgpu-runtime-error',
+          expected: 'underlying GPUCommandEncoder.writeTimestamp to succeed',
+          hint: `writeTimestamp raised: ${message}`,
+        });
       }
     },
     finish(): Result<CommandBuffer, RhiError> {
@@ -1774,20 +1784,19 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       // channel when caps.timestampQuery is false (K-3: spec writeTimestamp
       // returns void; the forgeax form keeps that shape).
       //
-      // Round 3 fix-up F-P3-3: previously a no-op stub. Now mirrors the K-9
-      // silent-skip fan-out double channel anchor: the forgeax RhiDevice
+      // Round 3 fix-up F-P3-3: the forgeax RhiDevice
       // does not expose `onError` directly (charter proposition 5: keep
       // RHI math-free + listener-free), so the shim writes a structured
       // diagnostic to `console.error` matching the RhiError shape. The
       // engine layer subscribes through `Renderer.onError` and fans the
-      // same RhiError out; this stub keeps the fault observable for
-      // pure-RHI consumers (mock unit tests, dawn-real-gpu probes) that
+      // same RhiError out; this keeps the unsupported capability observable
+      // for pure-RHI consumers (mock unit tests, dawn-real-gpu probes) that
       // never instantiate a Renderer.
       const fireFeatureNotEnabled = (featureName: string, hint: string): void => {
         // Diagnostic channel (a) of the K-9 double-channel pattern: default
         // console.error so AI consumers running headless / mock paths still
-        // observe the fault without subscribing to a listener. The void-
-        // returning entry must not raise; this fan-out is purely additive.
+        // observe the unsupported capability without subscribing to a
+        // listener. The capability-disabled entry remains non-throwing.
         console.error(
           `[RhiError feature-not-enabled] expected: device.features.has('${featureName}') === true; hint: ${hint}`,
         );

@@ -33,6 +33,7 @@ pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" preview
 # Semantic RHI-debug smoke and controlled falsifier
 pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:rhi-debug
 FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:rhi-debug
+FALSIFY_MATERIAL_METALLIC=metal pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:rhi-debug
 
 # Browser capture -> fresh replay -> pixel comparison
 pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" smoke:browser
@@ -43,9 +44,17 @@ documented sample site after the 60-frame light-color animation. The `FALSIFY_NO
 keeps the white lamp mesh but removes its `PointLight`; the same material witness must then reject
 the frame, proving that the result came from the producer's point-light/material path.
 
+`FALSIFY_MATERIAL_METALLIC=metal` changes only the cube's StandardMaterial `metallic` value from
+the default dielectric `0` to `1`. The smoke accepts the altered red-dominant response only when
+it is separated from the dielectric sample by a measured pixel distance greater than `0.1`;
+`FALSIFY_MATERIAL_METALLIC=dielectric` is the explicit control spelling for the default path.
+
 The browser smoke uses the producer's `__captureMaterials` hook through the shared RHI-debug capture
 path and compares the live WebGPU readback with a fresh-device replay; it is a local Chrome + WebGPU
-gate, while the Dawn smoke remains the deterministic CI gate.
+gate for the default lane. The `metal` and `dielectric` browser lanes use the structural capture
+mode and prove the 512-byte Standard PBR upload carries `metallic` at global byte offset 16 and
+that the Standard PBR pipeline is selected for a draw; the Dawn smoke remains the deterministic CI
+gate.
 
 ## forgeax-vs-LearnOpenGL mapping
 

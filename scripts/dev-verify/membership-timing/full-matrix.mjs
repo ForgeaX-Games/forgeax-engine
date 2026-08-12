@@ -11,6 +11,11 @@ const LIGHT_MATRIX = [32, 64, 128, 256];
 const TIMESTAMP_QUERY_UNSUPPORTED = MEMBERSHIP_TIMING_REASON_CODES.find(
   (code) => code === 'timestamp-query-unsupported',
 );
+const PERMITTED_GPU_REFUSALS = new Set([
+  'timestamp-query-unsupported',
+  'timestamp-period-unavailable',
+  'timestamp-write-unavailable',
+]);
 const FULL_MATRIX_EXACT = Object.fromEntries(
   Object.entries(FULL_MATRIX_CONTRACT).filter(([key]) => key !== 'generation'),
 );
@@ -21,6 +26,14 @@ function error(message, path = '$') {
 
 function reasonCode(value) {
   return value?.code ?? null;
+}
+
+function isPermittedGpuRefusal(record, declaration) {
+  return (
+    (declaration === undefined || declaration.route === 'dawn-gpu') &&
+    record?.status === 'refused' &&
+    PERMITTED_GPU_REFUSALS.has(reasonCode(record.reason))
+  );
 }
 
 function expectedChildren(manifest, attemptId) {
@@ -235,6 +248,73 @@ function checkCommon(record, manifest, artifactRoot, errors) {
     checkArtifact(descriptor, artifactRoot, name, errors);
 }
 
+function checkAcceptedGpuTiming(record, errors) {
+  const gpu = record.gpu;
+  const timingGpu = record.timing?.gpu;
+  if (
+    gpu === null ||
+    timingGpu === null ||
+    typeof gpu !== 'object' ||
+    typeof timingGpu !== 'object'
+  ) {
+    errors.push(error('accepted GPU attempt lacks GPU timing', '$.timing.gpu'));
+    return;
+  }
+  if (JSON.stringify(gpu) !== JSON.stringify(timingGpu))
+    errors.push(
+      error('record GPU timing differs between terminal and timing projections', '$.timing.gpu'),
+    );
+  if (
+    gpu.rawUnit !== 'ticks' ||
+    !/^(0|[1-9]\d*)$/.test(gpu.rawBeginTick) ||
+    !/^(0|[1-9]\d*)$/.test(gpu.rawEndTick) ||
+    !/^(0|[1-9]\d*)$/.test(gpu.deltaTicks)
+  ) {
+    errors.push(error('accepted GPU timing must use decimal u64 ticks', '$.gpu'));
+    return;
+  }
+  const begin = BigInt(gpu.rawBeginTick);
+  const end = BigInt(gpu.rawEndTick);
+  const delta = BigInt(gpu.deltaTicks);
+  if (end <= begin || delta !== end - begin)
+    errors.push(error('accepted GPU timing must have an advancing exact tick range', '$.gpu'));
+  const period = record.provenance.timestampPeriodNanoseconds;
+  if (gpu.timestampPeriodNanoseconds !== period)
+    errors.push(
+      error('GPU timing period differs from provenance period', '$.gpu.timestampPeriodNanoseconds'),
+    );
+  if (
+    !Number.isFinite(period) ||
+    period <= 0 ||
+    !Number.isFinite(gpu.durationNanoseconds) ||
+    gpu.durationNanoseconds <= 0 ||
+    gpu.durationNanoseconds !== Number(delta) * period
+  )
+    errors.push(
+      error(
+        'accepted GPU timing duration must be finite, positive, and exact',
+        '$.gpu.durationNanoseconds',
+      ),
+    );
+  for (const [name, phase] of [
+    ['cpu.encode', record.timing.cpu?.encode],
+    ['cpu.submit', record.timing.cpu?.submit],
+    ['async.queueCompletion', record.timing.async?.queueCompletion],
+    ['async.readback', record.timing.async?.readback],
+  ]) {
+    if (
+      phase === null ||
+      typeof phase !== 'object' ||
+      !Number.isFinite(phase.startNanoseconds) ||
+      !Number.isFinite(phase.endNanoseconds) ||
+      !Number.isFinite(phase.durationNanoseconds) ||
+      phase.endNanoseconds < phase.startNanoseconds ||
+      phase.durationNanoseconds < 0
+    )
+      errors.push(error(`accepted GPU timing phase is incomplete: ${name}`, '$.timing'));
+  }
+}
+
 const ROUTE_FACTS = {
   'dawn-gpu': {
     backendKind: 'webgpu',
@@ -321,7 +401,11 @@ function validateRouteFacts(record, declaration, errors) {
         '$.provenance.timestampPeriodNanoseconds',
       ),
     );
-  if (record.actualProducer !== facts.producer)
+  const refusedGpuRoute = isPermittedGpuRefusal(record, declaration);
+  if (
+    record.actualProducer !== facts.producer &&
+    !(refusedGpuRoute && record.actualProducer === 'cpu')
+  )
     errors.push(
       error(
         `route ${declaration.route} requires actualProducer=${facts.producer}`,
@@ -362,16 +446,20 @@ function validateAttempt(record, declaration, manifest, errors) {
     errors.push(error('top-level recordKind must be attempt', '$.recordKind'));
   if (record.attemptId !== declaration.attemptId)
     errors.push(error('attemptId differs from its declaration', '$.attemptId'));
-  if (record.status !== declaration.expectedStatus)
+  const permittedGpuRefusal = isPermittedGpuRefusal(record, declaration);
+  if (record.status !== declaration.expectedStatus && !permittedGpuRefusal)
     errors.push(
       error(
         `attempt status differs from manifest: expected ${declaration.expectedStatus}`,
         '$.status',
       ),
     );
-  if (record.actualProducer !== declaration.expectedProducer)
+  if (
+    record.actualProducer !== declaration.expectedProducer &&
+    !(permittedGpuRefusal && record.actualProducer === 'cpu')
+  )
     errors.push(error('actualProducer differs from manifest', '$.actualProducer'));
-  if (reasonCode(record.reason) !== declaration.expectedReason)
+  if (reasonCode(record.reason) !== declaration.expectedReason && !permittedGpuRefusal)
     errors.push(error('reason differs from manifest', '$.reason'));
   if (record.provenance.lights !== declaration.lights)
     errors.push(error('attempt light count differs from manifest', '$.provenance.lights'));
@@ -384,6 +472,7 @@ function validateAttempt(record, declaration, manifest, errors) {
   if (record.status === 'accepted') {
     if (record.actualProducer !== 'gpu' || record.gpu === null || record.timing.gpu === null)
       errors.push(error('accepted GPU attempt lacks GPU timing', '$'));
+    else checkAcceptedGpuTiming(record, errors);
     if (
       record.membership === null ||
       record.outputHashes.membership === null ||
@@ -413,14 +502,17 @@ function validateAttempt(record, declaration, manifest, errors) {
   if (record.status === 'refused') {
     if (record.gpu !== null) errors.push(error('refused attempt must have gpu=null', '$.gpu'));
     if (
-      declaration.expectedReason === null ||
-      reasonCode(record.reason) !== TIMESTAMP_QUERY_UNSUPPORTED
+      declaration.route !== 'dawn-gpu' &&
+      (declaration.expectedReason === null ||
+        reasonCode(record.reason) !== TIMESTAMP_QUERY_UNSUPPORTED)
     )
       errors.push(error('refused attempt must carry the declared Render refusal', '$.reason'));
+    if (declaration.route === 'dawn-gpu' && !PERMITTED_GPU_REFUSALS.has(reasonCode(record.reason)))
+      errors.push(error('Dawn GPU refusal must use a permitted timestamp reason', '$.reason'));
   }
 }
 
-function validateReference(record, declaration, parent, errors) {
+export function validateReference(record, declaration, parent, errors) {
   if (record.recordKind !== 'reference')
     errors.push(error('nested recordKind must be reference', '$.recordKind'));
   if (record.referenceId !== declaration.referenceId)
@@ -438,16 +530,21 @@ function validateReference(record, declaration, parent, errors) {
   if (record.provenance.backendKind !== 'webgpu' || record.provenance.compute !== true)
     errors.push(error('nested references require the Dawn WebGPU route', '$.provenance'));
   if (declaration.referenceKind === 'cpu-membership') {
+    const refusedGpuParent = isPermittedGpuRefusal(parent);
     if (
       record.actualProducer !== 'cpu' ||
       record.provenance.timestampQuery !== false ||
       record.provenance.timestampPeriodNanoseconds !== null
     )
       errors.push(error('cpu-membership reference route facts are invalid', '$'));
-    if (
-      record.outputHashes.membership === null ||
-      record.outputHashes.membership !== parent.outputHashes.membership
-    )
+    if (record.outputHashes.membership === null)
+      errors.push(
+        error(
+          'cpu-membership reference does not provide membership output',
+          '$.outputHashes.membership',
+        ),
+      );
+    else if (!refusedGpuParent && record.outputHashes.membership !== parent.outputHashes.membership)
       errors.push(
         error(
           'cpu-membership reference does not equal parent membership output',
@@ -604,12 +701,38 @@ export function validateRealCorpus({
       (record) => record.recordKind === 'attempt' && record.status === 'refused',
     ).length,
   };
+  const acceptedGpuRecords = (records ?? []).filter(
+    (record) =>
+      record.recordKind === 'attempt' &&
+      record.status === 'accepted' &&
+      record.actualProducer === 'gpu',
+  );
+  const varianceReady = [32, 64, 128].every((lights) => {
+    const deltas = new Set(
+      acceptedGpuRecords
+        .filter((record) => record.provenance?.lights === lights)
+        .map((record) => record.gpu?.deltaTicks)
+        .filter((value) => typeof value === 'string'),
+    );
+    return deltas.size >= 2;
+  });
+  const overflowReady = acceptedGpuRecords.some(
+    (record) => record.provenance?.lights === 256 && record.membership?.overflow === true,
+  );
+  const truthfulnessReady = errors.length === 0;
+  const optimizationReleaseReady =
+    truthfulnessReady &&
+    acceptedGpuRecords.length === FULL_MATRIX_CONTRACT.acceptedGpu &&
+    varianceReady &&
+    overflowReady;
   return {
-    valid: errors.length === 0,
+    valid: truthfulnessReady,
     errors,
     counts,
     evidenceKind: manifest.evidenceKind,
-    completeMatrixReady: errors.length === 0,
+    truthfulnessReady,
+    optimizationReleaseReady,
+    completeMatrixReady: truthfulnessReady,
     aggregateTarget: FULL_MATRIX_ID,
   };
 }

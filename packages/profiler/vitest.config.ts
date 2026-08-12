@@ -5,6 +5,7 @@ export default defineProject({
     environment: 'node',
     name: '@forgeax/engine-profiler',
     passWithNoTests: false,
+    exclude: ['**/*.browser.test.ts'],
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',

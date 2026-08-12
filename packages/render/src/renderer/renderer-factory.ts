@@ -669,6 +669,23 @@ export function allowsUnlitPreparedFallback(
   );
 }
 
+/**
+ * Prepared VFX draws own their vertex inputs and bind groups. A missing
+ * authored material shader is therefore retryable, but it is never safe to
+ * substitute the built-in PBR module: PBR declares mesh/instance groups that
+ * the VFX draw does not bind. Returning true keeps the feature on its
+ * structured next-frame recovery path instead of creating an invalid PSO.
+ */
+export function shouldDeferMissingPreparedMaterialShader(
+  vertexLayout: string | undefined,
+): boolean {
+  return (
+    vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance ||
+    vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance ||
+    vertexLayout === RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance
+  );
+}
+
 export function selectPipelineLayoutForVariant(
   state: {
     readonly pbrPipelineLayout: PipelineLayout | null;
@@ -2173,6 +2190,13 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     if (pipelineState === null) return null;
     const lookup = getShader().findMaterialArtifact(materialShaderId);
     if (!lookup.ok) {
+      if (shouldDeferMissingPreparedMaterialShader(vertexLayout)) {
+        // Prepared VFX draws bind only their feature-owned groups. The
+        // built-in PBR fallback declares mesh/instance groups 2/3 and would
+        // consequently emit an invalid pipeline before the authored shader
+        // becomes available. Let the feature retry on the next frame.
+        return null;
+      }
       // bug-20260527-renderstate-pipeline-dispatch-gap D-3:
       // fallback path parity -- when renderState is defined and the
       // shader id is not registered, build a renderState-variant of

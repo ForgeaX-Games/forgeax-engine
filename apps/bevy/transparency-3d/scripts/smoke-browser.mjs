@@ -92,6 +92,10 @@ function assertTransparencyTape({ tape }) {
     expected.alphaToCoverage = false;
     console.log('[transparency-3d] FALSIFY=transparency-3d-alpha-to-coverage -- expecting disabled alpha-to-coverage');
   }
+  if (process.env.FALSIFY === 'transparency-3d-blend-depth-write') {
+    expected.blendDepthWrite = true;
+    console.log('[transparency-3d] FALSIFY=transparency-3d-blend-depth-write -- expecting blended depth writes');
+  }
 
   const pipelineById = new Map(
     tape.events

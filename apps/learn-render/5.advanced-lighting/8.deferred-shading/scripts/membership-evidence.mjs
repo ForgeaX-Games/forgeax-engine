@@ -109,6 +109,71 @@ function timingRecord(input, gpuTiming) {
   };
 }
 
+function provenanceFailure(input, evidence, manifest) {
+  if (typeof input.sourceHead !== 'string' || !/^[0-9a-f]{40}$/.test(input.sourceHead))
+    return 'provenance-missing';
+  if (typeof manifest.sourceHead === 'string' && manifest.sourceHead !== input.sourceHead)
+    return 'provenance-mismatch';
+  for (const key of ['backendKind', 'adapter', 'environment']) {
+    if (typeof evidence[key] !== 'string' || evidence[key].length === 0) return 'provenance-missing';
+  }
+  if (typeof evidence.compute !== 'boolean' || typeof evidence.timestampQuery !== 'boolean')
+    return 'provenance-missing';
+  if (evidence.timestampQuery) {
+    if (
+      typeof evidence.timestampPeriodNanoseconds !== 'number' ||
+      !Number.isFinite(evidence.timestampPeriodNanoseconds) ||
+      evidence.timestampPeriodNanoseconds <= 0
+    )
+      return 'timestamp-period-unavailable';
+  } else if (evidence.timestampPeriodNanoseconds !== null) {
+    return 'provenance-mismatch';
+  }
+  return null;
+}
+
+function decimalTick(value) {
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) return null;
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
+}
+
+function gpuTimingFailure(gpuTiming, evidence) {
+  if (gpuTiming === null || typeof gpuTiming !== 'object') return 'terminal-record-incomplete';
+  if (gpuTiming.rawUnit !== 'ticks') return 'timestamp-range-invalid';
+  const begin = decimalTick(gpuTiming.rawBeginTick);
+  const end = decimalTick(gpuTiming.rawEndTick);
+  const delta = decimalTick(gpuTiming.deltaTicks);
+  if (begin === null || end === null || delta === null || end <= begin || delta !== end - begin)
+    return 'timestamp-range-invalid';
+  const period = evidence.timestampPeriodNanoseconds;
+  if (typeof period !== 'number' || !Number.isFinite(period) || period <= 0)
+    return 'timestamp-period-unavailable';
+  if (
+    gpuTiming.timestampPeriodNanoseconds !== period ||
+    !Number.isFinite(gpuTiming.durationNanoseconds) ||
+    gpuTiming.durationNanoseconds <= 0 ||
+    gpuTiming.durationNanoseconds !== Number(delta) * period
+  )
+    return 'provenance-mismatch';
+  return null;
+}
+
+function phaseComplete(value) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    Number.isFinite(value.startNanoseconds) &&
+    Number.isFinite(value.endNanoseconds) &&
+    Number.isFinite(value.durationNanoseconds) &&
+    value.endNanoseconds >= value.startNanoseconds &&
+    value.durationNanoseconds >= 0
+  );
+}
+
 /**
  * Write one terminal attempt or nested-reference record. The ID declaration
  * is checked before any artifact is published; all artifacts then use atomic
@@ -146,6 +211,13 @@ export function writeMembershipEvidence(input) {
   const profile = completeProfile(profileValue, profileArtifact);
   const gpuTiming = input.timing?.gpu ?? null;
   const timing = timingRecord(input, gpuTiming);
+  const provenanceCode = provenanceFailure(input, evidence, manifest);
+  const timingCode =
+    input.mode === 'gpu'
+      ? typeof input.timing?.code === 'string'
+        ? ownerCode(input.timing.code)
+        : gpuTimingFailure(gpuTiming, evidence)
+      : null;
   const outputHashes = {
     membership: membership === null ? null : sha256(membershipBytes),
     pixel: pixels === null ? null : sha256(pixelBytes),
@@ -166,13 +238,23 @@ export function writeMembershipEvidence(input) {
     : [];
   let references = input.references ?? [];
   const gpuPhasesComplete =
-    timing.submissionToken !== null &&
-    timing.dispatchId !== null &&
-    timing.cpu.encode !== null &&
-    timing.cpu.submit !== null &&
-    timing.async.queueCompletion !== null &&
-    timing.async.readback !== null;
-  if (input.recordKind === 'attempt' && input.mode === 'gpu' && actualProducer === 'gpu' && gpuTiming !== null && hasMembership && hasPixels && profileOk) {
+    typeof timing.submissionToken === 'string' &&
+    typeof timing.dispatchId === 'string' &&
+    phaseComplete(timing.cpu.encode) &&
+    phaseComplete(timing.cpu.submit) &&
+    phaseComplete(timing.async.queueCompletion) &&
+    phaseComplete(timing.async.readback);
+  if (
+    input.recordKind === 'attempt' &&
+    input.mode === 'gpu' &&
+    actualProducer === 'gpu' &&
+    gpuTiming !== null &&
+    provenanceCode === null &&
+    timingCode === null &&
+    hasMembership &&
+    hasPixels &&
+    profileOk
+  ) {
     if (declaredChildren.length !== 2) throw new Error(`accepted GPU attempt must declare exactly two nested references: ${input.attemptId}`);
     if (gpuPhasesComplete && input.references === undefined) {
       throw new Error(`accepted GPU attempt requires separately executed child references: ${input.attemptId}`);
@@ -184,10 +266,11 @@ export function writeMembershipEvidence(input) {
   }
   if (input.recordKind === 'attempt') {
     if (reasonCodeValue !== null) status = 'refused';
-    else if (input.mode === 'gpu' && actualProducer === 'gpu' && gpuTiming !== null && gpuPhasesComplete && hasMembership && hasPixels && profileOk && references.length === 2) status = 'accepted';
-    else if (input.mode === 'cpu-control' && actualProducer === 'cpu' && hasMembership && hasPixels && profileOk) status = 'accepted-control';
+    else if (input.mode === 'gpu' && actualProducer === 'gpu' && gpuTiming !== null && provenanceCode === null && timingCode === null && gpuPhasesComplete && hasMembership && hasPixels && profileOk && references.length === 2) status = 'accepted';
+    else if (input.mode === 'cpu-control' && actualProducer === 'cpu' && provenanceCode === null && hasMembership && hasPixels && profileOk) status = 'accepted-control';
     else {
-      reasonCodeValue = reasonCodeValue ?? failureCode({ ...input, membership, pixels }, profile);
+      reasonCodeValue =
+        reasonCodeValue ?? provenanceCode ?? timingCode ?? failureCode({ ...input, membership, pixels }, profile);
       status = MEMBERSHIP_TIMING_REASON_MAPPING[reasonCodeValue].topLevel;
     }
   } else if (reasonCodeValue !== null) {
@@ -197,16 +280,16 @@ export function writeMembershipEvidence(input) {
   } else if (input.referenceKind === 'timing-omitted-pixel' && input.mode === 'omitted' && hasPixels) {
     outcome = 'accepted-reference';
   } else {
-    reasonCodeValue = failureCode({ ...input, membership, pixels }, profile);
+    reasonCodeValue = provenanceCode ?? timingCode ?? failureCode({ ...input, membership, pixels }, profile);
     outcome = MEMBERSHIP_TIMING_REASON_MAPPING[reasonCodeValue].reference;
   }
   const provenance = {
-    backendKind: evidence.backendKind ?? 'unknown',
+    backendKind: evidence.backendKind,
     compute: evidence.compute === true,
     timestampQuery: evidence.timestampQuery === true,
     timestampPeriodNanoseconds: typeof evidence.timestampPeriodNanoseconds === 'number' ? evidence.timestampPeriodNanoseconds : null,
-    adapter: evidence.adapter ?? 'unknown',
-    environment: evidence.environment ?? 'unknown',
+    adapter: evidence.adapter,
+    environment: evidence.environment,
     configFingerprint: input.configFingerprint ?? 'deferred-membership-timing-generation-4',
     seed: input.seed ?? 13,
     frameTarget: input.frameTarget ?? 300,

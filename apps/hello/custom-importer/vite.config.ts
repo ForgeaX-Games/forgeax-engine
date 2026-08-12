@@ -1,7 +1,8 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
 
 import { reelGameBlobImporter } from './src/reel-game-blob-importer';
@@ -29,11 +30,12 @@ import { reelGameBlobImporter } from './src/reel-game-blob-importer';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const localAssets = resolve(here, 'assets');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-custom-importer');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [localAssets], importers: [reelGameBlobImporter()] , refresh: reloadAssetHost() }),
+    pluginPack({ roots: [localAssets], importers: [reelGameBlobImporter()], runtimeBinding }),
   ],
   server: {
     port: 5196,

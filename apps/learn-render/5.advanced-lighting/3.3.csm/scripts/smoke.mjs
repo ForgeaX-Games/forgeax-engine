@@ -31,6 +31,10 @@
 //     depth/cascade facts with sentinels; the producer-owned fact gate turns red.
 //   - FALSIFY=force-csm-probe-boundary-layer-shift : shift only the boundary
 //     cascade facts; the split-continuity gate must turn red.
+//   - FALSIFY=force-csm-probe-boundary-factor-shift : shift only the boundary
+//     shadow factors; the boundary depth-contribution gate must turn red.
+//   - FALSIFY=force-csm-probe-shadow-depth-shift : raise only the shadowed
+//     base sampled depths; the raw occlusion relation must turn red.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-3-3-csm] backend=<backend>`
@@ -564,6 +568,7 @@ if (csmProbeResults === null || csmProbeResults === undefined) {
 const csmBaseProbeResults = csmProbeResults.slice(0, csmProbePositions.length);
 const csmBoundaryResults = csmProbeResults.slice(csmProbePositions.length);
 const csmProbeFactors = csmBaseProbeResults.map(({ shadowFactor }) => shadowFactor);
+const csmShadowedProbeIndices = new Set([2, 3, 6]);
 const gatedCsmProbeResults = FALSIFY === 'force-csm-probe-raw-depth-sentinel'
   ? csmProbeResults.map(({ shadowFactor }) => ({
       shadowFactor,
@@ -577,6 +582,24 @@ const gatedCsmProbeResults = FALSIFY === 'force-csm-probe-raw-depth-sentinel'
           ? probe
           : { ...probe, cascadeIndex: (probe.cascadeIndex + 1) % 4 },
       )
+  : FALSIFY === 'force-csm-probe-boundary-depth-shift'
+    ? csmProbeResults.map((probe, index) =>
+        index < csmProbePositions.length
+          ? probe
+          : { ...probe, sampledDepth: probe.sampledDepth + 0.25 },
+      )
+  : FALSIFY === 'force-csm-probe-boundary-factor-shift'
+    ? csmProbeResults.map((probe, index) =>
+        index < csmProbePositions.length
+          ? probe
+          : { ...probe, shadowFactor: probe.shadowFactor * 0.5 },
+      )
+  : FALSIFY === 'force-csm-probe-shadow-depth-shift'
+    ? csmProbeResults.map((probe, index) =>
+        csmShadowedProbeIndices.has(index)
+          ? { ...probe, sampledDepth: probe.receiverDepth + 0.1 }
+          : probe,
+      )
   : csmProbeResults;
 if (FALSIFY === 'force-csm-probe-raw-depth-sentinel') {
   console.log('[smoke] FALSIFY=force-csm-probe-raw-depth-sentinel -- replaced raw depth/cascade facts with sentinels');
@@ -589,6 +612,9 @@ const gatedCsmProbeFactors = FALSIFY === 'force-csm-probe-depth-lit'
   : csmProbeFactors;
 if (FALSIFY === 'force-csm-probe-depth-lit') {
   console.log('[smoke] FALSIFY=force-csm-probe-depth-lit -- replaced sampled factors with fully lit');
+}
+if (FALSIFY === 'force-csm-probe-shadow-depth-shift') {
+  console.log('[smoke] FALSIFY=force-csm-probe-shadow-depth-shift -- raised shadowed sampled depths');
 }
 console.log(
   `[smoke] CSM sampled-depth factors=${JSON.stringify(csmProbeFactors)}`,
@@ -636,6 +662,15 @@ for (const [index, expectation] of csmProbeExpectations.entries()) {
       `factor=${factor} expected=${JSON.stringify(expectation)}`,
     );
   }
+  if (
+    expectation.max !== undefined &&
+    probe.sampledDepth + 0.02 >= probe.receiverDepth
+  ) {
+    throw new Error(
+      `CSM shadowed raw depth relation missing at ${expectation.label}: ` +
+        `sampled=${probe.sampledDepth} receiver=${probe.receiverDepth}`,
+    );
+  }
   const factors = perCascadeFactors.get(expectation.cascade) ?? [];
   factors.push(factor);
   perCascadeFactors.set(expectation.cascade, factors);
@@ -658,15 +693,18 @@ if (!oneCascade) {
     for (const [side, probe] of [['near', nearSide], ['far', farSide]]) {
       if (
         probe === undefined ||
+        !Number.isFinite(probe.shadowFactor) ||
+        Math.abs(probe.shadowFactor - 1) > 0.01 ||
         !Number.isFinite(probe.sampledDepth) ||
         probe.sampledDepth < 0 ||
         probe.sampledDepth > 1 ||
         !Number.isFinite(probe.receiverDepth) ||
         probe.receiverDepth < 0 ||
-        probe.receiverDepth > 1
+        probe.receiverDepth > 1 ||
+        probe.sampledDepth + 0.02 < probe.receiverDepth
       ) {
         throw new Error(
-          `CSM split-boundary raw depth witness missing at boundary ${boundary}/${side}: ` +
+          `CSM split-boundary raw depth contribution mismatch at boundary ${boundary}/${side}: ` +
             JSON.stringify(probe),
         );
       }

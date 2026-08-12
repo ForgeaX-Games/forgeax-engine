@@ -1,4 +1,5 @@
 import { ok } from '@forgeax/engine-rhi';
+import type { CatalogDelta } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { createCatalogSource } from '../catalog-source';
@@ -68,6 +69,31 @@ describe('AssetRegistry.enumerateCatalog', () => {
     const result = await assets.enumerateCatalog();
 
     expect(result).toEqual({ ok: true, value: [entry] });
+  });
+
+  it('clears a catalog source and unsubscribes its producer transport', async () => {
+    const listeners = new Set<(delta: CatalogDelta) => void>();
+    const unsubscribe = vi.fn(() => listeners.clear());
+    const source = {
+      enumerate: async () => ok([packageRow]),
+      subscribe: (listener: (delta: CatalogDelta) => void) => {
+        listeners.add(listener);
+        return unsubscribe;
+      },
+    };
+    const assets = registry();
+    const received = vi.fn();
+    assets.setCatalogSource(source);
+    assets.subscribeCatalog(received);
+    await assets.enumerateCatalog();
+
+    assets.clearCatalogSource();
+    assets.clearCatalogSource();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect((await assets.enumerateCatalog()).ok).toBe(false);
+    for (const listener of listeners) listener({ added: [], changed: [], removed: [] });
+    expect(received).not.toHaveBeenCalled();
   });
 
   it('preserves the explicit runtime projection instead of inferring it from locators', () => {

@@ -915,6 +915,7 @@ function executeGraphOwnedRenderFeaturePass(
         state,
         resolvedGraphics,
         ledger,
+        contributionPass.order,
       );
       if (!recorded.ok) throw recorded.error;
     } else {
@@ -977,6 +978,7 @@ export function recordResolvedRenderFeatureGraphicsPass(
   state: RenderFeaturePreparedGraphicsState,
   resolved: PreparedGraphicsResolvedSnapshot,
   ledger: RenderFeatureGraphicsRecordingLedger,
+  featureOrder = -1,
 ): Result<{ readonly acceptedDrawCount: number }, RenderError> {
   const validated = validateRenderFeatureGraphicsPass(featureIdentity, descriptor, state);
   if (!validated.ok) return validated;
@@ -1012,7 +1014,9 @@ export function recordResolvedRenderFeatureGraphicsPass(
       vertexData.some((vertex) => vertex.resource === undefined) ||
       (draw.indexData !== undefined && indexData === undefined)
     ) {
-      return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+      return err(
+        new RenderFeatureStageFailedError(featureIdentity, featureOrder, 'record', 'next-frame'),
+      );
     }
     resolvedDraws.push({
       pipeline,
@@ -1035,7 +1039,9 @@ export function recordResolvedRenderFeatureGraphicsPass(
       ledger.binding += 1;
       const handle = binding.handle ?? ledger.resolveTargetBindings?.(binding);
       if (handle === undefined) {
-        return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+        return err(
+          new RenderFeatureStageFailedError(featureIdentity, featureOrder, 'record', 'next-frame'),
+        );
       }
       if (ledger.setBindGroupAt !== undefined) {
         ledger.setBindGroupAt(index, handle, binding.dynamicOffsets);
@@ -1054,7 +1060,9 @@ export function recordResolvedRenderFeatureGraphicsPass(
       const indexData = resolvedDraw.draw.indexData;
       const indexHandle = resolvedDraw.indexData?.handle;
       if (indexData === undefined || indexHandle === undefined) {
-        return err(new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'next-frame'));
+        return err(
+          new RenderFeatureStageFailedError(featureIdentity, featureOrder, 'record', 'next-frame'),
+        );
       }
       ledger.index += 1;
       ledger.setIndexBuffer?.(indexHandle, indexData.format);
@@ -1063,7 +1071,12 @@ export function recordResolvedRenderFeatureGraphicsPass(
         const indirect = resolved.resolveGpuBuffer?.(resolvedDraw.draw.command.buffer);
         if (indirect === undefined) {
           return err(
-            new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'renderer-recover'),
+            new RenderFeatureStageFailedError(
+              featureIdentity,
+              featureOrder,
+              'record',
+              'renderer-recover',
+            ),
           );
         }
         ledger.recordDrawIndexedIndirect?.(indirect, resolvedDraw.draw.command.offset ?? 0);
@@ -1076,7 +1089,12 @@ export function recordResolvedRenderFeatureGraphicsPass(
         const indirect = resolved.resolveGpuBuffer?.(resolvedDraw.draw.command.buffer);
         if (indirect === undefined) {
           return err(
-            new RenderFeatureStageFailedError(featureIdentity, -1, 'record', 'renderer-recover'),
+            new RenderFeatureStageFailedError(
+              featureIdentity,
+              featureOrder,
+              'record',
+              'renderer-recover',
+            ),
           );
         }
         ledger.recordDrawIndirect?.(indirect, resolvedDraw.draw.command.offset ?? 0);

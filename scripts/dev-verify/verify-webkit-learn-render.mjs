@@ -29,6 +29,7 @@ const scenarioFrames = Number(argumentValue('--frames') ?? 300);
 const timeoutMs = Number(process.env.TIMEOUT_MS ?? 30_000);
 const demoTimeoutMs = Number(process.env.DEMO_TIMEOUT_MS ?? 120_000);
 const MAX_CAPTURED_LOGS = 2_048;
+const DEFERRED_MEMBERSHIP_VIEWPORT = { width: 512, height: 512 };
 const DECISIVE_LOG_PATTERN =
   /asset-not-imported|asset-not-registered|loadByGuid failed|HTTP 404|image-dimension-out-of-bounds|maxTextureDimension2D|Validation Error|EngineEnvironmentError|webgpu-runtime-error|rhi-not-available|createApp failed|WebAssembly\.Module doesn't parse|(?:Hdrp)?CapsInsufficientError|caps insufficient/i;
 const artifactRoot = resolve(
@@ -562,7 +563,7 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
   try {
     const url = await started.url;
     browser = await webkit.launch({ headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0' });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const page = await browser.newPage({ viewport: DEFERRED_MEMBERSHIP_VIEWPORT });
     await page.addInitScript(() => {
       globalThis.__forgeaxDeferredFrameCount = 0;
       const original = globalThis.requestAnimationFrame.bind(globalThis);
@@ -661,7 +662,7 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
       membership: result.timing?.membership ?? null,
       lights: 128,
       frames: result.frames,
-      dimensions: { width: 1280, height: 720 },
+      dimensions: DEFERRED_MEMBERSHIP_VIEWPORT,
       environment: result.evidence?.environment,
       evidenceKind: 'real',
     });

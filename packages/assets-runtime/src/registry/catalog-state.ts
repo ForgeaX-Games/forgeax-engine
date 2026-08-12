@@ -45,16 +45,16 @@ function revisionIsOlder(
   );
 }
 
-function sameValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function sameRevision(left: ResourceRevision, right: ResourceRevision): boolean {
+  return (
+    left.digest === right.digest &&
+    left.observedAt === right.observedAt &&
+    left.rootId === right.rootId
+  );
 }
 
-function hasRevisionGap(revisions: CatalogRevisionWindow | undefined): boolean {
-  if (revisions === undefined) return false;
-  const baseline = new Map(revisions.baseline.map((point) => [point.rootId, point.revision]));
-  return revisions.current.some(
-    (point) => (baseline.get(point.rootId) ?? point.revision) + 1 < point.revision,
-  );
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function diagnosticForGap(): CatalogDiagnostic {
@@ -65,6 +65,131 @@ function diagnosticForGap(): CatalogDiagnostic {
     hint: 'reconcile the catalog before consuming incremental changes',
     authority: 'catalog',
   };
+}
+
+function diagnosticForDegradedRows(): CatalogDiagnostic {
+  return {
+    code: 'catalog-degraded-rows',
+    severity: 'blocking',
+    expected: 'a degraded catalog delta to contain no identity-bearing rows',
+    hint: 'keep the last verified catalog and reconcile before applying a replacement',
+    authority: 'catalog',
+  };
+}
+
+function hasIdentityChanges(delta: CatalogDelta): boolean {
+  return delta.added.length > 0 || delta.changed.length > 0 || delta.removed.length > 0;
+}
+
+function revisionDiagnostic(
+  revisions: CatalogRevisionWindow,
+  hasChanges: boolean,
+): CatalogDiagnostic | undefined {
+  const baselineByRoot = new Map(revisions.baseline.map((point) => [point.rootId, point]));
+  const currentByRoot = new Map(revisions.current.map((point) => [point.rootId, point]));
+
+  for (const point of revisions.current) {
+    const baseline = baselineByRoot.get(point.rootId);
+    if (baseline === undefined) {
+      return {
+        code: 'catalog-revision-conflict',
+        severity: 'blocking',
+        expected: 'every current root to have a verified baseline',
+        actual: point.rootId,
+        hint: 'restore the latest verified snapshot for this root before applying the delta',
+        authority: 'catalog',
+      };
+    }
+    if (point.revision < baseline.revision) {
+      return {
+        code: 'catalog-revision-stale',
+        severity: 'blocking',
+        expected: 'current revision to be at least the verified baseline',
+        actual: `${baseline.revision} -> ${point.revision}`,
+        hint: 'discard the stale update and request a fresh catalog snapshot',
+        authority: 'catalog',
+      };
+    }
+    if (point.revision === baseline.revision && hasChanges) {
+      return {
+        code: 'catalog-revision-conflict',
+        severity: 'blocking',
+        expected: 'a changed delta to advance the root revision',
+        actual: `${baseline.revision} -> ${point.revision}`,
+        hint: 'keep the verified baseline and serialize concurrent updates before retrying',
+        authority: 'catalog',
+      };
+    }
+    if (point.revision > baseline.revision + 1) {
+      return {
+        code: 'catalog-revision-conflict',
+        severity: 'blocking',
+        expected: 'the next revision to be exactly baseline + 1',
+        actual: `${baseline.revision} -> ${point.revision}`,
+        hint: 'request the missing revisions or rebuild from the latest verified snapshot',
+        authority: 'catalog',
+      };
+    }
+  }
+
+  for (const point of revisions.baseline) {
+    if (!currentByRoot.has(point.rootId)) {
+      return {
+        code: 'catalog-revision-conflict',
+        severity: 'blocking',
+        expected: 'every baseline root to be present in the current revision set',
+        actual: point.rootId,
+        hint: 'do not apply a partial root set over the verified baseline',
+        authority: 'catalog',
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function rowRevisionDiagnostic(
+  entries: ReadonlyMap<string, CatalogEntry>,
+  delta: CatalogDelta,
+): CatalogDiagnostic | undefined {
+  for (const entry of [...delta.added, ...delta.changed]) {
+    const prior = entries.get(guidKey(entry.guid));
+    if (prior?.revision === undefined) continue;
+    if (prior !== undefined && sameValue(prior, entry)) continue;
+    if (entry.revision === undefined) {
+      return {
+        code: 'catalog-revision-conflict',
+        severity: 'blocking',
+        expected: 'a replacement row to carry a newer producer revision',
+        actual: `${prior.revision.rootId}@${prior.revision.observedAt} -> missing`,
+        hint: 'restore the producer revision before applying the catalog change',
+        authority: 'catalog',
+      };
+    }
+    if (entry.revision.observedAt < prior.revision.observedAt) {
+      return {
+        code: 'catalog-revision-stale',
+        severity: 'blocking',
+        expected: 'a replacement row to carry a non-decreasing producer revision',
+        actual: `${prior.revision.observedAt} -> ${entry.revision.observedAt}`,
+        hint: 'discard the stale update and request a fresh catalog snapshot',
+        authority: 'catalog',
+      };
+    }
+    if (entry.revision.observedAt === prior.revision.observedAt) {
+      return {
+        code: 'catalog-revision-conflict',
+        severity: 'blocking',
+        expected: 'a changed row to advance its producer revision',
+        actual: sameRevision(prior.revision, entry.revision)
+          ? `${prior.revision.observedAt} -> ${entry.revision.observedAt}`
+          : `${prior.revision.digest} -> ${entry.revision.digest}`,
+        hint: 'publish a new producer revision for changed payload bytes',
+        authority: 'catalog',
+      };
+    }
+  }
+  return undefined;
 }
 
 function diagnosticForScopeMismatch(): CatalogDiagnostic {
@@ -130,6 +255,15 @@ export class CatalogReplica {
     return this.currentSnapshot;
   }
 
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.startPromise = undefined;
+    this.pendingBeforeBaseline = [];
+    this.pendingDuringReconcile = undefined;
+    this.listeners.clear();
+  }
+
   async start(): Promise<SnapshotResult> {
     if (this.startPromise !== undefined) return this.startPromise;
     if (this.unsubscribe === undefined) {
@@ -178,40 +312,31 @@ export class CatalogReplica {
     if (!this.baselineReady) {
       if (this.pendingDuringReconcile !== undefined) this.pendingDuringReconcile.push(delta);
       else this.pendingBeforeBaseline.push(delta);
-      this.publish(delta);
+      this.publish(this.safeDelta(delta));
       return;
     }
     if (this.pendingDuringReconcile !== undefined) {
       this.pendingDuringReconcile.push(delta);
-      this.publish(delta);
+      this.publish(this.safeDelta(delta));
       return;
     }
     this.fold(delta, true);
   }
 
   private fold(delta: CatalogDelta, publish: boolean): void {
-    if (
-      this.expectedScope !== undefined &&
-      (delta.scopeId !== this.expectedScope.scopeId ||
-        delta.generation !== this.expectedScope.generation)
-    ) {
-      this.stale = true;
-      this.diagnostics = appendDiagnostic(this.diagnostics, [diagnosticForScopeMismatch()]);
-      this.currentSnapshot = this.makeSnapshot();
-      if (publish) this.publish(delta);
-      return;
-    }
-    const gap = hasRevisionGap(delta.revisions);
-    const degraded = delta.authority === 'degraded' || gap;
+    const safeDelta = this.safeDelta(delta);
+    const degraded = safeDelta.authority === 'degraded';
     this.stale = this.stale || degraded;
     this.diagnostics = appendDiagnostic(
       this.diagnostics,
-      gap ? [...(delta.diagnostics ?? []), diagnosticForGap()] : delta.diagnostics,
+      safeDelta.diagnostics?.some((diagnostic) => diagnostic.code === 'catalog-gap')
+        ? [...(safeDelta.diagnostics ?? []), diagnosticForGap()]
+        : safeDelta.diagnostics,
     );
 
     if (!degraded) {
       let changed = false;
-      for (const entry of [...delta.added, ...delta.changed]) {
+      for (const entry of [...safeDelta.added, ...safeDelta.changed]) {
         const key = guidKey(entry.guid);
         const prior = this.entries.get(key);
         if (revisionIsOlder(entry.revision, prior?.revision)) continue;
@@ -219,7 +344,7 @@ export class CatalogReplica {
         this.entries.set(key, freezeEntry(entry));
         changed = true;
       }
-      for (const guid of delta.removed) {
+      for (const guid of safeDelta.removed) {
         if (this.entries.delete(guidKey(guid))) changed = true;
       }
       if (changed) this.version += 1;
@@ -227,8 +352,36 @@ export class CatalogReplica {
 
     this.currentSnapshot = this.makeSnapshot();
     if (publish) {
-      this.publish(delta);
+      this.publish(safeDelta);
     }
+  }
+
+  private safeDelta(delta: CatalogDelta): CatalogDelta {
+    const diagnostic =
+      this.expectedScope !== undefined &&
+      (delta.scopeId !== this.expectedScope.scopeId ||
+        delta.generation !== this.expectedScope.generation)
+        ? diagnosticForScopeMismatch()
+        : delta.revisions === undefined
+          ? rowRevisionDiagnostic(this.entries, delta)
+          : (revisionDiagnostic(delta.revisions, hasIdentityChanges(delta)) ??
+            rowRevisionDiagnostic(this.entries, delta));
+    const degradedRows = delta.authority === 'degraded' && hasIdentityChanges(delta);
+    if (diagnostic === undefined && !degradedRows) return delta;
+    return {
+      ...delta,
+      added: [],
+      changed: [],
+      removed: [],
+      authority: 'degraded',
+      diagnostics: appendDiagnostic(
+        [],
+        [
+          ...(diagnostic === undefined ? [] : [diagnostic]),
+          ...(degradedRows ? [diagnosticForDegradedRows()] : []),
+        ],
+      ),
+    };
   }
 
   private publish(delta: CatalogDelta): void {

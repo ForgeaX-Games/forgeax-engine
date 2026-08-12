@@ -19,6 +19,9 @@
       "category": "3D Rendering",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["alpha-blend"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-transparency-3d smoke",
     "metrics": {
       "bundle-size": {

@@ -35,6 +35,36 @@
 // biome-ignore format: single-line union keeps the A-AC-09 grep gate (exactly 4 `recover-*` literals on the definition line) stable
 export type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented' | 'recover-adapter-unavailable' | 'recover-device-unavailable';
 
+const RECOVER_ERROR_POLICY = {
+  'recover-not-needed': {
+    message: 'recover-not-needed: renderer is not in a degraded state',
+    expected:
+      'renderer is healthy; call health() first to confirm degraded state before calling recover()',
+    hint: 'call health() first to confirm degraded state before calling recover()',
+  },
+  'recover-not-implemented': {
+    message: 'recover-not-implemented: self-heal recovery is not yet implemented',
+    expected: 'recovery is not yet implemented; self-heal lands in S5',
+    hint: 'self-heal recovery lands in S5; health().reason still reflects the degraded state',
+  },
+  'recover-adapter-unavailable': {
+    message: 'recover-adapter-unavailable: requestAdapter returned no adapter during rebuild',
+    expected: 'requestAdapter returned null; driver/GPU may have been reset',
+    hint: 'retry recover() after a host-chosen delay; adapter availability is transient',
+  },
+  'recover-device-unavailable': {
+    message: 'recover-device-unavailable: requestDevice failed or threw during rebuild',
+    expected: 'requestDevice failed or threw',
+    hint: 'retry recover() after a host-chosen delay; device creation is driver-dependent',
+  },
+} satisfies {
+  readonly [C in RecoverErrorCode]: {
+    readonly message: string;
+    readonly expected: string;
+    readonly hint: string;
+  };
+};
+
 /**
  * Structured error for `Renderer.recover()` failures.
  *
@@ -51,36 +81,11 @@ export class RecoverError extends Error {
   readonly hint: string;
 
   constructor(code: RecoverErrorCode) {
-    let message: string;
-    let expected: string;
-    let hint: string;
-    switch (code) {
-      case 'recover-not-needed':
-        message = 'recover-not-needed: renderer is not in a degraded state';
-        expected =
-          'renderer is healthy; call health() first to confirm degraded state before calling recover()';
-        hint = 'call health() first to confirm degraded state before calling recover()';
-        break;
-      case 'recover-not-implemented':
-        message = 'recover-not-implemented: self-heal recovery is not yet implemented';
-        expected = 'recovery is not yet implemented; self-heal lands in S5';
-        hint = 'self-heal recovery lands in S5; health().reason still reflects the degraded state';
-        break;
-      case 'recover-adapter-unavailable':
-        message = 'recover-adapter-unavailable: requestAdapter returned no adapter during rebuild';
-        expected = 'requestAdapter returned null; driver/GPU may have been reset';
-        hint = 'retry recover() after a host-chosen delay; adapter availability is transient';
-        break;
-      case 'recover-device-unavailable':
-        message = 'recover-device-unavailable: requestDevice failed or threw during rebuild';
-        expected = 'requestDevice failed or threw';
-        hint = 'retry recover() after a host-chosen delay; device creation is driver-dependent';
-        break;
-    }
-    super(message);
+    const policy = RECOVER_ERROR_POLICY[code];
+    super(policy.message);
     this.code = code;
-    this.expected = expected;
-    this.hint = hint;
+    this.expected = policy.expected;
+    this.hint = policy.hint;
     this.name = 'RecoverError';
   }
 }

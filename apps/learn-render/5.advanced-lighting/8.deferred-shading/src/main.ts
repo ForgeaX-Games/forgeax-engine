@@ -310,7 +310,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   ).unwrap();
 
   if (PROFILER !== undefined) {
-    const profileStart = PROFILER.startCapture({ frameLimit: 300, eventLimit: 40_000, detail: 'owner' });
+    // The membership contract profiles the first 90 nested-attribution frames
+    // while the browser workload continues through its required 300 frames.
+    const profileEventLimit = navigator.gpu === undefined ? 65_536 : 40_000;
+    const profileStart = PROFILER.startCapture({ frameLimit: 90, eventLimit: profileEventLimit, detail: 'nested' });
     if (!profileStart.ok) console.error(`[learn-render 5.8 deferred] profiler start failed: ${profileStart.error.code}`);
   }
   const startRes = app.start();

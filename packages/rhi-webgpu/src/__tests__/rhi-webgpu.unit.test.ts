@@ -351,6 +351,73 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       expect(encResult.ok).toBe(true);
       expect(typeof encResult.value.writeTimestamp).toBe('function');
     });
+
+    async function timestampEncoder(
+      writeTimestamp: ((querySet: unknown, queryIndex: number) => void) | undefined,
+    ) {
+      const gpu = createMockGpu();
+      const adapter = await gpu.requestAdapter();
+      if (adapter === null) throw new Error('mock adapter should exist');
+      const raw = await adapter.requestDevice();
+      const features = raw.features as unknown as Set<GPUFeatureName>;
+      features.add('timestamp-query');
+      const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
+      raw.createCommandEncoder = (descriptor) => {
+        const encoder = originalCreateCommandEncoder(descriptor) as unknown as Record<
+          string,
+          unknown
+        >;
+        if (writeTimestamp !== undefined) encoder.writeTimestamp = writeTimestamp;
+        return encoder as unknown as ReturnType<typeof raw.createCommandEncoder>;
+      };
+      const { device } = makeRhiDevice(raw as unknown as GPUDevice);
+      const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+      if (!querySet.ok) throw new Error('timestamp query set should be created');
+      const encoder = device.createCommandEncoder();
+      if (!encoder.ok) throw new Error('command encoder should be created');
+      return { encoder: encoder.value, querySet: querySet.value };
+    }
+
+    it('forwards a callable raw writeTimestamp exactly once with the raw query set and index', async () => {
+      const calls: Array<{ querySet: unknown; queryIndex: number }> = [];
+      const { encoder, querySet } = await timestampEncoder((rawQuerySet, queryIndex) => {
+        calls.push({ querySet: rawQuerySet, queryIndex });
+      });
+      encoder.writeTimestamp(querySet, 1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.queryIndex).toBe(1);
+      expect(calls[0]?.querySet).toBe(querySet);
+    });
+
+    it('throws structured webgpu-runtime-error when a timestamp-capable raw encoder omits writeTimestamp', async () => {
+      const { encoder, querySet } = await timestampEncoder(undefined);
+      expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
+      try {
+        encoder.writeTimestamp(querySet, 0);
+      } catch (error) {
+        expect(error).toMatchObject({
+          code: 'webgpu-runtime-error',
+          expected: 'underlying GPUCommandEncoder.writeTimestamp to be callable',
+        });
+        expect((error as RhiError).hint).toContain('timestamp-query');
+      }
+    });
+
+    it('throws structured webgpu-runtime-error when the raw timestamp write throws', async () => {
+      const { encoder, querySet } = await timestampEncoder(() => {
+        throw new Error('raw timestamp failure');
+      });
+      expect(() => encoder.writeTimestamp(querySet, 0)).toThrow(RhiError);
+      try {
+        encoder.writeTimestamp(querySet, 0);
+      } catch (error) {
+        expect(error).toMatchObject({
+          code: 'webgpu-runtime-error',
+          expected: 'underlying GPUCommandEncoder.writeTimestamp to succeed',
+        });
+        expect((error as RhiError).hint).toContain('raw timestamp failure');
+      }
+    });
   });
 }
 

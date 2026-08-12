@@ -168,7 +168,10 @@ policy.
 
 ### Recovery and static sources
 
-Call `setCatalogSource(source)` before enumeration. Without a source,
+Call `setCatalogSource(source)` before enumeration. Replacing a source disposes the
+previous producer subscription; call `clearCatalogSource()` during host teardown
+to remove the active transport and replica listeners without clearing payload caches.
+Without a source,
 `enumerateCatalog()` returns the structured `catalog-source-unconfigured`
 error; endpoint and parse failures remain structured results as well. Inspect
 `.code` and `.hint`, repair the external condition, then enumerate again — a

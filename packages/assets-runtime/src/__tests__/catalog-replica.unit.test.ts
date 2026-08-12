@@ -129,4 +129,68 @@ describe('CatalogReplica', () => {
     await expect(reconciling).resolves.toMatchObject({ ok: true });
     expect(replica.snapshot()).toMatchObject({ stale: false, entries: [other] });
   });
+
+  it('does not publish or apply a changed row whose revision window is stale', async () => {
+    const fixture = source();
+    const replica = new CatalogReplica(fixture.source as never);
+    await replica.start();
+    const received: CatalogDelta[] = [];
+    replica.subscribe((delta) => received.push(delta));
+    const staleEntry = {
+      ...base,
+      packageUrl: '/preview/stale',
+      revision: { ...base.revision, observedAt: 3 },
+    };
+
+    fixture.emit({
+      added: [],
+      changed: [staleEntry],
+      removed: [],
+      revisions: {
+        baseline: [{ rootId: 'fixture-root', revision: 2 }],
+        current: [{ rootId: 'fixture-root', revision: 1 }],
+      },
+    });
+
+    expect(replica.snapshot()).toMatchObject({
+      stale: true,
+      entries: [{ guid: base.guid, packageUrl: base.packageUrl }],
+      diagnostics: [{ code: 'catalog-revision-stale', severity: 'blocking' }],
+    });
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      added: [],
+      changed: [],
+      removed: [],
+      authority: 'degraded',
+      diagnostics: [{ code: 'catalog-revision-stale', severity: 'blocking' }],
+    });
+  });
+
+  it('rejects a changed payload that reuses the verified row revision', async () => {
+    const fixture = source();
+    const replica = new CatalogReplica(fixture.source as never);
+    await replica.start();
+    const received: CatalogDelta[] = [];
+    replica.subscribe((delta) => received.push(delta));
+
+    fixture.emit({
+      added: [],
+      changed: [{ ...base, packageUrl: '/preview/unchanged-revision' }],
+      removed: [],
+    });
+
+    expect(replica.snapshot()).toMatchObject({
+      stale: true,
+      entries: [{ guid: base.guid, packageUrl: base.packageUrl }],
+      diagnostics: [{ code: 'catalog-revision-conflict', severity: 'blocking' }],
+    });
+    expect(received[0]).toMatchObject({
+      added: [],
+      changed: [],
+      removed: [],
+      authority: 'degraded',
+      diagnostics: [{ code: 'catalog-revision-conflict', severity: 'blocking' }],
+    });
+  });
 });

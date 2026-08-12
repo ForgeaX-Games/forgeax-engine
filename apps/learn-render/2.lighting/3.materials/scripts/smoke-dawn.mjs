@@ -20,8 +20,18 @@ import { fileURLToPath } from 'node:url';
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
+const FALSIFY_MATERIAL_METALLIC = process.env.FALSIFY_MATERIAL_METALLIC ?? '';
+if (FALSIFY_MATERIAL_METALLIC !== '' && !['metal', 'dielectric'].includes(FALSIFY_MATERIAL_METALLIC)) {
+  console.error(
+    `[smoke] FAIL - unsupported FALSIFY_MATERIAL_METALLIC=${FALSIFY_MATERIAL_METALLIC}; expected metal or dielectric`,
+  );
+  process.exit(1);
+}
 const WIDTH = 512;
 const HEIGHT = 512;
+const POINT_LIGHT_INTENSITY = 1.0;
+const POINT_LIGHT_RANGE = Number.POSITIVE_INFINITY;
+const OBJECT_METALLIC = FALSIFY_MATERIAL_METALLIC === 'metal' ? 1.0 : 0.0;
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -122,7 +132,7 @@ const mockCanvas = {
 // --- 3. Build engine shader manifest for pbr + unlit pipelines ---
 
 const { World } = await import('@forgeax/engine-ecs');
-const { Camera, MeshRenderer } = await import('@forgeax/engine-render');
+const { Camera, Materials, MeshRenderer } = await import('@forgeax/engine-render');
 const { PointLight } = await import('@forgeax/engine-render');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { MeshFilter } = await import('@forgeax/engine-render');
@@ -158,6 +168,7 @@ if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null (renderer construction did not complete successfully)');
   process.exit(1);
 }
+assets.configurePackIndex('/pack-index.json');
 
 const errors = [];
 renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
@@ -175,27 +186,13 @@ const world = new World();
 // feat-20260614 M8 (D-15/D-17): pass-based MaterialAsset minted via allocSharedRef.
 const objectBaseColor = [1.0, 0.5, 0.31, 1.0];
 
-const objectMatHandle = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      program: { module: 'forgeax::default-standard-pbr' },
-      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
-    },
-  ],
-  values: {
-    baseColor: [objectBaseColor[0], objectBaseColor[1], objectBaseColor[2]],
-    metallic: 0.0,
-    roughness: 0.3,
-  },
-});
+const objectMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
+  baseColor: objectBaseColor,
+  metallic: OBJECT_METALLIC,
+  roughness: 0.3,
+}));
 
-const lampMatHandle = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
-  values: { baseColor: [1.0, 1.0, 1.0, 1.0] },
-});
+const lampMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 1.0, 1.0, 1.0]));
 
 // Spawn the object cube at origin (LO: model = identity).
 world
@@ -237,8 +234,8 @@ const lightEntity = FALSIFY_NO_LIGHT
           component: PointLight,
           data: {
             color: [1.0, 1.0, 1.0],
-            intensity: 1.0,
-            range: Number.POSITIVE_INFINITY,
+            intensity: POINT_LIGHT_INTENSITY,
+            range: POINT_LIGHT_RANGE,
           },
         },
       )
@@ -258,7 +255,11 @@ if (!FALSIFY_NO_LIGHT) {
       const colorR = Math.max(0, Math.sin(elapsed * FREQ_R));
       const colorG = Math.max(0, Math.sin(elapsed * FREQ_G));
       const colorB = Math.max(0, Math.sin(elapsed * FREQ_B));
-      world.set(lightEntity, PointLight, { color: [colorR, colorG, colorB] });
+      world.set(lightEntity, PointLight, {
+        color: [colorR, colorG, colorB],
+        intensity: POINT_LIGHT_INTENSITY,
+        range: POINT_LIGHT_RANGE,
+      });
     },
   });
 }
@@ -281,13 +282,37 @@ world.spawn(
 const frameStart = Date.now();
 let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
+const PROBE_FRAME = Math.min(TARGET_FRAMES, 60);
+const bytesPerPixel = 4;
+const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
+const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+let device;
+let probeReadbackBuffer;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
+  if (!device && sharedDevice) device = sharedDevice;
+  if (i + 1 === PROBE_FRAME) {
+    if (!device) {
+      console.error('[smoke] FAIL - no shared device captured at semantic probe frame');
+      process.exit(1);
+    }
+    probeReadbackBuffer = device.createBuffer({
+      size: bytesPerRow * HEIGHT,
+      usage: 0x01 | 0x08,
+    });
+    const enc = device.createCommandEncoder();
+    enc.copyTextureToBuffer(
+      { texture: renderTarget },
+      { buffer: probeReadbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+      { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    );
+    device.queue.submit([enc.finish()]);
+  }
 }
-const device = sharedDevice;
+if (!device && sharedDevice) device = sharedDevice;
 if (!device) {
   console.error('[smoke] FAIL - no shared device captured for readback');
   process.exit(1);
@@ -295,7 +320,7 @@ if (!device) {
 await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
 console.log(
-  `[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES})`,
+  `[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES}, semanticProbeFrame=${PROBE_FRAME})`,
 );
 
 // --- 6. Pixel readback ---
@@ -304,34 +329,22 @@ if (!renderTarget) {
   console.error('[smoke] FAIL - renderTarget never allocated');
   process.exit(1);
 }
-const bytesPerPixel = 4;
-const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
-const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
-const readbackBuffer = device.createBuffer({
-  size: bytesPerRow * HEIGHT,
-  usage: 0x01 | 0x08,
-});
-{
-  const enc = device.createCommandEncoder();
-  enc.copyTextureToBuffer(
-    { texture: renderTarget },
-    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
-    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
-  );
-  device.queue.submit([enc.finish()]);
+if (!probeReadbackBuffer) {
+  console.error('[smoke] FAIL - semantic probe readback was not submitted');
+  process.exit(1);
 }
 try {
-  await readbackBuffer.mapAsync(0x01);
+  await probeReadbackBuffer.mapAsync(0x01);
 } catch (err) {
   console.error(
     `[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 }
-const mapped = readbackBuffer.getMappedRange();
+const mapped = probeReadbackBuffer.getMappedRange();
 const bytes = new Uint8Array(mapped.slice(0));
-readbackBuffer.unmap();
-readbackBuffer.destroy();
+probeReadbackBuffer.unmap();
+probeReadbackBuffer.destroy();
 
 const readRgba = (px, py) => {
   const off = py * bytesPerRow + px * bytesPerPixel;
@@ -368,15 +381,26 @@ console.log(`[smoke] perSiteDistance=${JSON.stringify(perSite)}`);
 
 const ndcCenter = pixelSamples.ndcCenter;
 const cubeOffCenter = pixelSamples.cubeOffCenter;
+const dielectricCubeOffCenter = [0.2039215686, 0.0588235294, 0.0352941176];
+const metallicResponseDistance = distance(cubeOffCenter, dielectricCubeOffCenter);
 const animatedMaterialPointLightWitness =
-  ndcCenter[0] > 0.12 &&
-  cubeOffCenter[0] > 0.12 &&
-  cubeOffCenter[1] > 0.03 &&
-  cubeOffCenter[2] > 0.02 &&
-  cubeOffCenter[0] > cubeOffCenter[1] * 2.0 &&
-  cubeOffCenter[1] > cubeOffCenter[2] * 1.25;
+  FALSIFY_MATERIAL_METALLIC === 'metal'
+    ? ndcCenter[0] > 0.04 &&
+      cubeOffCenter[0] > 0.02 &&
+      cubeOffCenter[0] > cubeOffCenter[1] * 2.0 &&
+      cubeOffCenter[1] >= cubeOffCenter[2] &&
+      metallicResponseDistance > 0.1
+    : ndcCenter[0] > 0.12 &&
+      cubeOffCenter[0] > 0.12 &&
+      cubeOffCenter[1] > 0.03 &&
+      cubeOffCenter[2] > 0.02 &&
+      cubeOffCenter[0] > cubeOffCenter[1] * 2.0 &&
+      cubeOffCenter[1] > cubeOffCenter[2] * 1.25;
+const metallicWitness =
+  FALSIFY_MATERIAL_METALLIC === '' ||
+  (cubeOffCenter[0] > cubeOffCenter[1] && cubeOffCenter[1] >= cubeOffCenter[2]);
 console.log(
-  `[smoke] oracle=animated-material-point-light cubeOffCenter=${JSON.stringify(cubeOffCenter)} witness=${animatedMaterialPointLightWitness} falsifier=${FALSIFY_NO_LIGHT ? 'no-point-light' : 'none'}`,
+  `[smoke] oracle=animated-material-point-light cubeOffCenter=${JSON.stringify(cubeOffCenter)} metallicResponseDistance=${metallicResponseDistance.toFixed(4)} witness=${animatedMaterialPointLightWitness && metallicWitness} falsifier=${FALSIFY_NO_LIGHT ? 'no-point-light' : FALSIFY_MATERIAL_METALLIC === '' ? 'none' : `material-metallic-${FALSIFY_MATERIAL_METALLIC}`}`,
 );
 
 const wallTotalMs = Date.now() - frameStart;
@@ -392,7 +416,7 @@ if (meshedCount < 1) {
     `(c) 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD} from clear color; perSite=${JSON.stringify(perSite)}`,
   );
 }
-if (!animatedMaterialPointLightWitness) {
+if (!animatedMaterialPointLightWitness || !metallicWitness) {
   failures.push(
     `(e) animated material point-light witness rejected ndcCenter=${JSON.stringify(ndcCenter)} cubeOffCenter=${JSON.stringify(cubeOffCenter)}; expected lit red-dominant StandardMaterial response with a stable minimum`,
   );

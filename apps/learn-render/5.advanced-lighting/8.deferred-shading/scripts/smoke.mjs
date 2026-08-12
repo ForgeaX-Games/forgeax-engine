@@ -26,7 +26,9 @@ const PROFILE_FRAME_LIMIT = Number.parseInt(
   process.env.FORGEAX_PROFILE_FRAME_LIMIT ?? String(SMOKE_MIN_FRAMES),
   10,
 );
-const PROFILE_EVENT_LIMIT = Number.parseInt(process.env.FORGEAX_PROFILE_EVENT_LIMIT ?? '40000', 10);
+const PROFILE_EVENT_LIMIT = Number.parseInt(process.env.FORGEAX_PROFILE_EVENT_LIMIT ?? '100000', 10);
+const PROFILE_SETTLE_AFTER_FRAMES = 16;
+const PROFILE_SETTLE_MS = Number.parseInt(process.env.FORGEAX_PROFILE_SETTLE_MS ?? '25', 10);
 const MEMBERSHIP_TIMING_MODE = process.env.FORGEAX_MEMBERSHIP_TIMING;
 const MEMBERSHIP_TIMING_REPORT_PATH = process.env.FORGEAX_MEMBERSHIP_TIMING_REPORT;
 const MEMBERSHIP_RECORD_DIR = process.env.FORGEAX_MEMBERSHIP_RECORD_DIR;
@@ -262,7 +264,7 @@ if (profiler !== undefined) {
     process.exit(1);
   }
   console.log(
-    `[smoke] profiler capture=${started.value.captureId} detail=${PROFILE_DETAIL} frames=${PROFILE_FRAME_LIMIT} events=${PROFILE_EVENT_LIMIT}`,
+    `[smoke] profiler capture=${started.value.captureId} detail=${PROFILE_DETAIL} settleAfter=${PROFILE_SETTLE_AFTER_FRAMES} settleMs=${PROFILE_SETTLE_MS} frames=${PROFILE_FRAME_LIMIT} events=${PROFILE_EVENT_LIMIT}`,
   );
 }
 
@@ -441,7 +443,7 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   }
   due.cb(fakeNow);
   totalFrames++;
-  if (i % 16 === 15) await delay(1);
+  if (i % 16 === 15) await delay(i + 1 === PROFILE_SETTLE_AFTER_FRAMES ? PROFILE_SETTLE_MS : 1);
 }
 
 let timingReport = membershipCaptureStartError;

@@ -29,7 +29,7 @@
 //   - `[learn-render-lighting-maps] backend=webgpu`
 //   - `[smoke] frames observed=<N>`
 //   - `[smoke] pixelSamples=<json>`
-//   - `[smoke] PASS - 4 criteria GREEN: ...`
+//   - `[smoke] PASS - 6 criteria GREEN: ...`
 
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -40,6 +40,7 @@ const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
+const FALSIFY_NO_SPECULAR_MAP = process.env.FALSIFY_NO_SPECULAR_MAP === '1';
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -257,12 +258,18 @@ if (!cubeAssetRes.ok) {
 assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 
 // LO 2.4 main lit cube material -- mirror the production pack's Standard PBR
-// program. The specular handle exercises the loader path even though the
-// dawn-node deferred-upload falls back to a 1x1 white view.
+// program. The LO specular map is carried by the engine's
+// metallicRoughnessTexture slot, matching the production material payload.
 const cubeMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [{ name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' } }, queue: 2000 }],
-  values: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
+  values: {
+    baseColor: [1.0, 1.0, 1.0, 1.0],
+    baseColorTexture: unwrapHandle(diffuseHandle),
+    ...(FALSIFY_NO_SPECULAR_MAP
+      ? {}
+      : { metallicRoughnessTexture: unwrapHandle(specularHandle) }),
+  },
 });
 // Lamp marker material (white emissive proxy).
 const lampMaterial = world.allocSharedRef('MaterialAsset', {
@@ -271,7 +278,6 @@ const lampMaterial = world.allocSharedRef('MaterialAsset', {
   values: { baseColor: [1.0, 1.0, 1.0, 1.0] },
 });
 
-void specularHandle;
 // LO 2.4 single lit container cube at origin.
 world.spawn(
   {
@@ -388,7 +394,7 @@ const pixelSamples = {};
 for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
 console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
-// --- 5. Verdict (4 criteria) ------------------------------------------------
+// --- 5. Verdict (6 criteria) ------------------------------------------------
 
 const distance = (a, b) =>
   Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
@@ -413,8 +419,11 @@ const diffuseSpecularPointLightWitness =
   litCubeCenter[2] > 0.05 &&
   litCubeUL[0] > litCubeBR[0] + 0.08 &&
   litCubeUL[0] > litCubeUL[1] * 1.15;
+const specularMapWitness =
+  !FALSIFY_NO_SPECULAR_MAP && litCubeCenter[0] < 0.93 && litCubeBR[0] < 0.4;
 console.log(
-  `[smoke] oracle=diffuse-specular-point-light witness=${diffuseSpecularPointLightWitness} falsifier=${FALSIFY_NO_LIGHT ? 'no-point-light' : 'none'}`,
+  `[smoke] oracle=diffuse-specular-point-light witness=${diffuseSpecularPointLightWitness} ` +
+    `specular-map=${specularMapWitness} falsifier=${FALSIFY_NO_LIGHT ? 'no-point-light' : FALSIFY_NO_SPECULAR_MAP ? 'no-specular-map' : 'none'}`,
 );
 
 const wallTotalMs = Date.now() - frameStart;
@@ -437,6 +446,11 @@ if (!diffuseSpecularPointLightWitness) {
     `(e) diffuse/specular point-light witness rejected center=${JSON.stringify(litCubeCenter)} ul=${JSON.stringify(litCubeUL)} br=${JSON.stringify(litCubeBR)}`,
   );
 }
+if (!specularMapWitness) {
+  failures.push(
+    `(f) specular map response rejected center.r=${litCubeCenter[0].toFixed(4)} br.r=${litCubeBR[0].toFixed(4)}; expected the bound map to lower both below the no-map control`,
+  );
+}
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(d) Renderer.onError fired ${errors.length} times: [${codes}]`);
@@ -454,7 +468,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.4 lit cube + lamp sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, oracle=diffuse-specular-point-light, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.4 lit cube + lamp sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, oracle=diffuse-specular-point-light + specular-map-response, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

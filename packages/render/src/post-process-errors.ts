@@ -52,14 +52,7 @@
  * | `'params-size-mismatch'` | throw | `postProcess.register({params})` with `byteSize < 16` or `defaultValue.length !== byteSize` (feat-20260621 M-A4 / D-4) |
  * | `'params-update-size-mismatch'` | throw | per-frame data-driven write where `PostProcessParams.data` byteLength !== registered `params.byteSize` (feat-20260621 M-A4 / D-4) |
  */
-export type PostProcessErrorCode =
-  | 'post-process-already-registered'
-  | 'post-process-not-found'
-  | 'fullscreen-input-not-found'
-  | 'ssao-radius-non-positive'
-  | 'ssao-bias-negative'
-  | 'params-size-mismatch'
-  | 'params-update-size-mismatch';
+export type PostProcessErrorCode = keyof typeof POST_PROCESS_POLICY;
 
 /**
  * Detail for `'post-process-already-registered'`: the post-process id that was already taken.
@@ -166,32 +159,24 @@ export type PostProcessErrorDetailFor<C extends PostProcessErrorCode> =
  */
 export type PostProcessErrorDetail = PostProcessErrorDetailFor<PostProcessErrorCode>;
 
-const POST_PROCESS_EXPECTED: { readonly [C in PostProcessErrorCode]: string } = {
-  'post-process-already-registered': 'each post-process id is registered at most once',
-  'post-process-not-found': 'addFullscreenPass references a registered post-process id',
-  'fullscreen-input-not-found':
-    'reads key must be a graph-declared colorTarget with TEXTURE_BINDING',
-  'ssao-radius-non-positive': 'SSAO radius must be > 0',
-  'ssao-bias-negative': 'SSAO bias must be >= 0',
-  'params-size-mismatch': 'params.byteSize >= 16 and defaultValue.length === byteSize',
-  'params-update-size-mismatch': 'PostProcessParams.data byteLength === registered params.byteSize',
-};
-
-function postProcessHint(code: PostProcessErrorCode, detail: PostProcessErrorDetail): string {
-  switch (code) {
-    case 'post-process-already-registered':
-      return (
-        `post-process id '${(detail as PostProcessPreviouslyRegisteredDetail).id}' is already ` +
-        'registered; same-id re-register is forbidden. Pick a distinct id ' +
-        '(engine builtins use the forgeax:: prefix; user passes use <package>::<id>).'
-      );
-    case 'post-process-not-found':
-      return (
-        `no post-process is registered for id '${(detail as PostProcessNotFoundDetail).id}'. ` +
-        `First call renderer.postProcess.register('${(detail as PostProcessNotFoundDetail).id}', {source, reads?}), ` +
-        'then reference it via addFullscreenPass({shader: id}).'
-      );
-    case 'fullscreen-input-not-found': {
+const POST_PROCESS_POLICY = {
+  'post-process-already-registered': {
+    expected: 'each post-process id is registered at most once',
+    hint: (detail) =>
+      `post-process id '${(detail as PostProcessPreviouslyRegisteredDetail).id}' is already ` +
+      'registered; same-id re-register is forbidden. Pick a distinct id ' +
+      '(engine builtins use the forgeax:: prefix; user passes use <package>::<id>).',
+  },
+  'post-process-not-found': {
+    expected: 'addFullscreenPass references a registered post-process id',
+    hint: (detail) =>
+      `no post-process is registered for id '${(detail as PostProcessNotFoundDetail).id}'. ` +
+      `First call renderer.postProcess.register('${(detail as PostProcessNotFoundDetail).id}', {source, reads?}), ` +
+      'then reference it via addFullscreenPass({shader: id}).',
+  },
+  'fullscreen-input-not-found': {
+    expected: 'reads key must be a graph-declared colorTarget with TEXTURE_BINDING',
+    hint: (detail) => {
       const d = detail as FullscreenInputNotFoundDetail;
       return (
         `fullscreen pass '${d.passName}' references reads key '${d.readsKey}' but that key is not ` +
@@ -201,43 +186,57 @@ function postProcessHint(code: PostProcessErrorCode, detail: PostProcessErrorDet
         `If '${d.readsKey}' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) ` +
         `and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.`
       );
-    }
-    case 'ssao-radius-non-positive': {
+    },
+  },
+  'ssao-radius-non-positive': {
+    expected: 'SSAO radius must be > 0',
+    hint: (detail) => {
       const d = detail as SsaoRadiusNonPositiveDetail;
       return (
         `SSAO parameter '${d.paramName}' is ${d.value}, must be greater than 0. ` +
         `Set config.ssao.${d.paramName} to a positive value (default 0.5) or disable SSAO with config.ssao.enabled = false.`
       );
-    }
-    case 'ssao-bias-negative': {
+    },
+  },
+  'ssao-bias-negative': {
+    expected: 'SSAO bias must be >= 0',
+    hint: (detail) => {
       const d = detail as SsaoBiasNegativeDetail;
       return (
         `SSAO parameter '${d.paramName}' is ${d.value}, must be >= 0. ` +
         `Set config.ssao.${d.paramName} to a non-negative value (default 0.025) or disable SSAO.`
       );
-    }
-    case 'params-size-mismatch': {
+    },
+  },
+  'params-size-mismatch': {
+    expected: 'params.byteSize >= 16 and defaultValue.length === byteSize',
+    hint: (detail) => {
       const d = detail as PostProcessParamsSizeMismatchDetail;
       return (
         `params.byteSize is ${d.byteSize} but defaultValue.length is ${d.actualLength}. ` +
         'The UBO byteSize must be >= 16 B and defaultValue.length must equal byteSize. ' +
         'Pass a defaultValue Uint8Array whose .length matches byteSize exactly.'
       );
-    }
-    case 'params-update-size-mismatch': {
+    },
+  },
+  'params-update-size-mismatch': {
+    expected: 'PostProcessParams.data byteLength === registered params.byteSize',
+    hint: (detail) => {
       const d = detail as PostProcessParamsUpdateSizeMismatchDetail;
       return (
         `PostProcessParams.data byteLength is ${d.actualLength} but the registered ` +
         `params.byteSize is ${d.byteSize}. The per-frame data-driven write must match ` +
         'the registered byteSize exactly; check the PostProcessParams.data you assign each frame.'
       );
-    }
-    default: {
-      const exhaustive: never = code;
-      return exhaustive;
-    }
+    },
+  },
+} satisfies Record<
+  string,
+  {
+    readonly expected: string;
+    readonly hint: (detail: unknown) => string;
   }
-}
+>;
 
 class PostProcessErrorClass extends Error {
   readonly code: PostProcessErrorCode;
@@ -246,11 +245,12 @@ class PostProcessErrorClass extends Error {
   readonly detail: PostProcessErrorDetail;
 
   constructor(args: { code: PostProcessErrorCode; detail: PostProcessErrorDetail }) {
-    const hint = postProcessHint(args.code, args.detail);
+    const policy = POST_PROCESS_POLICY[args.code];
+    const hint = policy.hint(args.detail);
     super(`post-process: ${args.code} (${hint})`);
     this.name = 'PostProcessError';
     this.code = args.code;
-    this.expected = POST_PROCESS_EXPECTED[args.code];
+    this.expected = policy.expected;
     this.hint = hint;
     this.detail = args.detail;
   }

@@ -29,10 +29,9 @@ import { World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Camera, Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { PointLight } from '@forgeax/engine-render';
-import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
@@ -52,6 +51,13 @@ const OBJECT_BASE_COLOR = [1.0, 0.5, 0.31, 1.0] as const;
 // is bright, broad enough to read as a non-mirror surface).
 const OBJECT_METALLIC = 0.0;
 const OBJECT_ROUGHNESS = 0.3;
+const FALSIFY_MATERIAL_METALLIC = import.meta.env.VITE_FALSIFY_MATERIAL_METALLIC ?? '';
+if (FALSIFY_MATERIAL_METALLIC !== '' && !['metal', 'dielectric'].includes(FALSIFY_MATERIAL_METALLIC)) {
+  throw new Error(
+    `VITE_FALSIFY_MATERIAL_METALLIC must be metal or dielectric, got ${FALSIFY_MATERIAL_METALLIC}`,
+  );
+}
+const MATERIAL_METALLIC = FALSIFY_MATERIAL_METALLIC === 'metal' ? 1.0 : OBJECT_METALLIC;
 
 // Light position (LO: `glm::vec3 lightPos(1.2f, 1.0f, 2.0f)`).
 // Lamp visual + PointLight share one entity so the lamp's Transform
@@ -118,23 +124,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // HANDLE_CUBE is the builtin procedural cube; MeshFilter uses it directly.
 
   // feat-20260527 M1 / w4: pass-based MaterialAsset minted via allocSharedRef
-  const objectMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
-    kind: 'material',
-    passes: [
-      { name: 'Forward', program: { module: 'forgeax::default-standard-pbr' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
-    ],
-    values: {
-      baseColor: [OBJECT_BASE_COLOR[0], OBJECT_BASE_COLOR[1], OBJECT_BASE_COLOR[2]],
-      metallic: OBJECT_METALLIC,
-      roughness: OBJECT_ROUGHNESS,
-    },
-  });
+  const objectMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
+    baseColor: OBJECT_BASE_COLOR,
+    metallic: MATERIAL_METALLIC,
+    roughness: OBJECT_ROUGHNESS,
+  }));
 
-  const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
-    kind: 'material',
-    passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
-    values: { baseColor: [1.0, 1.0, 1.0, 1.0] },
-  });
+  const lampMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 1.0, 1.0, 1.0]));
 
   // Spawn the object cube at origin (LO: model = identity).
   world
@@ -168,8 +164,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         component: PointLight,
         data: {
           color: [1.0, 1.0, 1.0],
-          intensity: 100.0,
-          range: 50,
+          intensity: 1.0,
+          range: Number.POSITIVE_INFINITY,
         },
       },
     )
@@ -186,7 +182,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const colorR = Math.max(0, Math.sin(elapsed * LIGHT_ANIM_FREQ_R));
       const colorG = Math.max(0, Math.sin(elapsed * LIGHT_ANIM_FREQ_G));
       const colorB = Math.max(0, Math.sin(elapsed * LIGHT_ANIM_FREQ_B));
-      world.set(lightEntity, PointLight, { color: [colorR, colorG, colorB] });
+      world.set(lightEntity, PointLight, {
+        color: [colorR, colorG, colorB],
+        intensity: 100.0,
+        range: 50,
+      });
     },
   });
 

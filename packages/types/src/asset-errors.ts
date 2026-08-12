@@ -67,13 +67,6 @@ export interface PackV2Error {
   readonly detail: PackV2ErrorDetail;
 }
 
-export type AssetEvidenceErrorCode =
-  | 'asset-evidence-capability-missing'
-  | 'asset-evidence-source-conflict'
-  | 'asset-evidence-locator-conflict'
-  | 'asset-evidence-receipt-conflict'
-  | 'asset-evidence-digest-mismatch';
-
 export type AssetEvidenceErrorDetail =
   | { readonly capability: string; readonly stage: string }
   | { readonly guid: string; readonly observed: string; readonly expected: string };
@@ -85,7 +78,7 @@ export interface AssetEvidenceError {
   readonly detail: AssetEvidenceErrorDetail;
 }
 
-export const ASSET_EVIDENCE_ERROR_HINTS: Readonly<Record<AssetEvidenceErrorCode, string>> = {
+export const ASSET_EVIDENCE_ERROR_HINTS = {
   'asset-evidence-capability-missing':
     'provide the missing evidence capability, then rerun asset lookup or verify',
   'asset-evidence-source-conflict':
@@ -96,7 +89,9 @@ export const ASSET_EVIDENCE_ERROR_HINTS: Readonly<Record<AssetEvidenceErrorCode,
     'keep one producer-owned receipt per GUID and rerun cook before verifying the asset',
   'asset-evidence-digest-mismatch':
     'recook the source or restore the package bytes, then rerun artifact verification',
-};
+} satisfies Readonly<Record<string, string>>;
+
+export type AssetEvidenceErrorCode = keyof typeof ASSET_EVIDENCE_ERROR_HINTS;
 
 /** Ordered author-to-runtime stages used by structured recovery errors. */
 export type AssetErrorStage =

@@ -650,6 +650,18 @@ export class MaterialSkinAttrMissingError extends Error {
 
 // -- RenderFeature errors ---------------------------------------------------
 
+const renderFeatureRecoveryHintByRecovery = {
+  'next-frame': (featureIdentity: string, stage: RenderFeatureStage) =>
+    `correct '${featureIdentity}' ${stage} data and retry on the next frame`,
+  'renderer-recover': (featureIdentity: string, _stage: RenderFeatureStage) =>
+    `wait for renderer recovery before retrying '${featureIdentity}'`,
+  registration: (featureIdentity: string, _stage: RenderFeatureStage) =>
+    `correct '${featureIdentity}' registration before retrying`,
+} satisfies Record<
+  RenderFeatureRecovery,
+  (featureIdentity: string, stage: RenderFeatureStage) => string
+>;
+
 export class RenderFeatureRegistrationConflictError extends Error {
   readonly code = 'render-feature-registration-conflict' as const;
   readonly expected: string;
@@ -680,18 +692,7 @@ export class RenderFeatureStageFailedError extends Error {
     recovery: RenderFeatureRecovery,
   ) {
     const expected = `feature '${featureIdentity}' completes its ${stage} stage without an error`;
-    let hint: string;
-    switch (recovery) {
-      case 'next-frame':
-        hint = `correct '${featureIdentity}' ${stage} data and retry on the next frame`;
-        break;
-      case 'renderer-recover':
-        hint = `wait for renderer recovery before retrying '${featureIdentity}'`;
-        break;
-      case 'registration':
-        hint = `correct '${featureIdentity}' registration before retrying`;
-        break;
-    }
+    const hint = renderFeatureRecoveryHintByRecovery[recovery](featureIdentity, stage);
     super(`render feature '${featureIdentity}' failed during ${stage}`);
     this.name = 'RenderFeatureStageFailedError';
     this.expected = expected;

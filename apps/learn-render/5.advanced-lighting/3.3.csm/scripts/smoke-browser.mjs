@@ -29,7 +29,13 @@ await verifyDemoCapture({
       ? '?csm-highlight=2'
       : process.env.FALSIFY === 'force-csm-browser-probe-boundary-shift'
         ? '?csm-probe-boundary-shift=1'
-        : '',
+        : process.env.FALSIFY === 'force-csm-browser-probe-boundary-depth-shift'
+          ? '?csm-probe-boundary-depth-shift=1'
+          : process.env.FALSIFY === 'force-csm-browser-probe-boundary-factor-shift'
+          ? '?csm-probe-boundary-factor-shift=1'
+          : process.env.FALSIFY === 'force-csm-browser-probe-shadow-depth-shift'
+            ? '?csm-probe-shadow-depth-shift=1'
+            : '',
 });
 
 /** @param {object} report */

@@ -23,7 +23,12 @@ function fakeGpuDevice(
   options: {
     queueCompletion?: Promise<void>;
     mapErrorLabel?: string;
+    rangeErrorLabel?: string;
     failBufferLabel?: string;
+    timestampTicks?: readonly [bigint, bigint];
+    timestampPeriodNanoseconds?: number | null;
+    writeTimestampError?: string;
+    resolveError?: string;
   } = {},
 ) {
   const buffers: FakeBuffer[] = [];
@@ -42,7 +47,8 @@ function fakeGpuDevice(
       backendKind: 'webgpu',
       compute: true,
       timestampQuery: true,
-      timestampPeriodNanoseconds: 2,
+      timestampPeriodNanoseconds:
+        options.timestampPeriodNanoseconds === undefined ? 2 : options.timestampPeriodNanoseconds,
     },
     queue: {
       onSubmittedWorkDone: () => state.queueCompletion,
@@ -69,16 +75,20 @@ function fakeGpuDevice(
   };
   const deviceValue = rawDeviceValue as unknown as RhiDevice;
   const encoder = {
-    writeTimestamp: () => {},
+    writeTimestamp: () => {
+      if (options.writeTimestampError !== undefined) throw new Error(options.writeTimestampError);
+    },
     resolveQuerySet: (
       _querySet: QuerySet,
       _first: number,
       _count: number,
       destination: FakeBuffer,
     ) => {
+      if (options.resolveError !== undefined)
+        return { ok: false, error: { hint: options.resolveError } };
       const timestamps = new BigUint64Array(destination.data.buffer);
-      timestamps[0] = 10n;
-      timestamps[1] = 20n;
+      timestamps[0] = options.timestampTicks?.[0] ?? 10n;
+      timestamps[1] = options.timestampTicks?.[1] ?? 20n;
       return { ok: true, value: undefined };
     },
     copyBufferToBuffer: (
@@ -109,10 +119,13 @@ function fakeGpuDevice(
         return {
           ok: true,
           value: {
-            getMappedRange: (offset = 0, size = result.value.data.byteLength) => ({
-              ok: true,
-              value: result.value.data.buffer.slice(offset, offset + size),
-            }),
+            getMappedRange: (offset = 0, size = result.value.data.byteLength) =>
+              options.rangeErrorLabel === result.value.label
+                ? { ok: false, error: { hint: 'fake range failure' } }
+                : {
+                    ok: true,
+                    value: result.value.data.buffer.slice(offset, offset + size),
+                  },
             unmap: () => {},
           },
         };
@@ -260,6 +273,64 @@ describe('membership timing contract', () => {
     }
     expect(fake.state.destroyedBuffers).toHaveLength(4);
     expect(fake.state.destroyedQuerySets).toHaveLength(1);
+  });
+
+  it.each([
+    [[0n, 0n], 'zero timestamps'],
+    [[10n, 10n], 'equal timestamps'],
+    [[20n, 10n], 'reversed timestamps'],
+  ] as const)('rejects %s as timestamp-range-invalid', async (timestampTicks, _label) => {
+    const fake = fakeGpuDevice({ timestampTicks });
+    const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
+    expect(timing.start().ok).toBe(true);
+    timing.recordGpuMembershipSource(recordGpuSource(fake));
+    timing.beforeMembership(fake.encoder);
+    timing.afterMembership(fake.encoder);
+    timing.markEncodeFinished();
+    timing.markSubmitted({} as CommandBuffer);
+
+    const result = await timing.finish();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('timestamp-range-invalid');
+  });
+
+  it.each([
+    [
+      'write',
+      fakeGpuDevice({ writeTimestampError: 'timestamp write failed' }),
+      'timestamp-write-unavailable',
+    ],
+    ['resolve', fakeGpuDevice({ resolveError: 'resolve failed' }), 'terminal-record-incomplete'],
+    [
+      'readback range',
+      fakeGpuDevice({ rangeErrorLabel: 'membership-timing-readback' }),
+      'readback-map-failed',
+    ],
+  ] as const)('rejects %s failures with the owning reason', async (_label, fake, expected) => {
+    const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
+    expect(timing.start().ok).toBe(true);
+    timing.recordGpuMembershipSource(recordGpuSource(fake));
+    timing.beforeMembership(fake.encoder);
+    timing.afterMembership(fake.encoder);
+    timing.markEncodeFinished();
+    timing.markSubmitted({} as CommandBuffer);
+
+    const result = await timing.finish();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(expected);
+  });
+
+  it.each([
+    0,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    null,
+  ] as const)('refuses a non-positive or non-finite timestamp period: %s', (timestampPeriodNanoseconds) => {
+    const fake = fakeGpuDevice({ timestampPeriodNanoseconds });
+    const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
+    const result = timing.start();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('timestamp-period-unavailable');
   });
 
   it('destroys the first membership readback when the second allocation fails', async () => {

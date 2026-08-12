@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type {
   CatalogDelta,
+  CatalogDiagnostic,
   PackIndexEntry,
   RuntimeAssetBinding,
   RuntimeCatalogSnapshot,
@@ -19,7 +20,10 @@ import { normalizeSourcePackageError } from '../producer/source-package-errors.j
 import type { PackRuntimeRealm } from '../runtime-realm.js';
 import { resolvePackBuildInputs } from '../shared-build-inputs.js';
 import { createAssetChangedEvent, emitAssetChanged } from './asset-change-events.js';
-import { projectSourcePackageFailure } from './package-routes.js';
+import {
+  catalogDiagnosticForSourcePackageError,
+  projectSourcePackageFailure,
+} from './package-routes.js';
 import {
   buildGuidToMetaMap,
   buildUrlToAbsolute,
@@ -144,7 +148,10 @@ export function createPluginServer(context: PluginServerContext) {
     state.inFlightMetaImports.set(metaPath, current);
     return current;
   };
-  const settleMetaImports = async (metaPaths: readonly string[]): Promise<void> => {
+  const settleMetaImports = async (
+    metaPaths: readonly string[],
+  ): Promise<readonly CatalogDiagnostic[]> => {
+    const diagnostics: CatalogDiagnostic[] = [];
     await Promise.all(
       metaPaths.map(async (metaPath) => {
         try {
@@ -161,10 +168,12 @@ export function createPluginServer(context: PluginServerContext) {
             producer: 'source-package',
             importer: 'unknown',
           });
+          diagnostics.push(catalogDiagnosticForSourcePackageError(normalized));
           state.catalog = projectSourcePackageFailure(state.catalog, normalized);
         }
       }),
     );
+    return diagnostics;
   };
   const runtimeDiagnostics = (
     diagnostics: readonly {
@@ -186,7 +195,7 @@ export function createPluginServer(context: PluginServerContext) {
   const configureServer = (server: PluginServerLike, overrideRoots?: readonly string[]): void => {
     configuredServer = server;
     configured = true;
-    callbacks.setCatalogDeltaPublisher((delta) => {
+    const sendCatalogDelta = (delta: CatalogDelta): void => {
       const binding = runtimeRealm.snapshot()?.binding;
       server.ws?.send({
         type: 'custom',
@@ -196,6 +205,9 @@ export function createPluginServer(context: PluginServerContext) {
             ? delta
             : { ...delta, scopeId: binding.scopeId, generation: binding.generation },
       });
+    };
+    callbacks.setCatalogDeltaPublisher((delta) => {
+      sendCatalogDelta(delta);
     });
     // Async startup: scan roots to build the initial state.catalog.
     roots = [...(overrideRoots ?? resolvePackBuildInputs(opts).roots)];
@@ -350,7 +362,7 @@ export function createPluginServer(context: PluginServerContext) {
                   changedMetaPaths.add(metaPath);
                 }
               }
-              await settleMetaImports([...changedMetaPaths]);
+              const publicationDiagnostics = await settleMetaImports([...changedMetaPaths]);
               callbacks.installCatalogProjection({
                 ...rawProjection2,
                 entries:
@@ -361,10 +373,46 @@ export function createPluginServer(context: PluginServerContext) {
                 ddcPath: (guid) =>
                   callbacks.ddcPath(process.cwd(), guid, runtimeRealm.snapshot()?.binding),
               });
-              const delta = calculateCatalogDelta(previousCatalog, state.catalog);
+              const affectedSourceRows = previousCatalog.filter((row) =>
+                [...changedSourcePaths].includes(resolve(process.cwd(), row.sourcePath)),
+              );
+              const catalogDelta = calculateCatalogDelta(previousCatalog, state.catalog);
+              const sourceRevisionDiagnostic: CatalogDiagnostic | undefined =
+                sources.length > 0 &&
+                affectedSourceRows.length > 0 &&
+                publicationDiagnostics.length === 0 &&
+                catalogDelta === undefined
+                  ? {
+                      code: 'catalog-revision-conflict',
+                      severity: 'blocking',
+                      expected: 'a source payload change to advance its catalog revision',
+                      actual: 'source bytes changed without a catalog revision change',
+                      hint: 'repair the source revision and publish the next catalog snapshot',
+                      authority: 'catalog',
+                      evidence: affectedSourceRows.map((row) => ({
+                        type: 'asset' as const,
+                        id: row.guid,
+                      })),
+                    }
+                  : undefined;
+              const delta: CatalogDelta | undefined =
+                publicationDiagnostics.length > 0 || sourceRevisionDiagnostic !== undefined
+                  ? {
+                      added: [],
+                      changed: [],
+                      removed: [],
+                      authority: 'degraded',
+                      diagnostics: [
+                        ...publicationDiagnostics,
+                        ...(sourceRevisionDiagnostic === undefined
+                          ? []
+                          : [sourceRevisionDiagnostic]),
+                      ],
+                    }
+                  : catalogDelta;
               if (delta !== undefined) {
                 catalogChanged = true;
-                server.ws?.send({ type: 'custom', event: CATALOG_DELTA_EVENT, data: delta });
+                sendCatalogDelta(delta);
               }
             } catch (err: unknown) {
               console.warn('[forgeax-pack] rebuild state.catalog error:', err);

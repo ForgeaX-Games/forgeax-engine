@@ -3,6 +3,7 @@ import {
   allowsUnlitPreparedFallback,
   resolveMaterialShaderBindingContract,
   resolveMaterialShaderVertexInputContract,
+  shouldDeferMissingPreparedMaterialShader,
 } from '../renderer/renderer-factory';
 
 describe('material shader binding contract', () => {
@@ -78,5 +79,13 @@ describe('material shader vertex input contract', () => {
     expect(
       allowsUnlitPreparedFallback(null, 'position-size-color-instance', 'forgeax::missing-shader'),
     ).toBe(false);
+  });
+
+  it('defers every VFX prepared layout when its material shader is missing', () => {
+    expect(shouldDeferMissingPreparedMaterialShader('billboard-material-instance')).toBe(true);
+    expect(shouldDeferMissingPreparedMaterialShader('topology-segment-instance')).toBe(true);
+    expect(shouldDeferMissingPreparedMaterialShader('mesh-geometry-material-instance')).toBe(true);
+    expect(shouldDeferMissingPreparedMaterialShader('position-size-color-instance')).toBe(false);
+    expect(shouldDeferMissingPreparedMaterialShader(undefined)).toBe(false);
   });
 });

@@ -51,6 +51,10 @@ await verifyDemoCapture({
       expected[4] = { ...expected[3], name: 'multiply' };
       console.log('[blend-modes] FALSIFY=blend-modes-duplicate-multiply -- expecting additive factors for multiply');
     }
+    if (process.env.FALSIFY === 'blend-modes-opaque-alpha') {
+      expected[0] = { ...expected[1], name: 'opaque' };
+      console.log('[blend-modes] FALSIFY=blend-modes-opaque-alpha -- expecting alpha factors for opaque');
+    }
 
     const actual = spheres.map((draw) => ({
       blend: draw.pipeline?.desc?.fragment?.targets?.[0]?.blend,

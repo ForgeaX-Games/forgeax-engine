@@ -18,12 +18,11 @@ import {
   type SourcePackagePublicationResult,
 } from '../producer/source-package-publication.js';
 
-export function projectSourcePackageFailure(
-  rows: readonly PackIndexEntry[],
+export function catalogDiagnosticForSourcePackageError(
   error: SourcePackageError,
-): PackIndexEntry[] {
+): CatalogDiagnostic {
   const affected = new Set(error.detail.affectedGuids.map((guid) => guid.toLowerCase()));
-  const diagnostic: CatalogDiagnostic = {
+  return {
     code: error.code,
     severity: 'blocking',
     authority: 'producer',
@@ -33,6 +32,14 @@ export function projectSourcePackageFailure(
     evidence: [...affected].map((guid) => ({ type: 'asset', id: guid })),
     recoveryIntents: [error.hint],
   };
+}
+
+export function projectSourcePackageFailure(
+  rows: readonly PackIndexEntry[],
+  error: SourcePackageError,
+): PackIndexEntry[] {
+  const affected = new Set(error.detail.affectedGuids.map((guid) => guid.toLowerCase()));
+  const diagnostic = catalogDiagnosticForSourcePackageError(error);
   return rows.map((row) => {
     if (!affected.has(row.guid.toLowerCase())) return row;
     const subject = row.subject ?? 'imported-output';

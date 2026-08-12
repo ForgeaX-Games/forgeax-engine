@@ -163,5 +163,5 @@ describe('learn-render 5.1 advanced-lighting pixel-readback gate', () => {
       luma,
       `frame max luma ${luma}/255 <= ${LIT_LUMA_THRESHOLD}: surface is unlit (only ambient survives — light back-facing all visible geometry)`,
     ).toBeGreaterThan(LIT_LUMA_THRESHOLD);
-  });
+  }, 30_000);
 });

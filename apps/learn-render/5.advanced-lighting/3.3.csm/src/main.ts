@@ -307,14 +307,15 @@ function installCaptureHook(app: App, world: App['world']): void {
     world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
   };
-  const runCsmBoundaryProbe = async (): Promise<void> => {
-    const boundaryResults =
-      (await renderer.debugSampleShadowFactor?.(csmBoundaryProbePositions())) ?? null;
-    assertCsmBoundaryProbe(boundaryResults);
+  const runCsmProbe = async (): Promise<void> => {
+    const probeResults = (await renderer.debugSampleShadowFactor?.(csmProbePositions())) ?? null;
+    assertCsmBaseProbe(probeResults);
+    if (probeResults === null) return;
+    assertCsmBoundaryProbe(probeResults.slice(CSM_BASE_PROBE_POSITIONS.length));
   };
   win.__prepareCsmCapture = async (): Promise<void> => {
     drawCsmFrame();
-    await runCsmBoundaryProbe();
+    await runCsmProbe();
   };
   win.__captureCsm = async (): Promise<Uint8Array> => {
     drawCsmFrame();
@@ -324,12 +325,30 @@ function installCaptureHook(app: App, world: App['world']): void {
         `[learn-render 5.3.3 csm] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
-    await runCsmBoundaryProbe();
+    await runCsmProbe();
     return r.value;
   };
 }
 
 const CSM_BOUNDARY_PROBE_EPSILON = 0.25;
+const CSM_BASE_PROBE_POSITIONS: ReadonlyArray<readonly [number, number, number]> = [
+  [0, FLOOR_Y, 4],
+  [0, FLOOR_Y, -4],
+  [-2, FLOOR_Y, -1],
+  [-3, FLOOR_Y, -8],
+  [0, FLOOR_Y, -12],
+  [0, FLOOR_Y, -20],
+  [0, FLOOR_Y, -40],
+];
+const CSM_BASE_PROBE_SHADOWED_INDICES = new Set([2, 3, 6]);
+
+function csmBaseProbePositions(): ReadonlyArray<readonly [number, number, number]> {
+  return CSM_BASE_PROBE_POSITIONS;
+}
+
+function csmProbePositions(): ReadonlyArray<readonly [number, number, number]> {
+  return [...csmBaseProbePositions(), ...csmBoundaryProbePositions()];
+}
 
 function csmBoundaryProbePositions(): ReadonlyArray<readonly [number, number, number]> {
   const splitPlanes = computeCsmSplits();
@@ -345,8 +364,53 @@ function csmBoundaryProbePositions(): ReadonlyArray<readonly [number, number, nu
   return positions;
 }
 
+function assertCsmBaseProbe(
+  results: ReadonlyArray<{
+    readonly shadowFactor: number;
+    readonly sampledDepth: number;
+    readonly cascadeIndex: number;
+    readonly receiverDepth: number;
+  }> | null,
+): void {
+  if (results === null || results.length !== CSM_BASE_PROBE_POSITIONS.length + 6) {
+    throw new Error(`[learn-render 5.3.3 csm] base probe unavailable: ${results?.length ?? 'null'}`);
+  }
+  const gatedResults = new URLSearchParams(window.location.search).has('csm-probe-shadow-depth-shift')
+    ? results.map((probe, index) =>
+        CSM_BASE_PROBE_SHADOWED_INDICES.has(index)
+          ? { ...probe, sampledDepth: probe.receiverDepth + 0.1 }
+          : probe,
+      )
+    : results;
+  for (const index of CSM_BASE_PROBE_SHADOWED_INDICES) {
+    const probe = gatedResults[index];
+    if (
+      probe === undefined ||
+      !Number.isFinite(probe.shadowFactor) ||
+      probe.shadowFactor >= 0.5 ||
+      !Number.isFinite(probe.sampledDepth) ||
+      probe.sampledDepth < 0 ||
+      probe.sampledDepth > 1 ||
+      !Number.isFinite(probe.receiverDepth) ||
+      probe.receiverDepth < 0 ||
+      probe.receiverDepth > 1 ||
+      probe.sampledDepth + 0.02 >= probe.receiverDepth
+    ) {
+      throw new Error(
+        `[learn-render 5.3.3 csm] shadowed base depth mismatch at ${index}: ` +
+          JSON.stringify(probe),
+      );
+    }
+  }
+  console.warn(
+    '[learn-render 5.3.3 csm] shadowed base probe accepted: ' +
+      'sampled-depth < receiver-depth at indices 2,3,6',
+  );
+}
+
 function assertCsmBoundaryProbe(
   results: ReadonlyArray<{
+    readonly shadowFactor: number;
     readonly sampledDepth: number;
     readonly cascadeIndex: number;
     readonly receiverDepth: number;
@@ -359,6 +423,14 @@ function assertCsmBoundaryProbe(
     ? results.map((probe, index) =>
         index < 6 ? { ...probe, cascadeIndex: (probe.cascadeIndex + 1) % 4 } : probe,
       )
+    : new URLSearchParams(window.location.search).has('csm-probe-boundary-factor-shift')
+      ? results.map((probe, index) =>
+          index < 6 ? { ...probe, shadowFactor: probe.shadowFactor * 0.5 } : probe,
+        )
+      : new URLSearchParams(window.location.search).has('csm-probe-boundary-depth-shift')
+        ? results.map((probe, index) =>
+            index < 6 ? { ...probe, sampledDepth: probe.sampledDepth - 0.25 } : probe,
+          )
     : results;
   for (let boundary = 0; boundary < 3; boundary++) {
     const nearSide = gatedResults[boundary * 2];
@@ -368,18 +440,27 @@ function assertCsmBoundaryProbe(
       farSide?.cascadeIndex !== boundary + 1 ||
       nearSide === undefined ||
       farSide === undefined ||
+      !Number.isFinite(nearSide.shadowFactor) ||
+      !Number.isFinite(farSide.shadowFactor) ||
+      Math.abs(nearSide.shadowFactor - 1) > 0.01 ||
+      Math.abs(farSide.shadowFactor - 1) > 0.01 ||
       !Number.isFinite(nearSide.sampledDepth) ||
       !Number.isFinite(farSide.sampledDepth) ||
       !Number.isFinite(nearSide.receiverDepth) ||
-      !Number.isFinite(farSide.receiverDepth)
+      !Number.isFinite(farSide.receiverDepth) ||
+      nearSide.sampledDepth + 0.02 < nearSide.receiverDepth ||
+      farSide.sampledDepth + 0.02 < farSide.receiverDepth
     ) {
       throw new Error(
         `[learn-render 5.3.3 csm] browser split-boundary mismatch at ${boundary}: ` +
-          `near=${nearSide?.cascadeIndex} far=${farSide?.cascadeIndex}`,
+          `near=${JSON.stringify(nearSide)} far=${JSON.stringify(farSide)}`,
       );
     }
   }
-  console.warn('[learn-render 5.3.3 csm] browser split-boundary probe accepted: near-side=i, far-side=i+1');
+  console.warn(
+    '[learn-render 5.3.3 csm] browser split-boundary probe accepted: ' +
+      'near-side=i, far-side=i+1, raw-depth supports lit receiver',
+  );
 }
 
 async function loadTextureByGuid(

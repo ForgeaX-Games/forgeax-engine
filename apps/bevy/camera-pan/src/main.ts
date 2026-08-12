@@ -27,6 +27,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       stepCameraPan(world, dt, cameraPanInput(snapshot));
     },
   });
+  const captureWindow = globalThis as typeof globalThis & {
+    __prepareCameraPanCapture?: () => Promise<void>;
+  };
+  captureWindow.__prepareCameraPanCapture = async (): Promise<void> => {
+    app.world.update(1 / 60).unwrap();
+    app.renderer.draw([app.world], { owner: 0 });
+  };
   const started = app.start();
   if (!started.ok) console.error('[bevy-camera-pan] app.start failed:', started.error);
+  if (started.ok) (globalThis as { __bevyCameraPanReady?: boolean }).__bevyCameraPanReady = true;
 }

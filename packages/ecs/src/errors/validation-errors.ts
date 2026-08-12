@@ -182,26 +182,9 @@ export class SpawnLightInvalidBoundsError extends Error {
     field: 'range' | 'innerOuter' | 'outerNinety' | 'direction',
     got: number | readonly number[],
   ) {
-    let hint: string;
-    let expectedStr: string;
-    switch (field) {
-      case 'range':
-        hint = `${componentName}.range = ${got} is invalid; use Number.POSITIVE_INFINITY for unlimited range, or a non-negative meter value`;
-        expectedStr = 'range >= 0 or Number.POSITIVE_INFINITY';
-        break;
-      case 'innerOuter':
-        hint = `${componentName}.outerConeDeg <= innerConeDeg (got ${got}); inner cone is the saturated bright region, outer cone is the falloff edge; outerConeDeg > innerConeDeg required`;
-        expectedStr = 'outerConeDeg > innerConeDeg';
-        break;
-      case 'outerNinety':
-        hint = `${componentName}.outerConeDeg = ${got} > 90; a spot light cone wider than 90 degrees becomes a point light; use PointLight instead`;
-        expectedStr = 'outerConeDeg <= 90 (KHR_lights_punctual upper bound)';
-        break;
-      case 'direction':
-        hint = `${componentName}.direction is missing or a zero vector (got ${JSON.stringify(got)}); direction has no default, provide a non-zero direction, e.g. [-0.5, -1, -0.3]`;
-        expectedStr = 'direction is a non-zero [x, y, z] vector';
-        break;
-    }
+    const policy = SPAWN_LIGHT_INVALID_BOUNDS_POLICY[field];
+    const hint = policy.hint(componentName, got);
+    const expectedStr = policy.expected;
     super(
       `${componentName}: spawn payload bound violation.\n` +
         `  code: spawn-light-invalid-bounds\n` +
@@ -216,6 +199,34 @@ export class SpawnLightInvalidBoundsError extends Error {
     this.detail = { field, got };
   }
 }
+
+const SPAWN_LIGHT_INVALID_BOUNDS_POLICY = {
+  range: {
+    expected: 'range >= 0 or Number.POSITIVE_INFINITY',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.range = ${got} is invalid; use Number.POSITIVE_INFINITY for unlimited range, or a non-negative meter value`,
+  },
+  innerOuter: {
+    expected: 'outerConeDeg > innerConeDeg',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.outerConeDeg <= innerConeDeg (got ${got}); inner cone is the saturated bright region, outer cone is the falloff edge; outerConeDeg > innerConeDeg required`,
+  },
+  outerNinety: {
+    expected: 'outerConeDeg <= 90 (KHR_lights_punctual upper bound)',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.outerConeDeg = ${got} > 90; a spot light cone wider than 90 degrees becomes a point light; use PointLight instead`,
+  },
+  direction: {
+    expected: 'direction is a non-zero [x, y, z] vector',
+    hint: (componentName: string, got: number | readonly number[]) =>
+      `${componentName}.direction is missing or a zero vector (got ${JSON.stringify(got)}); direction has no default, provide a non-zero direction, e.g. [-0.5, -1, -0.3]`,
+  },
+} satisfies {
+  readonly [Field in SpawnLightInvalidBoundsError['detail']['field']]: {
+    readonly expected: string;
+    readonly hint: (componentName: string, got: number | readonly number[]) => string;
+  };
+};
 
 // ────────────────────────────────────────────────────────────────────────────
 // feat-20260520-directional-light-shadow-mapping M1 / w1 — closed-union
@@ -406,32 +417,35 @@ export class SpriteAnimationInvalidError extends Error {
         readonly frameDuration: number;
       };
 
-  constructor(
-    detail:
-      | { field: 'regions-length'; regionsLength: number; frameCount: number }
-      | { field: 'frame-duration'; frameDuration: number },
-  ) {
-    let hint: string;
-    let expectedStr: string;
+  private static resolvePolicy(detail: SpriteAnimationInvalidError['detail']): {
+    readonly expected: string;
+    readonly hint: string;
+  } {
     switch (detail.field) {
       case 'regions-length':
-        expectedStr = 'SpriteAnimation.regions.length === frameCount * 4';
-        hint = `SpriteAnimation.regions.length = ${detail.regionsLength} does not match frameCount * 4 = ${detail.frameCount * 4}; pack 4 floats [uMin, vMin, uW, vH] per frame (see <name>.atlas.meta.json sidecar 'regions' map)`;
-        break;
+        return {
+          expected: 'SpriteAnimation.regions.length === frameCount * 4',
+          hint: `SpriteAnimation.regions.length = ${detail.regionsLength} does not match frameCount * 4 = ${detail.frameCount * 4}; pack 4 floats [uMin, vMin, uW, vH] per frame (see <name>.atlas.meta.json sidecar 'regions' map)`,
+        };
       case 'frame-duration':
-        expectedStr = 'SpriteAnimation.frameDuration > 0';
-        hint = `SpriteAnimation.frameDuration = ${detail.frameDuration} is invalid; use a positive seconds-per-frame value (e.g. 0.1 = 10 fps)`;
-        break;
+        return {
+          expected: 'SpriteAnimation.frameDuration > 0',
+          hint: `SpriteAnimation.frameDuration = ${detail.frameDuration} is invalid; use a positive seconds-per-frame value (e.g. 0.1 = 10 fps)`,
+        };
     }
+  }
+
+  constructor(detail: SpriteAnimationInvalidError['detail']) {
+    const policy = SpriteAnimationInvalidError.resolvePolicy(detail);
     super(
       `SpriteAnimation: invariant violated.\n` +
         `  code: sprite-animation-invalid\n` +
         `  field: ${detail.field}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
+        `  expected: ${policy.expected}\n` +
+        `  hint: ${policy.hint}`,
     );
-    this.hint = hint;
-    this.expected = expectedStr;
+    this.hint = policy.hint;
+    this.expected = policy.expected;
     this.detail = detail;
   }
 }

@@ -39,11 +39,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { createApp, inputPlugin } from '../src/index';
 import type { App, AppError } from '../src/types';
 
-// Browser Mode files share Chromium's GPU process. Keep the canvas-form
-// renderer rooted after its lifecycle assertion so releasing the last app
-// reference cannot report a shared-device loss to the next file.
-const retainedCanvasApps: Array<{ readonly app: App; readonly canvas: HTMLCanvasElement }> = [];
-
 // -------- helpers ----------------------------------------------------
 
 interface FakeRendererState {
@@ -144,27 +139,31 @@ describe('device-lost path 1 -- heartbeat retained + simulation frozen', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const app = result.value;
-    const startResult = app.start();
-    expect(startResult.ok).toBe(true);
+    try {
+      const startResult = app.start();
+      expect(startResult.ok).toBe(true);
 
-    // wait one rAF tick to ensure rafHandle is captured non-null
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    const drawCallsBefore = state.drawCalls;
+      // wait one rAF tick to ensure rafHandle is captured non-null
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const drawCallsBefore = state.drawCalls;
 
-    // fire device-lost via the fake renderer
-    state.fireDeviceLost();
+      // fire device-lost via the fake renderer
+      state.fireDeviceLost();
 
-    // Device loss is recoverable at the renderer boundary, so the App remains
-    // started and an accidental second start is rejected as already-running.
-    const restart = app.start();
-    expect(restart.ok).toBe(false);
-    if (restart.ok) return;
-    expect(restart.error.code).toBe('app-already-running');
+      // Device loss is recoverable at the renderer boundary, so the App remains
+      // started and an accidental second start is rejected as already-running.
+      const restart = app.start();
+      expect(restart.ok).toBe(false);
+      if (restart.ok) return;
+      expect(restart.error.code).toBe('app-already-running');
 
-    // The rAF heartbeat remains armed, but the frame-loop must not submit work
-    // against a lost device until the host calls Renderer.recover().
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    expect(state.drawCalls).toBe(drawCallsBefore);
+      // The rAF heartbeat remains armed, but the frame-loop must not submit work
+      // against a lost device until the host calls Renderer.recover().
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(state.drawCalls).toBe(drawCallsBefore);
+    } finally {
+      app.stop();
+    }
   });
 });
 
@@ -180,20 +179,24 @@ describe('device-lost path 2 -- error fans out to host onError listener verbatim
     const app = result.value;
 
     const received: Array<AppError | RhiError> = [];
-    app.onError((e) => {
-      received.push(e);
-    });
-    app.start();
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    try {
+      app.onError((e) => {
+        received.push(e);
+      });
+      app.start();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-    state.fireDeviceLost();
+      state.fireDeviceLost();
 
-    const lostEvent = received.find(
-      (e) => e instanceof RhiError && e.code === 'device-lost',
-    );
-    expect(lostEvent).toBeDefined();
-    if (!(lostEvent instanceof RhiError)) return;
-    expect(lostEvent.code).toBe('device-lost');
+      const lostEvent = received.find(
+        (e) => e instanceof RhiError && e.code === 'device-lost',
+      );
+      expect(lostEvent).toBeDefined();
+      if (!(lostEvent instanceof RhiError)) return;
+      expect(lostEvent.code).toBe('device-lost');
+    } finally {
+      app.stop();
+    }
   });
 });
 
@@ -228,6 +231,7 @@ describe('device-lost path 3 -- late-attach replay does not throw NPE', () => {
       // freezes frame work until explicit recovery.
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     } finally {
+      app.stop();
       consoleErrorSpy.mockRestore();
     }
   });
@@ -294,7 +298,6 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
       canvas.width = 64;
       canvas.height = 64;
       document.body.appendChild(canvas);
-      let retainCanvas = false;
       try {
         const result = await createApp(canvas);
         expect(result.ok).toBe(true);
@@ -310,7 +313,10 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
             { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: 1 }) },
           )
           .unwrap();
-        const disposeSpy = vi.spyOn(app.renderer, 'dispose').mockImplementation(() => {});
+        // This path runs in a fresh Vitest browser process now. Spy through to
+        // the real dispose so the GPUDevice is released before that process
+        // hands control to the next split group.
+        const disposeSpy = vi.spyOn(app.renderer, 'dispose');
         // Replace renderer's onError with a controllable one before start
         // is not possible here -- the real renderer is wired. Instead, we
         // assert the canvas-form path engages cleanup on stop; the
@@ -326,10 +332,8 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
         // scan system name (R-4 cleanup proxy).
         expect(removeSpy).toHaveBeenCalledWith(Update, FRAME_START_SCAN_SYSTEM_NAME);
         disposeSpy.mockRestore();
-        retainedCanvasApps.push({ app, canvas });
-        retainCanvas = true;
       } finally {
-        if (!retainCanvas) canvas.remove();
+        canvas.remove();
       }
     } finally {
       removeSpy.mockRestore();

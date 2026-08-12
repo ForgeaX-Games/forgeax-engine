@@ -379,6 +379,12 @@ export interface ForgeaXShaderOptions {
    * same composed artifact.
    */
   readonly materialPackages?: readonly string[];
+  /**
+   * Resolve the material packages for the currently active game. The provider
+   * is re-evaluated when the dev manifest is requested so a runtime game switch
+   * cannot leave the renderer on the previous game's authored shader set.
+   */
+  readonly materialPackagesProvider?: () => readonly string[];
 }
 
 /** Optional engine fullscreen entries that a producer explicitly consumes. */
@@ -1907,6 +1913,125 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     engineShaderRoots = [resolve(process.cwd(), 'packages/shader/src')];
   }
 
+  const currentMaterialPackages = (): string[] =>
+    [
+      ...new Set(
+        [...(options.materialPackages ?? []), ...(options.materialPackagesProvider?.() ?? [])].map(
+          (packagePath) => resolve(process.cwd(), packagePath),
+        ),
+      ),
+    ].sort();
+  const materialPackageKey = (packagePaths: readonly string[]): string => packagePaths.join('\0');
+  let loadedMaterialPackageKey: string | null = null;
+  let materialPackageLoadTail = Promise.resolve();
+  const materialPackageLoads = new Map<string, Promise<void>>();
+  const authoredMaterialIdentifiers = new Set<string>();
+  const authoredMaterialSources = new Set<string>();
+
+  const clearAuthoredMaterialState = (): void => {
+    for (const identifier of authoredMaterialIdentifiers) {
+      state.entries.delete(identifier);
+      for (const key of state.variantWgsl.keys()) {
+        if (key.startsWith(`${identifier}#`)) state.variantWgsl.delete(key);
+      }
+    }
+    for (const sourcePath of authoredMaterialSources) {
+      state.authoredMaterials.delete(sourcePath);
+    }
+    state.materialShaders.splice(
+      0,
+      state.materialShaders.length,
+      ...state.materialShaders.filter(
+        (entry) =>
+          !authoredMaterialIdentifiers.has(entry.identifier) &&
+          !authoredMaterialSources.has(entry.sourcePath),
+      ),
+    );
+    authoredMaterialIdentifiers.clear();
+    authoredMaterialSources.clear();
+  };
+
+  const installAuthoredMaterial = (prepared: PreparedAuthoredMaterial): void => {
+    state.authoredMaterials.set(prepared.sourcePath, prepared);
+    const primary = prepared.primary;
+    state.entries.set(prepared.moduleId, {
+      hash: primary.manifestEntry.hash,
+      wgsl: primary.manifestEntry.wgsl,
+      bindings: primary.bindingsJson,
+      uvSetCount: primary.uvSetCount,
+    });
+    for (const variant of prepared.variants) {
+      state.variantWgsl.set(
+        `${prepared.moduleId}#${variant.definesKey}`,
+        variant.manifestEntry.wgsl,
+      );
+    }
+    state.materialShaders.push({
+      identifier: prepared.moduleId,
+      sourcePath: prepared.sourcePath,
+      composedWgsl: `./${primary.manifestEntry.hash}.composed.wgsl`,
+      paramSchema: JSON.stringify(prepared.paramSchema),
+      variants: prepared.variants.map((variant) => ({
+        definesKey: variant.definesKey,
+        defines: variant.defines,
+        composedWgsl: `./${variant.manifestEntry.hash}.composed.wgsl`,
+      })),
+      uvSetCount: primary.uvSetCount,
+    });
+    authoredMaterialIdentifiers.add(prepared.moduleId);
+    authoredMaterialSources.add(prepared.sourcePath);
+  };
+
+  const ensureAuthoredMaterialPackages = async (
+    packagePaths: readonly string[],
+    engineImports: Readonly<Record<string, string>>,
+  ): Promise<void> => {
+    let requestedPaths = [
+      ...new Set(packagePaths.map((packagePath) => resolve(process.cwd(), packagePath))),
+    ].sort();
+    while (true) {
+      const key = materialPackageKey(requestedPaths);
+      if (loadedMaterialPackageKey === key) return;
+      let load = materialPackageLoads.get(key);
+      if (load === undefined) {
+        load = materialPackageLoadTail.then(async () => {
+          if (loadedMaterialPackageKey === key) return;
+          const preparedMaterials: PreparedAuthoredMaterial[] = [];
+          for (const packagePath of requestedPaths) {
+            const materialPackage = parseMaterialPackage(
+              JSON.parse(await readFile(packagePath, 'utf8')) as unknown,
+              packagePath,
+            );
+            preparedMaterials.push(
+              await prepareAuthoredMaterial(packagePath, materialPackage, engineImports),
+            );
+          }
+          // A game switch may happen while compilation is in flight. Do not
+          // install a stale game's rows; the next loop observes the provider's
+          // latest key and installs that set atomically.
+          if (materialPackageKey(currentMaterialPackages()) !== key) return;
+          clearAuthoredMaterialState();
+          for (const prepared of preparedMaterials) installAuthoredMaterial(prepared);
+          loadedMaterialPackageKey = key;
+        });
+        materialPackageLoads.set(key, load);
+        materialPackageLoadTail = load.catch(() => undefined);
+        void load.then(
+          () => {
+            if (materialPackageLoads.get(key) === load) materialPackageLoads.delete(key);
+          },
+          () => {
+            if (materialPackageLoads.get(key) === load) materialPackageLoads.delete(key);
+          },
+        );
+      }
+      await load;
+      const latestPaths = currentMaterialPackages();
+      if (materialPackageKey(latestPaths) === key && loadedMaterialPackageKey === key) return;
+      requestedPaths = latestPaths;
+    }
+  };
+
   return {
     name: 'forgeax:shader',
 
@@ -1922,7 +2047,8 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     // shaders are SSOT — a compile failure here is a real bug, not a soft
     // skip).
     async buildStart(this: MinimalPluginContext): Promise<void> {
-      if (!wantEngineEntries && (options.materialPackages?.length ?? 0) === 0) return;
+      const materialPackages = currentMaterialPackages();
+      if (!wantEngineEntries && materialPackages.length === 0) return;
       const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
       const eng = await loadEngineShaderEntries();
       if (sharedManifest !== undefined) {
@@ -1932,44 +2058,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         }
         state.materialShaders.push(...shared.materialShaders);
       }
-      for (const packagePath of options.materialPackages ?? []) {
-        const resolvedPackagePath = resolve(process.cwd(), packagePath);
-        const materialPackage = parseMaterialPackage(
-          JSON.parse(await readFile(resolvedPackagePath, 'utf8')) as unknown,
-          resolvedPackagePath,
-        );
-        const prepared = await prepareAuthoredMaterial(
-          resolvedPackagePath,
-          materialPackage,
-          eng.imports,
-        );
-        state.authoredMaterials.set(prepared.sourcePath, prepared);
-        const primary = prepared.primary;
-        state.entries.set(prepared.moduleId, {
-          hash: primary.manifestEntry.hash,
-          wgsl: primary.manifestEntry.wgsl,
-          bindings: primary.bindingsJson,
-          uvSetCount: primary.uvSetCount,
-        });
-        for (const variant of prepared.variants) {
-          state.variantWgsl.set(
-            `${prepared.moduleId}#${variant.definesKey}`,
-            variant.manifestEntry.wgsl,
-          );
-        }
-        state.materialShaders.push({
-          identifier: prepared.moduleId,
-          sourcePath: prepared.sourcePath,
-          composedWgsl: `./${primary.manifestEntry.hash}.composed.wgsl`,
-          paramSchema: JSON.stringify(prepared.paramSchema),
-          variants: prepared.variants.map((variant) => ({
-            definesKey: variant.definesKey,
-            defines: variant.defines,
-            composedWgsl: `./${variant.manifestEntry.hash}.composed.wgsl`,
-          })),
-          uvSetCount: primary.uvSetCount,
-        });
-      }
+      await ensureAuthoredMaterialPackages(materialPackages, eng.imports);
       if (!wantEngineEntries) return;
       if (sharedManifest !== undefined) return;
       const packageMaterialShaders = await loadPackageMaterialShaderEntries(
@@ -2086,34 +2175,15 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
 
       const sourcePath = authoredShaderSourcePath(id);
       let authored = state.authoredMaterials.get(sourcePath);
-      if (authored === undefined && (options.materialPackages?.length ?? 0) > 0) {
+      const materialPackages = currentMaterialPackages();
+      if (authored === undefined && materialPackages.length > 0) {
         authored = await findAuthoredMaterialForSource(
-          options.materialPackages ?? [],
+          materialPackages,
           sourcePath,
           loadEngineImportsMap(engineShaderRoots),
         );
         if (authored !== undefined) {
-          state.authoredMaterials.set(sourcePath, authored);
-          const primary = authored.primary;
-          state.entries.set(authored.moduleId, primary.manifestEntry);
-          for (const variant of authored.variants) {
-            state.variantWgsl.set(
-              `${authored.moduleId}#${variant.definesKey}`,
-              variant.manifestEntry.wgsl,
-            );
-          }
-          state.materialShaders.push({
-            identifier: authored.moduleId,
-            sourcePath: authored.sourcePath,
-            composedWgsl: `./${primary.manifestEntry.hash}.composed.wgsl`,
-            paramSchema: JSON.stringify(authored.paramSchema),
-            variants: authored.variants.map((variant) => ({
-              definesKey: variant.definesKey,
-              defines: variant.defines,
-              composedWgsl: `./${variant.manifestEntry.hash}.composed.wgsl`,
-            })),
-            uvSetCount: primary.uvSetCount,
-          });
+          installAuthoredMaterial(authored);
         }
       }
       if (authored !== undefined) {
@@ -2456,6 +2526,15 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           next();
           return;
         }
+
+        // Active game scope binding is runtime state, so the package list used
+        // by buildStart may be stale (or empty). Refresh authored materials
+        // before priming the graph; this is the same compiler path used by
+        // production builds and fails fast on a malformed material contract.
+        await ensureAuthoredMaterialPackages(
+          currentMaterialPackages(),
+          loadEngineImportsMap(engineShaderRoots),
+        );
 
         // The app entry can request the manifest before a lazily imported
         // custom WGSL module has reached this plugin's transform hook. Walk

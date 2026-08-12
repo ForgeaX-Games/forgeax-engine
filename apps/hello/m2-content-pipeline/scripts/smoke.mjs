@@ -21,7 +21,7 @@ function expectOk(result, label) {
 }
 
 const project = loadGameProjectSync((path) => readFileSync(resolve(root, 'templates/game-default', path), 'utf8'));
-if (!project.ok || project.value.name !== '_template') fail(`project manifest rejected: ${project.ok ? project.value.name : project.error.code}`);
+if (!project.ok || project.value.id !== 'template-default') fail(`project manifest rejected: ${project.ok ? project.value.id : project.error.code}`);
 console.log('[m2-content] project manifest: PASS');
 
 const roots = [
@@ -49,6 +49,12 @@ console.log('[m2-content] host importer delivery: PASS');
 
 execFileSync('pnpm', ['--filter', '@forgeax/hello-custom-importer', 'smoke:browser'], { cwd: root, stdio: 'inherit' });
 console.log('[m2-content] browser HMR delivery: PASS');
+
+execFileSync('pnpm', ['--filter', '@forgeax/hello-m2-content-pipeline', 'smoke:browser-catalog-recovery'], {
+  cwd: root,
+  stdio: 'inherit',
+});
+console.log('[m2-content] browser catalog recovery: PASS');
 
 execFileSync('pnpm', ['--filter', '@forgeax/hello-m2-content-pipeline', 'smoke:source-reimport'], {
   cwd: root,

@@ -368,6 +368,34 @@ function readLastJsonLine(output) {
   return undefined;
 }
 
+const m10ArtifactRoot = resolve(
+  process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering'),
+  'm10-render-feature-stage-fault-recovery',
+);
+const m10Dawn = run(
+  'M10 render feature Dawn fault recovery',
+  ['--filter', '@forgeax/hello-m3-programmable-rendering', 'run', 'smoke:m10:dawn'],
+  { FORGEAX_M10_ARTIFACT_DIR: resolve(m10ArtifactRoot, 'dawn') },
+);
+const m10Browser = run(
+  'M10 render feature browser fault recovery',
+  ['--filter', '@forgeax/hello-m3-programmable-rendering', 'run', 'smoke:m10:browser'],
+  { FORGEAX_M10_ARTIFACT_DIR: resolve(m10ArtifactRoot, 'browser') },
+);
+if (
+  m10Dawn.status !== 0 ||
+  !m10Dawn.output.includes('[m10-render-feature] Dawn PASS') ||
+  m10Browser.status !== 0 ||
+  !m10Browser.output.includes('[m10-render-feature] Browser PASS')
+) {
+  console.error(
+    `[m3-programmable] M10 render feature fault recovery: FAIL - ${JSON.stringify({ dawnStatus: m10Dawn.status, browserStatus: m10Browser.status })}`,
+  );
+  process.exit(1);
+}
+console.log('[m3-programmable] M10 render feature Dawn fault recovery: PASS');
+console.log('[m3-programmable] M10 render feature browser fault recovery: PASS');
+
 function runCustomMaterialBrowser(label, extraEnv = {}) {
   return run(
     label,

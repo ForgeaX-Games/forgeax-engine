@@ -2064,6 +2064,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   ): PreparedGraphicsResolver =>
     createPreparedGraphicsResolver({
       device: internals.device,
+      featureIdentity: input.featureIdentity,
       generation: input.generation,
       capabilityAvailable: true,
       featureOrder: input.order,

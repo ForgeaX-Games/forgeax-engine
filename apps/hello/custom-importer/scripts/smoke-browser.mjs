@@ -18,12 +18,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
 const repoRoot = resolve(appRoot, '..', '..', '..');
 const sourcePath = resolve(appRoot, 'assets/level-1.reel.json');
+const metaPath = resolve(appRoot, 'assets/level-1.reel.json.meta.json');
 const artifactDir = resolve(appRoot, '.forgeax-debug/m2-browser-hmr');
 const port = Number.parseInt(process.env.FORGEAX_CUSTOM_IMPORTER_PORT ?? '5196', 10);
 
 mkdirSync(artifactDir, { recursive: true });
 const originalSource = readFileSync(sourcePath, 'utf8');
+const originalMetaSource = readFileSync(metaPath, 'utf8');
 const original = JSON.parse(originalSource);
+const originalMeta = JSON.parse(originalMetaSource);
 const mutatedTitle = `${original.title} HMR Reloaded`;
 const mutated = {
   ...original,
@@ -32,6 +35,14 @@ const mutated = {
     ...reel,
     x: reel.x + (index === 1 ? 0.75 : 0),
   })),
+};
+const mutatedMeta = {
+  ...originalMeta,
+  revision: {
+    ...originalMeta.revision,
+    digest: 'level-1-reel-v2',
+    observedAt: 2,
+  },
 };
 
 const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-custom-importer', 'dev'], {
@@ -77,6 +88,10 @@ try {
   const logs = [];
   const pageErrors = [];
   const consoleErrors = [];
+  let pageLoads = 0;
+  page.on('load', () => {
+    pageLoads += 1;
+  });
   page.on('console', (message) => {
     logs.push(message.text());
     if (message.type() === 'error') consoleErrors.push(message.text());
@@ -93,6 +108,7 @@ try {
   await page.screenshot({ path: beforePath });
 
   writeFileSync(sourcePath, `${JSON.stringify(mutated, null, 2)}\n`);
+  writeFileSync(metaPath, `${JSON.stringify(mutatedMeta, null, 2)}\n`);
   await page.waitForFunction(
     (title) => document.querySelector('#asset-status')?.textContent?.includes(title),
     mutatedTitle,
@@ -110,6 +126,7 @@ try {
   const reloadLogs = logs.filter((line) => line.includes('[custom-importer] loaded reel-game blob'));
   const changedLog = reloadLogs.find((line) => line.includes(JSON.stringify(mutatedTitle)));
   if (!changedLog) throw new Error(`browser did not log the mutated blob; logs=${JSON.stringify(reloadLogs)}`);
+  if (pageLoads > 1) throw new Error(`valid catalog HMR required a page reload: pageLoads=${pageLoads}`);
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   const unexpectedConsoleErrors = consoleErrors.filter((line) => !line.includes('404'));
   if (unexpectedConsoleErrors.length > 0) {
@@ -124,6 +141,7 @@ try {
   failure = error;
 } finally {
   writeFileSync(sourcePath, originalSource);
+  writeFileSync(metaPath, originalMetaSource);
   if (browser) await browser.close();
   viteProc.kill('SIGTERM');
   await sleep(300);

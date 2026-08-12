@@ -49,6 +49,9 @@ const runtimeBinding = createStandaloneRuntimeAssetBinding(
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 100;
 const CAMERA_PROJECTION_PERSPECTIVE = 0;
+const OMIT_SPECULAR_MAP = new URLSearchParams(window.location.search).has(
+  'rhi-debug-no-specular-map',
+);
 
 // LO canonical lamp position (`glm::vec3 lightPos(1.2f, 1.0f, 2.0f)` in
 // 4.2.lighting_maps_specular_map.cpp). PointLight reads its world-space
@@ -169,6 +172,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       continue;
     }
     if (k === 'metallicRoughnessTexture') {
+      if (OMIT_SPECULAR_MAP) continue;
       if (!specularTextureRes.ok) continue;
       filteredValues[k] = unwrapHandle(
         world.allocSharedRef('TextureAsset', specularTextureRes.value),

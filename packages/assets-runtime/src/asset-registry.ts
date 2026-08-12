@@ -614,11 +614,7 @@ export class AssetRegistry {
    * transition.
    */
   configureRuntimeBinding(binding: RuntimeAssetBinding): void {
-    this.catalogSourceDispose?.();
-    this.catalogSourceDispose = undefined;
-    this.catalogSource = undefined;
-    this.catalogReplica = undefined;
-    this.catalogEnumerating = undefined;
+    this.clearCatalogSource();
     this.runtimeBinding = binding;
     this.configurePackIndex(binding.catalogUrl);
     this.invalidateAll();
@@ -724,10 +720,9 @@ export class AssetRegistry {
   }
 
   setCatalogSource(source: CatalogSource): void {
-    this.catalogSourceDispose?.();
+    this.clearCatalogSource();
     this.catalogSource = source;
     this.catalogReplica = new CatalogReplica(source);
-    this.catalogEnumerating = undefined;
     this.catalogSourceDispose = this.catalogReplica.subscribe((delta) => {
       for (const listener of [...this.catalogListeners]) {
         try {
@@ -738,6 +733,16 @@ export class AssetRegistry {
       }
     });
     void this.catalogReplica.start();
+  }
+
+  /** Stop the catalog transport and remove its replica without clearing payload caches. */
+  clearCatalogSource(): void {
+    this.catalogReplica?.dispose();
+    this.catalogSourceDispose?.();
+    this.catalogSourceDispose = undefined;
+    this.catalogSource = undefined;
+    this.catalogReplica = undefined;
+    this.catalogEnumerating = undefined;
   }
 
   enumerateCatalog(): Promise<Result<readonly CatalogEntry[], AssetError>> {
