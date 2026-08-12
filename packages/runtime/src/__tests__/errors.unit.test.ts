@@ -389,7 +389,7 @@ import {
     // ─── Tests ──────────────────────────────────────────────────────────────────
 
     describe('Renderer.onError — device.lost / onuncapturederror dual-channel fan-out (D-VD2)', () => {
-      it('(1) intentional device teardown fires onLost without creating an RhiError', async () => {
+      it('(1) device.lost Promise resolution fires onError with code=device-lost AND onLost in parallel', async () => {
         const { navigator, resolveDeviceLost } = makeMockWebGPU();
         vi.stubGlobal('navigator', navigator);
         const { canvas } = makeMockCanvas();
@@ -413,53 +413,24 @@ import {
         renderer.onLost((info) => lostInfos.push(info));
 
         resolveDeviceLost({ reason: 'destroyed', message: 'driver reset' });
-        // Drain microtasks for the device.lost Promise + its lost-channel fan-out.
+        // Drain microtasks for the device.lost Promise + the dual-fire chain.
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
 
-        // onLost channel — existing wire-up unchanged (D-PD4 lost channel).
+        // onLost channel — existing wire-up unchanged (D-PD4 dual channel).
         expect(lostInfos.length).toBeGreaterThan(0);
         expect(lostInfos[0]?.reason).toBe('destroyed');
 
-        // An explicit renderer teardown is not a runtime failure. It must stay
-        // observable through onLost, but must not create an RhiError that the
-        // host logs as a browser-visible error while switching games.
-        expect(errors).toHaveLength(0);
-      });
-
-      it('(2) genuine device loss still creates an RhiError', async () => {
-        const { navigator, resolveDeviceLost } = makeMockWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas();
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            backend: string;
-            onError: (cb: (err: RhiError) => void) => () => void;
-          }>;
-        };
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        expect(renderer.backend).toBe('webgpu');
-
-        const errors: RhiError[] = [];
-        renderer.onError((err) => errors.push(err));
-
-        resolveDeviceLost({ reason: 'unknown', message: 'driver reset' });
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
+        // onError channel — D-VD2 wire-up: device.lost now also fires errorRegistry.
         expect(errors.length).toBeGreaterThan(0);
         expect(errors[0]?.code).toBe('device-lost');
+        // Hint/expected populated by translateErrorEventToRhiError.
         expect(errors[0]?.expected).toMatch(/device must remain alive/);
-        expect(errors[0]?.hint).toMatch(/unknown/);
+        expect(errors[0]?.hint).toMatch(/destroyed/);
       });
 
-      it('(3) GPUUncapturedErrorEvent with GPUOutOfMemoryError → onError fires with code=oom', async () => {
+      it('(2) GPUUncapturedErrorEvent with GPUOutOfMemoryError → onError fires with code=oom', async () => {
         const { navigator, dispatchUncapturedError } = makeMockWebGPU();
         vi.stubGlobal('navigator', navigator);
         const { canvas } = makeMockCanvas();
@@ -487,7 +458,7 @@ import {
         expect(errors[0]?.hint).toMatch(/4GB/);
       });
 
-      it('(4) GPUUncapturedErrorEvent with GPUInternalError → onError fires with code=internal-error', async () => {
+      it('(3) GPUUncapturedErrorEvent with GPUInternalError → onError fires with code=internal-error', async () => {
         const { navigator, dispatchUncapturedError } = makeMockWebGPU();
         vi.stubGlobal('navigator', navigator);
         const { canvas } = makeMockCanvas();
@@ -514,7 +485,7 @@ import {
         expect(errors[0]?.hint).toMatch(/driver assertion/);
       });
 
-      it('(5) GPUUncapturedErrorEvent with GPUValidationError matching shader pattern → code=shader-compile-failed', async () => {
+      it('(4) GPUUncapturedErrorEvent with GPUValidationError matching shader pattern → code=shader-compile-failed', async () => {
         const { navigator, dispatchUncapturedError } = makeMockWebGPU();
         vi.stubGlobal('navigator', navigator);
         const { canvas } = makeMockCanvas();

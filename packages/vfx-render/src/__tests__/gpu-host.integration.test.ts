@@ -384,11 +384,6 @@ describe('GPU VFX public host', () => {
     const host = createVfxRuntimeHost({ camera: { read: () => undefined } });
     await host.attachWorld({ world, assets: assets as never });
 
-    expect(host.inspect(world)).toEqual({
-      generation: 1,
-      renderGeneration: 0,
-      players: [],
-      diagnostics: [],
-    });
+    expect(host.inspect(world)).toEqual({ generation: 1, players: [], diagnostics: [] });
   });
 });

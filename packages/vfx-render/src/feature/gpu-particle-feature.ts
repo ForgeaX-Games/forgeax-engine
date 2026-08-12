@@ -1112,12 +1112,10 @@ export function gpuParticleRenderFeature(
       return ok(undefined);
     },
     recover: () => {
-      const runtimes = new Set<VfxGpuRuntime>();
       for (const state of states.values()) {
         if (!state.world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) continue;
-        runtimes.add(state.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY));
+        state.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY).reset(state.player);
       }
-      for (const runtime of runtimes) runtime.recover();
       states.clear();
       return ok(undefined);
     },

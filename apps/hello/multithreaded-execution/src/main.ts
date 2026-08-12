@@ -14,64 +14,6 @@ const tierParam = params.get('tier');
 const requestedTier = tierParam === 'main-serial' || tierParam === 'shared'
   ? tierParam
   : 'engine-worker';
-type ExecutionTelemetry = {
-  readonly registered: Array<{ readonly name: string; readonly worldIdentity: string }>;
-  readonly cleanups: Array<{ readonly name: string; readonly worldIdentity: string }>;
-  readonly updates: Array<{
-    readonly keyMDown: boolean;
-    readonly mousePrimaryDown: boolean;
-    readonly keyMJustPressed: boolean;
-    readonly worldIdentity: string;
-  }>;
-  readonly faultArmed: Array<{ readonly worldIdentity: string }>;
-};
-const telemetryEnabled = params.get('gauntlet') === '1';
-const telemetry: ExecutionTelemetry | undefined = telemetryEnabled
-  ? { registered: [], cleanups: [], updates: [], faultArmed: [] }
-  : undefined;
-const telemetryChannel = telemetryEnabled ? new MessageChannel() : undefined;
-if (telemetry !== undefined && telemetryChannel !== undefined) {
-  telemetryChannel.port1.onmessage = (event: MessageEvent<unknown>) => {
-    if (typeof event.data !== 'object' || event.data === null) return;
-    const message = event.data as {
-      kind?: unknown;
-      name?: unknown;
-      worldIdentity?: unknown;
-      keyMDown?: unknown;
-      mousePrimaryDown?: unknown;
-      keyMJustPressed?: unknown;
-    };
-    if (typeof message.worldIdentity !== 'string') return;
-    if (message.kind === 'cleanup-registered' && typeof message.name === 'string') {
-      telemetry.registered.push({ name: message.name, worldIdentity: message.worldIdentity });
-    } else if (message.kind === 'cleanup' && typeof message.name === 'string') {
-      telemetry.cleanups.push({ name: message.name, worldIdentity: message.worldIdentity });
-    } else if (
-      message.kind === 'update' &&
-      typeof message.keyMDown === 'boolean' &&
-      typeof message.mousePrimaryDown === 'boolean' &&
-      typeof message.keyMJustPressed === 'boolean'
-    ) {
-      telemetry.updates.push({
-        keyMDown: message.keyMDown,
-        mousePrimaryDown: message.mousePrimaryDown,
-        keyMJustPressed: message.keyMJustPressed,
-        worldIdentity: message.worldIdentity,
-      });
-    } else if (message.kind === 'fault-armed') {
-      telemetry.faultArmed.push({ worldIdentity: message.worldIdentity });
-    }
-  };
-  telemetryChannel.port1.start();
-}
-const diagnostics = globalThis as {
-  __forgeaxExecutionTelemetry?: ExecutionTelemetry;
-  __forgeaxExecutionReport?: () => unknown;
-  __forgeaxExecutionFrameSamples?: readonly number[];
-  __forgeaxExecutionCapture?: () => ProfileCapture;
-  __forgeaxExecutionStop?: () => unknown;
-};
-if (telemetry !== undefined) diagnostics.__forgeaxExecutionTelemetry = telemetry;
 const bootstrap = new URL('/assets/shared-bootstrap.js', location.href);
 if (params.get('fault') === '1') bootstrap.searchParams.set('fault', '1');
 const profiler = params.get('profile') === '1'
@@ -88,9 +30,6 @@ const created = await createApp(
     execution: {
       tier: requestedTier,
       bootstrap,
-      ...(telemetryChannel === undefined
-        ? {}
-        : { bootstrapData: { telemetry: true }, bootstrapPort: telemetryChannel.port2 }),
       startupTimeoutMs: 15_000,
       frameTimeoutMs: 5_000,
     },
@@ -101,30 +40,21 @@ const created = await createApp(
 
 if (!created.ok) {
   output.dataset.status = 'failed';
-  const detail = 'detail' in created.error ? created.error.detail : undefined;
   output.textContent = JSON.stringify({
     code: 'code' in created.error ? created.error.code : created.error.name,
     message: created.error.message,
-    requestedTier,
-    actualTier: null,
-    expected: 'expected' in created.error ? created.error.expected : undefined,
-    hint: 'hint' in created.error ? created.error.hint : undefined,
-    capabilityTruth:
-      typeof detail === 'object' && detail !== null
-        ? {
-            missingCapabilities: 'missingCapabilities' in detail ? detail.missingCapabilities : [],
-            sharedEvidencePassed:
-              'sharedEvidencePassed' in detail ? detail.sharedEvidencePassed : undefined,
-          }
-        : null,
     ...('detail' in created.error ? { detail: created.error.detail } : {}),
   });
   throw created.error;
 }
 
 const app = created.value;
+const diagnostics = globalThis as {
+  __forgeaxExecutionReport?: () => ReturnType<typeof app.execution.report>;
+  __forgeaxExecutionFrameSamples?: readonly number[];
+  __forgeaxExecutionCapture?: () => ProfileCapture;
+};
 diagnostics.__forgeaxExecutionReport = () => app.execution.report();
-diagnostics.__forgeaxExecutionStop = () => app.stop();
 if (profiler !== undefined) {
   diagnostics.__forgeaxExecutionCapture = () => {
     const stopped = app.stop();
@@ -152,8 +82,6 @@ rebuildButton.addEventListener('click', () => {
     if (!result.ok) throw result.error;
     const restarted = app.start();
     if (!restarted.ok) throw restarted.error;
-    previousReportSamples = 0;
-    previousFrameAt = 0;
   });
 });
 

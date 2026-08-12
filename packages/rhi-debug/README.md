@@ -262,22 +262,6 @@ node packages/rhi-debug/dist/cli.mjs summary .forgeax-debug/<runId>/frame-0.tape
 
 The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-debug -> ./dist/cli.mjs`, and `package.json#exports['./cli']` re-exports the subcommand functions for programmatic use. The barrel does **not** re-export CLI symbols (Node `ws` / `pngjs` are reached only via `/cli`, `/inspector`, `/adapter` subpaths, keeping the tree-shake gate intact).
 
-### Dawn performance result contract
-
-The root runner records one repeatable result over the admitted Lighting Maps Dawn path:
-
-```bash
-pnpm rhi-debug-performance -- --warmup=1 --trials=1 --output=/absolute/run-dir/artifacts/rhi-debug-performance-result.json --artifact-dir=/absolute/run-dir/artifacts/rhi-debug-performance
-```
-
-It runs the real app's native Dawn smoke, retains its tape and report, and invokes `summary
---lifecycle-only` plus `inspect-offline` on a fresh Dawn device. The result schema is
-`packages/rhi-debug/schema/performance-result.schema.json`; the reusable conforming and malformed
-fixtures are under `scripts/rhi-debug-performance/fixtures/`. The contract records public capture
-and finalize boundaries, marks off/idle as unavailable when the path does not expose them, and
-separates tape JSON, binary blob, and report JSON bytes. It does not start Browser/Vite or infer
-stage telemetry that the app does not expose.
-
 ### Live inspect via eval scope
 
 In a running engine with `app.remote` wired (default in dev mode), the `debugAdapter` live root inside eval scope exposes two methods:

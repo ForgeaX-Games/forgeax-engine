@@ -51,7 +51,6 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  * @property {number} [epsilon]     max whole-frame RGB pixel delta (default 0.02)
  * @property {number} [maxChannelEpsilon] max RGB-channel abs delta over any pixel (default 0.10)
  * @property {number} [coveredEpsilon]    max mean RGB delta over non-background pixels (default 0.03)
- * @property {boolean} [allowEmptyFrame]  permit an intentional all-black pixel falsifier
  * @property {(report: object) => void} [assertCapture] extra report-level contract gate
  * @property {(input: {tape: object}) => void} [assertTape] extra contract over the
  *                                  deserialized self-contained capture tape
@@ -79,7 +78,6 @@ export async function verifyDemoCapture(opts) {
     epsilon = 0.02,
     maxChannelEpsilon = 0.1,
     coveredEpsilon = 0.03,
-    allowEmptyFrame = false,
     assertCapture,
     assertTape,
     assertPixels,
@@ -342,7 +340,7 @@ export async function verifyDemoCapture(opts) {
   // coverage. (Demos that legitimately render near-black are not pixel-mode
   // candidates.) Reuse localMetrics' background test via a quick coverage scan.
   const liveCoverage = litCoverage(livePixels);
-  if (!allowEmptyFrame && liveCoverage < 0.001) {
+  if (liveCoverage < 0.001) {
     fail(
       1,
       `[${label}] RED -- live frame is ~all-black (lit coverage ${liveCoverage.toFixed(4)}). ` +

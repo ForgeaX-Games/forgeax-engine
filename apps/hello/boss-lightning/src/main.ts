@@ -211,7 +211,6 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         const stage = stageEvidence(loaded.value, falsifyMode, runtime.hasPlayer(scene.player));
         return {
           queuedIntents: runtime.snapshot().length,
-          renderGeneration: runtime.renderGeneration,
           diagnostics: runtime.diagnostics(),
           hasPlayer: runtime.hasPlayer(scene.player),
           renderFeatureEnabled:
@@ -268,24 +267,6 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         create: createBossLightningInstance,
         inspect: () => host.inspect(world),
         recover: () => renderer.recover(),
-      },
-      m11: {
-        holdStaleInstance: () => {
-          const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
-          const instance = runtime.getInstance(scene.player);
-          Object.assign(globalThis, { __forgeaxBossLightningM11Stale: instance });
-          return instance === undefined ? { ok: false, reason: 'instance-unavailable' } : { ok: true };
-        },
-        patchStaleInstance: () => {
-          const instance = (globalThis as typeof globalThis & {
-            __forgeaxBossLightningM11Stale?: ParticleEffectInstance;
-          }).__forgeaxBossLightningM11Stale;
-          return instance?.patch({ intensity: 1.75 });
-        },
-        patchCurrentInstance: () => {
-          const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
-          return runtime.getInstance(scene.player)?.patch({ intensity: 1.5 });
-        },
       },
       submitImpact: () => {
         const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);

@@ -5977,30 +5977,18 @@ importers:
       '@forgeax/engine-app':
         specifier: workspace:*
         version: link:../../../packages/app
-      '@forgeax/engine-assets-runtime':
-        specifier: workspace:*
-        version: link:../../../packages/assets-runtime
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../../../packages/ecs
-      '@forgeax/engine-input':
-        specifier: workspace:*
-        version: link:../../../packages/input
       '@forgeax/engine-profiler':
         specifier: workspace:*
         version: link:../../../packages/profiler
-      '@forgeax/engine-render':
-        specifier: workspace:*
-        version: link:../../../packages/render
       '@forgeax/engine-rhi-webgpu':
         specifier: workspace:*
         version: link:../../../packages/rhi-webgpu
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:../../../packages/runtime
-      '@forgeax/engine-scene':
-        specifier: workspace:*
-        version: link:../../../packages/scene
     devDependencies:
       '@forgeax/engine-shader-compiler':
         specifier: workspace:*

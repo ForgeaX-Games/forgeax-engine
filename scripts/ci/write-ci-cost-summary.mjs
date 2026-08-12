@@ -61,44 +61,6 @@ function artifactView(facts, familyRows) {
   return { validArtifacts, artifactBytes };
 }
 
-function secondsView(value) {
-  return Number.isFinite(value) ? value : 'N/A';
-}
-
-function timingProjectionSummary(projection) {
-  const lines = ['## Timing attribution', `Projection: ${projection?.status ?? 'invalidEvidence'}`];
-  if (projection?.status !== 'valid') {
-    lines.push(
-      `Reason codes: ${projection?.reasonCodes?.join(', ') || 'timing projection unavailable'}`,
-      '',
-    );
-    return lines.join('\n');
-  }
-  const criticalPath = projection.criticalPath;
-  const tail = projection.postCriticalReportingTail;
-  const reporter = projection.costReporterDelay;
-  const sticky = projection.stickySkip;
-  lines.push(
-    `Full-run wall: ${secondsView(projection.fullRunWall?.seconds)} seconds`,
-    `Critical-path envelope: ${secondsView(criticalPath?.seconds)} seconds`,
-    `Critical-path overlap: ${secondsView(criticalPath?.overlapSeconds)} seconds`,
-    `Post-critical reporting tail: ${secondsView(tail?.seconds)} seconds`,
-    `Cost-reporter delay after critical path: ${secondsView(reporter?.delayAfterCriticalPathSeconds)} seconds`,
-    `Cost-reporter active interval: ${secondsView(reporter?.activeSeconds)} seconds`,
-    `Sticky reporting: ${sticky?.status ?? 'N/A'}`,
-    '',
-    '### Artifact-ready delays',
-    '| Consumer | Status | Delay seconds |',
-    '| --- | --- | ---: |',
-    ...(projection.artifactReadyDelays?.consumers ?? []).map(
-      (consumer) =>
-        `| ${consumer.name ?? 'N/A'} | ${consumer.status} | ${secondsView(consumer.delaySeconds)} |`,
-    ),
-    '',
-  );
-  return lines.join('\n');
-}
-
 function summary(facts) {
   const familyRows = Array.isArray(facts.returnEvidence?.families)
     ? facts.returnEvidence.families
@@ -151,7 +113,6 @@ function summary(facts) {
     `Shared transfer bytes: ${facts.sharedProduction?.transferBytes ?? 'N/A'}`,
     `Shared duration seconds: ${facts.sharedProduction?.totalDurationSeconds ?? 'N/A'}`,
     '',
-    timingProjectionSummary(facts.timingProjection),
     '### Artifact classes',
     '| Class | Compressed bytes | Expanded bytes | Compression ratio |',
     '| --- | ---: | ---: | ---: |',

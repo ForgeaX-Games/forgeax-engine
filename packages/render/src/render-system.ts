@@ -1632,7 +1632,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
               }),
             ),
         } satisfies import('./pipeline-builder').PipelineBuilderShaderModuleFactory),
-      generation: internals.featureHost?.preparedGeneration ?? 0,
+      generation: 0,
       featureIdentity,
     });
     featureGpuWork.set(featureIdentity, created);
@@ -2368,7 +2368,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             visibilitySnapshots: frame.featureVisibilitySnapshots,
             hiddenEntityReports: frame.hiddenEntityReports,
             targets: featureTargets,
-            generation: internals.featureHost?.preparedGeneration ?? 0,
+            generation: 0,
             caps: internals.device.caps,
             createContributionStaging: (
               identity,

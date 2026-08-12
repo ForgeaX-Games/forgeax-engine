@@ -94,7 +94,6 @@
     "bevy:smokes": "node scripts/check-bevy-smoke-dependencies.mjs && node scripts/bevy-demo.mjs smokes",
     "gauntlet": "node scripts/gauntlet.mjs",
     "rhi-debug-fleet": "node scripts/rhi-debug-fleet-audit.mjs",
-    "rhi-debug-performance": "node scripts/rhi-debug-performance.mjs",
     "metrics:check": "node scripts/check-metrics-declared.mjs",
     "check:asset-authority-audit": "node scripts/forgeax/check-asset-authority-audit.mjs",
     "runtime:cutover": "node scripts/check-runtime-cutover.mjs",

@@ -3,7 +3,6 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { POOL_LABELS } from './check-runner-pool-labels.mjs';
-import { projectCiTiming } from './project-ci-timing.mjs';
 
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf('--out');
@@ -78,39 +77,36 @@ if (result.status !== 0) {
       missing: ['createdAt', 'startedAt', 'completedAt'],
     },
   }));
-  const facts = {
-    schemaVersion: contract.returnEvidence.schemaVersion,
-    runId: identity.runId,
-    runAttempt: identity.runAttempt,
-    returnEvidence: {
+  writeFileSync(
+    output,
+    `${JSON.stringify({
       schemaVersion: contract.returnEvidence.schemaVersion,
-      contractVersion: contract.version,
-      families,
-    },
-    producerAttempts: {},
-    artifacts: [],
-    physicalArtifacts: [],
-    artifactBytes: {
-      totalCompressedBytes: null,
-      totalExpandedBytes: null,
-      compressionRatio: null,
-      byClass: {},
-    },
-    consumers: [],
-    jobs,
-    cache: { activeBytes: null },
-    wallClock: { requiredJobRoster: contract.requiredCIJobRoster },
-    ac06: { status: 'invalidEvidence', perConsumer: [] },
-    sharedProduction: { status: 'invalidEvidence' },
-    monitorFailure: { code: 'ci-cost-facts-unavailable', exitCode: result.status },
-  };
-  facts.timingProjection = projectCiTiming(facts);
-  writeFileSync(output, `${JSON.stringify(facts, null, 2)}\n`);
+      runId: identity.runId,
+      runAttempt: identity.runAttempt,
+      returnEvidence: {
+        schemaVersion: contract.returnEvidence.schemaVersion,
+        contractVersion: contract.version,
+        families,
+      },
+      producerAttempts: {},
+      artifacts: [],
+      physicalArtifacts: [],
+      artifactBytes: {
+        totalCompressedBytes: null,
+        totalExpandedBytes: null,
+        compressionRatio: null,
+        byClass: {},
+      },
+      consumers: [],
+      jobs,
+      cache: { activeBytes: null },
+      wallClock: { requiredJobRoster: contract.requiredCIJobRoster },
+      ac06: { status: 'invalidEvidence', perConsumer: [] },
+      sharedProduction: { status: 'invalidEvidence' },
+      monitorFailure: { code: 'ci-cost-facts-unavailable', exitCode: result.status },
+    })}\n`,
+  );
   process.stdout.write(
     '::warning title=CI cost monitor::Cost facts were unavailable; invalid evidence was recorded without blocking CI.\n',
   );
-} else {
-  const facts = JSON.parse(readFileSync(output, 'utf8'));
-  facts.timingProjection = projectCiTiming(facts);
-  writeFileSync(output, `${JSON.stringify(facts, null, 2)}\n`);
 }

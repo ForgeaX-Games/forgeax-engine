@@ -52,9 +52,6 @@ const CAMERA_PROJECTION_PERSPECTIVE = 0;
 const OMIT_SPECULAR_MAP = new URLSearchParams(window.location.search).has(
   'rhi-debug-no-specular-map',
 );
-const OMIT_POINT_LIGHT = new URLSearchParams(window.location.search).has(
-  'rhi-debug-no-light',
-);
 
 // LO canonical lamp position (`glm::vec3 lightPos(1.2f, 1.0f, 2.0f)` in
 // 4.2.lighting_maps_specular_map.cpp). PointLight reads its world-space
@@ -252,22 +249,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     values: { baseColor: [1, 1, 1, 1] },
   });
 
-  const lampComponents = [
-    {
-      component: Transform,
-      data: {
-        pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z],
-        quat: [0, 0, 0, 1],
-        scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],
+  world
+    .spawn(
+      {
+        component: Transform,
+        data: {
+          pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z], quat: [0, 0, 0, 1], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],},
       },
-    },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [lampMatHandle] } },
-    ...(OMIT_POINT_LIGHT
-      ? []
-      : [{ component: PointLight, data: { color: [1, 1, 1], intensity: 100.0, range: 50 } }]),
-  ];
-  world.spawn(...lampComponents).unwrap();
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [lampMatHandle] } },
+      {
+        component: PointLight,
+        data: {
+          color: [1, 1, 1],
+          intensity: 100.0,
+          range: 50,
+        },
+      },
+    )
+    .unwrap();
 
   addFirstPersonSystem(world, renderer, {
     name: 'learn-render-lighting-maps-first-person',

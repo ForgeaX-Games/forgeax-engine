@@ -8,7 +8,6 @@ FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lightin
 FALSIFY_NO_SPECULAR_MAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:rhi-debug
 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:browser
 FALSIFY_NO_SPECULAR_MAP=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:browser
-FALSIFY_NO_LIGHT=1 pnpm --filter "@forgeax/app-learn-render-2-lighting-4-lighting-maps" smoke:browser
 ```
 
 The Dawn oracle uses the same Standard PBR material and diffuse/specular texture handles as the
@@ -21,6 +20,3 @@ The `FALSIFY_NO_SPECULAR_MAP=1` control keeps the diffuse map and point light bu
 reject the specular-map response witness.
 The same environment flag on Browser navigation adds `?rhi-debug-no-specular-map=1`; the captured
 material group must retain the diffuse binding while no longer carrying the specular view at binding 4.
-`FALSIFY_NO_LIGHT=1` adds `?rhi-debug-no-light=1`, keeps the lamp mesh and texture bindings, omits
-only the production PointLight, and requires the live lit-cube center to be dark while the captured
-Standard PBR draw still replays successfully.

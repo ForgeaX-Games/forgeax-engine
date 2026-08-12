@@ -95,8 +95,6 @@ export interface VfxRuntimeHost {
 
 export interface VfxRuntimeHostInspectSnapshot {
   readonly generation: number;
-  /** VFX GPU resource generation; distinct from host attachment generation. */
-  readonly renderGeneration: number;
   readonly players: readonly VfxGpuPlayerInspectSnapshot[];
   readonly diagnostics: readonly VfxGpuRuntimeDiagnostic[];
 }
@@ -153,7 +151,6 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
       const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
       return Object.freeze({
         generation: attached.generation,
-        renderGeneration: runtime.renderGeneration,
         players: runtime.inspectPlayers(),
         diagnostics: runtime.diagnostics(),
       });

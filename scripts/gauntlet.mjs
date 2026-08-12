@@ -135,7 +135,6 @@ const artifactDir = join(artifacts, scenario.id);
 mkdirSync(artifactDir, { recursive: true });
 const child = spawnSync('pnpm', ['--dir', scenario.packageDir, 'run', scenario.script], {
   cwd: root,
-  env: { ...process.env, FORGEAX_GAUNTLET_ARTIFACT_DIR: artifactDir },
   encoding: 'utf8',
 });
 const stdout = child.stdout ?? '';

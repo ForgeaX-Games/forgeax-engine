@@ -187,15 +187,9 @@ export class VfxGpuRuntime {
   readonly #replayRequests = new Set<EntityHandle>();
   readonly #replayInputs = new Map<EntityHandle, VfxReplayInput<VfxValueMap>>();
   #sequence = 0;
-  #renderGeneration = 0;
 
   constructor(options: VfxGpuRuntimeOptions = {}) {
     this.#maxQueuedTicks = options.maxQueuedTicks ?? 8;
-  }
-
-  /** Resource generation owned by the current VFX render attachment. */
-  get renderGeneration(): number {
-    return this.#renderGeneration;
   }
 
   snapshot(): readonly VfxGpuTickIntent[] {
@@ -397,27 +391,6 @@ export class VfxGpuRuntime {
     for (const key of this.#sessionEnabled.keys()) {
       if (key.startsWith(prefix)) this.#sessionEnabled.delete(key);
     }
-  }
-
-  /**
-   * Drop every generation-owned VFX runtime value after device recovery.
-   * Authored ParticleEffectPlayer state remains the restart source on the next
-   * FixedUpdate; no queued intent or stale instance crosses the boundary.
-   */
-  recover(): void {
-    this.#renderGeneration += 1;
-    this.#players.clear();
-    this.#instances.clear();
-    this.#seen.clear();
-    this.#intents.length = 0;
-    this.#diagnostics.length = 0;
-    this.#lastCommitted.clear();
-    this.#lastCommittedByEmitter.clear();
-    this.#eventCounters.clear();
-    this.#cameraVisibility.clear();
-    this.#sessionEnabled.clear();
-    this.#replayRequests.clear();
-    this.#replayInputs.clear();
   }
 
   #report(diagnostic: VfxGpuRuntimeDiagnostic): void {
