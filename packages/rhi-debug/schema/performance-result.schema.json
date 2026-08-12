@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schemas/rhi-debug/performance-result-1.0.json",
+  "title": "ForgeaX RHI-debug performance result",
+  "description": "Observed performance evidence for one real app capture. Missing public observations stay unavailable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "identity",
+    "experiment",
+    "observations",
+    "scaleInputs",
+    "artifacts",
+    "verdicts",
+    "contractCheck"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "identity": { "$ref": "#/$defs/identity" },
+    "experiment": { "$ref": "#/$defs/experiment" },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["off", "idle", "capture", "finalize", "analyze"],
+      "properties": {
+        "off": { "$ref": "#/$defs/observation" },
+        "idle": { "$ref": "#/$defs/observation" },
+        "capture": { "$ref": "#/$defs/observation" },
+        "finalize": { "$ref": "#/$defs/observation" },
+        "analyze": { "$ref": "#/$defs/observation" }
+      }
+    },
+    "scaleInputs": { "$ref": "#/$defs/scaleInputs" },
+    "artifacts": { "$ref": "#/$defs/artifacts" },
+    "verdicts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tapeValidity", "replayFidelity", "appOracle"],
+      "properties": {
+        "tapeValidity": { "$ref": "#/$defs/verdict" },
+        "replayFidelity": { "$ref": "#/$defs/verdict" },
+        "appOracle": { "$ref": "#/$defs/verdict" }
+      }
+    },
+    "contractCheck": { "$ref": "#/$defs/contractCheck" }
+  },
+  "$defs": {
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "app", "backend", "environment"],
+      "properties": {
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["commit", "branch"],
+          "properties": {
+            "commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+            "branch": { "type": "string", "minLength": 1 }
+          }
+        },
+        "app": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["package", "path"],
+          "properties": {
+            "package": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        },
+        "backend": { "type": "string", "minLength": 1 },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["node", "platform", "arch"],
+          "properties": {
+            "node": { "type": "string", "minLength": 1 },
+            "platform": { "type": "string", "minLength": 1 },
+            "arch": { "type": "string", "minLength": 1 },
+            "osRelease": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warmupCount", "trialCount", "retainedTrialIndex"],
+      "properties": {
+        "warmupCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "trialCount": { "$ref": "#/$defs/positiveInteger" },
+        "retainedTrialIndex": { "$ref": "#/$defs/positiveInteger" }
+      }
+    },
+    "observation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "wallTimeMs", "source", "boundary"],
+          "properties": {
+            "status": { "const": "observed" },
+            "wallTimeMs": { "$ref": "#/$defs/nonNegativeInteger" },
+            "source": { "enum": ["app-public-boundary", "runner-cli"] },
+            "boundary": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "const": "unavailable" },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "scaleInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventCount", "resourceCount", "frameCount"],
+      "properties": {
+        "eventCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "resourceCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "frameCount": { "$ref": "#/$defs/positiveInteger" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths", "bytes"],
+      "properties": {
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tape", "report"],
+          "properties": {
+            "tape": { "type": "string", "minLength": 1 },
+            "report": { "type": "string", "minLength": 1 },
+            "inspect": { "type": "string", "minLength": 1 }
+          }
+        },
+        "bytes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tapeJson", "blob", "reportJson", "total"],
+          "properties": {
+            "tapeJson": { "$ref": "#/$defs/nonNegativeInteger" },
+            "blob": { "$ref": "#/$defs/nonNegativeInteger" },
+            "reportJson": { "$ref": "#/$defs/nonNegativeInteger" },
+            "total": { "$ref": "#/$defs/nonNegativeInteger" }
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "basis"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "unavailable"] },
+        "basis": { "type": "string", "minLength": 1 }
+      }
+    },
+    "contractCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["validSample", "malformedRejection"],
+      "properties": {
+        "validSample": { "const": true },
+        "malformedRejection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fixture", "accepted", "errorCount"],
+          "properties": {
+            "fixture": { "type": "string", "minLength": 1 },
+            "accepted": { "const": false },
+            "errorCount": { "$ref": "#/$defs/positiveInteger" }
+          }
+        }
+      }
+    }
+  }
+}

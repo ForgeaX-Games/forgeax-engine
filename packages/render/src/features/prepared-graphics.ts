@@ -189,6 +189,8 @@ export type RenderFeatureDrawRecord =
       readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
       readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
       readonly vertexData: readonly RenderFeatureVertexDataBinding[];
+      /** Explicit fullscreen contract: the vertex shader owns vertex_index. */
+      readonly vertexLayout?: 'none';
       readonly indexData?: RenderFeatureIndexDataBinding;
       readonly command: RenderFeatureDrawCommand;
     }
@@ -197,6 +199,7 @@ export type RenderFeatureDrawRecord =
       readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
       readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
       readonly vertexData: readonly RenderFeatureVertexDataBinding[];
+      readonly vertexLayout?: 'none';
       readonly indexData?: RenderFeatureIndexDataBinding;
       readonly command: RenderFeatureIndirectDrawCommand;
     }
@@ -205,6 +208,7 @@ export type RenderFeatureDrawRecord =
       readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
       readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
       readonly vertexData: readonly RenderFeatureVertexDataBinding[];
+      readonly vertexLayout?: 'none';
       readonly indexData: RenderFeatureIndexDataBinding | undefined;
       readonly command: RenderFeatureIndexedDrawCommand;
     }
@@ -213,6 +217,7 @@ export type RenderFeatureDrawRecord =
       readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
       readonly bindings: readonly RenderFeaturePreparedRef<'bindings'>[];
       readonly vertexData: readonly RenderFeatureVertexDataBinding[];
+      readonly vertexLayout?: 'none';
       readonly indexData: RenderFeatureIndexDataBinding | undefined;
       readonly command: RenderFeatureIndirectDrawCommand;
     };
@@ -342,6 +347,37 @@ function hasPreparedRef(
   return available.some((reference) => reference === required);
 }
 
+function hasValidVertexContract(
+  draw: RenderFeatureDrawRecord,
+  state: RenderFeaturePreparedGraphicsState,
+): boolean {
+  if (draw.vertexLayout === 'none') {
+    return draw.kind === 'draw' && draw.vertexData.length === 0;
+  }
+  return (
+    draw.vertexData.length > 0 &&
+    draw.vertexData.every(
+      (binding) =>
+        validRef(binding.resource, 'vertex-data', state.generation) &&
+        hasPreparedRef(state.vertexData, binding.resource),
+    )
+  );
+}
+
+function hasValidBindings(
+  draw: RenderFeatureDrawRecord,
+  state: RenderFeaturePreparedGraphicsState,
+): boolean {
+  return (
+    draw.bindings.length > 0 &&
+    draw.bindings.every(
+      (reference) =>
+        validRef(reference, 'bindings', state.generation) &&
+        hasPreparedRef(state.bindings, reference),
+    )
+  );
+}
+
 /** Validate a graphics declaration without touching an RHI backend. */
 export function validateRenderFeatureGraphicsPass(
   featureIdentity: string,
@@ -350,7 +386,12 @@ export function validateRenderFeatureGraphicsPass(
 ): Result<RenderFeatureValidatedGraphicsPass, RenderError> {
   if (!state.capabilityAvailable) return invalid(featureIdentity, 'prepare');
   const pipelines = state.pipelines ?? (state.pipeline === undefined ? [] : [state.pipeline]);
-  if (pipelines.length === 0 || state.bindings.length === 0 || state.vertexData.length === 0) {
+  const hasVertexDraw = descriptor.draws.some((draw) => draw.vertexData.length > 0);
+  if (
+    pipelines.length === 0 ||
+    state.bindings.length === 0 ||
+    (hasVertexDraw && state.vertexData.length === 0)
+  ) {
     return invalid(featureIdentity, 'prepare');
   }
   if (
@@ -375,18 +416,8 @@ export function validateRenderFeatureGraphicsPass(
     if (
       !validRef(draw.pipeline, 'pipeline', state.generation) ||
       !hasPreparedRef(pipelines, draw.pipeline) ||
-      draw.bindings.length === 0 ||
-      draw.bindings.some(
-        (reference) =>
-          !validRef(reference, 'bindings', state.generation) ||
-          !hasPreparedRef(state.bindings, reference),
-      ) ||
-      draw.vertexData.length === 0 ||
-      draw.vertexData.some(
-        (binding) =>
-          !validRef(binding.resource, 'vertex-data', state.generation) ||
-          !hasPreparedRef(state.vertexData, binding.resource),
-      )
+      !hasValidBindings(draw, state) ||
+      !hasValidVertexContract(draw, state)
     ) {
       return invalid(featureIdentity, 'contribute');
     }

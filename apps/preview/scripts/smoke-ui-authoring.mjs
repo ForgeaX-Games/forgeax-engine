@@ -57,6 +57,17 @@ try {
   page.on('pageerror', (error) => pageFailures.push(error.message));
   await page.goto(`${origin}/?game=game-default`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => Boolean(globalThis.__forgeaxUiAuthoring), null, { timeout: 30_000 });
+  await page.waitForFunction(
+    () => {
+      const host = globalThis.__forgeaxUiAuthoring;
+      return Boolean(
+        host?.discover().some((entry) => entry.guid.toLowerCase() === '019f8354-6386-4386-849d-f2ab4b96229d') ||
+          document.querySelector('[data-forgeax-preview-engine-failure]'),
+      );
+    },
+    null,
+    { timeout: 30_000 },
+  );
   let captureSequence = 0;
   const waitForPaint = async () => {
     await page.evaluate(
@@ -172,27 +183,65 @@ try {
   const setup = await page.evaluate(async ({ falsify }) => {
     const host = globalThis.__forgeaxUiAuthoring;
     if (!host) throw new Error('preview authoring host is unavailable');
+    const discovered = host.discover();
+    const selected = discovered.find((entry) => entry.guid.toLowerCase() === host.guid.toLowerCase());
+    if (!selected || selected.guid === 'ui-preview-default' || !selected.sourcePath?.endsWith('preview-hud.ui.html')) {
+      throw new Error(`authoring host did not select the real catalog UI source: ${JSON.stringify({ selected, discovered })}`);
+    }
     const before = await host.validate();
+    const opened = await host.open('default');
+    if (!opened.ok) throw new Error(`default scenario failed: ${opened.error.code}`);
     const invalid = await host.repair({ html: '<script>bad</script>', css: '' });
     if (invalid.ok) throw new Error('invalid authoring source unexpectedly passed');
+    const failure = host.getLastRefreshError();
+    if (!failure || failure.code !== 'preview-load-failed' || !failure.detail.diagnostics?.length) {
+      throw new Error(`invalid edit did not fail the mounted session with diagnostics: ${JSON.stringify(failure)}`);
+    }
     const repaired = await host.repair({
-      html: '<section data-ui-part="root"><strong data-ui-part="score">Score 0</strong><span data-ui-part="stress-meter">Ready</span></section>',
-      css: ':host { display: block; color: white; font: 16px sans-serif; } section { padding: 12px; }',
+      html: '<section data-ui-part="root"><strong data-ui-part="score">Score 1</strong><span data-ui-part="stress-meter">Recovered</span><button type="button" data-ui-action="preview-action">Action</button></section>',
+      css: ':host { display: block; color: white; font: 16px sans-serif; } section { display: grid; gap: 8px; padding: 12px; } button { width: max-content; pointer-events: auto; }',
     });
     if (!repaired.ok) throw new Error('repaired authoring source failed validation');
+    const retried = await host.getSession()?.retry();
+    if (!retried?.ok || host.getSession()?.state !== 'mounted') {
+      throw new Error(`same-page retry did not remount the repaired source: ${JSON.stringify(retried)}`);
+    }
+    const action = host.getCaptureTarget()?.shadowRoot?.querySelector('[data-ui-action="preview-action"]');
+    if (!(action instanceof HTMLElement)) throw new Error('repaired action control is missing');
+    action.click();
+    if (host.getLastAction() !== 'preview-action') throw new Error('repaired action did not recover');
     if (falsify) {
       const missingResource = await host.repair({
-        html: '<section data-ui-part="root"><strong data-ui-part="score">Score 0</strong><img alt="" /></section>',
+        html: '<section data-ui-part="root"><strong data-ui-part="score">Score 1</strong><span data-ui-part="stress-meter">Recovered</span><button type="button" data-ui-action="preview-action">Action</button><img alt="" /></section>',
         css: ':host { display: block; }',
       });
       if (!missingResource.ok) throw new Error('missing-resource falsification source failed validation');
+      const rebuilt = await host.getSession()?.rebuild();
+      if (!rebuilt?.ok || host.getSession()?.state !== 'mounted') {
+        throw new Error(`missing-resource source did not remount for readiness falsification: ${JSON.stringify(rebuilt)}`);
+      }
     }
-    const opened = await host.open('default');
-    if (!opened.ok) throw new Error(`default scenario failed: ${opened.error.code}`);
     if (falsify) {
-      return { initiallyValid: before.ok, repaired: repaired.ok, falsified: true };
+      return {
+        initiallyValid: before.ok,
+        invalidCode: failure.code,
+        diagnostics: failure.detail.diagnostics,
+        repaired: repaired.ok,
+        retried: retried.ok,
+        action: host.getLastAction(),
+        selected,
+        falsified: true,
+      };
     }
-    return { initiallyValid: before.ok, repaired: repaired.ok };
+    return {
+      initiallyValid: before.ok,
+      invalidCode: failure.code,
+      diagnostics: failure.detail.diagnostics,
+      repaired: repaired.ok,
+      retried: retried.ok,
+      action: host.getLastAction(),
+      selected,
+    };
   }, { falsify: falsifyCompanion });
   if (falsifyCompanion) {
     await waitForPaint();
@@ -203,7 +252,11 @@ try {
     if (!failed.error.detail.unmet.includes('resources')) {
       throw new Error('companion falsification did not identify resources');
     }
-    await page.evaluate(() => globalThis.__forgeaxUiAuthoring?.dispose());
+    await page.evaluate(() => {
+      const host = globalThis.__forgeaxUiAuthoring;
+      host?.dispose();
+      host?.dispose();
+    });
     console.log(JSON.stringify({ ...setup, falsified: true, unmet: failed.error.detail.unmet }));
     await browser.close();
   } else {
@@ -250,7 +303,7 @@ try {
     if (report.defaultBytes.some((bytes) => JSON.stringify(bytes) !== JSON.stringify(report.defaultBytes[0]))) {
       throw new Error('capture PNG bytes were not deterministic');
     }
-    if (!report.initiallyValid || !report.repaired || report.discovered.length !== 1) {
+    if (!report.initiallyValid || report.invalidCode !== 'preview-load-failed' || !report.repaired || !report.retried || report.action !== 'preview-action' || !report.discovered.some((entry) => entry.guid === report.selected.guid)) {
       throw new Error('authoring smoke report failed');
     }
     console.log(JSON.stringify(report));

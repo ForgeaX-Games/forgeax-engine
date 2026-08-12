@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.0",
+  "identity": {
+    "engine": { "commit": "0123456", "branch": "fixture" },
+    "app": { "package": "@forgeax/fixture-app", "path": "apps/fixture" },
+    "backend": "webgpu",
+    "environment": { "node": "v24.0.0", "platform": "darwin", "arch": "arm64" }
+  },
+  "experiment": { "warmupCount": 1, "trialCount": 1, "retainedTrialIndex": 1 },
+  "observations": {
+    "off": { "status": "unavailable", "reason": "fixture has no paired off observation" },
+    "idle": { "status": "unavailable", "reason": "fixture has no public idle boundary" },
+    "capture": {
+      "status": "observed",
+      "wallTimeMs": 4,
+      "source": "app-public-boundary",
+      "boundary": "fixture capture boundary"
+    },
+    "finalize": {
+      "status": "observed",
+      "wallTimeMs": 1,
+      "source": "app-public-boundary",
+      "boundary": "fixture finalize boundary"
+    },
+    "analyze": {
+      "status": "observed",
+      "wallTimeMs": 2,
+      "source": "runner-cli",
+      "boundary": "fixture analyze boundary"
+    }
+  },
+  "scaleInputs": { "eventCount": 3, "resourceCount": 2, "frameCount": 1 },
+  "artifacts": {
+    "paths": { "tape": "fixture/frame-0.tape.bin", "report": "fixture/frame-0.report.json" },
+    "bytes": { "tapeJson": 100, "blob": 200, "reportJson": 300, "total": 600 }
+  },
+  "verdicts": {
+    "tapeValidity": { "status": "pass", "basis": "fixture tape validity" },
+    "replayFidelity": { "status": "pass", "basis": "fixture replay" },
+    "appOracle": { "status": "pass", "basis": "fixture oracle" }
+  },
+  "contractCheck": {
+    "validSample": true,
+    "malformedRejection": {
+      "fixture": "scripts/rhi-debug-performance/fixtures/malformed-result.json",
+      "accepted": false,
+      "errorCount": 1
+    }
+  }
+}

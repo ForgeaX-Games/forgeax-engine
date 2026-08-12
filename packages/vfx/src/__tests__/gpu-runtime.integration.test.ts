@@ -136,6 +136,43 @@ describe('GPU VFX fixed-tick intents', () => {
     expect(runtime.snapshot()[0]?.canonicalPayload).toBeInstanceOf(Uint8Array);
   });
 
+  it('drops stale instances at a new render generation and restarts from authored state', async () => {
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', effect);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
+      })
+      .unwrap();
+    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+
+    world.update(1 / 60).unwrap();
+    const stale = runtime.getInstance(player);
+    expect(stale).toBeDefined();
+    expect(runtime.renderGeneration).toBe(0);
+
+    runtime.recover();
+
+    expect(runtime.renderGeneration).toBe(1);
+    expect(runtime.hasPlayer(player)).toBe(false);
+    expect(runtime.getInstance(player)).toBeUndefined();
+    expect(runtime.snapshot()).toHaveLength(0);
+    expect(runtime.lastCommitted(player)).toBeUndefined();
+
+    expect(stale?.patch({}).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    const restarted = runtime.getInstance(player);
+    expect(restarted).toBeDefined();
+    expect(restarted).not.toBe(stale);
+    expect(runtime.inspectPlayer(player)?.values.generation).toBe(0);
+
+    expect(restarted?.patch({}).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(runtime.inspectPlayer(player)?.values.generation).toBe(1);
+  });
+
   it('fires time-zero once and keeps tick commands bounded and ordered', async () => {
     const world = new World();
     const handle = world.allocSharedRef('ParticleEffectAsset', effect);
