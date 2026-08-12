@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "1.0",
+  "identity": {
+    "engine": { "commit": "0123456", "branch": "fixture" },
+    "app": { "package": "@forgeax/fixture-app", "path": "apps/fixture" },
+    "backend": "webgpu",
+    "environment": { "node": "v24.0.0", "platform": "darwin", "arch": "arm64" }
+  }
+}

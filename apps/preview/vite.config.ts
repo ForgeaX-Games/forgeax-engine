@@ -17,6 +17,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
 const templatesDir = resolve(monorepoRoot, 'templates');
 const templateAssetRoot = resolve(templatesDir, 'game-default', 'assets');
+const previewUiAuthoringMetaPath = resolve(
+  here,
+  'assets',
+  'ui-authoring',
+  'preview-hud.ui.html.meta.json',
+);
 // Keep the authored WGSL tree under assets/ so the template has one visible
 // content root, but do not hand build-only shader sidecars to vite-plugin-pack.
 // Pack is a runtime catalog; forgeaxShader owns WGSL compilation and manifest
@@ -117,6 +123,7 @@ export default defineConfig(({ command }) => ({
         // and target-profile sidecar. WGSL stays beside them in
         // game-default/assets/shaders but is intentionally build-only.
         ...templatePackRoots,
+        previewUiAuthoringMetaPath,
         submoduleSkyMetaPath,
         submoduleJpegMetaPath,
         submoduleSfxDir,

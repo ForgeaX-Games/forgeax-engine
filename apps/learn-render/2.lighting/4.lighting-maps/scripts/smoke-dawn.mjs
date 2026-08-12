@@ -41,6 +41,8 @@ const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
 const FALSIFY_NO_SPECULAR_MAP = process.env.FALSIFY_NO_SPECULAR_MAP === '1';
+const RHI_DEBUG_DAWN_CAPTURE = process.env.FORGEAX_RHI_DEBUG_DAWN_CAPTURE === '1';
+const RHI_DEBUG_CAPTURE_FRAMES = 1;
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -195,9 +197,39 @@ const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
+let debugInst;
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  let rendererOptions = {};
+  if (RHI_DEBUG_DAWN_CAPTURE) {
+    const { rhi: realRhi, createShaderModule } = await import('@forgeax/engine-rhi-webgpu');
+    const { wrap, wrapCreateShaderModule } = await import('@forgeax/engine-rhi-debug');
+    debugInst = wrap(realRhi);
+    const debugExtras = debugInst;
+    debugExtras.createShaderModule = wrapCreateShaderModule(createShaderModule, debugInst);
+    const realAcquireCanvasContext = realRhi.acquireCanvasContext.bind(realRhi);
+    debugExtras.acquireCanvasContext = (canvasArg) => {
+      const contextResult = realAcquireCanvasContext(canvasArg);
+      if (!contextResult.ok) return contextResult;
+      const realContext = contextResult.value;
+      const wrappedContext = Object.create(realContext);
+      wrappedContext.configure = (desc) => {
+        const device = desc.device;
+        const realDevice = device?._realDevice;
+        return realContext.configure(
+          realDevice === undefined ? desc : { ...desc, device: realDevice },
+        );
+      };
+      return { ...contextResult, value: wrappedContext };
+    };
+    const armResult = debugInst.arm(RHI_DEBUG_CAPTURE_FRAMES);
+    if (!armResult.ok) {
+      console.error(`[smoke] FAIL - Dawn RHI-debug arm failed: ${armResult.error.code}`);
+      process.exit(1);
+    }
+    rendererOptions = { rhi: debugInst };
+  }
+  renderer = await createRenderer(mockCanvas, rendererOptions, { shaderManifestUrl: EMPTY_MANIFEST_URL });
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -325,7 +357,39 @@ world.spawn(
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const frameStart = Date.now();
 let framesObserved = 0;
-for (let i = 0; i < TARGET_FRAMES; i++) {
+let rhiDebugCapture;
+if (debugInst !== undefined) {
+  const rendererInternal = renderer;
+  const unsubscribe = rendererInternal._onFrameEnd(() => debugInst.onFrameEnd());
+  const captureStart = performance.now();
+  const snapshotResult = await debugInst.snapshotAllLiveResources();
+  if (!snapshotResult.ok) {
+    unsubscribe();
+    console.error(`[smoke] FAIL - Dawn RHI-debug snapshot failed: ${snapshotResult.error.code}`);
+    process.exit(1);
+  }
+  const captureDraw = renderer.draw([world], { owner: 0 });
+  if (!captureDraw.ok) console.error(`[smoke] draw capture frame error: ${captureDraw.error.code}`);
+  await sharedDevice.queue.onSubmittedWorkDone();
+  const captureWallMs = Math.max(0, Math.round(performance.now() - captureStart));
+  const finalizeStart = performance.now();
+  const finalizeResult = debugInst.finalize();
+  const finalizeWallMs = Math.max(0, Math.round(performance.now() - finalizeStart));
+  unsubscribe();
+  if (!finalizeResult.ok) {
+    console.error(`[smoke] FAIL - Dawn RHI-debug finalize failed: ${finalizeResult.error.code}`);
+    process.exit(1);
+  }
+  rhiDebugCapture = {
+    ...finalizeResult.value,
+    requestedFrames: RHI_DEBUG_CAPTURE_FRAMES,
+    captureWallMs,
+    finalizeWallMs,
+  };
+  console.log(`[smoke] rhiDebugCapture=${JSON.stringify(rhiDebugCapture)}`);
+  framesObserved++;
+}
+for (let i = framesObserved; i < TARGET_FRAMES; i++) {
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;

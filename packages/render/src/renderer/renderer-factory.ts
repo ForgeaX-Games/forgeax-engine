@@ -927,10 +927,11 @@ export async function createRenderer(
 
 /**
  * Wire the spec `device.lost` Promise into the lost / error / health channels
- * (research §F-4 / R2). D-VD2 Round 2: the same event fans out through
- * `errorRegistry` so `renderer.onError(err => switch err.code { 'device-lost' })`
- * triggers, and through `healthRegistry` so `health().reason` flips to
- * `'device-lost'` (feat-20260622-s5 M1/M2).
+ * (research §F-4 / R2). A genuine device loss fans out through `errorRegistry`
+ * so `renderer.onError(err => switch err.code { 'device-lost' })` triggers, and
+ * through `healthRegistry` so `health().reason` flips to `'device-lost'`
+ * (feat-20260622-s5 M1/M2). Explicit renderer teardown is observable through
+ * `onLost`, but is not a runtime error and must not manufacture an RhiError.
  *
  * Extracted to a single helper (SSOT) so the createRenderer assembly path AND
  * the recover() rebuild path attach byte-identical fan-out to whichever device
@@ -965,33 +966,32 @@ function attachDeviceLostFanout(
       // device.destroy() -- e.g. renderer.dispose(), browser tab recycle,
       // or test-isolation device pooling), NOT a recoverable fault. It must
       // NOT flip health to 'device-lost' (which would make draw() refuse via
-      // the M2 guard and invite a spurious recover()). The lost + error
-      // channels still fire below so AI users observe the teardown; only the
-      // health channel (which drives the draw guard + recover eligibility)
-      // is gated. Genuine unrecoverable loss surfaces as reason 'unknown'.
+      // the M2 guard and invite a spurious recover()). The lost channel still
+      // fires so AI users observe the teardown; the health and error channels
+      // are gated because this is an expected lifecycle event, not a renderer
+      // failure. Genuine unrecoverable loss surfaces as reason 'unknown'.
       if (safe.reason !== 'destroyed') {
         healthRegistry.fire({
           reason: 'device-lost',
           detail: { lostReason: safe.reason, message: safe.message },
           recoverable: true,
         });
-      }
-      // Dual-channel fan-out: translate to RhiError + fire errorRegistry.
-      // When pack.translateErrorEventToRhiError is unavailable (e.g. explicit
-      // escape-hatch instance that omits the translator), build a minimal
-      // device-lost RhiError inline so the wire-up promise still holds on
-      // the lost path (graceful degradation; charter proposition 5).
-      if (pack.translateErrorEventToRhiError) {
-        const translated = pack.translateErrorEventToRhiError(safe);
-        errorRegistry.fire(translated.error);
-      } else {
-        errorRegistry.fire(
-          new RhiError({
-            code: 'device-lost',
-            expected: 'device must remain alive (driver / browser must not destroy the GPUDevice)',
-            hint: `device-lost reason: ${safe.reason}; message: ${safe.message || '<empty>'}`,
-          }),
-        );
+        // Translate only genuine device loss to RhiError. When the backend
+        // translator is unavailable (e.g. an explicit escape-hatch instance),
+        // build a minimal error so the real lost path remains fail-loud.
+        if (pack.translateErrorEventToRhiError) {
+          const translated = pack.translateErrorEventToRhiError(safe);
+          errorRegistry.fire(translated.error);
+        } else {
+          errorRegistry.fire(
+            new RhiError({
+              code: 'device-lost',
+              expected:
+                'device must remain alive (driver / browser must not destroy the GPUDevice)',
+              hint: `device-lost reason: ${safe.reason}; message: ${safe.message || '<empty>'}`,
+            }),
+          );
+        }
       }
     })
     .catch((err: unknown) => {
@@ -2479,7 +2479,13 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const renderSystem: RenderSystem = createRenderSystem({
     canvas: internals.canvas,
     featureHost: internals.featureHost,
-    shaderModuleFactory: getShaderModuleAdapter(),
+    // Keep the feature-facing factory stable while resolving the adapter at
+    // call time. Renderer recovery swaps the device and invalidates the
+    // per-device adapter; a boot-time snapshot would feed recovered VFX
+    // programs shader modules owned by the lost device.
+    shaderModuleFactory: {
+      createShaderModule: (descriptor) => getShaderModuleAdapter().createShaderModule(descriptor),
+    },
     profiler: internals.options?.profiler,
     // feat-20260622-s5 M3 / w17: device + context read live off `internals` via
     // getters so the recover() rebuild (which swaps internals.device /
@@ -3073,6 +3079,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // stable references; only `internals.device` changed).
       materialShaderPipelineCache.clear();
       perShaderMaterialLayoutCache.clear();
+      group0ResourceLayouts.clear();
       preparedMaterialPipelineLayoutCache.clear();
       group0MaterialLayout = null;
       viewOnlyMaterialPipelineLayout = null;

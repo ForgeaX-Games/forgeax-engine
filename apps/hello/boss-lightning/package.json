@@ -12,10 +12,40 @@
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:m11": "node scripts/smoke-m11-device-loss.mjs",
     "smoke:falsify": "node scripts/smoke-falsify.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-boss-lightning smoke",
+    "gauntletScenario": {
+      "id": "hello-boss-lightning-m11-device-loss",
+      "script": "smoke:m11",
+      "domains": [
+        "Rendering and shader construction",
+        "Simulation and media implementations",
+        "Inspection, debugging, and development bridges"
+      ],
+      "packages": [
+        "@forgeax/engine-render",
+        "@forgeax/engine-runtime",
+        "@forgeax/engine-vfx",
+        "@forgeax/engine-vfx-render"
+      ],
+      "risks": ["baseline", "dynamic", "live", "fault", "recovery", "cleanup", "behavioral", "visual"],
+      "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery", "cleanup"],
+      "evidence": {
+        "frontDoors": ["browser-webgpu", "dawn-node", "browser-gpu-device-loss", "renderer-recover", "vfx-host-inspect", "vfx-public-control"],
+        "legs": ["semantic", "live", "gpu", "behavioral", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[m11-vfx] Dawn generation fence: PASS",
+          "[m11-vfx] browser device-loss recovery: PASS",
+          "[m11-vfx] cleanup idempotency: PASS",
+          "[m11-vfx] PASS - M11 VFX generation-fenced device-loss gates GREEN"
+        ]
+      }
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

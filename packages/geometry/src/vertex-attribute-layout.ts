@@ -75,23 +75,13 @@ export interface GpuVertexBufferLayoutEntry {
   readonly stepMode?: 'vertex' | 'instance' | undefined;
 }
 
-const CANONICAL_KEYS: readonly AttributeKey[] = [
-  'position',
-  'normal',
-  'uv',
-  'tangent',
-  'skinIndex',
-  'skinWeight',
-  'uv1',
-  'uv2',
-  'uv3',
-  'uv4',
-  'uv5',
-  'uv6',
-  'uv7',
-];
+const isAttributeKey = (key: string): key is AttributeKey => key in ATTRIBUTE_FORMAT_MAP;
 
-const UV_KEYS: readonly AttributeKey[] = ['uv', 'uv1', 'uv2', 'uv3', 'uv4', 'uv5', 'uv6', 'uv7'];
+const CANONICAL_KEYS: readonly AttributeKey[] =
+  Object.keys(ATTRIBUTE_FORMAT_MAP).filter(isAttributeKey);
+const UV_KEYS: readonly AttributeKey[] = CANONICAL_KEYS.filter(
+  (key) => key === 'uv' || key.startsWith('uv'),
+);
 
 type Entry = {
   readonly shaderLocation: number;

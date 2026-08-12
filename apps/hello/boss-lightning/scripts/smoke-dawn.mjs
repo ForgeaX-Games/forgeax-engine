@@ -24,6 +24,7 @@ const SEED = 42;
 const CAMERA = { position: [0, 1.2, 7.5], target: [0, 0.8, 0] };
 const rerunCmd = 'pnpm --filter @forgeax/hello-boss-lightning smoke';
 const falsifier = process.env.BOSS_LIGHTNING_FALSIFY ?? '';
+const m11Mode = process.env.BOSS_LIGHTNING_M11 === '1';
 const eventScenario = 'event-sub-emitter';
 const eventOverflow = 'overflow';
 const missingDepth = 'missing-depth';
@@ -297,6 +298,60 @@ for (let frame = 0; frame < frameLimit; frame += 1) {
   if (firstReadinessFrame === undefined && frame >= READINESS_FRAME_LIMIT) break;
 }
 
+let m11Recovery;
+if (m11Mode) {
+  const stale = runtime.getInstance(playerEntity);
+  const renderGenerationBefore = runtime.renderGeneration;
+  const featureRecovery = host.feature.recover();
+  const stalePatch = stale?.patch({});
+  world.update(1 / 60).unwrap();
+  const restarted = runtime.getInstance(playerEntity);
+  const restartedInspect = runtime.inspectPlayer(playerEntity);
+  const currentPatch = restarted?.patch({});
+  world.update(1 / 60).unwrap();
+  const currentInspect = runtime.inspectPlayer(playerEntity);
+  for (let recoveryFrame = 0; recoveryFrame < 10; recoveryFrame += 1) {
+    currentFrame += 1;
+    const recoveredDraw = renderer.draw([world], { owner: 0 });
+    if (!recoveredDraw.ok) {
+      errors.push({
+        code: recoveredDraw.error.code,
+        hint: recoveredDraw.error.hint,
+        detail: recoveredDraw.error.detail,
+        frame: currentFrame,
+      });
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    if (recoveryFrame < 9) world.update(1 / 60).unwrap();
+  }
+  queuedIntents = runtime.snapshot().length;
+  runtimeDiagnostics = runtime.diagnostics();
+  lastCommitted = runtime.lastCommitted(playerEntity);
+  m11Recovery = {
+    featureRecovery,
+    renderGenerationBefore,
+    renderGenerationAfter: runtime.renderGeneration,
+    stalePatch,
+    staleInstanceDetached: stale !== undefined && restarted !== stale,
+    restartedGeneration: restartedInspect?.values.generation ?? null,
+    currentPatch,
+    currentGeneration: currentInspect?.values.generation ?? null,
+  };
+  if (
+    !featureRecovery.ok ||
+    runtime.renderGeneration !== renderGenerationBefore + 1 ||
+    !m11Recovery.staleInstanceDetached ||
+    restartedInspect?.values.generation !== 0 ||
+    currentInspect?.values.generation !== 1 ||
+    queuedIntents !== 0 ||
+    runtimeDiagnostics.length !== 0
+  ) {
+    console.error(`[smoke-dawn] FAIL M11 generation fence ${JSON.stringify(m11Recovery)}`);
+    process.exit(1);
+  }
+  console.log(`[m11-vfx] Dawn generation fence: PASS ${JSON.stringify(m11Recovery)}`);
+}
+
 if (falsifier === 'strike-only') {
   console.error('[smoke-dawn] RED strike-only correctly has no particle signal');
   process.exit(1);
@@ -424,6 +479,7 @@ const result = {
   readinessFrame,
   readinessFrameLimit: READINESS_FRAME_LIMIT,
   recovery,
+  ...(m11Recovery === undefined ? {} : { m11Recovery }),
   strikeOnly,
   errors,
   warmupErrors,
