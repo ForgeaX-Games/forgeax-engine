@@ -25,7 +25,7 @@ The browser-to-CLI loop is: **one line in the browser console to capture one or 
 | **L0** | low-level subpath (raw bytes) | `@forgeax/engine-rhi-debug/capture-browser` -> `captureFramesToMemory(debugInst, frames, label?)` | `CaptureBrowserTape { runId, json, blob, passOffsets, valid }` (in-memory, zero fs/network) |
 | **L1** | on-disk tape | POST `/__forgeax-debug/tape` (dev-server) or the Node `finalize()` tail | `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json` (byte-identical from both writers, D-3) |
 | **L2a** | external CLI trigger | `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` | `{ runId, tapePath, reportPath }` -- synchronous round-trip; no browser DevTools console switch |
-| **L2c** | one-line browser trigger | `window.__forgeax.captureFrame(n)` (console autocomplete) | `{ runId, tapePath, reportPath }` -- `tapePath` feeds L3a |
+| **L2c** | one-line browser trigger | `window.__forgeax.captureFrame(n, options?)` (console autocomplete) | `{ runId, tapePath, reportPath }` -- `tapePath` feeds L3a |
 | **L3a** | offline CLI inspect | `forgeax-rhi-debug inspect-offline <tapePath> <drawIdx> [--fields=...]` | structured InspectReport JSON (bindings / drawCall / **pipelineState**) + RT PNG path |
 | **L3b** | browser per-draw JSON | `@forgeax/engine-rhi-debug/inspect-core` -> `inspectDrawJson(replay, idx, events, device, fields?)` | structured `InspectReport` (bindings + drawCall + pipelineState, no PNG path) |
 | **L3c** | browser RT to canvas | `@forgeax/engine-rhi-debug/rt-to-canvas` -> `renderRtToCanvas(replay, idx, device, canvas)` | RT pixels rendered onto external canvas (no fs/pngjs) |
@@ -48,7 +48,7 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 | `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`; the structural `rhi-null` backend accepts compression formats without claiming compression hardware). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
 | `replay.commitThroughDraw` | `(drawIdx: number): Promise<Result<{committed: boolean}, DebugError>>` | **Per-draw cumulative RT.** Replays up to & including global draw #`drawIdx`, then synthesizes `endRenderPass` + `finish` + `submit` on the enclosing pass so its color attachment holds the **draws-0..N cumulative** pixels (selecting draw N shows the frame as it stood right after N, not the final composite). After `{committed:true}`, `readbackDrawRt(drawIdx)` / `inspectDrawJson(..., ['rt'])` read those pixels. `{committed:false}` = the draw is in a depth-only render pass or a compute pass (no color RT — render a "no-rt" state). Monotonic-forward like `stepTo`: `reset()` before re-targeting an earlier draw. Out-of-range/non-monotonic → `replay-step-out-of-range`. Use this (not `stepTo(end)`) whenever inspecting a *specific* draw; use `stepTo(events.length-1)` only for the whole composited frame. |
 | `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. Step the replay with `commitThroughDraw(drawIdx)` first for per-draw pixels (the CLI `inspect-at` path does this). |
-| `debugAdapter` | eval scope live root | `debugAdapter` is directly available inside `@forgeax/engine-remote` eval scope (no Registry wiring needed — `createApp` auto-injects it alongside `world`, `renderer`, `assets`). The live adapter uses `await debugAdapter.captureFrames(frames, label?)`, returning `{ tapes: [{ tapePath, reportPath, runId, frameIdx }] }`; Dawn/Node adapters additionally expose `await debugAdapter.inspectAt(tapePath, drawIdx, fields?)`. Browser capture uses `window.__forgeax.captureFrame(frames)` and the returned tape goes through offline `inspect-offline`. |
+| `debugAdapter` | eval scope live root | `debugAdapter` is directly available inside `@forgeax/engine-remote` eval scope (no Registry wiring needed — `createApp` auto-injects it alongside `world`, `renderer`, `assets`). The live adapter uses `await debugAdapter.captureFrames(frames, label?, options?)`, returning `{ tapes: [{ tapePath, reportPath, runId, frameIdx }] }`; `options.snapshotTimeoutMs` is the explicit bounded fault-control for exercising the documented timeout/recovery boundary. Dawn/Node adapters additionally expose `await debugAdapter.inspectAt(tapePath, drawIdx, fields?)`. Browser capture uses `window.__forgeax.captureFrame(frames, options?)` and the returned tape goes through offline `inspect-offline`. |
 
 ### Browser capture subpath (`@forgeax/engine-rhi-debug/capture-browser`)
 
@@ -58,7 +58,7 @@ Node-free L0 entry, reached only via the explicit `/capture-browser` subpath -- 
 |:--|:--|:--|
 | `captureFramesToMemory` | `(debugInst: CaptureBrowserRecorder, frames: number, label?: string): Promise<CaptureBrowserTape>` | Drive a live recorder through `arm -> waitForRecorderIdle -> finalizeToMemory`, entirely in memory (zero fs, zero network). Returns one tape containing all requested frame marks as `{ runId, json, blob, passOffsets, valid }`; the idle wait has a 30 s floor, a 50 ms/frame budget, and a 300 s cap. |
 | `uploadTape` | `(tape: CaptureBrowserTape, label?: string): Promise<UploadTapeResult>` | Base64-encode the blob (browser-safe `btoa`, no Node Buffer) and POST it to the dev-server `/__forgeax-debug/tape` endpoint. Returns `{ runId, tapePath, reportPath }`. Non-2xx throws an Error carrying the server `{error, hint}` envelope. |
-| `captureAndUpload` | `(debugInst: CaptureBrowserRecorder, frames: number, label?: string): Promise<UploadTapeResult>` | `captureFramesToMemory` then `uploadTape` in one call. This is what `window.__forgeax.captureFrame(n)` invokes. |
+| `captureAndUpload` | `(debugInst: CaptureBrowserRecorder, frames: number, label?: string, options?: CaptureFramesOptions): Promise<UploadTapeResult>` | `captureFramesToMemory` then `uploadTape` in one call. This is what `window.__forgeax.captureFrame(n, options?)` invokes. |
 
 The barrel (`@forgeax/engine-rhi-debug`) re-exports the node-free L0 primitives `finalizeToMemory` / `assembleReport` / `generateRunId` (shared by the Node finalize tail); the `capture-browser` symbols above are reachable **only** through the subpath.
 
@@ -168,7 +168,7 @@ replay.dispose();
 When `FORGEAX_ENGINE_RHI_DEBUG=1`, `createAppFromCanvas` (`@forgeax/engine-app`) installs:
 
 ```js
-window.__forgeax.captureFrame(n)  // Promise<{ runId, tapePath, reportPath }>, all n frames in one tape
+window.__forgeax.captureFrame(n, options?)  // Promise<{ runId, tapePath, reportPath }>, all n frames in one tape
 ```
 
 It dynamic-imports `@forgeax/engine-rhi-debug/capture-browser` -> `captureAndUpload(debugInst, n)`. Discoverable via DevTools console autocomplete. When the flag is unset the assignment never runs, so `window.__forgeax` does not exist and a caller hits a `TypeError` -- explicit failure (charter P3 / F-3 zero-injection), not a silent no-op.
@@ -221,7 +221,7 @@ Error envelopes (all `{ error, hint }`, never `DebugError` -- OOS-6, union stays
 ### CLI subcommands
 
 > [!NOTE]
-> **Current invocation: `node packages/rhi-debug/dist/cli.mjs <subcommand>`** (after `pnpm -F @forgeax/engine-rhi-debug build`). The offline subcommands (`inspect-offline`, `summary`, `trigger-browser`) are direct CLI entry points -- no engine server or WS connection required. Live-inspect (`capture-frame` / `inspect-at` on a running engine) routes through `@forgeax/engine-remote` eval scope: `await debugAdapter.captureFrames(frames, label?)` and Dawn/Node `await debugAdapter.inspectAt(tapePath, drawIdx, fields?)` are the canonical live paths. Browser tabs use `window.__forgeax.captureFrame(frames)` and then the offline inspect path.
+> **Current invocation: `node packages/rhi-debug/dist/cli.mjs <subcommand>`** (after `pnpm -F @forgeax/engine-rhi-debug build`). The offline subcommands (`inspect-offline`, `summary`, `trigger-browser`) are direct CLI entry points -- no engine server or WS connection required. Live-inspect (`capture-frame` / `inspect-at` on a running engine) routes through `@forgeax/engine-remote` eval scope: `await debugAdapter.captureFrames(frames, label?, options?)` and Dawn/Node `await debugAdapter.inspectAt(tapePath, drawIdx, fields?)` are the canonical live paths. Browser tabs use `window.__forgeax.captureFrame(frames, options?)` and then the offline inspect path.
 
 | command (end-state shape) | description |
 |:--|:--|
@@ -230,7 +230,7 @@ Error envelopes (all `{ error, hint }`, never `DebugError` -- OOS-6, union stays
 
 #### Offline inspect (L3a) -- the canonical entry today
 
-`inspect-offline` reads an on-disk tape and replays it on a freshly-booted dawn-node device **without a running engine or WS connection** -- this is the distinction from `inspect-at` (which dispatches over WS:5732 to a live device). It is the CLI half of the browser-to-CLI loop: pass the `tapePath` that `window.__forgeax.captureFrame(n)` returned.
+`inspect-offline` reads an on-disk tape and replays it on a freshly-booted dawn-node device **without a running engine or WS connection** -- this is the distinction from `inspect-at` (which dispatches over WS:5732 to a live device). It is the CLI half of the browser-to-CLI loop: pass the `tapePath` that `window.__forgeax.captureFrame(n, options?)` returned.
 
 ```bash
 node packages/rhi-debug/dist/cli.mjs inspect-offline <tapePath> <drawIdx> [--fields=bindings,drawCall,rt]

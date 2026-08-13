@@ -10,6 +10,7 @@ import {
   joinWebkitSubsetCapture,
   validateWebkitSubsetManifest,
 } from '../membership-timing/webkit-subset.mjs';
+import { projectWebkitSubsetIdentity } from '../verify-webkit-learn-render.mjs';
 
 const sourceHead = '3c170a2e7b97ebadfd8742ec74b1724b9ee79a85';
 const timestampRefusal = 'timestamp-query-unsupported';
@@ -141,6 +142,45 @@ test('tracks the exact full-matrix target while validating the WebKit subset', (
   assert.equal(validateWebkitSubsetManifest(manifest()).valid, true);
 });
 
+test('projects only schema-declared identity fields for the WebKit driver', () => {
+  const value = manifest();
+  value.identity = projectWebkitSubsetIdentity(
+    {
+      carrier: { selector: 'heavy' },
+      workload: {
+        scenario: 'deferred-membership',
+        frames: 300,
+        lights: 128,
+        lightCounts: [32, 64, 128, 256],
+        seed: 13,
+        clusterGrid: { x: 16, y: 9, z: 24 },
+      },
+      profile: {
+        dawnEventLimit: 100000,
+        webkitEventLimit: 65536,
+        nestedFrameLimit: 90,
+        settleMs: 25,
+      },
+      artifactHashes: {
+        algorithm: 'sha256',
+        required: ['record', 'profile', 'membership', 'pixel'],
+      },
+    },
+    sourceHead,
+  );
+  assert.deepEqual(value.identity, {
+    sourceHead,
+    carrier: { selector: 'heavy', backendKind: 'wgpu-webgl2', adapter: 'webkit-webgl2' },
+    workload: { scenario: 'deferred-membership', frames: 300, lights: 128 },
+    profile: { webkitEventLimit: 65536, nestedFrameLimit: 90, settleMs: 25 },
+    artifactHashes: {
+      algorithm: 'sha256',
+      required: ['record', 'profile', 'membership', 'pixel'],
+    },
+  });
+  assert.equal(validateWebkitSubsetManifest(value).valid, true);
+});
+
 test('joins two real WebKit records as a declared non-complete subset', () => {
   const artifactRoot = mkdtempSync(join(tmpdir(), 'forgeax-webkit-subset-'));
   const control = record(artifactRoot, 'webkit-cpu-control', 'accepted-control', null);
@@ -174,4 +214,18 @@ test('rejects a subset that weakens the matrix target or raw comparison', () => 
     result.errors.map((item) => item.message).join('\n'),
     /subset must target|raw pixel comparison/,
   );
+});
+
+test('rejects duplicate attempt identity in a concurrent WebKit join', () => {
+  const artifactRoot = mkdtempSync(join(tmpdir(), 'forgeax-webkit-subset-'));
+  const control = record(artifactRoot, 'webkit-cpu-control', 'accepted-control', null);
+  const duplicate = record(artifactRoot, 'webkit-cpu-control', 'accepted-control', null);
+  const result = joinWebkitSubsetCapture({
+    manifest: manifest(),
+    records: [control, duplicate],
+    artifactRoot,
+    rawComparison: { pixelHashEqual: true, pixelBytesEqual: true },
+  });
+  assert.equal(result.valid, false);
+  assert.match(result.errors.map((item) => item.message).join('\n'), /attempt IDs must be unique/);
 });

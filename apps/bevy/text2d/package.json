@@ -19,6 +19,9 @@
       "category": "2D Rendering",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["font-atlas"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-text2d smoke",
     "metrics": {
       "bundle-size": {

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -98,6 +106,7 @@ function liveEval(env, script) {
 
 async function runRemoteLiveBrowser() {
   const bridgePort = '5743';
+  const pageUrl = 'http://localhost:5173';
   const env = { ...childEnv, FORGEAX_ENGINE_BRIDGE_PORT: bridgePort };
   const liveArtifactDir = mkdtempSync(resolve(tmpdir(), 'forgeax-m6-live-'));
   const dev = spawn(process.execPath, ['scripts/dev-live.mjs', '@forgeax/remote-demo'], {
@@ -109,14 +118,14 @@ async function runRemoteLiveBrowser() {
   dev.stderr.on('data', (chunk) => process.stderr.write(`[dev-live.err] ${chunk}`));
   let browser;
   try {
-    await waitForPage('http://127.0.0.1:5173');
+    await waitForPage(pageUrl);
     browser = await chromium.launch({
       headless: true,
       channel: 'chrome',
       args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer', '--ignore-gpu-blocklist'],
     });
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
-    await page.goto('http://127.0.0.1:5173', { waitUntil: 'networkidle', timeout: 30_000 });
+    await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: 30_000 });
     const health = await waitForBridge(env);
     const entities = liveEval(
       env,
@@ -191,6 +200,56 @@ async function runRemoteLiveBrowser() {
       return { tapePath, reportPath, runId: tape.runId };
     }
 
+    const timeoutFault = liveEval(
+      env,
+      `(async () => {
+        try {
+          await debugAdapter.captureFrames(1, 'm21-snapshot-timeout', { snapshotTimeoutMs: 1 });
+          return { ok: true };
+        } catch (error) {
+          return {
+            ok: false,
+            code: error?.code,
+            detail: error?.detail,
+            hint: error?.hint,
+          };
+        }
+      })()`,
+    );
+    if (
+      timeoutFault?.ok !== false ||
+      timeoutFault.code !== 'snapshot-timeout' ||
+      timeoutFault.detail?.timeoutMs !== 1
+    ) {
+      throw new Error(`M21 timeout fault oracle failed: ${JSON.stringify(timeoutFault)}`);
+    }
+    console.log(
+      `[m6-forensics] M21 snapshot timeout: PASS (code=${timeoutFault.code}, timeoutMs=${timeoutFault.detail.timeoutMs})`,
+    );
+
+    // Let the timed-out generation unwind before the public retry. The retry
+    // must remain in this same page/app process so a stale snapshot cannot be
+    // hidden by a restart.
+    await sleep(250);
+    const retryCapture = liveEval(
+      env,
+      "(async () => ({ capture: await debugAdapter.captureFrames(1, 'm21-retry-1') }))()",
+    );
+    const retry = copyCapture('m21-retry-1', retryCapture);
+    const retryCapture2 = liveEval(
+      env,
+      "(async () => ({ capture: await debugAdapter.captureFrames(1, 'm21-retry-2') }))()",
+    );
+    const retry2 = copyCapture('m21-retry-2', retryCapture2);
+    if (retry.runId === retry2.runId || retry.runId === mutatedCapture.capture.tapes[0].runId) {
+      throw new Error(
+        `M21 retry did not produce fresh capture identities: ${JSON.stringify({ retry, retry2, mutated: mutatedCapture.capture.tapes[0] })}`,
+      );
+    }
+    console.log(
+      `[m6-forensics] M21 retry recovery: PASS (same-process runIds=${retry.runId},${retry2.runId})`,
+    );
+
     const baseline = copyCapture('before', baselineCapture);
     const mutated = copyCapture('after', mutatedCapture);
     console.log(
@@ -207,6 +266,12 @@ async function runRemoteLiveBrowser() {
       probe: mutatedCapture.probe,
       beforePosX: baselineCapture.posX,
       afterPosX: mutatedCapture.posX,
+      m21: {
+        timeoutFault,
+        retry,
+        retry2,
+        sameProcess: true,
+      },
     };
   } finally {
     if (browser) await browser.close();
@@ -219,6 +284,14 @@ async function runRemoteLiveBrowser() {
 async function main() {
   try {
     const liveCapture = await runRemoteLiveBrowser();
+    const m21ArtifactDir = process.env.FORGEAX_GAUNTLET_ARTIFACT_DIR;
+    if (m21ArtifactDir !== undefined) {
+      mkdirSync(m21ArtifactDir, { recursive: true });
+      writeFileSync(
+        resolve(m21ArtifactDir, 'm21-rhi-debug-recovery.json'),
+        `${JSON.stringify(liveCapture.m21, null, 2)}\n`,
+      );
+    }
     run('remote contracts', ['--filter', '@forgeax/remote-demo', 'e2e:motion']);
     run('remote contract syntax/error', ['--filter', '@forgeax/remote-demo', 'e2e:cli']);
 
@@ -301,6 +374,58 @@ async function main() {
       }
       console.log(
         `[m6-forensics] semantic-to-pixel correlation: PASS (Transform.pos.x ${liveCapture.beforePosX} -> ${liveCapture.afterPosX}, pixelDeltaAbsMean=${pixelDelta.toFixed(6)})`,
+      );
+
+      const m21Summary = parseJsonOutput(
+        runNode('M21 retry RHI frame model', [cli, 'summary', liveCapture.m21.retry.tapePath]),
+        'M21 retry RHI summary',
+      );
+      if (
+        !Array.isArray(m21Summary.draws) ||
+        m21Summary.draws.length < 1 ||
+        !Array.isArray(m21Summary.commands) ||
+        m21Summary.commands.length < 1
+      ) {
+        throw new Error(`M21 retry tape lacks frame evidence: ${JSON.stringify(m21Summary.meta)}`);
+      }
+      const m21DrawIdx = m21Summary.draws.length - 1;
+      const m21Inspect = parseJsonOutput(
+        runNode('M21 retry offline inspect', [
+          cli,
+          'inspect-offline',
+          liveCapture.m21.retry.tapePath,
+          String(m21DrawIdx),
+          '--fields=bindings,drawCall,rt',
+        ]),
+        'M21 retry inspect',
+      );
+      if (
+        m21Inspect.drawIdx !== m21DrawIdx ||
+        m21Inspect.drawCall === undefined ||
+        m21Inspect.rt === undefined
+      ) {
+        throw new Error(`M21 retry offline inspect lacks evidence: ${JSON.stringify(m21Inspect)}`);
+      }
+      if (m21ArtifactDir !== undefined) {
+        copyFileSync(
+          liveCapture.m21.retry.tapePath,
+          resolve(m21ArtifactDir, 'm21-retry-1.tape.bin'),
+        );
+        copyFileSync(
+          liveCapture.m21.retry.reportPath,
+          resolve(m21ArtifactDir, 'm21-retry-1.report.json'),
+        );
+        writeFileSync(
+          resolve(m21ArtifactDir, 'm21-retry-summary.json'),
+          `${JSON.stringify(m21Summary, null, 2)}\n`,
+        );
+        writeFileSync(
+          resolve(m21ArtifactDir, 'm21-retry-inspect.json'),
+          `${JSON.stringify(m21Inspect, null, 2)}\n`,
+        );
+      }
+      console.log(
+        `[m6-forensics] M21 offline inspect: PASS (drawIdx=${m21Inspect.drawIdx}, draws=${m21Summary.draws.length}, commands=${m21Summary.commands.length})`,
       );
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });

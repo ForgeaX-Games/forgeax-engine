@@ -44,5 +44,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[bevy-shader-material-2d] app.start failed:', started.error);
     return;
   }
-  (globalThis as { __bevyShaderMaterial2dReady?: boolean }).__bevyShaderMaterial2dReady = true;
+  const debugGlobal = globalThis as typeof globalThis & {
+    __bevyShaderMaterial2dReady?: boolean;
+    __prepareShaderMaterial2dCapture?: () => Promise<void>;
+  };
+  debugGlobal.__prepareShaderMaterial2dCapture = async () => {
+    const updated = app.world.update(1 / 60);
+    if (!updated.ok) throw updated.error;
+    const drawn = app.renderer.draw([app.world], { owner: 0 });
+    if (!drawn.ok) throw drawn.error;
+  };
+  debugGlobal.__bevyShaderMaterial2dReady = true;
 }

@@ -57,12 +57,18 @@ try {
     const beforePath = resolve(ARTIFACT_DIR, 'before-click.png');
     const hitPath = resolve(ARTIFACT_DIR, 'after-hit.png');
     const missPath = resolve(ARTIFACT_DIR, 'after-miss.png');
+    const movedPath = resolve(ARTIFACT_DIR, 'after-transform.png');
+    const cameraPath = resolve(ARTIFACT_DIR, 'after-camera.png');
     await page.screenshot({ path: beforePath, clip: { x: 300, y: 200, width: 200, height: 200 } });
 
     await page.mouse.click(400, 300);
     await page.waitForTimeout(500);
     if (!logs.some((line) => line.startsWith('[picking] hit entity='))) {
       throw new Error(`center click did not produce a pick hit; logs=${JSON.stringify(logs)}`);
+    }
+    const pointerVertex = logs.find((line) => line.startsWith('[picking] vertex phase=pointer'));
+    if (!pointerVertex?.includes('scene=[{')) {
+      throw new Error(`center click did not produce vertex hits; logs=${JSON.stringify(logs)}`);
     }
     await page.screenshot({ path: hitPath, clip: { x: 300, y: 200, width: 200, height: 200 } });
 
@@ -71,7 +77,33 @@ try {
     if (!logs.includes('[picking] miss (no entity under pointer)')) {
       throw new Error(`corner click did not produce a pick miss; logs=${JSON.stringify(logs)}`);
     }
+    const missVertex = logs.find((line) => line.startsWith('[picking] vertex phase=pointer') && line.includes('scene=[]'));
+    if (!missVertex) {
+      throw new Error(`corner click did not produce a vertex miss; logs=${JSON.stringify(logs)}`);
+    }
     await page.screenshot({ path: missPath, clip: { x: 300, y: 200, width: 200, height: 200 } });
+
+    await page.locator('#mutate-transform').click();
+    await page.waitForTimeout(500);
+    if (!logs.includes('[picking] transform phase=updated posX=0.25')) {
+      throw new Error(`transform button did not update the live cube; logs=${JSON.stringify(logs)}`);
+    }
+    const movedVertex = logs.find((line) => line.startsWith('[picking] vertex phase=after-transform'));
+    if (!movedVertex?.includes('scene=[{')) {
+      throw new Error(`live transform did not recover vertex hits; logs=${JSON.stringify(logs)}`);
+    }
+    await page.screenshot({ path: movedPath, clip: { x: 300, y: 200, width: 200, height: 200 } });
+
+    await page.locator('#update-camera').click();
+    await page.waitForTimeout(500);
+    if (!logs.includes('[picking] camera phase=updated aspect=1.1 fov=1.0472')) {
+      throw new Error(`camera update did not reach the live projection; logs=${JSON.stringify(logs)}`);
+    }
+    const cameraVertex = logs.find((line) => line.startsWith('[picking] vertex phase=after-camera'));
+    if (!cameraVertex?.includes('scene=[{')) {
+      throw new Error(`camera update did not preserve vertex hits; logs=${JSON.stringify(logs)}`);
+    }
+    await page.screenshot({ path: cameraPath, clip: { x: 300, y: 200, width: 200, height: 200 } });
 
     if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
     const unexpectedConsoleErrors = consoleErrors.filter((line) => !line.includes('404'));
@@ -88,8 +120,8 @@ try {
       throw new Error(`hit click changed only ${changedPixels} pixels in the canvas capture`);
     }
 
-    console.log(`[smoke-browser] artifacts: before=${beforePath} hit=${hitPath} miss=${missPath}`);
-    console.log(`[smoke-browser] PASS - real browser center hit and corner miss drove DOM input through pick; changedPixels=${changedPixels}.`);
+    console.log(`[smoke-browser] artifacts: before=${beforePath} hit=${hitPath} miss=${missPath} moved=${movedPath} camera=${cameraPath}`);
+    console.log(`[smoke-browser] PASS - real browser pointer hit/miss plus live vertex transform and camera recovery are GREEN; changedPixels=${changedPixels}.`);
   } finally {
     await browser.close();
   }

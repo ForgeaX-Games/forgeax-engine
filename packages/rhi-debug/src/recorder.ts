@@ -23,6 +23,7 @@ import type {
   BufferDescriptor,
   CommandBuffer,
   CommandEncoderDescriptor,
+  ComputePassDescriptor,
   ComputePipeline,
   ComputePipelineDescriptor,
   PipelineLayoutDescriptor,
@@ -2214,7 +2215,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         const realPass = realEnc.beginRenderPass(desc);
         return proxyRenderPass(realPass, passHId);
       },
-      beginComputePass(desc?: GPUComputePassDescriptor | undefined) {
+      beginComputePass(desc?: ComputePassDescriptor | undefined) {
         const passHId = allocHandleId('computePass');
         pushEvent(s, {
           kind: 'beginComputePass',

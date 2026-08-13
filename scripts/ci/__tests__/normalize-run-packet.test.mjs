@@ -132,6 +132,18 @@ test('classifies the required fail-closed packet matrix with deterministic reaso
       },
     ],
     [
+      'run-id-missing',
+      (packet) => {
+        delete packet.run.runId;
+      },
+    ],
+    [
+      'run-failed',
+      (packet) => {
+        packet.run.conclusion = 'failure';
+      },
+    ],
+    [
       'run-conclusion-missing',
       (packet) => {
         delete packet.run.conclusion;
@@ -193,6 +205,29 @@ test('classifies the required fail-closed packet matrix with deterministic reaso
     assert.equal(result.admissible, false, code);
     assert.equal(result.reasonCodes.includes(code), true, code);
   }
+});
+
+test('classifies every known nonterminal run state as unknown and fail-closed', () => {
+  for (const status of ['queued', 'requested', 'waiting', 'in_progress']) {
+    const packet = fixture();
+    packet.run.status = status;
+    const result = normalizeRunPacket(packet, expected);
+    assert.equal(result.admissible, false, status);
+    assert.equal(result.classification, 'unknown', status);
+    assert.deepEqual(result.reasonCodes, ['run-nonterminal'], status);
+  }
+});
+
+test('classifies an explicit terminal run failure before admitting packet facts', () => {
+  const packet = fixture();
+  packet.run.conclusion = 'failure';
+  const result = normalizeRunPacket(packet, expected);
+  assert.equal(result.admissible, false);
+  assert.equal(result.classification, 'invalid');
+  assert.deepEqual(result.reasonCodes, ['run-failed']);
+  assert.deepEqual(result.reasons, [
+    { code: 'run-failed', scope: 'run', detail: { conclusion: 'failure' } },
+  ]);
 });
 
 test('rejects identity and artifact provenance mismatches without changing the packet', () => {

@@ -127,7 +127,7 @@ const { Materials } = await import('@forgeax/engine-render');
     MeshRenderer,
     perspective,
   } = await import('@forgeax/engine-render');
-  const { Transform } = await import('@forgeax/engine-scene');
+  const { propagateTransforms, Transform } = await import('@forgeax/engine-scene');
 
 const world = new World();
 
@@ -183,7 +183,10 @@ const cubeEntity = world.spawn(
 
 const cameraEntity = world.spawn(
   { component: Transform, data: { pos: [0, 0, 4]} },
-  { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT }) },
+  {
+    component: Camera,
+    data: perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT, autoAspect: false }),
+  },
 ).unwrap();
 
 // --- 4. Frame loop ---
@@ -212,6 +215,94 @@ console.log(
 );
 console.log(`[picking] cornerMiss=${cornerMiss === undefined ? 'undefined' : `entity=${cornerMiss.entity}`}`);
 
+// --- 7. M18 live vertex recovery contract ---
+
+const { pickVertex, pickVertexOnEntity } = await import('@forgeax/engine-picking');
+const centerX = WIDTH / 2;
+const centerY = HEIGHT / 2;
+const m18Failures = [];
+const isSorted = (hits) => hits.every((hit, index) => index === 0 || hits[index - 1].screenDist <= hit.screenDist);
+const finiteVertexHit = (hit) =>
+  Number.isFinite(hit.screenDist) && Number.isFinite(hit.worldDist) &&
+  Number.isFinite(hit.worldPos[0]) && Number.isFinite(hit.worldPos[1]) && Number.isFinite(hit.worldPos[2]);
+
+const baselinePropagation = propagateTransforms(world);
+if (!baselinePropagation.ok) m18Failures.push(`baseline propagate failed: ${baselinePropagation.error.code}`);
+const baselineVertices = pickVertex(world, cameraEntity, centerX, centerY, WIDTH, HEIGHT, { limit: 3 });
+const baselineAllVertices = pickVertex(world, cameraEntity, centerX, centerY, WIDTH, HEIGHT, { limit: 64 });
+const baselineEntityVertices = pickVertexOnEntity(
+  world,
+  cameraEntity,
+  centerX,
+  centerY,
+  WIDTH,
+  HEIGHT,
+  cubeEntity,
+  { limit: 3 },
+);
+console.log(`[picking] m18 baseline sceneVertices=${baselineVertices.length} entityVertices=${baselineEntityVertices.length}`);
+if (baselineVertices.length === 0) m18Failures.push('baseline pickVertex returned no vertices');
+if (baselineEntityVertices.length === 0) m18Failures.push('baseline pickVertexOnEntity returned no vertices');
+if (!isSorted(baselineVertices) || !isSorted(baselineEntityVertices)) m18Failures.push('baseline vertex hits are not sorted');
+if (baselineVertices.some((hit) => hit.entity !== cubeEntity || !finiteVertexHit(hit))) {
+  m18Failures.push('baseline vertex hit identity or numeric fields are invalid');
+}
+
+const baselineAnchor = baselineAllVertices[0];
+const transformUpdate = world.set(cubeEntity, Transform, { pos: [0.25, 0, 0] });
+if (!transformUpdate.ok) m18Failures.push(`transform update failed: ${transformUpdate.error.code}`);
+const movedPropagation = propagateTransforms(world);
+if (!movedPropagation.ok) m18Failures.push(`moved propagate failed: ${movedPropagation.error.code}`);
+const movedVertices = pickVertex(world, cameraEntity, centerX, centerY, WIDTH, HEIGHT, { limit: 3 });
+const movedAllVertices = pickVertex(world, cameraEntity, centerX, centerY, WIDTH, HEIGHT, { limit: 64 });
+console.log(`[picking] m18 afterTransform sceneVertices=${movedVertices.length}`);
+if (movedVertices.length === 0) m18Failures.push('after-transform pickVertex returned no vertices');
+if (!isSorted(movedVertices)) m18Failures.push('after-transform vertex hits are not sorted');
+if (movedVertices.some((hit) => hit.entity !== cubeEntity || !finiteVertexHit(hit))) {
+  m18Failures.push('after-transform vertex hit identity or numeric fields are invalid');
+}
+if (baselineAnchor) {
+  const movedAnchor = movedAllVertices.find((hit) => hit.vertexIndex === baselineAnchor.vertexIndex);
+  if (!movedAnchor) {
+    m18Failures.push(`after-transform lost vertex identity ${baselineAnchor.vertexIndex}`);
+  } else if (Math.abs(movedAnchor.worldPos[0] - baselineAnchor.worldPos[0] - 0.25) > 0.01) {
+    m18Failures.push(
+      `after-transform worldPos.x delta=${movedAnchor.worldPos[0] - baselineAnchor.worldPos[0]} (expected 0.25)`,
+    );
+  }
+}
+
+const cameraUpdate = world.set(cameraEntity, Camera, { aspect: 1.1, fov: Math.PI / 3 });
+if (!cameraUpdate.ok) m18Failures.push(`camera update failed: ${cameraUpdate.error.code}`);
+const cameraPropagation = propagateTransforms(world);
+if (!cameraPropagation.ok) m18Failures.push(`camera propagate failed: ${cameraPropagation.error.code}`);
+const afterCameraVertices = pickVertex(world, cameraEntity, centerX, centerY, WIDTH, HEIGHT, { limit: 3 });
+const afterCameraEntityVertices = pickVertexOnEntity(
+  world,
+  cameraEntity,
+  centerX,
+  centerY,
+  WIDTH,
+  HEIGHT,
+  cubeEntity,
+  { limit: 3 },
+);
+const afterCameraMiss = pickVertex(world, cameraEntity, 1, 1, WIDTH, HEIGHT, { limit: 3 });
+console.log(
+  `[picking] m18 afterCamera sceneVertices=${afterCameraVertices.length} entityVertices=${afterCameraEntityVertices.length} cornerVertices=${afterCameraMiss.length}`,
+);
+if (afterCameraVertices.length === 0 || afterCameraEntityVertices.length === 0) {
+  m18Failures.push('after-camera vertex query returned no hits');
+}
+if (!isSorted(afterCameraVertices) || !isSorted(afterCameraEntityVertices)) {
+  m18Failures.push('after-camera vertex hits are not sorted');
+}
+if (afterCameraVertices.some((hit) => hit.entity !== cubeEntity || !finiteVertexHit(hit))) {
+  m18Failures.push('after-camera vertex hit identity or numeric fields are invalid');
+}
+if (afterCameraMiss.length !== 0) m18Failures.push('after-camera corner query returned a hit');
+if (m18Failures.length === 0) console.log('[picking] M18 live vertex recovery: PASS');
+
 // --- 6. Verdict ---
 
 const failures = [];
@@ -236,6 +327,7 @@ if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(f) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
+for (const failure of m18Failures) failures.push(`M18: ${failure}`);
 
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
@@ -247,7 +339,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, centerHit=entity ${centerHit.entity}, cornerMiss=undefined, RhiError count=0`,
+  `[smoke] PASS - 7 criteria GREEN: backend=webgpu, frames=${framesObserved}, centerHit=entity ${centerHit.entity}, cornerMiss=undefined, M18 live vertex recovery=PASS, RhiError count=0`,
 );
 
 device?.destroy?.();

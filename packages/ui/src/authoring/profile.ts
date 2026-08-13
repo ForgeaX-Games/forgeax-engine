@@ -1,4 +1,4 @@
-export type UiAuthoringCategory = 'native' | 'normalizable' | 'runtime-bound';
+export type UiAuthoringCategory = UiAuthoringProfile['precedence'][number];
 
 export interface UiAuthoringProfile {
   readonly version: '1';

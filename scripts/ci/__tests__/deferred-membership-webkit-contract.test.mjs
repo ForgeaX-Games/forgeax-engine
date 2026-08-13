@@ -25,6 +25,10 @@ test('WebKit deferred membership CI uses tracked source integration', () => {
   assert.match(verifier, /const DEFERRED_MEMBERSHIP_VIEWPORT = \{ width: 512, height: 512 \};/);
   assert.match(verifier, /newPage\(\{ viewport: DEFERRED_MEMBERSHIP_VIEWPORT \}\)/);
   assert.match(verifier, /dimensions: DEFERRED_MEMBERSHIP_VIEWPORT/);
+  assert.match(verifier, /scenario: 'deferred-membership'/);
+  assert.match(verifier, /deferred-membership-timing\/webkit-webgl2/);
+  assert.match(verifier, /real-capture-manifest\.json/);
+  assert.match(verifier, /real-capture-report\.json/);
   assert.doesNotMatch(
     verifier,
     /\.forgeax-harness\/forgeax-loop\/feat-20260810-deferred-gpu-membership-timing-recovery/,

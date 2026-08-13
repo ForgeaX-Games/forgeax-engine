@@ -26,6 +26,9 @@
       "bench": { "enabled": false, "reason": "custom material behavior is not a benchmark" },
       "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-shader-material-2d smoke" },
       "spike-report": { "enabled": false, "reason": "not a spike app" }
+    },
+    "rhiDebug": {
+      "riskFamilies": ["programmable-pipelines", "materials-textures"]
     }
   },
   "dependencies": {

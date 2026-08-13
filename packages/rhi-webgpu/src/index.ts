@@ -515,6 +515,8 @@ export type {
   CanvasConfiguration,
   CommandBuffer,
   CommandEncoderDescriptor,
+  ComputePassDescriptor,
+  ComputePassTimestampWrites,
   ComputePipeline,
   ComputePipelineDescriptor,
   Fence,

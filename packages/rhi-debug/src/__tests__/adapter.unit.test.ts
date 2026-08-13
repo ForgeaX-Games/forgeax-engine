@@ -7,6 +7,7 @@ describe('createDebugRhiAdapter capture recovery', () => {
   it('clears a terminal capture error before the public retry', async () => {
     let state = 'error';
     let disposeCount = 0;
+    let snapshotTimeout: number | undefined;
     const debugInst = {
       getState: () => state,
       disposeError: () => {
@@ -17,7 +18,8 @@ describe('createDebugRhiAdapter capture recovery', () => {
         state = 'armed';
         return { ok: true as const };
       },
-      snapshotAllLiveResources: async () => {
+      snapshotAllLiveResources: async (timeoutMs?: number) => {
+        snapshotTimeout = timeoutMs;
         state = 'idle';
         return { ok: true as const };
       },
@@ -36,10 +38,11 @@ describe('createDebugRhiAdapter capture recovery', () => {
       debugInst,
       device: {} as unknown as RhiDevice,
     });
-    const result = await adapter.captureFrames(1, 'recovery-test');
+    const result = await adapter.captureFrames(1, 'recovery-test', { snapshotTimeoutMs: 17 });
 
     expect(result.tapes).toHaveLength(1);
     expect(disposeCount).toBe(1);
+    expect(snapshotTimeout).toBe(17);
     expect(state).toBe('idle');
   });
 });

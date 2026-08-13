@@ -47,7 +47,14 @@
 
 import { mat4 } from '@forgeax/engine-math';
 import { RenderGraph, type ResolveContext } from '@forgeax/engine-render-graph';
-import { err, ok, type Result, RhiError, type TextureView } from '@forgeax/engine-rhi';
+import {
+  err,
+  ok,
+  type Result,
+  type RhiComputePassEncoder,
+  RhiError,
+  type TextureView,
+} from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
 import { HdrpDeferredCapsInsufficientError } from './errors/render';
 import { createRenderFeatureTarget } from './features/targets';
@@ -175,6 +182,26 @@ export const LIGHT_INDEX_LIST_CAPACITY = 1048576;
 /** Maximum number of LightSlot entries in light_data SSBO (FR-3, MVP 256). */
 export const MAX_LIGHTS = 256;
 
+/**
+ * Select the GPU membership graph branch only when every producer dependency
+ * is present. Capability data is an optional carrier at this seam because
+ * fallback adapters and test carriers may omit it; an omitted capability is
+ * never treated as compute support.
+ */
+export function isGpuMembershipProducerAvailable(
+  caps: { readonly compute?: boolean } | null | undefined,
+  pipeline: unknown,
+  bindGroup: unknown,
+): boolean {
+  return (
+    caps?.compute === true &&
+    pipeline !== null &&
+    pipeline !== undefined &&
+    bindGroup !== null &&
+    bindGroup !== undefined
+  );
+}
+
 // ── hdrpPipeline ──────────────────────────────────────────────────────────────
 
 /**
@@ -235,7 +262,7 @@ export const hdrpPipeline: RenderPipeline = {
     // `maxColorAttachments < 4` -> throw HdrpDeferredCapsInsufficientError
     // (not RuntimeError because this is synchronous install-time, not async
     // per-frame fire-through-onError; HDRP is hard-disabled on this device).
-    const maxColorAttachments = runtime.device.caps.maxColorAttachments;
+    const maxColorAttachments = runtime.device.caps?.maxColorAttachments ?? 0;
     if (maxColorAttachments < 4) {
       throw new HdrpDeferredCapsInsufficientError(maxColorAttachments);
     }
@@ -372,9 +399,11 @@ export const hdrpPipeline: RenderPipeline = {
     // valid producer for its reads (no more dangling-read fail-fast every
     // frame). Storage-capable WebGPU adds a real compute producer below;
     // fallback backends keep the existing CPU upload path.
-    const hasGpuMembershipProducer =
-      ctx.pipelineState.hdrpClusterMembershipPipeline !== null &&
-      (ctx as _InternalRenderPipelineContext).hdrpClusterMembershipBindGroup !== null;
+    const hasGpuMembershipProducer = isGpuMembershipProducerAvailable(
+      ctx.runtime.device.caps,
+      ctx.pipelineState.hdrpClusterMembershipPipeline,
+      (ctx as _InternalRenderPipelineContext).hdrpClusterMembershipBindGroup,
+    );
     graph.addPass('cluster-binner-upload', {
       reads: [],
       writes: [
@@ -398,15 +427,23 @@ export const hdrpPipeline: RenderPipeline = {
           const internal = ctx as _InternalRenderPipelineContext;
           if (pipeline === null || internal.hdrpClusterMembershipBindGroup === null) return;
           const grid = ctx.frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
-          internal.runtime.membershipTiming?.beforeMembership(ctx.encoder);
-          const computePass = ctx.encoder.beginComputePass({
-            label: 'hdrp-cluster-membership',
-          });
+          const membershipTiming = internal.runtime.membershipTiming;
+          const timestampDescriptor = membershipTiming?.beforeMembership();
+          let computePass: RhiComputePassEncoder;
+          try {
+            computePass = ctx.encoder.beginComputePass({
+              label: 'hdrp-cluster-membership',
+              ...timestampDescriptor,
+            });
+          } catch (cause) {
+            membershipTiming?.markTimestampPassFailed(String(cause));
+            return;
+          }
           computePass.setPipeline(pipeline);
           computePass.setBindGroup(0, internal.hdrpClusterMembershipBindGroup);
           computePass.dispatchWorkgroups(Math.ceil((grid.x * grid.y * grid.z) / 64));
           computePass.end();
-          internal.runtime.membershipTiming?.afterMembership(ctx.encoder);
+          membershipTiming?.afterMembership(ctx.encoder);
         },
       });
     }

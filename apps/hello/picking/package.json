@@ -20,6 +20,32 @@
       "status": "implemented"
     },
     "smokeInvocation": "pnpm --filter @forgeax/hello-picking smoke",
+    "gauntletScenario": {
+      "id": "hello-picking-vertex-live-transform-recovery",
+      "script": "smoke",
+      "domains": [
+        "Rendering and shader construction",
+        "World and host contract"
+      ],
+      "packages": [
+        "@forgeax/engine-picking",
+        "@forgeax/engine-scene",
+        "@forgeax/engine-render",
+        "@forgeax/engine-runtime"
+      ],
+      "risks": ["baseline", "dynamic", "behavioral", "recovery", "cleanup"],
+      "phaseInputs": ["baseline", "dynamic", "behavioral", "recovery", "cleanup"],
+      "evidence": {
+        "frontDoors": ["dom-pointer", "vertex-query", "live-transform", "camera-projection"],
+        "legs": ["semantic", "live", "gpu", "behavioral", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[picking] M18 live vertex recovery: PASS",
+          "[smoke] PASS - 7 criteria GREEN"
+        ]
+      }
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

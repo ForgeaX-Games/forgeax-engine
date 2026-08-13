@@ -26,10 +26,13 @@ const tier = argumentValue('--tier') ?? 'core';
 const demoArg = argumentValue('--demo');
 const scenario = argumentValue('--scenario');
 const scenarioFrames = Number(argumentValue('--frames') ?? 300);
+const falsify = argumentValue('--falsify');
+const membershipProfileBudget = argumentValue('--membership-profile-budget');
 const timeoutMs = Number(process.env.TIMEOUT_MS ?? 30_000);
 const demoTimeoutMs = Number(process.env.DEMO_TIMEOUT_MS ?? 120_000);
 const MAX_CAPTURED_LOGS = 2_048;
 const DEFERRED_MEMBERSHIP_VIEWPORT = { width: 512, height: 512 };
+const WEBKIT_ARTIFACT_ROOT = 'deferred-membership-timing/webkit-webgl2';
 const DECISIVE_LOG_PATTERN =
   /asset-not-imported|asset-not-registered|loadByGuid failed|HTTP 404|image-dimension-out-of-bounds|maxTextureDimension2D|Validation Error|EngineEnvironmentError|webgpu-runtime-error|rhi-not-available|createApp failed|WebAssembly\.Module doesn't parse|(?:Hdrp)?CapsInsufficientError|caps insufficient/i;
 const artifactRoot = resolve(
@@ -46,6 +49,31 @@ const execution = {
   demoTimeoutMs,
 };
 
+export function projectWebkitSubsetIdentity(identity, sourceHead) {
+  return {
+    sourceHead,
+    carrier: {
+      selector: identity?.carrier?.selector ?? 'heavy',
+      backendKind: 'wgpu-webgl2',
+      adapter: 'webkit-webgl2',
+    },
+    workload: {
+      scenario: 'deferred-membership',
+      frames: 300,
+      lights: 128,
+    },
+    profile: {
+      webkitEventLimit: 65536,
+      nestedFrameLimit: 90,
+      settleMs: 25,
+    },
+    artifactHashes: {
+      algorithm: 'sha256',
+      required: ['record', 'profile', 'membership', 'pixel'],
+    },
+  };
+}
+
 function membershipManifest() {
   if (membershipManifestPath !== null && existsSync(membershipManifestPath))
     return JSON.parse(readFileSync(membershipManifestPath, 'utf8'));
@@ -59,6 +87,7 @@ function membershipManifest() {
     evidenceKind: 'real',
     sourceHead: execution.commit,
     corpusId: 'deferred-membership-webkit-driver-only',
+    identity: projectWebkitSubsetIdentity(undefined, execution.commit),
     subsetOf: 'deferred-membership-timing-generation-4',
     subsetKind: 'webkit-deferred-membership-control-refusal',
     attempts: [
@@ -103,6 +132,7 @@ function driverManifest() {
     evidenceKind: 'real',
     sourceHead: execution.commit,
     corpusId: `${full.corpusId}-webkit-driver`,
+    identity: projectWebkitSubsetIdentity(full.identity, execution.commit),
     subsetOf: 'deferred-membership-timing-generation-4',
     subsetKind: 'webkit-deferred-membership-control-refusal',
     attempts,
@@ -121,7 +151,7 @@ function driverManifest() {
 
 if (args.includes('--help')) {
   process.stdout.write(
-    `Usage: node scripts/dev-verify/verify-webkit-learn-render.mjs [--tier=core|full] [--demo=<relative-demo>] [--scenario=deferred-membership --frames=300] [--artifacts=<dir>]\n`,
+    `Usage: node scripts/dev-verify/verify-webkit-learn-render.mjs [--tier=core|full] [--demo=<relative-demo>] [--scenario=deferred-membership --frames=300] [--membership-profile-budget=falsifier] [--artifacts=<dir>]\n`,
   );
   process.exit(0);
 }
@@ -270,6 +300,42 @@ export function evaluatePixelOracle(contract, stats) {
     nonBlackSamples: stats.nonBlackSamples,
     lumaRange: stats.lumaRange,
     reason: passed ? undefined : contract.reason,
+  };
+}
+
+export function validateVisualEvidence({
+  expectation,
+  observed,
+  verdict,
+  confidence,
+  pixelStats,
+  acceptedGpu,
+}) {
+  const errors = [];
+  if (expectation !== 'deferred-shading-output-intact')
+    errors.push('visual expectation is not the deferred-shading output contract');
+  if (typeof observed !== 'string' || observed.trim().length === 0)
+    errors.push('visual evidence requires observed');
+  if (verdict !== 'pass') errors.push('visual evidence verdict must be pass');
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)
+    errors.push('visual evidence confidence must be within [0, 1]');
+  if (
+    pixelStats === null ||
+    typeof pixelStats !== 'object' ||
+    pixelStats.sampled <= 0 ||
+    pixelStats.nonBlackSamples <= 0 ||
+    pixelStats.lumaRange <= 0
+  )
+    errors.push('visual pixel falsifier detected blank or uniform output');
+  const gpuClose = errors.length === 0 && acceptedGpu === 16;
+  return {
+    valid: errors.length === 0,
+    observed,
+    verdict,
+    confidence,
+    gpuClose,
+    errors,
+    reason: gpuClose ? null : 'acceptedGpu must be 16 before GPU close',
   };
 }
 
@@ -576,7 +642,15 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
     const logs = [];
     page.on('console', (message) => logs.push(`${message.type()}: ${message.text()}`));
     page.on('pageerror', (error) => logs.push(`pageerror: ${error.message}`));
-    await page.goto(`${url}?lights=128&membershipTiming=${mode}&membershipProfile=1`, {
+    const query = new URLSearchParams({
+      lights: '128',
+      membershipTiming: mode,
+      membershipProfile: '1',
+    });
+    if (falsify !== undefined) query.set('falsify', falsify);
+    if (membershipProfileBudget !== undefined)
+      query.set('membershipProfileBudget', membershipProfileBudget);
+    await page.goto(`${url}?${query}`, {
       waitUntil: 'domcontentloaded',
       timeout: 30_000,
     });
@@ -619,7 +693,17 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
     result.profile = capture.profile ?? null;
     result.error = capture.error ?? null;
     const screenshotPath = join(outputDir, 'screenshot.png');
-    await page.screenshot({ path: screenshotPath, type: 'png' });
+    const visualOracle = await screenshotOracle(page, screenshotPath, undefined);
+    result.visualEvidence = validateVisualEvidence({
+      expectation: 'deferred-shading-output-intact',
+      observed: visualOracle.passed
+        ? `WebKit screenshot contains ${visualOracle.nonBlackSamples} non-black samples with luma range ${visualOracle.lumaRange}`
+        : 'WebKit screenshot is blank or visually uniform',
+      verdict: visualOracle.passed ? 'pass' : 'fail',
+      confidence: visualOracle.sampled > 0 ? 1 : 0,
+      pixelStats: visualOracle,
+      acceptedGpu: 0,
+    });
     const pixels = capture.pixels === undefined ? Buffer.alloc(0) : Buffer.from(capture.pixels);
     writeFileSync(join(outputDir, 'frame.rgba'), pixels);
     writeFileSync(join(outputDir, 'frame.sha256'), `${sha256(pixels)}\n`);
@@ -637,6 +721,7 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
       evidence: result.evidence,
       timing: result.timing,
       error: result.error,
+      visualEvidence: result.visualEvidence,
       pixelHash: sha256(pixels),
       pixelBytes: pixels.byteLength,
       logs,
@@ -661,6 +746,7 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
       pixels,
       membership: result.timing?.membership ?? null,
       lights: 128,
+      clusterGrid: result.evidence?.clusterGrid,
       frames: result.frames,
       dimensions: DEFERRED_MEMBERSHIP_VIEWPORT,
       environment: result.evidence?.environment,
@@ -685,6 +771,7 @@ async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
       result.evidence?.backendKind === 'wgpu-webgl2' &&
       result.pixelBytes > 0 &&
       (mode === 'cpu-control' ? status === 'accepted-control' : status === 'refused');
+    result.passed = result.passed && result.visualEvidence.valid;
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
   } finally {
@@ -699,7 +786,7 @@ async function verifyDeferredMembershipScenario() {
     throw new Error('--frames must be an integer >= 300 for deferred-membership');
   }
   const demo = demoArg ?? '5.advanced-lighting/8.deferred-shading';
-  const root = join(artifactRoot, 'deferred-membership-timing', 'webkit-webgl2');
+  const root = join(artifactRoot, WEBKIT_ARTIFACT_ROOT);
   const control = await verifyDeferredMembershipAttempt(demo, 'cpu-control', join(root, 'control'));
   const unsupported = await verifyDeferredMembershipAttempt(demo, 'gpu', join(root, 'unsupported'));
   const rawComparison = {

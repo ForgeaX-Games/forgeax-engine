@@ -5,6 +5,12 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { buildCustomMeshWorld, makeCustomMeshTexture, stepCustomMesh, type MeshGpuStore } from './generate-custom-mesh.js';
 
+type EvidenceGlobal = typeof globalThis & {
+  __bevyGenerateCustomMeshReady?: boolean;
+  __bevyGenerateCustomMeshState?: ReturnType<typeof buildCustomMeshWorld>;
+  __prepareGenerateCustomMeshCapture?: () => Promise<void>;
+};
+
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
   if (!appResult.ok) {
@@ -40,7 +46,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const started = app.start();
   if (!started.ok) console.error('[generate-custom-mesh] app.start() failed:', started.error);
-  Object.assign(globalThis, { __bevyGenerateCustomMeshReady: true, __bevyGenerateCustomMeshState: state });
+  const evidenceGlobal = globalThis as EvidenceGlobal;
+  evidenceGlobal.__prepareGenerateCustomMeshCapture = async () => {
+    const updated = app.world.update(1 / 60);
+    if (!updated.ok) throw updated.error;
+    const drawn = app.renderer.draw([app.world], { owner: 0 });
+    if (!drawn.ok) throw drawn.error;
+  };
+  Object.assign(evidenceGlobal, { __bevyGenerateCustomMeshReady: true, __bevyGenerateCustomMeshState: state });
 }
 
 const canvas = document.getElementById('app') as HTMLCanvasElement | null;

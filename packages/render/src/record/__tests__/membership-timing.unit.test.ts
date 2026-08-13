@@ -27,7 +27,6 @@ function fakeGpuDevice(
     failBufferLabel?: string;
     timestampTicks?: readonly [bigint, bigint];
     timestampPeriodNanoseconds?: number | null;
-    writeTimestampError?: string;
     resolveError?: string;
   } = {},
 ) {
@@ -75,9 +74,6 @@ function fakeGpuDevice(
   };
   const deviceValue = rawDeviceValue as unknown as RhiDevice;
   const encoder = {
-    writeTimestamp: () => {
-      if (options.writeTimestampError !== undefined) throw new Error(options.writeTimestampError);
-    },
     resolveQuerySet: (
       _querySet: QuerySet,
       _first: number,
@@ -163,6 +159,19 @@ function recordGpuSource(fake: ReturnType<typeof fakeGpuDevice>) {
   };
 }
 
+function expectStructuredFailure(
+  result: Awaited<ReturnType<ReturnType<typeof createMembershipTiming>['finish']>>,
+  code: string,
+): void {
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.error.code).toBe(code);
+    expect(result.error.expected).toEqual(expect.any(String));
+    expect(result.error.hint).toEqual(expect.any(String));
+    expect(result.error.detail).toEqual(expect.any(String));
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -242,7 +251,12 @@ describe('membership timing contract', () => {
     );
     const result = timing.start();
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('invalid-options');
+    if (!result.ok) {
+      expect(result.error.code).toBe('invalid-options');
+      expect(result.error.expected).toContain('integer');
+      expect(result.error.hint).toContain('maxPendingCaptures');
+      expect(result.error.detail).toEqual(expect.any(String));
+    }
   });
 
   it('brackets the real producer and reads canonical membership output before releasing resources', async () => {
@@ -250,7 +264,12 @@ describe('membership timing contract', () => {
     const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
     expect(timing.start().ok).toBe(true);
     timing.recordGpuMembershipSource(recordGpuSource(fake));
-    timing.beforeMembership(fake.encoder);
+    const timestampDescriptor = timing.beforeMembership();
+    expect(timestampDescriptor?.timestampWrites).toMatchObject({
+      querySet: expect.anything(),
+      beginningOfPassWriteIndex: 0,
+      endOfPassWriteIndex: 1,
+    });
     timing.afterMembership(fake.encoder);
     timing.markEncodeFinished();
     timing.markSubmitStarted();
@@ -276,30 +295,35 @@ describe('membership timing contract', () => {
   });
 
   it.each([
+    [[0n, 1n], 'zero-origin positive timestamps'],
     [[0n, 0n], 'zero timestamps'],
     [[10n, 10n], 'equal timestamps'],
     [[20n, 10n], 'reversed timestamps'],
-  ] as const)('rejects %s as timestamp-range-invalid', async (timestampTicks, _label) => {
+  ] as const)('%s timestamp interval', async (timestampTicks, label) => {
     const fake = fakeGpuDevice({ timestampTicks });
     const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
     expect(timing.start().ok).toBe(true);
     timing.recordGpuMembershipSource(recordGpuSource(fake));
-    timing.beforeMembership(fake.encoder);
+    timing.beforeMembership();
     timing.afterMembership(fake.encoder);
     timing.markEncodeFinished();
     timing.markSubmitted({} as CommandBuffer);
 
     const result = await timing.finish();
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('timestamp-range-invalid');
+    if (label === 'zero-origin positive timestamps') {
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.gpu?.rawBeginTick).toBe('0');
+        expect(result.value.gpu?.rawEndTick).toBe('1');
+        expect(result.value.gpu?.durationNanoseconds).toBeGreaterThan(0);
+      }
+    } else {
+      expectStructuredFailure(result, 'timestamp-range-invalid');
+    }
   });
 
   it.each([
-    [
-      'write',
-      fakeGpuDevice({ writeTimestampError: 'timestamp write failed' }),
-      'timestamp-write-unavailable',
-    ],
+    ['pass timestamp setup', fakeGpuDevice(), 'timestamp-write-unavailable'],
     ['resolve', fakeGpuDevice({ resolveError: 'resolve failed' }), 'terminal-record-incomplete'],
     [
       'readback range',
@@ -310,14 +334,14 @@ describe('membership timing contract', () => {
     const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
     expect(timing.start().ok).toBe(true);
     timing.recordGpuMembershipSource(recordGpuSource(fake));
-    timing.beforeMembership(fake.encoder);
+    timing.beforeMembership();
+    if (_label === 'pass timestamp setup') timing.markTimestampPassFailed('timestamp pass failed');
     timing.afterMembership(fake.encoder);
     timing.markEncodeFinished();
     timing.markSubmitted({} as CommandBuffer);
 
     const result = await timing.finish();
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe(expected);
+    expectStructuredFailure(result, expected);
   });
 
   it.each([
@@ -330,7 +354,26 @@ describe('membership timing contract', () => {
     const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
     const result = timing.start();
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('timestamp-period-unavailable');
+    if (!result.ok) {
+      expect(result.error.code).toBe('timestamp-period-unavailable');
+      expect(result.error.expected).toContain('finite and positive');
+      expect(result.error.hint).toEqual(expect.any(String));
+      expect(result.error.detail).toEqual(expect.any(String));
+    }
+  });
+
+  it('refuses a producer capture when the canonical source is missing', async () => {
+    const fake = fakeGpuDevice();
+    const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
+    expect(timing.start().ok).toBe(true);
+    timing.beforeMembership();
+    timing.afterMembership(fake.encoder);
+    timing.markSubmitted({} as CommandBuffer);
+
+    const result = await timing.finish();
+    expectStructuredFailure(result, 'membership-output-mismatch');
+    expect(fake.state.destroyedBuffers).toHaveLength(2);
+    expect(fake.state.destroyedQuerySets).toHaveLength(1);
   });
 
   it('destroys the first membership readback when the second allocation fails', async () => {
@@ -368,7 +411,7 @@ describe('membership timing contract', () => {
     const queueTiming = createMembershipTiming(queueFailure.device, { mode: 'gpu' });
     expect(queueTiming.start().ok).toBe(true);
     queueTiming.recordGpuMembershipSource(recordGpuSource(queueFailure));
-    queueTiming.beforeMembership(queueFailure.encoder);
+    queueTiming.beforeMembership();
     queueTiming.afterMembership(queueFailure.encoder);
     queueTiming.markSubmitted({} as CommandBuffer);
     const queueResult = await queueTiming.finish();
@@ -380,7 +423,7 @@ describe('membership timing contract', () => {
     const mapTiming = createMembershipTiming(mapFailure.device, { mode: 'gpu' });
     expect(mapTiming.start().ok).toBe(true);
     mapTiming.recordGpuMembershipSource(recordGpuSource(mapFailure));
-    mapTiming.beforeMembership(mapFailure.encoder);
+    mapTiming.beforeMembership();
     mapTiming.afterMembership(mapFailure.encoder);
     mapTiming.markSubmitted({} as CommandBuffer);
     const mapResult = await mapTiming.finish();
@@ -399,7 +442,7 @@ describe('membership timing contract', () => {
     const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
     expect(timing.start().ok).toBe(true);
     timing.recordGpuMembershipSource(recordGpuSource(fake));
-    timing.beforeMembership(fake.encoder);
+    timing.beforeMembership();
     timing.afterMembership(fake.encoder);
     timing.markSubmitted({} as CommandBuffer);
     const finished = timing.finish();
@@ -464,7 +507,7 @@ describe('membership timing contract', () => {
     const timing = createMembershipTiming(fake.device, { mode: 'gpu' });
     expect(timing.start().ok).toBe(true);
     timing.recordGpuMembershipSource(recordGpuSource(fake));
-    timing.beforeMembership(fake.encoder);
+    timing.beforeMembership();
     timing.afterMembership(fake.encoder);
     timing.markSubmitted({} as CommandBuffer);
     timing.dispose();

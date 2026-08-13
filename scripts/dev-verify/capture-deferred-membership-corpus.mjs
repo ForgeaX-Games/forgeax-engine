@@ -108,6 +108,7 @@ run('Dawn CPU control', SMOKE, [], {
   FORGEAX_PROFILE_CAPTURE_PATH: join(controlRoot, 'profile.capture.json'),
   FORGEAX_PROFILE_DETAIL: 'nested',
   FORGEAX_PROFILE_FRAME_LIMIT: '90',
+  FORGEAX_PROFILE_EVENT_LIMIT: '100000',
   FORGEAX_PROFILE_SETTLE_MS: '25',
   FORGEAX_MEMBERSHIP_RECORD_DIR: controlRoot,
   FORGEAX_MEMBERSHIP_RECORD_KIND: 'attempt',
@@ -141,8 +142,17 @@ const report = {
   gate: 'real-capture-join',
   sourceHead,
   records: records.length,
+  blocker:
+    validation.valid && validation.optimizationReleaseReady
+      ? null
+      : {
+          code: 'accepted-gpu-matrix-incomplete',
+          expected: 'acceptedGpu=16 with positive ticks, variance, and 256 overflow fingerprint',
+          hint: 'inspect the per-attempt refusal, profile, identity, and artifact hash records before rerunning the fixed carrier route',
+          acceptedGpu: validation.counts.acceptedGpu,
+        },
   ...validation,
 };
 writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-if (!validation.valid) process.exitCode = 1;
+if (!validation.valid || !validation.optimizationReleaseReady) process.exitCode = 1;

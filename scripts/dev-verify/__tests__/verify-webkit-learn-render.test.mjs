@@ -6,6 +6,7 @@ import {
   evaluatePixelOracle,
   readinessForDemo,
   readinessWaitBudget,
+  validateVisualEvidence,
   waitForVisualSettle,
 } from '../verify-webkit-learn-render.mjs';
 
@@ -154,6 +155,62 @@ test('pixel oracle keeps generic and family-specific evidence distinct', () => {
     ).passed,
     true,
   );
+});
+
+test('visual evidence requires a reader verdict and rejects blank output', () => {
+  const complete = validateVisualEvidence({
+    expectation: 'deferred-shading-output-intact',
+    observed: 'red cubes and colored deferred lights are visible',
+    verdict: 'pass',
+    confidence: 0.9,
+    pixelStats: { sampled: 10, nonBlackSamples: 10, lumaRange: 32 },
+    acceptedGpu: 0,
+  });
+  assert.equal(complete.valid, true);
+  assert.equal(complete.observed, 'red cubes and colored deferred lights are visible');
+  assert.equal(complete.verdict, 'pass');
+  assert.equal(complete.confidence, 0.9);
+  assert.equal(complete.gpuClose, false);
+
+  for (const invalid of [
+    { observed: undefined, verdict: 'pass', confidence: 0.9 },
+    {
+      observed: 'all black',
+      verdict: 'pass',
+      confidence: 0.9,
+      pixelStats: { sampled: 10, nonBlackSamples: 0, lumaRange: 0 },
+    },
+    {
+      observed: 'missing light field',
+      verdict: 'pass',
+      confidence: 0.9,
+      pixelStats: { sampled: 10, nonBlackSamples: 10, lumaRange: 0 },
+    },
+    { observed: 'scene is visible', verdict: undefined, confidence: 0.9 },
+    { observed: 'scene is visible', verdict: 'pass', confidence: undefined },
+  ]) {
+    const result = validateVisualEvidence({
+      expectation: 'deferred-shading-output-intact',
+      pixelStats: { sampled: 10, nonBlackSamples: 10, lumaRange: 32 },
+      acceptedGpu: 0,
+      ...invalid,
+    });
+    assert.equal(result.valid, false);
+  }
+});
+
+test('visual falsification cannot promote control or refusal to GPU close', () => {
+  const result = validateVisualEvidence({
+    expectation: 'deferred-shading-output-intact',
+    observed: 'scene is visible',
+    verdict: 'pass',
+    confidence: 0.8,
+    pixelStats: { sampled: 10, nonBlackSamples: 10, lumaRange: 32 },
+    acceptedGpu: 0,
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.gpuClose, false);
+  assert.equal(result.reason, 'acceptedGpu must be 16 before GPU close');
 });
 
 test('readiness contracts wait for slow asset consumers without changing unconfigured demos', () => {

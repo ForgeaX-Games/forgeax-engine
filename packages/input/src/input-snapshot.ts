@@ -405,6 +405,8 @@ export interface InputBackendSample {
    * accumulator (mirrors movementX/Y semantics).
    */
   readonly wheelDelta: number;
+  /** True for the first sample after blur/hidden state reset. */
+  readonly focusReset?: boolean;
   readonly focused: boolean;
   /** M1+ gamepad per-slot frame data (optional — absent when backend lacks gamepad support). */
   readonly gamepads?: readonly GamepadSlotSample[];
@@ -553,9 +555,9 @@ export function snapshotFromSample(
     buttons[2] && (previousSnapshot === undefined || !previousSnapshot.mouse.button(2)),
   ];
   const justReleasedButtons: readonly [boolean, boolean, boolean] = [
-    previousSnapshot?.mouse.button(0) === true && !buttons[0],
-    previousSnapshot?.mouse.button(1) === true && !buttons[1],
-    previousSnapshot?.mouse.button(2) === true && !buttons[2],
+    sample.focusReset !== true && previousSnapshot?.mouse.button(0) === true && !buttons[0],
+    sample.focusReset !== true && previousSnapshot?.mouse.button(1) === true && !buttons[1],
+    sample.focusReset !== true && previousSnapshot?.mouse.button(2) === true && !buttons[2],
   ];
   const movementDelta = Object.freeze({ x: sample.movementX, y: sample.movementY });
   const mousePosition =

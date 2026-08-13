@@ -205,7 +205,7 @@ Five gesture recognizers running in the backend closure (C-3 single legal cross-
 |:--|:--|
 | 越界坐标 | pointer `x`/`y` 原样保留不 clamp（可为负或超出 canvas 尺寸）；charter P3：显式文档化不隐式行为 |
 | `touch-action` | `attach` 时浏览器 backend 内部设置 `canvas.style.touchAction='none'`（existential 探测——fake canvas 无 `.style` 时静默跳过）；detach 恢复原值。AI 用户不需手动设 CSS |
-| 失焦（blur / visibilitychange `hidden`） | pointerMap 全清 + 每活跃触点 push cancel 相位事件进入队列；gamepad justPressed/justReleased 集合复位——下帧不喷幽灵边沿。恢复焦点后下次 `sample()` 自然恢复 |
+| 失焦（blur / visibilitychange `hidden`） | pointerMap 全清 + 每活跃触点 push cancel 相位事件进入队列；W3C/provider pointer lock 立即释放；gamepad justPressed/justReleased 集合复位，并以一次 focus-reset sample 边界抑制旧 snapshot 的 mouse/action release——下帧不喷幽灵边沿。恢复焦点后下次 `sample()` 自然恢复 |
 | assemble form — action surface | Assemble-form hosts must manually `world.insertResource(INPUT_MAP_KEY, map)` to enable action readpoints (D-7). Canvas-form `createApp` does this automatically. |
 | controller-db 子导出懒加载 | `@forgeax/engine-input/controller-db` is dynamically imported only on first connected non-standard gamepad (D-2). Until then (or on DB miss), non-standard slots maintain the Feat1 empty-signal behavior (`standardMapping=false`). Standard gamepads never trigger the load (C-5). |
 | 手势 cancel on blur | `onBlur` resets all active gesture recognizers: emits cancel events for each active gesture type, resets continuous values to identity, and clears timers (AC-18). Prevent ghost gestures on refocus. |

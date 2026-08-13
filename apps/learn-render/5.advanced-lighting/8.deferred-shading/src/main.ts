@@ -57,7 +57,7 @@ const NUM_LIGHTS = (() => {
   }
   return DEFAULT_NUM_LIGHTS;
 })();
-const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
+const CLUSTER_GRID = { x: 16, y: 9, z: 64 } as const;
 const CUBE_SCALE = 0.5;
 const CUBE_SPACING = 3.0;
 const CUBE_Y = -0.5;
@@ -121,6 +121,7 @@ const FALSIFY = (() => {
   }
   return '';
 })();
+const VISUAL_FALSIFY = FALSIFY === 'blank';
 
 const MEMBERSHIP_TIMING: MembershipTimingOptions | undefined = (() => {
   if (typeof window === 'undefined') return undefined;
@@ -187,6 +188,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     timestampQuery: app.renderer.device.caps.timestampQuery,
     timestampPeriodNanoseconds: app.renderer.device.caps.timestampPeriodNanoseconds ?? null,
     adapter: app.renderer.device.caps.backendKind,
+    clusterGrid: CLUSTER_GRID,
     environment: typeof navigator === 'undefined' ? 'browser-unknown' : navigator.userAgent,
     actualProducer:
       MEMBERSHIP_TIMING?.mode === 'gpu' && app.renderer.device.caps.compute
@@ -312,7 +314,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (PROFILER !== undefined) {
     // The membership contract profiles the first 90 nested-attribution frames
     // while the browser workload continues through its required 300 frames.
-    const profileEventLimit = navigator.gpu === undefined ? 65_536 : 40_000;
+    const profileBudget = new URL(window.location.href).searchParams.get('membershipProfileBudget');
+    const profileEventLimit = profileBudget === 'falsifier' ? 40_000 : 65_536;
     const profileStart = PROFILER.startCapture({ frameLimit: 90, eventLimit: profileEventLimit, detail: 'nested' });
     if (!profileStart.ok) console.error(`[learn-render 5.8 deferred] profiler start failed: ${profileStart.error.code}`);
   }
@@ -326,6 +329,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   );
 
   installCaptureHook(app, world);
+  if (VISUAL_FALSIFY) target.style.filter = 'brightness(0)';
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives

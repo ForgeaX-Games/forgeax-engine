@@ -436,7 +436,9 @@ export interface App {
    * `undefined` otherwise. Demo / e2e harness code calls `_debugRhi.arm(N)`
    * + later `_debugRhi.finalize()` directly. Production code should
    * reach the same pipeline through the WS:5732 eval `debugAdapter.captureFrames`
-   * surface (which routes through `_debugAdapter`).
+   * surface (which routes through `_debugAdapter`). The optional
+   * `snapshotTimeoutMs` capture option is the bounded fault-control for the
+   * documented timeout/recovery boundary.
    * Typed as `unknown` here to avoid pulling
    * `@forgeax/engine-rhi-debug` into the `@forgeax/engine-app` type
    * surface — host code that wants the typed shape imports

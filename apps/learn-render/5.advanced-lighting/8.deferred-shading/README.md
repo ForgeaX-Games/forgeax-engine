@@ -8,53 +8,90 @@
 > [!IMPORTANT]
 > **PBR visual diff vs LO 5.8 Phong is expected, not a bug.** LO 5.8 uses the Blinn-Phong shading model with hardcoded light constants in a GBuffer-then-lighting multipass fragment shader. This demo uses forgeax's HDRP deferred opaque path with `Materials.standard` (PBR metallic-roughness GGX + diffuse Lambert), which handles specular, roughness, energy conservation, and light falloff differently. The scene layout, light positions (seed=13 LCG), object grid, and attenuation constants (1.0, 0.7, 1.8) are preserved exactly; the visual difference is the shading model, not the data.
 
-## LO §5.8 sub-example 命中度索引
+## Deferred membership evidence closure
 
-| LO sub-example | 命中度 | forgeax 偏差点 |
+> [!CAUTION]
+> `acceptedGpu=16` is the close condition: 20 real top-level attempts, 32
+> nested references, five accepted GPU records at 32, 64, and 128 lights,
+> one at 256 lights, positive ticks, variance, and the 256-light overflow
+> fingerprint. The current `acceptedGpu=0` state is a blocker. CPU control,
+> refusal records, screenshots, and capability bits are not accepted GPU
+> evidence.
+
+Generate and capture the exact matrix with the producer-owned commands:
+
+```sh
+node scripts/dev-verify/generate-deferred-membership-manifest.mjs --output=report/deferred-membership-timing/full-matrix-manifest.json
+node scripts/dev-verify/capture-deferred-membership-corpus.mjs --manifest=report/deferred-membership-timing/full-matrix-manifest.json --output-root=report/deferred-membership-timing --webkit-download=webkit-evidence --report=report/deferred-membership-timing
+```
+
+The manifest is governed by [`full-matrix-contract.json`](../../../../scripts/dev-verify/membership-timing/full-matrix-contract.json). WebKit's two-record control/refusal subset is governed by [`webkit-subset.schema.json`](../../../../scripts/dev-verify/membership-timing/webkit-subset.schema.json). Every record must retain `sourceHead`, `carrier`, `workload`, `profile`, and `artifactHashes`; required artifacts are `record`, `profile`, `membership`, and `pixel`, each with a SHA-256 descriptor.
+
+The formal profile is Dawn `100000` events, WebKit `65536` events, nested
+frame limit `90`, and settle time `25` ms. The 128-light, 90-frame,
+`40000`-event run is a falsifier: it must report dropped events and incomplete
+profile status. It cannot replace the formal WebKit budget. The report fields
+`valid`, `truthfulnessReady`, `completeMatrixReady`,
+`optimizationReleaseReady`, `counts`, `errors`, and `blocker` are the AI
+recovery surface. Read `blocker.code`, `blocker.expected`, `blocker.hint`, and
+`blocker.acceptedGpu`, then inspect per-attempt `identity`, `profile`, timing,
+membership, pixel, and artifact hash records. Do not invent ticks or promote
+visual, CPU, refusal, or null evidence.
+
+Run the WebKit profile falsifier through the public verifier front door with
+`--membership-profile-budget=falsifier`:
+
+```sh
+xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 node scripts/dev-verify/verify-webkit-learn-render.mjs --demo=5.advanced-lighting/8.deferred-shading --scenario=deferred-membership --frames=300 --membership-profile-budget=falsifier --artifacts=report/deferred-membership-timing
+```
+
+## LO §5.8 sub-example parity index
+
+| LO sub-example | Match | forgeax divergence |
 |:--|:--|:--|
-| **5.8.1 G-Buffer FBO setup** (`glGenFramebuffers` + 3 MRT `GL_COLOR_ATTACHMENT0..2` with RGBA16F/16F/RGBA8 + RBO depth) | 替换 | forgeax HDRP pipeline built-in: 3 color attachments + depth-stencil managed by render-graph; demo calls `installPipeline(HDRP_PIPELINE_ID)` without touching framebuffer creation |
-| **5.8.1 Geometry pass** (MRT write to gPosition/gNormal/gAlbedoSpec with `glDrawBuffers(3, ...)`) | 替换 | HDRP Deferred pass: `Materials.standard` outputs G-Buffer via `fs_gbuffer` WGSL entry point; MRT binding is engine-internal |
-| **5.8.1 Lighting pass** (fullscreen quad with `deferredLightingPass` iterating 32 lights per pixel in fragment shader) | 替换 | HDRP Lighting pass: cluster-deferred fullscreen quad with 16x9x24 cluster grid; each pixel iterates only lights in its cluster cell |
-| **5.8.1 Depth blit** (`glBlitFramebuffer(gBuffer -> default, GL_DEPTH_BUFFER_BIT)`) | 替换（无等价） | WebGPU depth-stencil attachment is directly resolved by the render pass; no manual blit needed |
-| **5.8.1 Light-box cubes** (32 small cubes at lightPositions, scale=0.125, colored by lightColor) | 命中 | `world.spawn()` with `MeshFilter(HANDLE_CUBE)` at each light position, scale=0.125 |
-| **5.8.1 9-backpack 3x3 grid** (`backpack.obj` instances at y=-0.5, spacing 3.0) | 偏离 | forgeax uses `HANDLE_CUBE` (engine built-in 1x1x1 cube mesh) instead of backpack model; grid layout and positions preserved |
-| **5.8.1 Random light generation** (`srand(13)` + `rand()` for positions + colors) | 命中 | Deterministic JS LCG (`glibcRand`) matching LO's `srand(13)` output bit-for-bit, pre-computed at bootstrap |
+| **5.8.1 G-Buffer FBO setup** (`glGenFramebuffers` + 3 MRT `GL_COLOR_ATTACHMENT0..2` with RGBA16F/16F/RGBA8 + RBO depth) | Replaced | forgeax HDRP pipeline built-in: 3 color attachments + depth-stencil managed by render-graph; demo calls `installPipeline(HDRP_PIPELINE_ID)` without touching framebuffer creation |
+| **5.8.1 Geometry pass** (MRT write to gPosition/gNormal/gAlbedoSpec with `glDrawBuffers(3, ...)`) | Replaced | HDRP Deferred pass: `Materials.standard` outputs G-Buffer via `fs_gbuffer` WGSL entry point; MRT binding is engine-internal |
+| **5.8.1 Lighting pass** (fullscreen quad with `deferredLightingPass` iterating 32 lights per pixel in fragment shader) | Replaced | HDRP Lighting pass: cluster-deferred fullscreen quad with 16x9x24 cluster grid; each pixel iterates only lights in its cluster cell |
+| **5.8.1 Depth blit** (`glBlitFramebuffer(gBuffer -> default, GL_DEPTH_BUFFER_BIT)`) | Replaced (no equivalent) | WebGPU depth-stencil attachment is directly resolved by the render pass; no manual blit needed |
+| **5.8.1 Light-box cubes** (32 small cubes at lightPositions, scale=0.125, colored by lightColor) | Matched | `world.spawn()` with `MeshFilter(HANDLE_CUBE)` at each light position, scale=0.125 |
+| **5.8.1 9-backpack 3x3 grid** (`backpack.obj` instances at y=-0.5, spacing 3.0) | Diverged | forgeax uses `HANDLE_CUBE` (engine built-in 1x1x1 cube mesh) instead of backpack model; grid layout and positions preserved |
+| **5.8.1 Random light generation** (`srand(13)` + `rand()` for positions + colors) | Matched | Deterministic JS LCG (`glibcRand`) matching LO's `srand(13)` output bit-for-bit, pre-computed at bootstrap |
 
-## 这个示例展示什么
+## What this example demonstrates
 
-LO §5.8 教 deferred shading：将几何体渲染一次写入 G-Buffer（位置、法线、漫反射+高光），再在单独的 lighting pass 中从这些缓冲纹理采样执行全部光照计算。核心收益是**光照数量与几何体数量解耦**——lighting pass 每像素只遍历一次光源，与场景中物体数量无关。
+LO §5.8 teaches deferred shading: render geometry once into a G-Buffer (position, normal, diffuse, and specular), then sample those buffers in a separate lighting pass. The core benefit is **decoupling light count from geometry count**: the lighting pass processes each light contribution without repeating the geometry pass for every object.
 
-在 forgeax 中，此示例通过 HDRP deferred rendering pipeline 展示相同模式：
+In forgeax, this example shows the same pattern through the HDRP deferred rendering pipeline:
 
-1. **HDRP pipeline 安装**: `assets.register<RenderPipelineAsset>({ pipelineId: HDRP_PIPELINE_ID, config: { clusterGrid } })` 声明 deferred-shading pipeline 拓扑。`app.renderer.installPipeline(hdrpHandle)` 在运行时激活，将引擎默认的 forward-only URP 路径替换为 HDRP deferred-opaque + forward-transparent 路径。
+1. **HDRP pipeline installation**: `assets.register<RenderPipelineAsset>({ pipelineId: HDRP_PIPELINE_ID, config: { clusterGrid } })` declares the deferred-shading pipeline topology. `app.renderer.installPipeline(hdrpHandle)` activates it at runtime, replacing the engine's default forward-only URP path with HDRP deferred-opaque plus forward-transparent paths.
 
-2. **32 个点光源**: 每个光源是一个 `PointLight` ECS 组件，位置使用确定性 LO 5.8.1 坐标（glibc LCG seed=13），强度 1.0 + 范围 6.0。衰减常数（constant=1.0, linear=0.7, quadratic=1.8）在 shader 侧计算，非组件字段。cluster grid（16x9x24）在 lighting pass 中把光源分 bin 到视空间格子，避免 O(width * height * lightCount) 逐像素迭代。
+2. **32 point lights**: Each light is a `PointLight` ECS component using deterministic LO 5.8.1 coordinates (glibc LCG seed=13), intensity 1.0, and range 6.0. Attenuation constants (constant=1.0, linear=0.7, quadratic=1.8) are computed in the shader rather than stored as component fields. The 16x9x24 cluster grid bins lights into view-space cells and avoids an O(width * height * lightCount) per-pixel traversal.
 
-3. **9-cube 3x3 网格**: 9 个立方体排列为 3x3 网格（y=-0.5, 间距 3.0），每个带有独特的基色。被 HDRP 渲染为 deferred-opaque——几何体只写入 G-Buffer 一次；全部 32 个光源在后续 lighting pass 中影响每个像素。
+3. **9-cube 3x3 grid**: Nine cubes form a 3x3 grid (y=-0.5, spacing 3.0), each with a distinct base color. HDRP renders them as deferred-opaque geometry, writing the G-Buffer once before the later lighting pass applies all 32 lights.
 
-4. **Light-box 可视化**: 在每个光源位置生成一个小立方体（scale=0.125），渲染光源颜色作为视觉参考——对应 LO 教程中的 light-box 球体。
+4. **Light-box visualization**: A small cube (scale=0.125) is spawned at each light position and rendered in the light color as a visual reference, corresponding to the LO tutorial's light-box spheres.
 
-5. **Material PBR pipeline**: 所有立方体使用 `Materials.standard({ baseColor })`，目标为 `forgeax::default-standard-pbr`。shader 提供三个 pass：Deferred（写入 G-Buffer）、Forward（transparent + URP fallback）和 Shadow。HDRP deferred-opaque 路径走 Deferred pass，Forward pass 处理透明实体。
+5. **Material PBR pipeline**: All cubes use `Materials.standard({ baseColor })` targeting `forgeax::default-standard-pbr`. The shader provides Deferred (G-Buffer), Forward (transparent plus URP fallback), and Shadow passes. HDRP deferred-opaque uses Deferred, while transparent entities use Forward.
 
-## 渲染流程
+## Rendering flow
 
 ```mermaid
 flowchart TD
-  S[每帧] --> P1["Pass 1: G-Buffer (Deferred opaque)"]
-  P1 --> C1["9 cubes: MeshFilter + MeshRenderer<br/>Materials.standard → fs_gbuffer<br/>输出: position + normal + albedo+specular + depth-stencil"]
+  S["Each frame"] --> P1["Pass 1: G-Buffer (Deferred opaque)"]
+  P1 --> C1["9 cubes: MeshFilter + MeshRenderer<br/>Materials.standard -> fs_gbuffer<br/>Output: position + normal + albedo+specular + depth-stencil"]
   C1 --> P2["Pass 2: Cluster-deferred Lighting<br/>(fullscreen quad)"]
-  P2 --> C2["cluster binning (16x9x24 grid)<br/>每个像素遍历其 cluster cell 内的光源<br/>PBR GGX + Lambert + 衰减"]
+  P2 --> C2["cluster binning (16x9x24 grid)<br/>Each pixel visits lights in its cluster cell<br/>PBR GGX + Lambert + attenuation"]
   C2 --> P3["Pass 3: Forward transparent / Light-box cubes"]
-  P3 --> C3["32 light-box cubes + 任何透明实体走 Forward pass"]
+  P3 --> C3["32 light-box cubes + transparent entities use Forward"]
   C3 --> SWAP["swap-chain present"]
 ```
 
-## 引擎用法
+## Engine usage
 
 ```ts
-// 来自 src/main.ts 的关键片段（三段式注释）。
+// Key excerpts from src/main.ts (three-stage outline).
 
-// 1. engine usage - 引擎公开符号集
+// 1. engine usage - public engine symbols
 import { createApp } from '@forgeax/engine-app';
 import { Camera, Materials, MeshFilter, MeshRenderer, perspective, PointLight } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
@@ -147,21 +184,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 }
 ```
 
-## 与 LO 原版的差异
+## Differences from the LO original
 
-| 维度 | LO 原版（C++ / GLSL / GLFW） | forgeax 这里（TS / WGSL / WebGPU） |
+| Dimension | LO original (C++ / GLSL / GLFW) | forgeax here (TS / WGSL / WebGPU) |
 |:--|:--|:--|
-| Shading model | Blinn-Phong（ambient + diffuse + specular，硬编码光源颜色/位置 uniform） | PBR（GGX specular + Lambert diffuse + energy conservation，物理正确的 roughness/metallic） |
-| G-Buffer 布局 | 3 张 `GL_RGBA16F`/`GL_RGBA` 纹理手动创建：gPosition.rgb、gNormal.rgb、gAlbedoSpec.rgb+specular.a + RBO depth | HDRP built-in layout（引擎管理，对 demo 透明） |
-| 光源遍历 | lighting-pass fragment shader 中逐像素遍历全部 32 个光源 | Cluster-culled 逐像素遍历：光源分 bin 到 16x9x24 view-space 格子，每像素仅遍历其 cluster 内光源 |
-| 光源数据 | shader 中硬编码 `uniform vec3 lights[32]` 数组 | PointLight ECS 组件逐帧上传；shader 读取 per-cluster light index buffer |
-| 物体渲染 | `backpack.obj` 模型（Assimp 导入） | `HANDLE_CUBE`（引擎内置 1x1x1 立方体网格） |
-| G-Buffer 位置 | gPosition shader 写入世界空间位置 `FragPos = model * aPos` | G-Buffer 中位置从深度重建（lighting pass 中做逆投影），节省带宽 |
-| 高光贴图 | 每个立方体使用 `container2_specular.png` | PBR roughness + metallic 参数（无高光贴图） |
-| 深度缓冲处理 | `glBlitFramebuffer` 将 gBuffer depth 拷贝回 default FBO | WebGPU depth-stencil attachment 在 render pass 间自动 resolve |
-| 错误处理 | `glCheckFramebufferStatus` / `glGetError` 手动检查，静默 misbehaviour | 结构化错误（`err.code` 闭族：`'hdrp-deferred-caps-insufficient'` 安装时 caps 不够 + `'hdrp-light-budget-exceeded'` 每帧 fail-soft），AI 用户 `switch (err.code)` exhaustive narrow（charter P3） |
+| Shading model | Blinn-Phong (ambient + diffuse + specular, hardcoded light color/position uniforms) | PBR (GGX specular + Lambert diffuse + energy conservation, physical roughness/metallic) |
+| G-Buffer layout | Three `GL_RGBA16F`/`GL_RGBA` textures created manually: gPosition.rgb, gNormal.rgb, gAlbedoSpec.rgb+specular.a, and RBO depth | HDRP built-in layout (engine-managed and transparent to the demo) |
+| Light traversal | Fragment shader visits all 32 lights per pixel in the lighting pass | Cluster-culled traversal bins lights into a 16x9x24 view-space grid; each pixel visits only its cluster cell |
+| Light data | Shader contains a hardcoded `uniform vec3 lights[32]` array | PointLight ECS components upload each frame; the shader reads a per-cluster light index buffer |
+| Object rendering | `backpack.obj` model (Assimp import) | `HANDLE_CUBE` (engine built-in 1x1x1 cube mesh) |
+| G-Buffer position | gPosition shader writes world position `FragPos = model * aPos` | G-Buffer position is reconstructed from depth in the lighting pass to save bandwidth |
+| Specular map | Each cube uses `container2_specular.png` | PBR roughness plus metallic parameters (no specular map) |
+| Depth buffer | `glBlitFramebuffer` copies gBuffer depth to the default FBO | WebGPU depth-stencil attachment resolves directly between render passes |
+| Error handling | `glCheckFramebufferStatus` / `glGetError` manual checks with silent misbehavior | Structured errors (`err.code` closed union: `'hdrp-deferred-caps-insufficient'` for install caps and `'hdrp-light-budget-exceeded'` for per-frame fail-soft); AI users use exhaustive `switch (err.code)` (charter P3) |
 
-## 运行
+## Running
 
 ```bash
 # Dev server (port 5179)
@@ -181,9 +218,9 @@ pnpm --filter "@forgeax/app-learn-render-5-advanced-lighting-8-deferred-shading"
 ```
 
 <details>
-<summary>LO 原版 C++/GLSL 关键片段（参考用）</summary>
+<summary>LO original C++/GLSL excerpts (reference)</summary>
 
-LO §5.8.1 在 `src/5.advanced_lighting/8.1.deferred_shading/deferred_shading.cpp` 的核心代码（来自 [JoeyDeVries/LearnOpenGL master 分支](https://github.com/JoeyDeVries/LearnOpenGL)）：
+LO §5.8.1 core code in `src/5.advanced_lighting/8.1.deferred_shading/deferred_shading.cpp` (from the [JoeyDeVries/LearnOpenGL master branch](https://github.com/JoeyDeVries/LearnOpenGL)):
 
 ```cpp
 // deferred_shading.cpp -- g-buffer setup + geometry pass + lighting pass + light boxes
@@ -315,6 +352,6 @@ while (!glfwWindowShouldClose(window))
 }
 ```
 
-`glGenFramebuffers` / `glBindFramebuffer` / `glTexImage2D` / `glTexParameteri` / `GL_RGBA16F` / `GL_COLOR_ATTACHMENT0` / `glDrawBuffers` / `glGenRenderbuffers` / `GL_DEPTH_ATTACHMENT` / `glBlitFramebuffer` / `glActiveTexture` / `glBindTexture` / `glClear` / `renderQuad` / `renderCube` / `glfwSwapBuffers` / `glfwPollEvents` / `srand` / `rand` / `glm::perspective` / `glm::translate` / `glm::scale` / `glfwWindowShouldClose` / `shaderGeometryPass` / `shaderLightingPass` / `shaderLightBox` 共 25 个 LO §5.8.1 关键 GL / GLFW / GLM 标识在本折叠块全部命中（grep 闸门 AC-23）。
+`glGenFramebuffers` / `glBindFramebuffer` / `glTexImage2D` / `glTexParameteri` / `GL_RGBA16F` / `GL_COLOR_ATTACHMENT0` / `glDrawBuffers` / `glGenRenderbuffers` / `GL_DEPTH_ATTACHMENT` / `glBlitFramebuffer` / `glActiveTexture` / `glBindTexture` / `glClear` / `renderQuad` / `renderCube` / `glfwSwapBuffers` / `glfwPollEvents` / `srand` / `rand` / `glm::perspective` / `glm::translate` / `glm::scale` / `glfwWindowShouldClose` / `shaderGeometryPass` / `shaderLightingPass` / `shaderLightBox` provide all 25 key LO §5.8.1 GL / GLFW / GLM identifiers required by grep gate AC-23.
 
 </details>

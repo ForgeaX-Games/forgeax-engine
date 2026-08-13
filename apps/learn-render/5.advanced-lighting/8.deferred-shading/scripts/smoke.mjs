@@ -54,7 +54,7 @@ const NUM_LIGHTS = (() => {
   if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 256) return parsed;
   throw new Error('FORGEAX_DEFERRED_LIGHTS must be an integer in [1, 256]');
 })();
-const CLUSTER_GRID = { x: 16, y: 9, z: 24 };
+const CLUSTER_GRID = { x: 16, y: 9, z: 64 };
 const CUBE_SCALE = 0.5;
 const CUBE_SPACING = 3.0;
 const CUBE_Y = -0.5;
@@ -531,6 +531,7 @@ if (MEMBERSHIP_RECORD_DIR !== undefined) {
       profiler?.latestCapture() ??
       { completeness: { status: 'not-requested', droppedEventCount: 0 } },
     lights: NUM_LIGHTS,
+    clusterGrid: CLUSTER_GRID,
     frames: totalFrames,
   });
   console.log(`[smoke] membership terminal record=${join(MEMBERSHIP_RECORD_DIR, 'record.json')} kind=${record.record.recordKind} outcome=${record.record.status ?? record.record.terminal.outcome}`);

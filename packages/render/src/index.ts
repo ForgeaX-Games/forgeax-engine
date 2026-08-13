@@ -88,6 +88,7 @@ export {
   observeCurrentFrame,
 } from './record/frame-observation';
 export {
+  // Evidence is producer-owned and fail-closed; acceptedGpu=16 is required for closure.
   createMembershipTiming,
   MEMBERSHIP_TIMING_REASON_CODES,
   MEMBERSHIP_TIMING_REASON_MAPPING,

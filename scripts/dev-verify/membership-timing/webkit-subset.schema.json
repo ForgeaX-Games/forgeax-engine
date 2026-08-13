@@ -26,6 +26,55 @@
     "corpusId": { "type": "string", "minLength": 1 },
     "subsetOf": { "const": "deferred-membership-timing-generation-4" },
     "subsetKind": { "const": "webkit-deferred-membership-control-refusal" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceHead", "carrier", "workload", "profile", "artifactHashes"],
+      "properties": {
+        "sourceHead": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "carrier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selector", "backendKind", "adapter"],
+          "properties": {
+            "selector": { "enum": ["standard", "heavy"] },
+            "backendKind": { "const": "wgpu-webgl2" },
+            "adapter": { "type": "string", "minLength": 1 }
+          }
+        },
+        "workload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scenario", "frames", "lights"],
+          "properties": {
+            "scenario": { "const": "deferred-membership" },
+            "frames": { "const": 300 },
+            "lights": { "const": 128 }
+          }
+        },
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["webkitEventLimit", "nestedFrameLimit", "settleMs"],
+          "properties": {
+            "webkitEventLimit": { "const": 65536 },
+            "nestedFrameLimit": { "const": 90 },
+            "settleMs": { "const": 25 }
+          }
+        },
+        "artifactHashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "required"],
+          "properties": {
+            "algorithm": { "const": "sha256" },
+            "required": {
+              "const": ["record", "profile", "membership", "pixel"]
+            }
+          }
+        }
+      }
+    },
     "attempts": {
       "type": "array",
       "minItems": 2,

@@ -360,7 +360,7 @@ export function getOrCreateHdrpBuffers(
   if (cached !== undefined) return cached;
 
   const device = runtime.device;
-  const storageBuffer = runtime.device.caps.storageBuffer;
+  const storageBuffer = runtime.device.caps?.storageBuffer === true;
   const clusterUniformBytes = 32;
   const lightDataBytes =
     (storageBuffer ? MAX_LIGHTS : HDRP_UNIFORM_LIGHT_CAPACITY) * BYTES_PER_LIGHT_SLOT;
@@ -438,7 +438,7 @@ export function getOrCreateHdrpBuffers(
   // (plan D-6, feat-20260609-hdrp-cluster-fragment-ggx M3).
   // D-13 round-2: route through buildBindGroupLayoutDescriptor (the
   // 'hdrp-7-slot' arm delegates to createHdrpBindGroupLayoutDescriptor).
-  const storageBufferCap = runtime.device.caps.storageBuffer;
+  const storageBufferCap = runtime.device.caps?.storageBuffer === true;
   const unifiedBglRes = device.createBindGroupLayout(
     buildBindGroupLayoutDescriptor(HDRP_BGL_SPEC_STUB, {
       kind: 'hdrp-7-slot',

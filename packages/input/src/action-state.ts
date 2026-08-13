@@ -237,7 +237,7 @@ export function deriveActionStates(
     // Edge detection: justPressed / justReleased from prev frame's pressed state.
     const prevPressed = prevByAction.get(config.action) ?? false;
     const justPressed = aggregatedPressed && !prevPressed;
-    const justReleased = !aggregatedPressed && prevPressed;
+    const justReleased = sample.focusReset !== true && !aggregatedPressed && prevPressed;
 
     results.push({
       action: config.action,

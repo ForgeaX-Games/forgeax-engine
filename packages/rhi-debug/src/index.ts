@@ -1,5 +1,9 @@
 // @forgeax/engine-rhi-debug/src/index.ts — package barrel.
 
+import type { CaptureFramesOptions } from './capture-options';
+
+export type { CaptureFramesOptions } from './capture-options';
+
 export {
   type CapsMismatchDetail,
   DebugError,
@@ -64,6 +68,7 @@ export interface DebugRhiAdapter {
   captureFrames(
     frames: number,
     label?: string,
+    options?: CaptureFramesOptions,
   ): Promise<{
     readonly tapes: Array<{
       readonly frameIdx: number;

@@ -236,6 +236,24 @@ test('classifies an explicit terminal run failure before looking for a roster', 
   assert.equal(result.actionable, true);
 });
 
+test('isolates simultaneous metrics and WebKit failures in the exact required roster', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: completeRoster().map((job) =>
+      job.name === 'metrics-validate' || job.name === 'webkit-fallback'
+        ? { ...job, conclusion: 'failure' }
+        : job,
+    ),
+  });
+  assert.equal(result.status, 'genuine-failure');
+  assert.equal(result.terminal, true);
+  assert.equal(result.complete, false);
+  assert.equal(result.fallbackEligible, false);
+  assert.equal(result.actionable, true);
+  assert.deepEqual(result.failedContexts, ['webkit-fallback', 'metrics-validate']);
+  assert.deepEqual(result.reasonCodes, ['required-context-failed']);
+});
+
 test('keeps an incomplete required job out of terminal coverage evidence', () => {
   const result = classifyRequiredContextAdmission({
     run: runFixture(),

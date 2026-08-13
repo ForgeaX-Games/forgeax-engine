@@ -559,6 +559,7 @@ export function ensurePerFrameGraph(
     pipelineState,
     targetW,
     targetH,
+    hdrpClusterMembershipBindGroup: frameState.hdrpClusterMembershipBindGroup,
   };
   if (frameState.perFrameGraph === null) {
     frameState.perFrameGraph = frameState.activePipeline.buildGraph(

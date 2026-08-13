@@ -302,6 +302,7 @@ export function writeMembershipEvidence(input) {
     schemaVersion: 1,
     evidenceKind: input.evidenceKind ?? 'real',
     sourceHead: input.sourceHead,
+    identity: input.identity ?? manifest.identity,
     command: input.command ?? ['deferred-membership-evidence', identifier],
     process: {
       id: input.processId ?? `${identifier}-${process.pid}-${Date.now()}-${++payloadSerial}`,

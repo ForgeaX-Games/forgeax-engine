@@ -13,6 +13,7 @@
 import {
   type Buffer,
   type CommandBuffer,
+  type ComputePassDescriptor,
   ok,
   type QuerySet,
   type Result,
@@ -22,7 +23,7 @@ import {
   type RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
 import { unwrapBuffer } from './buffer';
-import { webgpuRuntimeError } from './errors';
+import { featureNotEnabledError, webgpuRuntimeError } from './errors';
 import { aspectToU8, normalizeExtent } from './queue';
 import { makeRhiRenderPassEncoder, type RawRenderPassLike } from './render-pass-encoder';
 
@@ -116,8 +117,10 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
     return makeRhiRenderPassEncoder(raw);
   }
 
-  beginComputePass(desc?: GPUComputePassDescriptor | undefined): RhiComputePassEncoder {
-    if (this.raw.beginComputePass === undefined) return makeRhiComputePassEncoder({});
+  beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder {
+    if (this.raw.beginComputePass === undefined) {
+      throw featureNotEnabledError('compute');
+    }
     const raw = this.raw.beginComputePass.call(this.raw, desc) as RawComputePassLike;
     return makeRhiComputePassEncoder(raw);
   }

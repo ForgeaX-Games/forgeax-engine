@@ -61,6 +61,7 @@ const SPEC_MAPPING = {
   RenderPassDepthStencilAttachment: 'GPURenderPassDepthStencilAttachment',
   TextureViewDescriptor: 'GPUTextureViewDescriptor',
   ComputePipelineDescriptor: 'GPUComputePipelineDescriptor',
+  ComputePassDescriptor: 'GPUComputePassDescriptor',
   QuerySetDescriptor: 'GPUQuerySetDescriptor',
 };
 

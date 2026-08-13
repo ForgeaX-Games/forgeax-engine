@@ -16,6 +16,7 @@
 //
 // Related: requirements AC-10; plan-strategy D-7/D-8.
 
+import type { CaptureFramesOptions } from './capture-options';
 import { RHI_DEBUG_DEV_ROUTES } from './dev-routes';
 import { DebugError, type SnapshotTimeoutDetail } from './errors';
 import {
@@ -48,10 +49,7 @@ export interface CaptureBrowserRecorder {
   _getValid(): boolean;
 }
 
-export interface CaptureFramesOptions {
-  /** Maximum time allowed for the frame-header GPU resource snapshot. */
-  readonly snapshotTimeoutMs?: number;
-}
+export type { CaptureFramesOptions } from './capture-options';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -226,7 +224,8 @@ export async function captureAndUpload(
   debugInst: CaptureBrowserRecorder,
   frames: number,
   label?: string,
+  options?: CaptureFramesOptions,
 ): Promise<UploadTapeResult> {
-  const tape = await captureFramesToMemory(debugInst, frames, label);
+  const tape = await captureFramesToMemory(debugInst, frames, label, options);
   return uploadTape(tape, label);
 }

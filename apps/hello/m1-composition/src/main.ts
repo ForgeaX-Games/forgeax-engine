@@ -45,11 +45,41 @@ const liveFrames = { value: 0 };
 const liveFixedTicks = { value: 0 };
 const liveErrors = { value: 0, codes: [] as string[] };
 const livePosition = { x: 0, y: 0, z: 0 };
+const m19LiveInput = {
+  keyboardDown: false,
+  keyboardJustPressed: false,
+  keyboardJustReleased: false,
+  mouseHeld: false,
+  mouseJustPressed: false,
+  mouseJustReleased: false,
+  pointerLocked: false,
+  pointerActiveCount: 0,
+  pointerEvents: [] as string[],
+  pointerPhaseLog: [] as string[],
+  gesture: { pinchScale: 1, rotationAngle: 0 },
+  gestureEvents: [] as string[],
+  gestureLog: [] as string[],
+  gamepad: {
+    connected: false,
+    held: false,
+    justPressed: false,
+    justReleased: false,
+  },
+  edgeLog: [] as string[],
+};
+const m19PointerIds = new Set<number>();
+
+function appendM19Log(log: string[], value: string): void {
+  log.push(value);
+  if (log.length > 64) log.shift();
+}
+
 world.insertResource('m1LivePhase', liveState);
 world.insertResource('m1LiveFrames', liveFrames);
 world.insertResource('m1LiveFixedTicks', liveFixedTicks);
 world.insertResource('m1LiveErrors', liveErrors);
 world.insertResource('m1LivePosition', livePosition);
+world.insertResource('m19LiveInput', m19LiveInput);
 world.insertResource(INPUT_MAP_KEY, [
   { action: 'jump', bindings: [{ type: 'key', key: 'Space' }] },
 ]);
@@ -90,6 +120,45 @@ world.addSystem(Update, {
     const liveInput = world.getResource<{ jump: boolean; justPressed: boolean }>('m1LiveInput');
     liveInput.jump = jump.isPressed();
     liveInput.justPressed = jump.justPressed();
+    const m19 = world.getResource<typeof m19LiveInput>('m19LiveInput');
+    const keyboardDown = snapshot.keyboard.downCode('KeyW');
+    const keyboardJustPressed = snapshot.keyboard.justPressedCode('KeyW');
+    const keyboardJustReleased = snapshot.keyboard.upCode('KeyW');
+    const mouseHeld = snapshot.mouse.button(0);
+    const mouseJustPressed = snapshot.mouse.justPressed(0);
+    const mouseJustReleased = snapshot.mouse.justReleased(0);
+    const pointerEvents = snapshot.pointerEvents.map((event) => `${event.pointerId}:${event.phase}`);
+    for (const event of snapshot.pointerEvents) {
+      if (event.phase === 'down' || event.phase === 'move') m19PointerIds.add(event.pointerId);
+      else m19PointerIds.delete(event.pointerId);
+      appendM19Log(m19.pointerPhaseLog, `${event.pointerId}:${event.phase}`);
+    }
+    const gestureEvents = snapshot.gestureEvents.map((event) => event.kind);
+    for (const event of gestureEvents) appendM19Log(m19.gestureLog, event);
+    const gamepad = snapshot.gamepad(0);
+    m19.keyboardDown = keyboardDown;
+    m19.keyboardJustPressed = keyboardJustPressed;
+    m19.keyboardJustReleased = keyboardJustReleased;
+    m19.mouseHeld = mouseHeld;
+    m19.mouseJustPressed = mouseJustPressed;
+    m19.mouseJustReleased = mouseJustReleased;
+    m19.pointerLocked = snapshot.mouse.pointerLocked;
+    m19.pointerActiveCount = m19PointerIds.size;
+    m19.pointerEvents = pointerEvents;
+    m19.gesture = { ...snapshot.gesture };
+    m19.gestureEvents = gestureEvents;
+    m19.gamepad = {
+      connected: gamepad.connected,
+      held: gamepad.button(0),
+      justPressed: gamepad.justPressed(0),
+      justReleased: gamepad.justReleased(0),
+    };
+    if (keyboardJustPressed) appendM19Log(m19.edgeLog, 'keyboard:justPressed');
+    if (keyboardJustReleased) appendM19Log(m19.edgeLog, 'keyboard:justReleased');
+    if (mouseJustPressed) appendM19Log(m19.edgeLog, 'mouse:justPressed');
+    if (mouseJustReleased) appendM19Log(m19.edgeLog, 'mouse:justReleased');
+    if (gamepad.justPressed(0)) appendM19Log(m19.edgeLog, 'gamepad:justPressed');
+    if (gamepad.justReleased(0)) appendM19Log(m19.edgeLog, 'gamepad:justReleased');
     const position = world.getResource<{ x: number; y: number; z: number }>('m1LivePosition');
     world.set(root, Transform, { pos: [position.x, position.y, position.z] }).unwrap();
     status.textContent = `phase=${liveState.value} frames=${liveFrames.value} fixed=${liveFixedTicks.value}`;

@@ -2186,9 +2186,42 @@ impl RhiWgpuCommandEncoder {
                 .and_then(|value| value.as_string())
                 .map(leak_str)
         };
+        let timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'static>> =
+            match js_sys::Reflect::get(&desc_js, &JsValue::from_str("timestampWrites")) {
+                Ok(js) if !js.is_null() && !js.is_undefined() => {
+                    let query_set = js_sys::Reflect::get(
+                        &js,
+                        &JsValue::from_str("querySet"),
+                    )
+                    .map_err(|_| JsValue::from_str("timestampWrites missing querySet"))?;
+                    let beginning = js_sys::Reflect::get(
+                        &js,
+                        &JsValue::from_str("beginningOfPassWriteIndex"),
+                    )
+                    .ok()
+                    .and_then(|value| value.as_f64())
+                    .map(|value| value as u32);
+                    let end = js_sys::Reflect::get(
+                        &js,
+                        &JsValue::from_str("endOfPassWriteIndex"),
+                    )
+                    .ok()
+                    .and_then(|value| value.as_f64())
+                    .map(|value| value as u32);
+                    Some(wgpu::ComputePassTimestampWrites {
+                        query_set: query_set_borrow(
+                            &query_set,
+                            "beginComputePass.timestampWrites.querySet",
+                        )?,
+                        beginning_of_pass_write_index: beginning,
+                        end_of_pass_write_index: end,
+                    })
+                }
+                _ => None,
+            };
         let desc = wgpu::ComputePassDescriptor {
             label,
-            timestamp_writes: None,
+            timestamp_writes,
         };
         let encoder = self.inner.as_mut().expect("CommandEncoder already consumed");
         let pass = encoder.begin_compute_pass(&desc);

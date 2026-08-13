@@ -37,6 +37,7 @@ import type {
   CanvasConfiguration,
   CommandBuffer,
   CommandEncoderDescriptor,
+  ComputePassDescriptor,
   ComputePipeline,
   ComputePipelineDescriptor,
   MappedBuffer,
@@ -71,6 +72,7 @@ import {
   queueWriteBufferOutOfBounds,
   renderPassNotEnded,
 } from './errors';
+import { resolveTimestampQueries, writeTimestamp } from './internal/timestamp-query';
 
 /**
  * Mirror forgeax `?: T | undefined` descriptor onto the spec GPUXxxDescriptor
@@ -703,6 +705,31 @@ function makeCommandEncoder(
   caps: { readonly timestampQuery: boolean },
   fireFeatureNotEnabled: (featureName: string, hint: string) => void,
 ): RhiCommandEncoder {
+  function mirrorComputePassDescriptor(
+    desc: ComputePassDescriptor | undefined,
+  ): GPUComputePassDescriptor | undefined {
+    if (desc === undefined) return undefined;
+    const out = mirror(desc, ['label']);
+    if ('timestampWrites' in desc) {
+      const writes = desc.timestampWrites;
+      out.timestampWrites =
+        writes === undefined
+          ? undefined
+          : {
+              querySet:
+                QUERY_SET_RAW_MAP.get(writes.querySet) ??
+                (writes.querySet as unknown as GPUQuerySet),
+              ...(writes.beginningOfPassWriteIndex === undefined
+                ? {}
+                : { beginningOfPassWriteIndex: writes.beginningOfPassWriteIndex }),
+              ...(writes.endOfPassWriteIndex === undefined
+                ? {}
+                : { endOfPassWriteIndex: writes.endOfPassWriteIndex }),
+            };
+    }
+    return out as unknown as GPUComputePassDescriptor;
+  }
+
   const enc: RhiCommandEncoder = {
     beginRenderPass(desc: GPURenderPassDescriptor): RhiRenderPassEncoder {
       const state = ENCODER_STATE.get(enc);
@@ -719,11 +746,14 @@ function makeCommandEncoder(
       if (state !== undefined) state.activePass = pass;
       return pass;
     },
-    beginComputePass(desc?: GPUComputePassDescriptor | undefined): RhiComputePassEncoder {
+    beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder {
       const state = ENCODER_STATE.get(enc);
       throwIfFinished(state);
+      const rawDescriptor = mirrorComputePassDescriptor(desc);
       const rawPass =
-        desc === undefined ? rawEncoder.beginComputePass() : rawEncoder.beginComputePass(desc);
+        rawDescriptor === undefined
+          ? rawEncoder.beginComputePass()
+          : rawEncoder.beginComputePass(rawDescriptor);
       const pass: RhiComputePassEncoder = {
         setPipeline(pipeline) {
           rawPass.setPipeline(pipeline as unknown as GPUComputePipeline);
@@ -884,28 +914,16 @@ function makeCommandEncoder(
           );
         }
       }
-      try {
-        const rawQsHandle = QUERY_SET_RAW_MAP.get(querySet) ?? (querySet as unknown as GPUQuerySet);
-        const rawDstHandle =
-          BUFFER_RAW_MAP.get(destination) ?? (destination as unknown as GPUBuffer);
-        rawEncoder.resolveQuerySet(
-          rawQsHandle,
-          firstQuery,
-          queryCount,
-          rawDstHandle,
-          destinationOffset,
-        );
-        return ok(undefined);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        return err(
-          new RhiErrorClass({
-            code: 'webgpu-runtime-error',
-            expected: 'underlying GPUCommandEncoder.resolveQuerySet to succeed',
-            hint: `resolveQuerySet raised: ${message}`,
-          }),
-        );
-      }
+      const rawQsHandle = QUERY_SET_RAW_MAP.get(querySet) ?? (querySet as unknown as GPUQuerySet);
+      const rawDstHandle = BUFFER_RAW_MAP.get(destination) ?? (destination as unknown as GPUBuffer);
+      return resolveTimestampQueries({
+        rawEncoder,
+        rawQuerySet: rawQsHandle,
+        firstQuery,
+        queryCount,
+        rawDestination: rawDstHandle,
+        destinationOffset,
+      });
     },
     pushDebugGroup(groupLabel: string): void {
       rawEncoder.pushDebugGroup(groupLabel);
@@ -933,30 +951,7 @@ function makeCommandEncoder(
         return;
       }
       const rawQs = QUERY_SET_RAW_MAP.get(querySet) ?? (querySet as unknown as GPUQuerySet);
-      // @webgpu/types v0.1.69 declares writeTimestamp on GPUCommandEncoder
-      // when the timestamp-query feature is enabled. A capability-positive
-      // backend must expose and execute that raw operation; otherwise a
-      // Render capture could publish a fabricated zero interval.
-      const encoderWithTimestamp = rawEncoder as unknown as {
-        writeTimestamp?: (qs: GPUQuerySet, idx: number) => void;
-      };
-      if (typeof encoderWithTimestamp.writeTimestamp !== 'function') {
-        throw new RhiErrorClass({
-          code: 'webgpu-runtime-error',
-          expected: 'underlying GPUCommandEncoder.writeTimestamp to be callable',
-          hint: 'timestamp-query is advertised but the raw encoder has no writeTimestamp method',
-        });
-      }
-      try {
-        encoderWithTimestamp.writeTimestamp(rawQs, queryIndex);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        throw new RhiErrorClass({
-          code: 'webgpu-runtime-error',
-          expected: 'underlying GPUCommandEncoder.writeTimestamp to succeed',
-          hint: `writeTimestamp raised: ${message}`,
-        });
-      }
+      writeTimestamp({ rawEncoder, rawQuerySet: rawQs, queryIndex });
     },
     finish(): Result<CommandBuffer, RhiError> {
       const state = ENCODER_STATE.get(enc);

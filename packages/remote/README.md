@@ -64,7 +64,7 @@ Three live engine roots are always present in eval scope. Diagnostics are struct
 | `world` | `World` (from `@forgeax/engine-ecs`) | ECS read/write: `spawn`, `despawn`, `set`, `query` |
 | `renderer` | `Renderer` | Renderer control: create/destroy render targets, read backbuffer |
 | `assets` | `AssetRegistry` | Asset queries: `loadByGuid`, `resolveName`, `rename` |
-| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrames(frames, label?)`, `inspectAt(tapePath, drawIdx, fields?)`. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). Browser capture uses the separate `window.__forgeax.captureFrame(frames)` surface. |
+| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrames(frames, label?, options?)`, `inspectAt(tapePath, drawIdx, fields?)`. `options.snapshotTimeoutMs` is an explicit bounded fault-control for exercising the documented timeout/recovery boundary. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). Browser capture uses the separate `window.__forgeax.captureFrame(frames, options?)` surface. |
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture: `startCapture({ frameLimit, eventLimit })`. **Only defined when the host passes `profiler` to `createApp` or `startServer`.** |
 | `execution` | `{ report(): unknown; rebuild(): Promise<unknown> } \| undefined` | App-owned execution report and explicit poisoned-World rebuild. Remote imports no App or ECS execution type. |
 

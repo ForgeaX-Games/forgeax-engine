@@ -26,6 +26,7 @@ import type {
   BindGroupLayout,
   BufferDescriptor,
   CommandEncoderDescriptor,
+  ComputePassDescriptor,
   PipelineLayout,
   Result,
   RhiCommandEncoder,
@@ -1517,7 +1518,7 @@ function replayBeginComputePass(
   const encoder = encoderMap.get(event.cmdHandleId);
   if (encoder === undefined) return;
 
-  const pass = encoder.beginComputePass(event.desc);
+  const pass = encoder.beginComputePass(event.desc as ComputePassDescriptor | undefined);
   passEncoderMap.set(event.passHandleId, pass);
 }
 

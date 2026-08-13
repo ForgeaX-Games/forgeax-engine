@@ -114,6 +114,31 @@ export function createFullMatrixManifest({ sourceHead, corpusId = `real-${source
     evidenceKind: 'real',
     sourceHead,
     corpusId,
+    identity: {
+      sourceHead,
+      carrier: {
+        selector: 'heavy',
+        backendKind: 'webgpu',
+        adapter: 'dawn-node',
+      },
+      workload: {
+        scenario: 'deferred-membership',
+        frames: 300,
+        lightCounts: [...LIGHT_MATRIX],
+        seed: 13,
+        clusterGrid: { x: 16, y: 9, z: 64 },
+      },
+      profile: {
+        dawnEventLimit: 100000,
+        webkitEventLimit: 65536,
+        nestedFrameLimit: 90,
+        settleMs: 25,
+      },
+      artifactHashes: {
+        algorithm: 'sha256',
+        required: ['record', 'profile', 'membership', 'pixel'],
+      },
+    },
     attempts,
     references,
     exact: FULL_MATRIX_EXACT,
@@ -130,6 +155,55 @@ export function validateFullMatrixManifest(manifest) {
     errors.push(error('manifest sourceHead must be a full commit SHA', '$.sourceHead'));
   if (typeof manifest?.corpusId !== 'string' || manifest.corpusId.length === 0)
     errors.push(error('manifest corpusId is required', '$.corpusId'));
+  const identity = manifest?.identity;
+  if (identity === null || typeof identity !== 'object') {
+    errors.push(error('manifest execution identity is required', '$.identity'));
+  } else {
+    if (identity.sourceHead !== manifest.sourceHead)
+      errors.push(error('identity sourceHead differs from manifest', '$.identity.sourceHead'));
+    if (!['standard', 'heavy'].includes(identity.carrier?.selector))
+      errors.push(
+        error('identity carrier selector must be standard or heavy', '$.identity.carrier'),
+      );
+    if (identity.carrier?.backendKind !== 'webgpu' || identity.carrier?.adapter !== 'dawn-node')
+      errors.push(
+        error('identity carrier must describe the Dawn WebGPU producer', '$.identity.carrier'),
+      );
+    if (identity.workload?.scenario !== 'deferred-membership' || identity.workload?.frames !== 300)
+      errors.push(
+        error(
+          'identity workload must be the 300-frame deferred membership scenario',
+          '$.identity.workload',
+        ),
+      );
+    if (JSON.stringify(identity.workload?.lightCounts) !== JSON.stringify(LIGHT_MATRIX))
+      errors.push(
+        error(
+          'identity workload light counts differ from the exact matrix',
+          '$.identity.workload.lightCounts',
+        ),
+      );
+    if (
+      identity.profile?.dawnEventLimit !== 100000 ||
+      identity.profile?.webkitEventLimit !== 65536 ||
+      identity.profile?.nestedFrameLimit !== 90 ||
+      identity.profile?.settleMs !== 25
+    )
+      errors.push(
+        error('identity profile budgets differ from the formal contract', '$.identity.profile'),
+      );
+    if (
+      identity.artifactHashes?.algorithm !== 'sha256' ||
+      JSON.stringify(identity.artifactHashes?.required) !==
+        JSON.stringify(['record', 'profile', 'membership', 'pixel'])
+    )
+      errors.push(
+        error(
+          'identity artifact hashes must require SHA-256 descriptors',
+          '$.identity.artifactHashes',
+        ),
+      );
+  }
   if (!Array.isArray(manifest?.attempts) || manifest.attempts.length !== 20)
     errors.push(error('full matrix requires exactly 20 attempt declarations', '$.attempts'));
   if (!Array.isArray(manifest?.references) || manifest.references.length !== 32)
@@ -225,12 +299,64 @@ function checkArtifact(descriptor, artifactRoot, name, errors) {
     errors.push(error(`${name} artifact SHA-256 does not match descriptor`, `$.artifacts.${name}`));
 }
 
+export function projectIdentityForRoute(manifestIdentity, record) {
+  if (record?.provenance?.backendKind !== 'wgpu-webgl2') return manifestIdentity;
+  return {
+    sourceHead: manifestIdentity.sourceHead,
+    carrier: {
+      selector: manifestIdentity.carrier.selector,
+      backendKind: 'wgpu-webgl2',
+      adapter: 'webkit-webgl2',
+    },
+    workload: {
+      scenario: manifestIdentity.workload.scenario,
+      frames: manifestIdentity.workload.frames,
+      lights: record.provenance.lights,
+    },
+    profile: {
+      webkitEventLimit: manifestIdentity.profile.webkitEventLimit,
+      nestedFrameLimit: manifestIdentity.profile.nestedFrameLimit,
+      settleMs: manifestIdentity.profile.settleMs,
+    },
+    artifactHashes: manifestIdentity.artifactHashes,
+  };
+}
+
 function checkCommon(record, manifest, artifactRoot, errors) {
   if (record?.schemaVersion !== 1) errors.push(error('record schemaVersion must be 1'));
   if (record?.evidenceKind !== 'real')
     errors.push(error('record evidenceKind must be real', '$.evidenceKind'));
   if (record?.sourceHead !== manifest.sourceHead)
     errors.push(error('record sourceHead differs from manifest', '$.sourceHead'));
+  const recordIdentity = record?.identity;
+  const manifestIdentity = manifest?.identity;
+  if (recordIdentity === null || typeof recordIdentity !== 'object') {
+    errors.push(error('record execution identity is required', '$.identity'));
+  } else if (manifestIdentity !== null && typeof manifestIdentity === 'object') {
+    const expectedIdentity = projectIdentityForRoute(manifestIdentity, record);
+    if (recordIdentity.sourceHead !== expectedIdentity.sourceHead)
+      errors.push(
+        error('record identity sourceHead differs from manifest', '$.identity.sourceHead'),
+      );
+    if (recordIdentity.carrier?.selector !== expectedIdentity.carrier?.selector)
+      errors.push(
+        error(
+          'record identity carrier selector differs from manifest',
+          '$.identity.carrier.selector',
+        ),
+      );
+    if (JSON.stringify(recordIdentity) !== JSON.stringify(expectedIdentity))
+      errors.push(
+        error('record identity does not match its carrier-route projection', '$.identity'),
+      );
+    if (
+      JSON.stringify(recordIdentity.artifactHashes) !==
+      JSON.stringify(expectedIdentity.artifactHashes)
+    )
+      errors.push(
+        error('record identity artifact hashes differ from manifest', '$.identity.artifactHashes'),
+      );
+  }
   if (record?.process?.pid <= 0)
     errors.push(error('real record requires a process id', '$.process.pid'));
   if (typeof record?.process?.id !== 'string' || record.process.id.length === 0)
@@ -244,6 +370,18 @@ function checkCommon(record, manifest, artifactRoot, errors) {
     errors.push(error('record dimensions are required', '$.provenance.dimensions'));
   if (!record?.timing || !record?.outputHashes || !record?.artifacts)
     errors.push(error('record timing, outputHashes, and artifacts are required'));
+  for (const name of manifest?.identity?.artifactHashes?.required ?? []) {
+    const descriptor = record?.artifacts?.[name];
+    if (descriptor === undefined)
+      errors.push(error(`record is missing required ${name} artifact descriptor`, '$.artifacts'));
+    else if (typeof descriptor.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(descriptor.sha256))
+      errors.push(
+        error(
+          `${name} artifact descriptor must contain a SHA-256 hash`,
+          `$.artifacts.${name}.sha256`,
+        ),
+      );
+  }
   for (const [name, descriptor] of Object.entries(record?.artifacts ?? {}))
     checkArtifact(descriptor, artifactRoot, name, errors);
 }
@@ -732,7 +870,8 @@ export function validateRealCorpus({
     evidenceKind: manifest.evidenceKind,
     truthfulnessReady,
     optimizationReleaseReady,
-    completeMatrixReady: truthfulnessReady,
+    completeMatrixReady:
+      truthfulnessReady && acceptedGpuRecords.length === FULL_MATRIX_CONTRACT.acceptedGpu,
     aggregateTarget: FULL_MATRIX_ID,
   };
 }

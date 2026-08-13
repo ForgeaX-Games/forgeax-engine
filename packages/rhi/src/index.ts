@@ -791,6 +791,20 @@ export interface RenderPassTimestampWrites {
   endOfPassWriteIndex?: number | undefined;
 }
 
+/** Compute-pass descriptor with forgeax-owned timestamp query handles. */
+export type ComputePassDescriptor = ExplicitUndefined<
+  Omit<Pick<GPUComputePassDescriptor, 'label' | 'timestampWrites'>, 'timestampWrites'>
+> & {
+  timestampWrites?: ComputePassTimestampWrites | undefined;
+};
+
+/** Timestamp writes attached to a compute pass descriptor. */
+export interface ComputePassTimestampWrites {
+  querySet: QuerySet;
+  beginningOfPassWriteIndex?: number | undefined;
+  endOfPassWriteIndex?: number | undefined;
+}
+
 // ============================================================================
 // Capabilities trio (MVP-1.2) - readonly + independent fields
 // ============================================================================
@@ -1709,7 +1723,7 @@ export interface RhiCommandEncoder {
    * @example
    *   const pass = encoder.beginComputePass();
    */
-  beginComputePass(desc?: GPUComputePassDescriptor | undefined): RhiComputePassEncoder;
+  beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder;
   /** Copy a sub-region of a Buffer to another Buffer (5-arg full form).
    *
    * Spec anchor: [@webgpu/types.GPUCommandEncoder.copyBufferToBuffer].

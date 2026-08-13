@@ -4,7 +4,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import { createFullMatrixManifest } from './membership-timing/full-matrix.mjs';
+import {
+  createFullMatrixManifest,
+  validateFullMatrixManifest,
+} from './membership-timing/full-matrix.mjs';
 
 const output = process.argv
   .find((value) => value.startsWith('--output='))
@@ -14,6 +17,11 @@ if (output === undefined)
 
 const sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const manifest = createFullMatrixManifest({ sourceHead });
+const validation = validateFullMatrixManifest(manifest);
+if (!validation.valid)
+  throw new Error(
+    `generated full matrix manifest is invalid: ${JSON.stringify(validation.errors)}`,
+  );
 const outputPath = resolve(output);
 mkdirSync(dirname(outputPath), { recursive: true });
 writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);

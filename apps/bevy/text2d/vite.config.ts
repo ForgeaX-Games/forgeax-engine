@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
@@ -14,12 +15,18 @@ const legacyFontRoots = [
   resolve(dejavuFonts, 'DejaVuSansMono.atlas.png.meta.json'),
   resolve(dejavuFonts, 'DejaVuSansMono.font.pack.json'),
 ];
+const runtimeBinding = createStandaloneRuntimeAssetBinding('bevy-text2d');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     vitePluginRhiDebug(),
-    pluginPack({ roots: legacyFontRoots, importers: [imageImporter], refresh: reloadAssetHost() }),
+    pluginPack({
+      runtimeBinding,
+      roots: legacyFontRoots,
+      importers: [imageImporter],
+      refresh: reloadAssetHost(),
+    }),
   ],
   server: { fs: { allow: [monorepoRoot] } },
   build: { target: 'esnext', rollupOptions: { input: { main: resolve(here, 'index.html') } } },

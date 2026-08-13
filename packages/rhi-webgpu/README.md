@@ -2,18 +2,18 @@
 
 > WebGPU thin shim implementation of `@forgeax/engine-rhi`; spec-aligned descriptors; `'x' in src` guard; no field renaming.
 
-## Charter propositions (顶部命题 / AI users read AGENTS.md §RHI / WebGPU first)
+## Charter propositions (AI users read AGENTS.md §RHI / WebGPU first)
 
 | Proposition | This package's contract |
 |:--|:--|
-| 1 渐进披露 | Single `import { rhi } from '@forgeax/engine-rhi-webgpu'` exposes 14 opaque handles + the entire RHI surface; one read covers entry. |
-| 2 业界实践 | Descriptor mirroring uses `Pick<GPUXxxDescriptor, ...>`; `tsconfig` enables `exactOptionalPropertyTypes`; ts-morph drives the R12 lint mirror (S-2). |
-| 3 机读 union > 散文 | Bounds-guard hints (`'queue-write-buffer-out-of-bounds'`) carry concrete `got X` numbers, not prose; AI users parse `.hint` for self-recovery. |
-| 4 显式失败 | Real-path surfaces returned `Result.err` for every D-S3 trigger (4 new codes added by `feat-20260508-rhi-surface-completion`). The escape hatch is renamed to `_internal_getRawDevice` + confined to a 4-path allow-list (D-S1). |
-| 5 一致抽象 | Shim never renames descriptor fields; `BufferDescriptor.size` -> `GPUBufferDescriptor.size` byte-for-byte; descriptors travel via `'x' in src` guard preserving missing vs explicit-undefined. |
-| 6 (candidate) mock vs real-GPU | `src/__tests__/dawn-real-gpu.dawn.test.ts` triggers all 4 D-S3 codes against real dawn.node GPU (plan-decisions L-P3); silent-pass blind spots monitored. |
+| 1 Progressive disclosure | Single `import { rhi } from '@forgeax/engine-rhi-webgpu'` exposes 14 opaque handles plus the entire RHI surface; one read covers entry. |
+| 2 Industry practice | Descriptor mirroring uses `Pick<GPUXxxDescriptor, ...>`; `tsconfig` enables `exactOptionalPropertyTypes`; ts-morph drives the R12 lint mirror (S-2). |
+| 3 Machine-readable unions | Bounds-guard hints (`'queue-write-buffer-out-of-bounds'`) carry concrete `got X` numbers, not prose; AI users parse `.hint` for self-recovery. |
+| 4 Explicit failure | Real-path surfaces return `Result.err` for every D-S3 trigger. The escape hatch is renamed to `_internal_getRawDevice` and confined to a four-path allow-list (D-S1). |
+| 5 Consistent abstraction | The shim never renames descriptor fields; `BufferDescriptor.size` maps byte-for-byte to `GPUBufferDescriptor.size`; descriptors use an `'x' in src` guard to preserve missing versus explicit-undefined. |
+| 6 Real-GPU observation | `src/__tests__/dawn-real-gpu.dawn.test.ts` triggers the D-S3 codes against dawn.node GPU; silent-pass blind spots remain visible. |
 
-> AI users: read [AGENTS.md §RHI / WebGPU](../../AGENTS.md) first for the形态铁律 (spec alignment / capability-gated / opaque handle / math-free); this package is the WebGPU thin shim that physically realizes the contract.
+> AI users: read [AGENTS.md §RHI / WebGPU](../../AGENTS.md) first for the shape rules (spec alignment, capability gating, opaque handles, and math-free descriptors); this package is the WebGPU thin shim that realizes the contract.
 
 ## API entries (mid-section method tables)
 
@@ -52,6 +52,30 @@ devices retain the existing `feature-not-enabled` diagnostic path.
 ## Capabilities tri-layer
 
 `device.caps` (hardware probe) / `device.features` (enabled set) / `device.limits` (numeric upper bounds) — three independent `readonly` fields (charter proposition 5); `caps.X = false` is an explicit signal, never an exception (proposition 4).
+
+## Deferred membership evidence closure
+
+The full matrix closes only at `acceptedGpu=16`: five Dawn GPU records each
+for 32, 64, and 128 lights, one 256-light record, positive GPU ticks,
+variance, and the 256-light overflow fingerprint. `acceptedGpu=0` is a
+fail-closed blocker. CPU control, WebKit WebGL2 refusal, RhiNull refusal,
+screenshots, and capability bits cannot be promoted to accepted GPU evidence.
+
+The validator binds `sourceHead`, `carrier`, `workload`, `profile`, and
+`artifactHashes`. It requires the exact 20 top-level and 32 nested records and
+SHA-256 descriptors for `record`, `profile`, `membership`, and `pixel`. The
+formal budgets are Dawn `100000` events, WebKit `65536` events, nested frame
+limit `90`, and settle time `25` ms. The 128-light / 90-frame / `40000` event
+configuration is a falsifier and must be incomplete with dropped events; it is
+not the formal WebKit budget.
+
+The producer report is the recovery entry point. Read `blocker.code`,
+`blocker.expected`, `blocker.hint`, and `blocker.acceptedGpu`, then inspect the
+per-attempt `identity`, `profile`, `timing`, `membership`, `pixel`, and artifact
+hash records. The Render reason union remains closed: timestamp-query refusal
+uses `timestamp-query-unsupported`, while a raw timestamp write failure is
+`webgpu-runtime-error` at the RHI layer and `timestamp-write-unavailable` in
+the Render owner contract. Neither produces synthetic ticks.
 
 ## Test infrastructure
 

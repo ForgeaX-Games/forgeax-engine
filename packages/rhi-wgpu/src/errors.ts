@@ -43,15 +43,17 @@ export function adapterUnavailable(): Result<never, RhiError> {
  * so AI users learn the canonical pre-check pattern (charter proposition 4
  * explicit failure + capability-gated form).
  */
-export function featureNotEnabled(featureName?: string | undefined): Result<never, RhiError> {
+export function featureNotEnabledError(featureName?: string | undefined): RhiError {
   const fname = featureName ?? 'compute';
-  return err(
-    new RhiError({
-      code: 'feature-not-enabled',
-      expected: `feature ${fname} to be enabled on the active wgpu backend`,
-      hint: `feature ${fname} not available on wgpu webgl backend; check engine.rhi.caps.${fname} before requesting`,
-    }),
-  );
+  return new RhiError({
+    code: 'feature-not-enabled',
+    expected: `feature ${fname} to be enabled on the active wgpu backend`,
+    hint: `feature ${fname} not available on wgpu webgl backend; check engine.rhi.caps.${fname} before requesting`,
+  });
+}
+
+export function featureNotEnabled(featureName?: string | undefined): Result<never, RhiError> {
+  return err(featureNotEnabledError(featureName));
 }
 
 /**

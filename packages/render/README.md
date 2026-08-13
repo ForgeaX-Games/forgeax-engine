@@ -78,6 +78,44 @@ Timestamp-capable backends must execute both raw timestamp writes. A missing or
 throwing write is a structured `timestamp-write-unavailable` refusal; Render
 never publishes a zero, reversed, or non-finite GPU interval as a report.
 
+## Deferred membership evidence closure
+
+> [!IMPORTANT]
+> The close condition is `acceptedGpu=16`, with five accepted Dawn GPU
+> records at each of 32, 64, and 128 lights, one 256-light record, positive
+> tick intervals, per-light-count variance, and the 256-light overflow
+> fingerprint. `acceptedGpu=0` is a blocker. CPU control, WebKit refusal,
+> RhiNull refusal, PNG screenshots, and capability bits never count as GPU
+> evidence.
+
+The producer and validator are deliberately separate from the public Render
+API. Generate the exact manifest, run the full producer matrix, and inspect
+the machine-readable report in this order:
+
+```sh
+node scripts/dev-verify/generate-deferred-membership-manifest.mjs --output=report/deferred-membership-timing/full-matrix-manifest.json
+node scripts/dev-verify/capture-deferred-membership-corpus.mjs --manifest=report/deferred-membership-timing/full-matrix-manifest.json --output-root=report/deferred-membership-timing --webkit-download=webkit-evidence --report=report/deferred-membership-timing
+```
+
+The manifest contract is [`full-matrix-contract.json`](../../scripts/dev-verify/membership-timing/full-matrix-contract.json); the WebKit subset is validated by [`webkit-subset.schema.json`](../../scripts/dev-verify/membership-timing/webkit-subset.schema.json). The stable identity is `sourceHead`, `carrier`, `workload`, `profile`, and `artifactHashes`. The exact target is 20 top-level records and 32 nested references, with `record`, `profile`, `membership`, and `pixel` SHA-256 descriptors.
+
+The report exposes `valid`, `truthfulnessReady`, `completeMatrixReady`,
+`optimizationReleaseReady`, `counts`, `errors`, and `blocker`. A blocker uses
+`code`, `expected`, `hint`, and the observed `acceptedGpu` count so an AI user
+can recover by inspecting per-attempt refusal, profile, identity, and artifact
+hash records. The owner reason union remains closed; for example,
+`timestamp-query-unsupported` is a refusal, while `timestamp-write-unavailable`
+is a terminal producer failure. Neither is a successful GPU sample.
+
+## RenderFeature: the producer seam (first-read index)
+
+The public route remains `RenderFeature` through `RenderPipeline` and the
+active RenderGraph pass. This is the RenderGraph pass for a `type FrameData`
+producer, which uses
+`createRenderer(canvas, { features: [feature] })`,
+`context.staging.addPass('named-pass'`, `execute: ({ pass })`, and the
+`Material pass` boundary. This is the graph-only Wave 1 feature route.
+
 > [!IMPORTANT]
 > Render consumes the effective MaterialAsset snapshot produced by extract. Each texture slot carries its own coordinate set and transform into the built-in PBR binding layout; render records do not reinterpret authoring fields or manufacture shader artifacts. The effective `passes` are already validated.
 

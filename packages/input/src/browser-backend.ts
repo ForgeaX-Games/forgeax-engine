@@ -221,6 +221,11 @@ export function attachBrowserInputBackend(
   // D-1: prevGamepadFrame is the only cross-frame state holder for gamepad diff.
   // Stored in backend closure; diffGamepadFrame compares prev vs cur each sample().
   let prevGamepadFrame = new Map<number, GamepadSlotSample>();
+  // Focus loss discards the old physical frame. The first successful sample
+  // afterwards establishes a new baseline instead of turning a still-held
+  // button into a synthetic justPressed edge.
+  let gamepadBaselinePending = false;
+  let focusResetPending = false;
 
   // M3 D-2 lazy-load state. The SDL DB (554KB) is loaded once, on first sight
   // of a non-standard gamepad, then cached here. `controllerDb` stays
@@ -550,6 +555,13 @@ export function attachBrowserInputBackend(
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
+    // Pointer lock is not allowed to survive a focus boundary. Publish the
+    // unlocked state synchronously; pointerlockchange may arrive later (or
+    // be suppressed by the browser while the document is hidden).
+    if (typeof doc.exitPointerLock === 'function' && doc.pointerLockElement === canvas) {
+      doc.exitPointerLock();
+    }
+    w3cLocked = false;
     releaseProviderLock();
     if (pointerMap.size > 0) {
       for (const [id, entry] of pointerMap) {
@@ -565,6 +577,8 @@ export function attachBrowserInputBackend(
       pointerMap.clear();
     }
     prevGamepadFrame.clear();
+    gamepadBaselinePending = true;
+    focusResetPending = true;
     vjBindState.clear();
   }
 
@@ -599,10 +613,13 @@ export function attachBrowserInputBackend(
 
   // w6 (D-1): track W3C pointer-lock state via document-level pointerlockchange.
   // Per-instance isolation: only update w3cLocked when pointerLockElement matches
-  // this backend's canvas. This handles ESC / blur / browser-auto-unlock natively
-  // without backend-side ESC logic for the W3C path.
+  // this backend's canvas. A native unlock is also a lifecycle boundary: browsers
+  // do not all pair an OS focus transition with a DOM blur event, so clear the
+  // physical frame when an owned lock exits after being acquired.
   function onPointerLockChange(): void {
+    const wasLocked = w3cLocked;
     w3cLocked = doc.pointerLockElement === canvas;
+    if (wasLocked && !w3cLocked && !providerLocked) onBlur();
   }
   safeAdd(doc, 'pointerlockchange', onPointerLockChange as EventListener);
 
@@ -687,6 +704,14 @@ export function attachBrowserInputBackend(
         // load. Standard pads never pull in the 554KB DB.
         if (hasNonStandard) kickOffDbLoad();
         gamepads = diffGamepadFrame(prevGamepadFrame, valid, remapLookup);
+        if (gamepadBaselinePending) {
+          gamepads = gamepads.map((slot) => ({
+            ...slot,
+            justPressed: new Set<number>(),
+            justReleased: new Set<number>(),
+          }));
+          gamepadBaselinePending = false;
+        }
         // Store this frame's state for next frame's diff.
         const nextFrame = new Map<number, GamepadSlotSample>();
         for (const slot of gamepads) {
@@ -776,6 +801,7 @@ export function attachBrowserInputBackend(
       ...(virtualAxes ? { virtualAxes } : {}),
       ...(gestures ? { gestures } : {}),
       ...(gestureEvents ? { gestureEvents } : {}),
+      ...(focusResetPending ? { focusReset: true } : {}),
     };
     // Reset per-frame accumulators (movement delta + key edges + wheel notches + phase queue).
     upEdges.clear();
@@ -784,6 +810,7 @@ export function attachBrowserInputBackend(
     mvy = 0;
     wheelAccum = 0;
     phaseQueue.length = 0;
+    focusResetPending = false;
     return out;
   }
 

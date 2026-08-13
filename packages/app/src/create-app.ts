@@ -425,15 +425,24 @@ async function createAppFromCanvas(
     // flag is unset this assignment never runs, so globalThis.__forgeax does
     // not exist and a DevTools caller hits a TypeError (charter P3 explicit
     // failure -- F-3 zero-injection).
-    (globalThis as { __forgeax?: { captureFrame(n: number): Promise<unknown> } }).__forgeax = {
-      captureFrame(n: number): Promise<unknown> {
+    (
+      globalThis as {
+        __forgeax?: {
+          captureFrame(
+            n: number,
+            options?: { readonly snapshotTimeoutMs?: number },
+          ): Promise<unknown>;
+        };
+      }
+    ).__forgeax = {
+      captureFrame(n: number, options?: { readonly snapshotTimeoutMs?: number }): Promise<unknown> {
         if (import.meta.env?.DEV !== true) {
           return Promise.reject(
             new Error('RHI browser capture is available only in a Vite dev host'),
           );
         }
         return import('@forgeax/engine-rhi-debug/capture-browser').then((m) =>
-          m.captureAndUpload(debugInst, n),
+          m.captureAndUpload(debugInst, n, undefined, options),
         );
       },
     };
@@ -518,8 +527,17 @@ async function createAppFromCanvas(
         if (import.meta.env?.DEV === true) {
           const captureMod = await import('@forgeax/engine-rhi-debug/capture-browser');
           _debugAdapter = {
-            captureFrames: async (frames: number, label?: string) => {
-              const uploaded = await captureMod.captureAndUpload(_debugInst, frames, label);
+            captureFrames: async (
+              frames: number,
+              label?: string,
+              options?: { readonly snapshotTimeoutMs?: number },
+            ) => {
+              const uploaded = await captureMod.captureAndUpload(
+                _debugInst,
+                frames,
+                label,
+                options,
+              );
               return {
                 tapes: [
                   {

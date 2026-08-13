@@ -317,6 +317,68 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
     });
   });
 
+  describe('w2 timestamp resolve and readback resource contract', () => {
+    it('resolves aligned timestamp queries, reads u64 slots, and releases resources', async () => {
+      const gpu = createMockGpu();
+      const adapter = await gpu.requestAdapter();
+      if (adapter === null) throw new Error('mock adapter should exist');
+      const raw = await adapter.requestDevice();
+      const features = raw.features as unknown as Set<GPUFeatureName>;
+      features.add('timestamp-query');
+
+      let resolveCalls = 0;
+      const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
+      raw.createCommandEncoder = (descriptor) => {
+        const encoder = originalCreateCommandEncoder(descriptor);
+        const originalResolveQuerySet = encoder.resolveQuerySet.bind(encoder);
+        encoder.resolveQuerySet = (...args) => {
+          resolveCalls += 1;
+          originalResolveQuerySet(...args);
+        };
+        return encoder;
+      };
+
+      const { device } = makeRhiDevice(raw as unknown as GPUDevice);
+      const querySetResult = device.createQuerySet({ type: 'timestamp', count: 2 });
+      expect(querySetResult.ok).toBe(true);
+      if (!querySetResult.ok) return;
+
+      const readbackResult = device.createBuffer({
+        label: 'w2-timestamp-readback',
+        size: 256,
+        usage: QUERY_RESOLVE_USAGE | 0x1,
+      });
+      expect(readbackResult.ok).toBe(true);
+      if (!readbackResult.ok) return;
+
+      const encoderResult = device.createCommandEncoder({ label: 'w2-timestamp-resolve' });
+      expect(encoderResult.ok).toBe(true);
+      if (!encoderResult.ok) return;
+
+      const resolveResult = encoderResult.value.resolveQuerySet(
+        querySetResult.value,
+        0,
+        2,
+        readbackResult.value,
+        0,
+      );
+      expect(resolveResult.ok).toBe(true);
+      expect(resolveCalls).toBe(1);
+
+      const mappedResult = await readbackResult.value.mapAsync(0x1);
+      expect(mappedResult.ok).toBe(true);
+      if (!mappedResult.ok) return;
+      const mappedRange = mappedResult.value.getMappedRange(0, 16);
+      expect(mappedRange.ok).toBe(true);
+      if (!mappedRange.ok) return;
+      expect(new BigUint64Array(mappedRange.value).length).toBe(2);
+      mappedResult.value.unmap();
+
+      expect(device.destroyQuerySet(querySetResult.value).ok).toBe(true);
+      expect(device.destroyBuffer(readbackResult.value).ok).toBe(true);
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // w38 (M5 / K-3) - RhiCommandEncoder.writeTimestamp gating + happy path.
   // ---------------------------------------------------------------------------
@@ -350,6 +412,63 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       const encResult = device.createCommandEncoder({ label: 'w38-encoder' });
       expect(encResult.ok).toBe(true);
       expect(typeof encResult.value.writeTimestamp).toBe('function');
+    });
+
+    it('maps an opaque QuerySet in compute-pass timestampWrites to the raw descriptor', async () => {
+      const gpu = createMockGpu();
+      const adapter = await gpu.requestAdapter();
+      if (adapter === null) throw new Error('mock adapter should exist');
+      const raw = await adapter.requestDevice();
+      (raw.features as unknown as Set<GPUFeatureName>).add('timestamp-query');
+      let rawQuerySet: unknown;
+      const originalCreateQuerySet = raw.createQuerySet.bind(raw);
+      raw.createQuerySet = (descriptor) => {
+        const result = originalCreateQuerySet(descriptor);
+        rawQuerySet = result;
+        return result;
+      };
+      let captured: GPUComputePassDescriptor | undefined;
+      const originalCreateCommandEncoder = raw.createCommandEncoder.bind(raw);
+      raw.createCommandEncoder = (descriptor) => {
+        const encoder = originalCreateCommandEncoder(descriptor) as unknown as Record<
+          string,
+          unknown
+        >;
+        const originalBegin = encoder.beginComputePass as (
+          passDescriptor?: GPUComputePassDescriptor,
+        ) => unknown;
+        encoder.beginComputePass = (passDescriptor?: GPUComputePassDescriptor) => {
+          captured = passDescriptor;
+          return originalBegin.call(encoder, passDescriptor);
+        };
+        return encoder as unknown as ReturnType<typeof raw.createCommandEncoder>;
+      };
+      const { device } = makeRhiDevice(raw as unknown as GPUDevice);
+      const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+      expect(querySet.ok).toBe(true);
+      if (!querySet.ok) return;
+      const encoder = device.createCommandEncoder();
+      expect(encoder.ok).toBe(true);
+      if (!encoder.ok) return;
+      const pass = encoder.value.beginComputePass({
+        label: 'hdrp-cluster-membership',
+        timestampWrites: {
+          querySet: querySet.value,
+          beginningOfPassWriteIndex: 0,
+          endOfPassWriteIndex: 1,
+        },
+      });
+      pass.end();
+      expect(captured).toMatchObject({
+        label: 'hdrp-cluster-membership',
+        timestampWrites: {
+          querySet: querySet.value,
+          beginningOfPassWriteIndex: 0,
+          endOfPassWriteIndex: 1,
+        },
+      });
+      expect(rawQuerySet).toBeDefined();
+      expect(captured?.timestampWrites?.querySet).toBe(rawQuerySet);
     });
 
     async function timestampEncoder(

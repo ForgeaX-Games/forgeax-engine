@@ -907,6 +907,7 @@ export function createPluginServer(context: PluginServerContext) {
         }
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
         res.end(body);
         return;
       }

@@ -473,6 +473,8 @@ export type {
   CommandBuffer,
   CommandEncoder,
   CommandEncoderDescriptor,
+  ComputePassDescriptor,
+  ComputePassTimestampWrites,
   ComputePipeline,
   ComputePipelineDescriptor,
   Fence,

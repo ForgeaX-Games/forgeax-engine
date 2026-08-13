@@ -33,6 +33,56 @@ describe('factory contract', () => {
     expect(renderer.draw([], { owner: 0 }).ok).toBe(true);
   });
 
+  it('keeps the real factory-owned GPU refusal structured on the null carrier', async () => {
+    const manifest = `data:application/json,${encodeURIComponent(JSON.stringify({ schemaVersion: '1.0.0', entries: [] }))}`;
+    const renderer = await constructRenderer(
+      { getContext: () => null },
+      { rhi, membershipTiming: { mode: 'gpu' } },
+      { shaderManifestUrl: manifest },
+    );
+    try {
+      const ready = await renderer.ready;
+      expect(ready.ok).toBe(true);
+      expect(renderer.membershipTiming).toBeDefined();
+      const started = renderer.membershipTiming?.start();
+      expect(started?.ok).toBe(false);
+      if (started !== undefined && !started.ok) {
+        expect(started.error.code).toBe('timestamp-query-unsupported');
+        expect(started.error.expected).toContain('timestampQuery');
+        expect(started.error.hint).toEqual(expect.any(String));
+        expect(started.error.detail).toEqual(expect.any(String));
+      }
+    } finally {
+      renderer.dispose();
+    }
+  });
+
+  it('reports one capture identity through the real Render submit path for CPU control', async () => {
+    const manifest = `data:application/json,${encodeURIComponent(JSON.stringify({ schemaVersion: '1.0.0', entries: [] }))}`;
+    const renderer = await constructRenderer(
+      { getContext: () => null },
+      { rhi, membershipTiming: { mode: 'cpu-control' } },
+      { shaderManifestUrl: manifest },
+    );
+    try {
+      const ready = await renderer.ready;
+      expect(ready.ok).toBe(true);
+      const timing = renderer.membershipTiming;
+      expect(timing?.start().ok).toBe(true);
+      expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+      const report = await timing?.finish();
+      expect(report?.ok).toBe(true);
+      if (report?.ok) {
+        expect(report.value.captureId).toMatch(/^membership-\d+$/);
+        expect(report.value.submissionToken).toBe(`${report.value.captureId}:submission`);
+        expect(report.value.actualProducer).toBe('cpu');
+        expect(report.value.gpu).toBeNull();
+      }
+    } finally {
+      renderer.dispose();
+    }
+  });
+
   it('publishes frame completion only after a successful draw', async () => {
     const manifest = manifestUrl();
     const renderer = await constructRenderer(

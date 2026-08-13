@@ -21,14 +21,14 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { type MeshAsset } from '@forgeax/engine-assets-runtime';
-import { Transform } from '@forgeax/engine-scene';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 
 import { perspective } from '@forgeax/engine-render';
 import { acquireCanvasContext, createRenderer, EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
-import { pick } from '@forgeax/engine-picking';
+import { pick, pickVertex, pickVertexOnEntity, type VertexHit } from '@forgeax/engine-picking';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -106,21 +106,114 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     {
       component: Camera,
-      data: perspective({ fov: Math.PI / 4, aspect: target.width / target.height }),
+      data: perspective({
+        fov: Math.PI / 4,
+        aspect: target.width / target.height,
+        autoAspect: false,
+      }),
     },
   ).unwrap();
+
+  const probeButton = document.querySelector<HTMLButtonElement>('#probe-vertices');
+  const mutateButton = document.querySelector<HTMLButtonElement>('#mutate-transform');
+  const cameraButton = document.querySelector<HTMLButtonElement>('#update-camera');
+  const status = document.querySelector<HTMLOutputElement>('#picking-status');
+  if (!probeButton || !mutateButton || !cameraButton || !status) {
+    throw new Error('hello-picking: missing vertex probe controls');
+  }
+
+  const center = (): [number, number] => [target.width / 2, target.height / 2];
+  const summarizeHit = (hit: VertexHit): Record<string, unknown> => ({
+    entity: hit.entity,
+    vertexIndex: hit.vertexIndex,
+    worldPos: [
+      Number(hit.worldPos[0]),
+      Number(hit.worldPos[1]),
+      Number(hit.worldPos[2]),
+    ],
+    screenDist: Number(hit.screenDist.toFixed(4)),
+    worldDist: Number(hit.worldDist.toFixed(4)),
+    deformed: hit.deformed,
+  });
+
+  const probeVertices = (screenX: number, screenY: number, phase: string): VertexHit[] => {
+    const propagation = propagateTransforms(world);
+    if (!propagation.ok) {
+      console.error(`[picking] vertex phase=${phase} propagation=${propagation.error.code}`);
+      status.value = `propagation error: ${propagation.error.code}`;
+      return [];
+    }
+
+    const sceneHits = pickVertex(world, cameraEntity, screenX, screenY, target.width, target.height, {
+      limit: 3,
+    });
+    const entityHits = pickVertexOnEntity(
+      world,
+      cameraEntity,
+      screenX,
+      screenY,
+      target.width,
+      target.height,
+      cubeEntity,
+      { limit: 3 },
+    );
+    const sceneEvidence = sceneHits.map(summarizeHit);
+    const entityEvidence = entityHits.map(summarizeHit);
+    console.log(
+      `[picking] vertex phase=${phase} scene=${JSON.stringify(sceneEvidence)} entity=${JSON.stringify(entityEvidence)}`,
+    );
+    status.value = `${phase}: ${sceneHits.length} scene vertices`;
+    return sceneHits;
+  };
+
+  const updateTransform = (): void => {
+    const result = world.set(cubeEntity, Transform, { pos: [0.25, 0, 0] });
+    if (!result.ok) {
+      console.error(`[picking] transform update failed: ${result.error.code}`);
+      return;
+    }
+    const [x, y] = center();
+    console.log('[picking] transform phase=updated posX=0.25');
+    probeVertices(x, y, 'after-transform');
+  };
+
+  const updateCamera = (): void => {
+    const result = world.set(cameraEntity, Camera, { aspect: 1.1, fov: Math.PI / 3 });
+    if (!result.ok) {
+      console.error(`[picking] camera update failed: ${result.error.code}`);
+      return;
+    }
+    const [x, y] = center();
+    console.log('[picking] camera phase=updated aspect=1.1 fov=1.0472');
+    probeVertices(x, y, 'after-camera');
+  };
+
+  probeButton.addEventListener('click', () => {
+    const [x, y] = center();
+    probeVertices(x, y, 'button');
+  });
+  mutateButton.addEventListener('click', updateTransform);
+  cameraButton.addEventListener('click', updateCamera);
 
   // Click -> pick -> highlight. DOM coordinate conversion (OOS-13) is done here.
   target.addEventListener('click', (e) => {
     const rect = target.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const propagation = propagateTransforms(world);
+    if (!propagation.ok) {
+      console.error(`[picking] propagation failed: ${propagation.error.code}`);
+      return;
+    }
     const hit = pick(
       world,
       cameraEntity,
-      e.clientX - rect.left,
-      e.clientY - rect.top,
+      screenX,
+      screenY,
       target.width,
       target.height,
     );
+    probeVertices(screenX, screenY, 'pointer');
     if (hit) {
       world.set(hit.entity, MeshRenderer, { materials: [highlightHandle] });
       console.log(`[picking] hit entity=${hit.entity} distance=${hit.distance.toFixed(3)}`);

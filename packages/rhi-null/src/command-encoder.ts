@@ -16,6 +16,7 @@
 import type {
   Buffer,
   CommandBuffer,
+  ComputePassDescriptor,
   QuerySet,
   Result,
   RhiCommandEncoder,
@@ -83,7 +84,7 @@ export class RhiNullCommandEncoder implements RhiCommandEncoder {
     return new RhiNullRenderPassEncoder(this.bookkeeper, this.counter, label);
   }
 
-  beginComputePass(desc?: GPUComputePassDescriptor | undefined): RhiComputePassEncoder {
+  beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder {
     const label = readPassLabel(desc as unknown as Record<string, unknown> | undefined);
     return new RhiNullComputePassEncoder(this.bookkeeper, this.counter, label);
   }

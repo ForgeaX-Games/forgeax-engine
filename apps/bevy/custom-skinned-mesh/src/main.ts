@@ -16,6 +16,7 @@ interface Rig {
 interface EvidenceWindow extends Window {
   __bevyCustomSkinnedMeshReady?: boolean;
   __bevyCustomSkinnedMeshSnapshot?: () => { readonly upperQuat: number[]; readonly elapsed: number };
+  __prepareCustomSkinnedMeshCapture?: () => Promise<void>;
 }
 
 if (typeof document !== 'undefined') {
@@ -42,6 +43,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
   const started = app.start();
   if (!started.ok) console.error(`[custom-skinned-mesh] app.start failed: ${started.error.code}`);
+  evidence.__prepareCustomSkinnedMeshCapture = async (): Promise<void> => {
+    const updated = app.world.update(1 / 60);
+    if (!updated.ok) throw new Error(`capture preparation update failed: ${updated.error.code}`);
+    const drawn = app.renderer.draw([app.world], { owner: 0 });
+    if (!drawn.ok) throw new Error(`capture preparation draw failed: ${drawn.error.code}`);
+  };
 }
 
 export function buildWorld(world: World): readonly Rig[] {

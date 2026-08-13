@@ -274,3 +274,23 @@ test('rejects missing real provenance instead of writing unknown identity defaul
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('rejects a manifest source identity mismatch before publishing accepted evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forgeax-membership-evidence-'));
+  try {
+    const value = gpuInput(root, {
+      rawUnit: 'ticks',
+      rawBeginTick: '1',
+      rawEndTick: '3',
+      deltaTicks: '2',
+      timestampPeriodNanoseconds: 2,
+      durationNanoseconds: 4,
+    });
+    value.manifest.sourceHead = '0000000000000000000000000000000000000000';
+    const result = writeMembershipEvidence(value);
+    assert.equal(result.record.status, 'incomplete');
+    assert.equal(result.record.reason?.code, 'provenance-mismatch');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

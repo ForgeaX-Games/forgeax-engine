@@ -61,6 +61,11 @@ async function requestRhiDevice(): Promise<RhiDevice | undefined> {
   return deviceResult.value;
 }
 
+function reportTimestampEvidence(evidence: Record<string, unknown>): void {
+  // biome-ignore lint/suspicious/noConsole: the dawn admission record is the test evidence output
+  console.log(JSON.stringify(evidence));
+}
+
 describe("dawn-real-gpu - 'command-encoder-finished' triggered by second finish() (D-S3 #1)", () => {
   it('encoder.finish() returns ok; subsequent finish() returns command-encoder-finished', async () => {
     const device = await requestRhiDevice();
@@ -1191,38 +1196,172 @@ describe('w36 (M5) - dawn-real-gpu RhiQueue.onSubmittedWorkDone returns Promise<
 });
 
 // ---------------------------------------------------------------------------
-// w38 (M5 / K-3) - dawn-real-gpu RhiCommandEncoder.writeTimestamp.
+// w38 (M5 / K-3) - dawn-real-gpu compute-pass timestampWrites.
 // ---------------------------------------------------------------------------
 //
-// research §2.4 + dawn TimestampOnCommandEncoder reference:
-// encoder.writeTimestamp(querySet, queryIndex) writes a u64 GPU clock value
-// at queryIndex; when the 'timestamp-query' feature is NOT enabled, the gate
-// fires 'feature-not-enabled' via onError fan-out (the spec method returns
-// void; the forgeax form does not wrap Result).
-describe('w38 (M5 / K-3) - dawn-real-gpu RhiCommandEncoder.writeTimestamp gate', () => {
-  it('writeTimestamp on a device without timestamp-query feature does NOT throw and silently no-ops', async () => {
+// research §2.4 + dawn ComputePassDescriptor timestampWrites reference:
+// the real compute pass owns the beginning/end timestamp writes. The legacy
+// command-encoder writeTimestamp path is not used because current Dawn rejects
+// it even when timestamp-query is advertised.
+describe('w38 (M5 / K-3) - dawn-real-gpu compute-pass timestampWrites gate', () => {
+  it('reports timestamp-query refusal without treating a capability-disabled path as success', async () => {
     const device = await requestRhiDevice();
     if (device === undefined) return;
 
-    // dawn-node defaults to no timestamp-query feature (research §1.3 +
-    // §2.4 dawn surrounding notes). The shim must NOT throw; instead the
-    // call is treated as a silent no-op (engine layer can subscribe to
-    // onError to detect the gate; the test asserts the call itself does
-    // not raise).
     if (device.caps.timestampQuery) {
-      // Skip when the platform happens to enable timestamp-query.
       return;
     }
-    const qsResult = device.createQuerySet({ type: 'occlusion', count: 1 });
-    expect(qsResult.ok).toBe(true);
-    if (!qsResult.ok) return;
-    const encResult = device.createCommandEncoder({ label: 'w38-ts-gate' });
-    expect(encResult.ok).toBe(true);
-    if (!encResult.ok) return;
-    expect(typeof encResult.value.writeTimestamp).toBe('function');
-    // Call must not throw; the gate fans out via onError with feature-not-
-    // enabled but does not raise here.
-    expect(() => encResult.value.writeTimestamp(qsResult.value, 0)).not.toThrow();
+    const qsResult = device.createQuerySet({ type: 'timestamp', count: 1 });
+    expect(qsResult.ok).toBe(false);
+    if (!qsResult.ok) {
+      expect(qsResult.error.code).toBe('feature-not-enabled');
+      expect(qsResult.error.expected).toContain('timestampQuery');
+      expect(qsResult.error.hint).toContain('timestamp-query');
+      reportTimestampEvidence({
+        carrier: 'dawn-node',
+        selector: 'standard',
+        source: 'packages/rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts',
+        acceptedGpu: 0,
+        refusalCode: 'timestamp-query-unsupported',
+        expected: qsResult.error.expected,
+        hint: qsResult.error.hint,
+      });
+    }
+  });
+});
+
+describe('w3 dawn-real-gpu timestamp admission path', () => {
+  it('runs compute-pass timestampWrites -> resolve -> submit -> readback or records a structured refusal', async () => {
+    const selector = 'standard' as const;
+    const source = 'packages/rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts';
+    const adapterResult = await rhi.requestAdapter();
+    expect(adapterResult.ok).toBe(true);
+    if (!adapterResult.ok) return;
+
+    if (!adapterResult.value.features.has('timestamp-query')) {
+      reportTimestampEvidence({
+        carrier: 'dawn-node',
+        selector,
+        source,
+        acceptedGpu: 0,
+        refusalCode: 'timestamp-query-unsupported',
+        expected: "adapter.features.has('timestamp-query')",
+        hint: 'request a real Dawn device with the timestamp-query feature enabled',
+      });
+      return;
+    }
+
+    const deviceResult = await adapterResult.value.requestDevice({
+      requiredFeatures: ['timestamp-query'],
+    });
+    expect(deviceResult.ok).toBe(true);
+    if (!deviceResult.ok) return;
+    const device = deviceResult.value;
+
+    const querySetResult = device.createQuerySet({ type: 'timestamp', count: 2 });
+    expect(querySetResult.ok).toBe(true);
+    if (!querySetResult.ok) return;
+
+    const resolveResult = device.createBuffer({
+      label: 'w3-timestamp-resolve',
+      size: 256,
+      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+    });
+    expect(resolveResult.ok).toBe(true);
+    if (!resolveResult.ok) return;
+
+    const readbackResult = device.createBuffer({
+      label: 'w3-timestamp-readback',
+      size: 256,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    expect(readbackResult.ok).toBe(true);
+    if (!readbackResult.ok) return;
+
+    const encoderResult = device.createCommandEncoder({ label: 'w3-timestamp-encoder' });
+    expect(encoderResult.ok).toBe(true);
+    if (!encoderResult.ok) return;
+    const encoder = encoderResult.value;
+
+    try {
+      const pass = encoder.beginComputePass({
+        label: 'hdrp-cluster-membership',
+        timestampWrites: {
+          querySet: querySetResult.value,
+          beginningOfPassWriteIndex: 0,
+          endOfPassWriteIndex: 1,
+        },
+      });
+      pass.end();
+    } catch (error) {
+      const refusal = error as { code?: string; expected?: string; hint?: string };
+      reportTimestampEvidence({
+        carrier: 'dawn-node',
+        selector,
+        source,
+        acceptedGpu: 0,
+        refusalCode: 'timestamp-write-unavailable',
+        expected:
+          refusal.expected ??
+          'GPUComputePassDescriptor.timestampWrites to be accepted by the real compute pass',
+        hint: refusal.hint ?? String(error),
+      });
+      expect(refusal.code).toBe('webgpu-runtime-error');
+      return;
+    }
+
+    const resolveQueriesResult = encoder.resolveQuerySet(
+      querySetResult.value,
+      0,
+      2,
+      resolveResult.value,
+      0,
+    );
+    expect(resolveQueriesResult.ok).toBe(true);
+    if (!resolveQueriesResult.ok) return;
+    encoder.copyBufferToBuffer(resolveResult.value, 0, readbackResult.value, 0, 16);
+
+    const finishResult = encoder.finish();
+    expect(finishResult.ok).toBe(true);
+    if (!finishResult.ok) return;
+    const submitResult = device.queue.submit([finishResult.value]);
+    expect(submitResult.ok).toBe(true);
+    if (!submitResult.ok) return;
+    await device.queue.onSubmittedWorkDone();
+
+    const mappedResult = await readbackResult.value.mapAsync(GPUMapMode.READ);
+    expect(mappedResult.ok).toBe(true);
+    if (!mappedResult.ok) return;
+    const rangeResult = mappedResult.value.getMappedRange(0, 16);
+    expect(rangeResult.ok).toBe(true);
+    if (!rangeResult.ok) return;
+    const ticks = new BigUint64Array(rangeResult.value);
+    const begin = ticks[0];
+    const end = ticks[1];
+    if (begin === undefined || end === undefined || end <= begin) {
+      reportTimestampEvidence({
+        carrier: 'dawn-node',
+        selector,
+        source,
+        acceptedGpu: 0,
+        refusalCode: 'timestamp-write-unavailable',
+        expected: 'end > begin',
+        hint: 'timestamp readback did not produce a positive GPU interval',
+        observed: { begin: begin?.toString() ?? null, end: end?.toString() ?? null },
+      });
+      mappedResult.value.unmap();
+      return;
+    }
+
+    reportTimestampEvidence({
+      carrier: 'dawn-node',
+      selector,
+      source,
+      acceptedGpu: 1,
+      ticks: { begin: begin.toString(), end: end.toString() },
+    });
+    expect(end).toBeGreaterThan(begin);
+    mappedResult.value.unmap();
   });
 });
 

@@ -344,6 +344,10 @@ function sampleRun(runId, runAttempt, overrides = {}) {
   const base = {
     runId,
     runAttempt,
+    repository: 'ForgeaX-Games/forgeax-engine',
+    event: 'push',
+    branch: 'main',
+    headSha: 'a'.repeat(40),
     returnEvidence: {
       schemaVersion: 1,
       contractVersion: 3,
@@ -451,22 +455,25 @@ function sampleRun(runId, runAttempt, overrides = {}) {
     runnerType: 'self-hosted',
     cancelled: false,
     requiredRoster: [
-      'post-merge-gate',
       'build-artifacts',
       'primary-pnpm',
       'coverage-pnpm',
+      'coverage-perf',
       'vitest-browser',
+      'shared-inputs-browser',
       'smoke-fleet',
+      'smoke-fleet-0',
+      'smoke-fleet-1',
+      'smoke-fleet-2',
       'bevy-smoke-fleet',
+      'bevy-smoke-fleet-0',
+      'bevy-smoke-fleet-1',
+      'bevy-smoke-fleet-2',
       'vitest-dawn',
       'webkit-fallback',
       'portability-bun',
       'metrics-validate',
       'collectathon-boot-e2e',
-      'publish-fbx-wasm-release',
-      'publish-wgpu-wasm-release',
-      'publish-basis-wasm-release',
-      'sticky-comment',
     ],
     ...overrides,
   };
@@ -577,6 +584,28 @@ test('t26: different required roster rejects from comparable set', () => {
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.status, 'insufficientEvidence');
   assert.ok(parsed.comparableCount < 10);
+});
+
+test('t26: comparison requires the same repository and push on main provenance', () => {
+  const cases = [
+    { repository: 'ForgeaX-Games/other-repo' },
+    { event: 'pull_request' },
+    { branch: 'feature/probe' },
+    { repository: undefined },
+    { event: undefined },
+    { branch: undefined },
+    { headSha: undefined },
+    { headSha: 'b'.repeat(40) },
+  ];
+  for (const override of cases) {
+    const entries = [];
+    for (let i = 0; i < 10; i++) entries.push(sampleRun(100 + i, 1, i === 4 ? override : {}));
+    const result = multiRun(entries);
+    assert.equal(result.exitCode, 0, result.stdout);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, 'insufficientEvidence', JSON.stringify(override));
+    assert.ok(parsed.comparableCount < 10, JSON.stringify(override));
+  }
 });
 
 test('t26: missing artifact ID rejects from comparable set', () => {

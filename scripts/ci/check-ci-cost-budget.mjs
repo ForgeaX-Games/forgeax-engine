@@ -156,13 +156,67 @@ function worstOf(values) {
   return Math.max(...values);
 }
 
+function stringValue(...values) {
+  const value = values.find(
+    (candidate) => typeof candidate === 'string' && candidate.trim() !== '',
+  );
+  return value ?? null;
+}
+
+function comparisonProvenance(entry) {
+  const run = entry.run ?? entry.runMetadata ?? {};
+  const repository = entry.repository ?? run.repository;
+  const repositoryName =
+    typeof repository === 'string'
+      ? repository
+      : stringValue(repository?.full_name, repository?.fullName, repository?.name);
+  return {
+    repository: repositoryName,
+    event: stringValue(entry.event, entry.eventName, entry.event_name, run.event, run.eventName),
+    branch: stringValue(
+      entry.ref,
+      entry.branch,
+      entry.headBranch,
+      entry.head_branch,
+      run.ref,
+      run.branch,
+      run.headBranch,
+      run.head_branch,
+    ),
+    headSha: stringValue(
+      entry.headSha,
+      entry.head_sha,
+      entry.sha,
+      run.headSha,
+      run.head_sha,
+      run.sha,
+    ),
+  };
+}
+
 function isComparable(entry, reference) {
   if (entry.cancelled === true) return false;
   const rows = familyRows(entry);
   if (!rows || rows.length === 0 || rows.some(({ status }) => status !== 'valid')) return false;
   const artifactRows = validArtifactRows(entry);
   if (!artifactRows || artifactRows.length === 0) return false;
+  const provenance = comparisonProvenance(entry);
+  if (
+    provenance.repository === null ||
+    provenance.event !== 'push' ||
+    (provenance.branch !== 'main' && provenance.branch !== 'refs/heads/main') ||
+    provenance.headSha === null
+  )
+    return false;
   if (reference) {
+    const referenceProvenance = comparisonProvenance(reference);
+    if (
+      provenance.repository !== referenceProvenance.repository ||
+      provenance.event !== referenceProvenance.event ||
+      provenance.branch !== referenceProvenance.branch ||
+      provenance.headSha !== referenceProvenance.headSha
+    )
+      return false;
     const referenceFingerprints = new Map(
       validFamilyRows(reference).map((row) => [row.family, row.inputFingerprint]),
     );

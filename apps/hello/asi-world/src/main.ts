@@ -88,8 +88,8 @@ const SHEET_COLS = 4;
 const SHEET_ROWS = 4;
 const FRAME_DURATION_MS_MOVE = 100;
 
-type Direction = 'down' | 'left' | 'right' | 'up';
-const DIR_ROW: Record<Direction, number> = { down: 0, left: 1, right: 2, up: 3 };
+const DIR_ROW = { down: 0, left: 1, right: 2, up: 3 };
+export type Direction = keyof typeof DIR_ROW;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {

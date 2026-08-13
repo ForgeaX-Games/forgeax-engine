@@ -33,7 +33,7 @@
         "@forgeax/engine-state"
       ],
       "risks": ["baseline", "dynamic", "churn", "fault", "recovery", "behavioral"],
-      "phaseInputs": ["baseline", "dynamic", "churn", "fault", "recovery"],
+      "phaseInputs": ["baseline", "dynamic", "churn", "fault", "recovery", "focus-loss", "reacquire"],
       "evidence": {
         "frontDoors": ["node-app", "browser-app", "remote-live", "ecs-world"],
         "legs": ["semantic", "live", "recovery"]
@@ -46,7 +46,8 @@
           "[m1-composition] multi-world drawSource and plugin registry: PASS",
           "[m1-composition] App error fan-out and same-process recovery: PASS",
           "[m1-composition] PASS - M1 composition gates GREEN",
-          "[m1-live] PASS - live baseline="
+          "[m1-live] PASS - live baseline=",
+          "[m19-input] PASS - focus loss cancelled held input, gestures, and pointer lock; reacquisition required new edges:"
         ]
       }
     },

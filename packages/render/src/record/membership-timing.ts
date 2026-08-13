@@ -1,6 +1,7 @@
 import type {
   Buffer,
   CommandBuffer,
+  ComputePassDescriptor,
   QuerySet,
   Result,
   RhiCommandEncoder,
@@ -156,13 +157,20 @@ export class MembershipTimingError extends Error {
   readonly code: MembershipTimingReasonCode;
   readonly expected: string;
   readonly hint: string;
+  readonly detail: string;
 
-  constructor(code: MembershipTimingReasonCode, expected: string, hint: string) {
+  constructor(
+    code: MembershipTimingReasonCode,
+    expected: string,
+    hint: string,
+    detail: string = hint,
+  ) {
     super(hint);
     this.name = 'MembershipTimingError';
     this.code = code;
     this.expected = expected;
     this.hint = hint;
+    this.detail = detail;
   }
 }
 
@@ -174,10 +182,11 @@ export interface MembershipTimingController {
   usesCpuControl(): boolean;
   start(): Result<{ readonly captureId: string }, MembershipTimingError>;
   finish(): Promise<Result<MembershipTimingReport, MembershipTimingError>>;
-  beforeMembership(encoder: RhiCommandEncoder): void;
+  beforeMembership(): ComputePassDescriptor | undefined;
   afterMembership(encoder: RhiCommandEncoder): void;
   markEncodeFinished(): void;
   markEncodeFailed(detail?: string): void;
+  markTimestampPassFailed(detail?: string): void;
   markSubmitStarted(): void;
   markSubmitted(command: CommandBuffer): void;
   markSubmitFailed(detail?: string): void;
@@ -282,8 +291,9 @@ function captureError(
   code: MembershipTimingReasonCode,
   expected: string,
   hint: string,
+  detail: string = hint,
 ): MembershipTimingError {
-  return new MembershipTimingError(code, expected, hint);
+  return new MembershipTimingError(code, expected, hint, detail);
 }
 
 function withTimeout<T>(promise: Promise<T>): Promise<T> {
@@ -745,7 +755,7 @@ export function createMembershipTiming(
         return err(timeoutError);
       }
     },
-    beforeMembership(encoder) {
+    beforeMembership() {
       const capture = current;
       if (
         capture === undefined ||
@@ -754,22 +764,17 @@ export function createMembershipTiming(
         capture.ended ||
         capture.settled
       )
-        return;
+        return undefined;
       if (capture.querySet === undefined) return;
-      try {
-        capture.dispatchId = `${capture.captureId}:hdrp-cluster-membership`;
-        encoder.writeTimestamp(capture.querySet, 0);
-        capture.begun = true;
-      } catch (cause) {
-        terminalizeIdle(
-          capture,
-          captureError(
-            'timestamp-write-unavailable',
-            'the timestamp begin write succeeds on the timestamp-capable encoder',
-            String(cause),
-          ),
-        );
-      }
+      capture.dispatchId = `${capture.captureId}:hdrp-cluster-membership`;
+      capture.begun = true;
+      return {
+        timestampWrites: {
+          querySet: capture.querySet,
+          beginningOfPassWriteIndex: 0,
+          endOfPassWriteIndex: 1,
+        },
+      };
     },
     afterMembership(encoder) {
       const capture = current;
@@ -786,19 +791,6 @@ export function createMembershipTiming(
             'timestamp resources remain available',
             'capture resources are incomplete',
           );
-        try {
-          encoder.writeTimestamp(capture.querySet, 1);
-        } catch (cause) {
-          settleError(
-            capture,
-            captureError(
-              'timestamp-write-unavailable',
-              'the timestamp end write succeeds on the timestamp-capable encoder',
-              String(cause),
-            ),
-          );
-          return;
-        }
         capture.ended = true;
         const resolved = encoder.resolveQuerySet(capture.querySet, 0, 2, capture.resolveBuffer, 0);
         if (!resolved.ok)
@@ -871,6 +863,18 @@ export function createMembershipTiming(
           'terminal-record-incomplete',
           'the frame encoder finishes successfully',
           detail ?? 'encoder.finish failed',
+        ),
+      );
+    },
+    markTimestampPassFailed(detail) {
+      const capture = current;
+      if (capture === undefined) return;
+      terminalizeIdle(
+        capture,
+        captureError(
+          'timestamp-write-unavailable',
+          'the real compute pass accepts timestampWrites on the timestamp-capable encoder',
+          detail ?? 'compute-pass timestampWrites failed',
         ),
       );
     },

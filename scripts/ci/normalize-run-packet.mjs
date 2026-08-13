@@ -19,6 +19,14 @@ const TERMINAL_CONCLUSIONS = new Set([
 ]);
 const NON_TERMINAL_STATES = new Set(['queued', 'requested', 'waiting', 'in_progress']);
 const TERMINAL_RUN_STATES = new Set(['completed']);
+const FAILED_RUN_CONCLUSIONS = new Set([
+  'failure',
+  'cancelled',
+  'timed_out',
+  'action_required',
+  'startup_failure',
+  'stale',
+]);
 
 const UNKNOWN_CODES = new Set([
   'packet-missing',
@@ -29,6 +37,7 @@ const UNKNOWN_CODES = new Set([
   'run-attempt-missing',
   'fingerprint-missing',
   'run-conclusion-missing',
+  'run-nonterminal',
   'roster-missing',
   'jobs-missing',
   'artifacts-missing',
@@ -554,6 +563,8 @@ export function normalizeRunPacket(packet, expected = {}) {
   if (runState.conclusion === null) addReason(state, 'run-conclusion-missing', {}, 'run');
   else if (!TERMINAL_CONCLUSIONS.has(runState.conclusion))
     addReason(state, 'run-conclusion-unknown', { conclusion: runState.conclusion }, 'run');
+  else if (FAILED_RUN_CONCLUSIONS.has(runState.conclusion))
+    addReason(state, 'run-failed', { conclusion: runState.conclusion }, 'run');
   identityComparison(state, expectation, run);
   if (!expectation.declaredRoster) addReason(state, 'roster-missing');
   const jobs = observedJobs(packet);

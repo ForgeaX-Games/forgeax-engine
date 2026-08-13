@@ -46,6 +46,21 @@ export function validateWebkitSubsetManifest(manifest) {
   const refused = byRoute.get('webkit-gpu-refused');
   if (manifest.subsetOf !== FULL_MATRIX_ID)
     errors.push(error(`subset must target ${FULL_MATRIX_ID}`, '$.subsetOf'));
+  if (manifest.identity !== undefined && manifest.identity.sourceHead !== manifest.sourceHead)
+    errors.push(error('WebKit identity sourceHead differs from manifest', '$.identity.sourceHead'));
+  if (manifest.identity?.workload?.scenario !== undefined) {
+    if (
+      manifest.identity.workload.scenario !== 'deferred-membership' ||
+      manifest.identity.workload.frames !== 300 ||
+      manifest.identity.workload.lights !== 128
+    )
+      errors.push(
+        error(
+          'WebKit identity workload must be the 300-frame 128-light scenario',
+          '$.identity.workload',
+        ),
+      );
+  }
   if (control?.expectedStatus !== 'accepted-control' || control.expectedReason !== null)
     errors.push(error('WebKit subset must declare an accepted CPU control attempt', '$.attempts'));
   if (

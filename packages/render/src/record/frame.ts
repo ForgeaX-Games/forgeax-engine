@@ -250,6 +250,7 @@ export function recordFrame(
           spotLights,
           profilePhase,
           pipelineState.hdrpClusterMembershipPipeline !== null &&
+            internals.device.caps?.compute === true &&
             internals.membershipTiming?.usesCpuControl() !== true,
           pipelineState.hdrpClusterMembershipBindGroupLayout,
         );

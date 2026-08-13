@@ -303,6 +303,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // undefined, and `loadByGuid` failed `asset-not-found` on the first scene /
   // mesh / material lookup.
   const metaPackBodies: Map<string, string> = new Map();
+  const authoredPackSourcePaths: Map<string, string> = new Map();
   const devArtifactBodies: Map<string, { readonly bytes: Uint8Array; readonly mimeType: string }> =
     new Map();
   const DEV_PACK_PREFIX = '/__forgeax-ddc/';
@@ -325,6 +326,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     inFlightImports.clear();
     inFlightMetaImports.clear();
     metaPackBodies.clear();
+    authoredPackSourcePaths.clear();
     devArtifactBodies.clear();
     packageRoutes.invalidate();
     packageRoutes = createPackageRoutes();
@@ -555,7 +557,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const cooked = await readCookedAuthoredPack(sourcePath);
       const packageUrl = `${DEV_PACK_PREFIX}${firstGuid}.pack.json`;
       published.set(entry.packageUrl, packageUrl);
+      authoredPackSourcePaths.delete(packageUrl);
       if (cooked === undefined) {
+        authoredPackSourcePaths.set(packageUrl, sourcePath);
         bodies.set(packageUrl, body);
         continue;
       }
@@ -1067,6 +1071,20 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
    * once it exists.
    */
   async function ensureMetaPackBody(url: string): Promise<string | undefined> {
+    const authoredSourcePath = authoredPackSourcePaths.get(url);
+    if (authoredSourcePath !== undefined) {
+      const source = await readFile(authoredSourcePath, 'utf-8');
+      const parsed = JSON.parse(source) as AuthoredPackInput;
+      const pack = upgradeLegacyAuthoredPack(parsed);
+      if (
+        pack.schemaVersion !== '2.0.0' ||
+        pack.assets === undefined ||
+        pack.assets.some((asset) => asset.execution === 'cooked')
+      ) {
+        throw new Error(`authored pack source is no longer a direct pack: ${authoredSourcePath}`);
+      }
+      return parsed.schemaVersion === '1.0.0' ? JSON.stringify(pack) : source;
+    }
     const existing = metaPackBodies.get(url);
     if (existing !== undefined) return existing;
     if (!url.startsWith(DEV_PACK_PREFIX) || !url.endsWith('.pack.json')) return undefined;

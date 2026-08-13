@@ -31,10 +31,14 @@ const children = manifest.references.filter((item) => item.parentAttemptId === a
 if (children.length !== 2) throw new Error(`${attemptId} must declare exactly two nested references`);
 const childIds = children.map((item) => item.referenceId);
 const attemptRoot = join(outputRoot, attemptId);
-const sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], {
-  cwd: REPOSITORY_ROOT,
-  encoding: 'utf8',
-}).trim();
+const sourceHead =
+  process.env.FORGEAX_SOURCE_HEAD ??
+  execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: REPOSITORY_ROOT,
+    encoding: 'utf8',
+  }).trim();
+if (manifest.sourceHead !== sourceHead)
+  throw new Error(`manifest sourceHead ${manifest.sourceHead} differs from capture sourceHead ${sourceHead}`);
 
 function runInvocation(label, extra) {
   const recordDir = join(attemptRoot, label);
@@ -51,6 +55,7 @@ function runInvocation(label, extra) {
     // bounded nested attribution window used by the immutable fingerprints.
     FORGEAX_PROFILE_DETAIL: 'nested',
     FORGEAX_PROFILE_FRAME_LIMIT: '90',
+    FORGEAX_PROFILE_EVENT_LIMIT: '100000',
     FORGEAX_PROFILE_SETTLE_MS: '25',
     FORGEAX_MEMBERSHIP_RECORD_DIR: recordDir,
     ...extra,

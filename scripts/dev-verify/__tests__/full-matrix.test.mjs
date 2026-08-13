@@ -4,7 +4,9 @@ import test from 'node:test';
 
 import {
   createFullMatrixManifest,
+  projectIdentityForRoute,
   validateFullMatrixManifest,
+  validateRealCorpus,
   validateReference,
 } from '../membership-timing/full-matrix.mjs';
 
@@ -43,6 +45,41 @@ test('rejects a full matrix that drops a required nested reference', () => {
     result.errors.map((item) => item.message).join('\n'),
     /exactly 32|exactly two children/,
   );
+});
+
+test('requires source, carrier, workload, profile, and artifact identity', () => {
+  const manifest = createFullMatrixManifest({ sourceHead });
+  delete manifest.identity;
+  const result = validateFullMatrixManifest(manifest);
+  assert.equal(result.valid, false);
+  assert.match(result.errors.map((item) => item.message).join('\n'), /identity/);
+});
+
+test('projects WebKit identity from the Dawn manifest without Dawn-only budget fields', () => {
+  const manifest = createFullMatrixManifest({ sourceHead });
+  const projected = projectIdentityForRoute(manifest.identity, {
+    provenance: { backendKind: 'wgpu-webgl2', adapter: 'wgpu-webgl2', lights: 128 },
+  });
+  assert.deepEqual(projected, {
+    sourceHead,
+    carrier: { selector: 'heavy', backendKind: 'wgpu-webgl2', adapter: 'webkit-webgl2' },
+    workload: { scenario: 'deferred-membership', frames: 300, lights: 128 },
+    profile: { webkitEventLimit: 65536, nestedFrameLimit: 90, settleMs: 25 },
+    artifactHashes: {
+      algorithm: 'sha256',
+      required: ['record', 'profile', 'membership', 'pixel'],
+    },
+  });
+  assert.equal(Object.hasOwn(projected.profile, 'dawnEventLimit'), false);
+});
+
+test('keeps an empty or refusal-only corpus out of optimization release', () => {
+  const manifest = createFullMatrixManifest({ sourceHead });
+  const result = validateRealCorpus({ manifest, records: [], artifactRoot: '.' });
+  assert.equal(result.valid, false);
+  assert.equal(result.counts.acceptedGpu, 0);
+  assert.equal(result.optimizationReleaseReady, false);
+  assert.equal(result.completeMatrixReady, false);
 });
 
 test('isolates each captured attempt before joining the corpus', () => {

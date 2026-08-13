@@ -8,6 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { RhiDevice } from '@forgeax/engine-rhi';
+import type { CaptureFramesOptions } from './capture-options';
 import { DebugError } from './errors';
 import type { DebugRhiAdapter } from './index';
 import { InspectorCache, inspectAt as runInspectAt } from './inspector';
@@ -54,7 +55,7 @@ export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhi
   const replayDeviceMap = new Map<string, RhiDevice>();
 
   return {
-    async captureFrames(frames: number, _label?: string) {
+    async captureFrames(frames: number, _label?: string, options?: CaptureFramesOptions) {
       // A bounded snapshot failure leaves the recorder in its terminal error
       // state so stale async readbacks cannot contaminate the next tape. The
       // public adapter owns the retry boundary: dispose that failed capture
@@ -75,7 +76,7 @@ export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhi
       // advances Armed -> Snapshotting -> Recording and must complete before the
       // first frame's commands record (it drains in-flight writes via
       // onSubmittedWorkDone, so the captured bytes are the pre-frame content).
-      const snapResult = await debugInst.snapshotAllLiveResources();
+      const snapResult = await debugInst.snapshotAllLiveResources(options?.snapshotTimeoutMs);
       if (!snapResult.ok) {
         throw snapResult.error;
       }

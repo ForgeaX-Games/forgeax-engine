@@ -71,6 +71,18 @@ function restoreMocks(): void {
 }
 
 describe('compute-pass forwarding', () => {
+  it('raises a structured capability refusal when the raw encoder has no compute pass', () => {
+    const encoder = makeRhiCommandEncoder({});
+
+    expect(() => encoder.beginComputePass()).toThrowError(
+      expect.objectContaining({
+        code: 'feature-not-enabled',
+        expected: expect.stringContaining('feature compute'),
+        hint: expect.stringContaining('caps.compute'),
+      }),
+    );
+  });
+
   it('forwards pipeline, bindings, direct and indirect dispatch into the wasm handle', () => {
     const rawPass = {
       setPipeline: vi.fn(),
@@ -81,7 +93,15 @@ describe('compute-pass forwarding', () => {
     };
     const beginComputePass = vi.fn(() => rawPass);
     const encoder = makeRhiCommandEncoder({ beginComputePass });
-    const pass = encoder.beginComputePass({ label: 'compute' });
+    const querySet = {};
+    const pass = encoder.beginComputePass({
+      label: 'compute',
+      timestampWrites: {
+        querySet,
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      },
+    });
     const pipeline = {};
     const bindings = {};
     const indirect = {};
@@ -92,7 +112,14 @@ describe('compute-pass forwarding', () => {
     pass.dispatchWorkgroupsIndirect(indirect, 8);
     pass.end();
 
-    expect(beginComputePass).toHaveBeenCalledWith({ label: 'compute' });
+    expect(beginComputePass).toHaveBeenCalledWith({
+      label: 'compute',
+      timestampWrites: {
+        querySet,
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      },
+    });
     expect(rawPass.setPipeline).toHaveBeenCalledWith(pipeline);
     expect(rawPass.setBindGroup).toHaveBeenCalledWith(0, bindings, [16]);
     expect(rawPass.dispatchWorkgroups).toHaveBeenCalledWith(2, 3, 4);
