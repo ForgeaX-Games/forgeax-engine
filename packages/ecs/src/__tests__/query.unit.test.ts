@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { defineComponent } from '../component';
 import type { EntityHandle } from '../entity-handle';
 import {
@@ -53,11 +53,24 @@ describe('executable Query', () => {
     const seen: number[] = [];
     for (const row of query) {
       seen.push(row.entity);
+      expect(row.has(Position)).toBe(true);
+      expect(row.has(Velocity)).toBe(true);
       expect(row.get(Position).x).toBe(1);
       expect(row.get(Velocity)?.x).toBe(3);
     }
     expect(seen).toEqual([first]);
     expect(seen).not.toContain(second);
+  });
+
+  it('checks optional presence without materialising a component row', () => {
+    const { world } = createWorld();
+    const query = world.query({ read: [Position], optional: [Velocity] }).unwrap();
+    const readRowSpy = vi.spyOn(world, '_getQueryRow');
+
+    const presence: boolean[] = [];
+    for (const row of query) presence.push(row.has(Velocity));
+    expect(presence).toEqual([true, false]);
+    expect(readRowSpy).not.toHaveBeenCalled();
   });
 
   it('row.mut marks one epoch and writes through the component owner', () => {

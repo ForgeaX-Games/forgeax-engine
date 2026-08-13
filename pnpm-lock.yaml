@@ -4395,6 +4395,9 @@ importers:
       '@forgeax/engine-vite-plugin-pack':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-pack
+      '@forgeax/engine-vite-plugin-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-rhi-debug
       '@forgeax/engine-vite-plugin-shader':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-shader
@@ -9216,6 +9219,9 @@ importers:
       '@forgeax/engine-pack':
         specifier: workspace:*
         version: link:../../packages/pack
+      '@forgeax/engine-profiler':
+        specifier: workspace:*
+        version: link:../../packages/profiler
       '@forgeax/engine-remote':
         specifier: workspace:*
         version: link:../../packages/remote
@@ -9235,9 +9241,15 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.71
         version: 0.1.71
+      playwright:
+        specifier: ^1.56.1
+        version: 1.56.1
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      ws:
+        specifier: ^8.20.0
+        version: 8.21.0
 
   apps/rhi-debug-viewer:
     dependencies:

@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 import { makeRhiCommandEncoder } from '../command-encoder';
 import { makeRhiDevice, type RawDeviceLike } from '../device';
 import { __resetForTests, ensureRhiWgpuReady, getRhiWgpuModule } from '../internal/wasm-loader';
+import { makeRhiRenderPassEncoder } from '../render-pass-encoder';
 
 // ── unified mock for @forgeax/engine-wgpu-wasm ──
 const fakeWasmAdapter = {
@@ -97,6 +98,19 @@ describe('compute-pass forwarding', () => {
     expect(rawPass.dispatchWorkgroups).toHaveBeenCalledWith(2, 3, 4);
     expect(rawPass.dispatchWorkgroupsIndirect).toHaveBeenCalledWith(indirect, 8n);
     expect(rawPass.end).toHaveBeenCalledOnce();
+  });
+});
+
+describe('render-pass dynamic-offset forwarding', () => {
+  it('preserves Uint32Array start and length in the five-argument overload', () => {
+    const rawPass = { setBindGroup: vi.fn() };
+    const pass = makeRhiRenderPassEncoder(rawPass);
+    const offsets = new Uint32Array([256, 512]);
+    const bindings = {};
+
+    pass.setBindGroup(1, bindings, offsets, 1, 1);
+
+    expect(rawPass.setBindGroup).toHaveBeenCalledWith(1, bindings, offsets, 1, 1);
   });
 });
 

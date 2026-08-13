@@ -57,13 +57,13 @@ function registerQuadMesh(world: World): Handle<'MeshAsset', 'shared'> {
   });
 }
 
-function textureAsset(): TextureAsset {
+function textureAsset(red = 255): TextureAsset {
   return {
     kind: 'texture',
     width: 1,
     height: 1,
     format: 'rgba8unorm',
-    data: new Uint8Array([255, 255, 255, 255]),
+    data: new Uint8Array([red, 255, 255, 255]),
     colorSpace: 'linear',
     mipmap: false,
   } as unknown as TextureAsset;
@@ -173,5 +173,41 @@ describe('M4 loadByGuid texture handle interning (per-frame re-upload regression
     const textureAllocCalls = allocSpy.mock.calls.filter((c) => c[0] === 'TextureAsset');
     expect(textureAllocCalls.length).toBe(0);
     allocSpy.mockRestore();
+  });
+
+  it('retires the cached allocation grant when the GUID is re-catalogued', () => {
+    const world = new World();
+    const assets = new AssetRegistry(makeMockShaderRegistry());
+    const { textureGuidStr } = spawnTexturedRenderable(world, assets);
+
+    const oldHandle = baseColorHandleFromFrame(world, assets);
+    expect(oldHandle).toBeDefined();
+    const replacement = textureAsset(127);
+    assets.catalog(textureGuidStr, replacement);
+
+    const newHandle = baseColorHandleFromFrame(world, assets);
+    expect(newHandle).toBeDefined();
+    expect(newHandle).not.toBe(oldHandle);
+    expect(
+      world.sharedRefs.resolve(newHandle as unknown as Handle<'TextureAsset', 'shared'>),
+    ).toMatchObject({ ok: true, value: replacement });
+    expect(
+      world.sharedRefs.refcount(oldHandle as unknown as Handle<'TextureAsset', 'shared'>),
+    ).toBe(0);
+  });
+
+  it('drops the cached allocation grant when the GUID is invalidated', () => {
+    const world = new World();
+    const assets = new AssetRegistry(makeMockShaderRegistry());
+    const { textureGuidStr } = spawnTexturedRenderable(world, assets);
+
+    const handle = baseColorHandleFromFrame(world, assets);
+    expect(handle).toBeDefined();
+    assets.invalidate(textureGuidStr);
+
+    expect(baseColorHandleFromFrame(world, assets)).toBeUndefined();
+    expect(world.sharedRefs.refcount(handle as unknown as Handle<'TextureAsset', 'shared'>)).toBe(
+      0,
+    );
   });
 });

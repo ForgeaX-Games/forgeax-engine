@@ -29,6 +29,46 @@ function flattenPages(pages) {
 function isLowValue(entry) {
   return /(?:^|-)tsup-dist-/.test(entry.key);
 }
+
+function cacheFamily(key) {
+  const value = String(key ?? '').toLowerCase();
+  if (value.includes('forgeax-shard-ddc')) return 'merged-ddc';
+  if (value.includes('forgeax-build-ddc')) return 'model-loading-ddc';
+  if (value.includes('tsbuildinfo')) return 'tsbuildinfo-declarations';
+  if (value.includes('tsup-dist')) return 'tsup-dist';
+  if (value.includes('wgpu-wasm-pkg')) return 'wgpu-wasm-pkg';
+  if (value.includes('fbx-wasm-pkg')) return 'fbx-wasm-pkg';
+  if (value.includes('basis-wasm-pkg')) return 'basis-wasm-pkg';
+  if (value.includes('rust-wgpu-wasm') || value.includes('v0-rust-wgpu')) return 'cargo-wgpu';
+  if (value.includes('playwright')) return 'playwright-browsers';
+  if (value.includes('chrome-beta')) return 'chrome-beta-debs';
+  if (value.includes('mesa')) return 'mesa-debs';
+  if (value.includes('node-cache') || value.includes('pnpm')) return 'node-pnpm';
+  return 'unclassified-cache';
+}
+
+const versionedCacheFamilies = new Map([
+  ['tsbuildinfo-declarations', 'v6'],
+  ['wgpu-wasm-pkg', 'v1'],
+  ['fbx-wasm-pkg', 'v1'],
+  ['basis-wasm-pkg', 'v1'],
+]);
+
+function cacheFamilyStatus(key, family) {
+  if (family === 'unclassified-cache') return 'unknown';
+  if (family === 'merged-ddc' || family === 'model-loading-ddc') return 'preserved';
+  const expectedVersion = versionedCacheFamilies.get(family);
+  if (expectedVersion && !String(key).toLowerCase().includes(`-${expectedVersion}-`))
+    return 'stale';
+  return 'current';
+}
+
+function mergeFamilyStatus(previous, next) {
+  if (previous === 'preserved' || next === 'preserved') return 'preserved';
+  if (previous === 'stale' || next === 'stale') return 'stale';
+  if (previous === 'unknown' || next === 'unknown') return 'unknown';
+  return 'current';
+}
 function isDdcTemporaryKey(key) {
   return /(?:^|\/)(?:staging|lease|attempt|head)(?:\/|$)/.test(key);
 }
@@ -108,21 +148,45 @@ const repositoryName = input
   : repository();
 const entries = input ? flattenPages(input.cachePages) : await ghPages(repositoryName);
 const timings = input?.restoreSaveTimings ?? {};
-const reports = entries.map((entry) => ({
-  id: entry.id,
-  key: entry.key,
-  bytes: entry.size_in_bytes,
-  lastAccessedAt: entry.last_accessed_at,
-  restoreSeconds: timings[entry.key]?.restoreSeconds ?? null,
-  saveSeconds: timings[entry.key]?.saveSeconds ?? null,
-  lowValue: isLowValue(entry),
-}));
+const reports = entries.map((entry) => {
+  const family = cacheFamily(entry.key);
+  return {
+    id: entry.id,
+    key: entry.key,
+    bytes: entry.size_in_bytes,
+    lastAccessedAt: entry.last_accessed_at,
+    restoreSeconds: timings[entry.key]?.restoreSeconds ?? null,
+    saveSeconds: timings[entry.key]?.saveSeconds ?? null,
+    lowValue: isLowValue(entry),
+    family,
+    familyStatus: cacheFamilyStatus(entry.key, family),
+  };
+});
 const lowValueCaches = reports.filter((entry) => entry.lowValue);
 const ddcTemporaryEntries = reports.filter((entry) => isDdcTemporaryKey(entry.key));
 const activeBytesBefore = reports.reduce((sum, entry) => sum + entry.bytes, 0);
 const activeBytesAfter = reports
   .filter((entry) => !entry.lowValue)
   .reduce((sum, entry) => sum + entry.bytes, 0);
+const families = new Map();
+for (const entry of reports) {
+  const previous = families.get(entry.family);
+  const status = mergeFamilyStatus(previous?.status, entry.familyStatus);
+  families.set(entry.family, {
+    bytes: (previous?.bytes ?? 0) + entry.bytes,
+    status,
+  });
+}
+const familyBytes = Object.fromEntries(
+  [...families]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([family, value]) => [family, value.bytes]),
+);
+const familyStatus = Object.fromEntries(
+  [...families]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([family, value]) => [family, value.status]),
+);
 if (process.argv.includes('--confirm-delete') && !input) {
   for (const cache of lowValueCaches)
     execFileSync(
@@ -141,6 +205,10 @@ const report = {
   lowValueCaches,
   ddcSnapshotStatus: ddcTemporaryEntries.length === 0 ? 'pass' : 'fail',
   ddcTemporaryEntries,
+  familyBytes,
+  familyStatus,
+  staleEntries: reports.filter((entry) => entry.familyStatus === 'stale'),
+  unknownEntries: reports.filter((entry) => entry.familyStatus === 'unknown'),
   deletionApplied: process.argv.includes('--confirm-delete') && !input,
   preservedFamilies: ['ddc'],
 };

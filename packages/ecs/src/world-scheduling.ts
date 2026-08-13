@@ -507,3 +507,11 @@ export function worldAllocSharedRef<Target extends string, T>(
 ): Handle<Target, 'shared'> {
   return world._getSharedRefs().alloc(target, payload, onLastRelease);
 }
+
+export function worldInternSharedRef<Target extends string, T extends object>(
+  world: World,
+  target: Target,
+  payload: T,
+): Handle<Target, 'shared'> {
+  return world._getSharedRefs().intern(target, payload);
+}

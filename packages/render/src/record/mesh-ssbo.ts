@@ -157,9 +157,11 @@ export function cleanPerEntityCache(
  *  - `{ ok: false, code, degradedToSlotCount }` — controller hit ceiling /
  *                           capacity and ALREADY fired the structured error
  *                           via errorRegistry.  Caller truncates the draw
- *                           list to `degradedToSlotCount` (graceful degradation
- *                           per plan-strategy D-2): renders the subset that
- *                           fits, discards overflow, no black frame.
+ *                           list to the largest complete entity prefix that
+ *                           fits within `degradedToSlotCount` slots (graceful
+ *                           degradation per plan-strategy D-2): renders the
+ *                           subset that fits, discards overflow, no black
+ *                           frame.
  *
  * This helper does NOT re-fire on `ok:false` — the controller is the single
  * fire site (createRenderer.ts grow factory), so callers see exactly one

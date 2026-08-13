@@ -13,7 +13,7 @@ export interface RecorderLimits {
   readonly detail?: ProfileDetail;
 }
 
-export type ProfileDetail = 'owner' | 'nested';
+export type ProfileDetail = 'owner' | 'passes' | 'nested';
 
 export interface RecorderPhaseCatalog {
   readonly app: readonly string[];

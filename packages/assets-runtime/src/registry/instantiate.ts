@@ -337,6 +337,7 @@ export function resolveMountsRec(
   world: World,
   visited: Set<string>,
   guidToHandle: Map<string, number> = new Map(),
+  resolvedSceneHandles: Map<string, number> = new Map(),
 ): Result<
   SceneInstanceMount[],
   | AssetError
@@ -404,6 +405,16 @@ export function resolveMountsRec(
       continue;
     }
 
+    const cachedChildHandle = resolvedSceneHandles.get(guidKey);
+    if (cachedChildHandle !== undefined) {
+      out.push({
+        ...m,
+        source: cachedChildHandle,
+        ...overridePatch,
+      } as SceneInstanceMount);
+      continue;
+    }
+
     // Resolve mounts recursively.
     const childVisited = new Set(visited);
     // Don't add guidKey to visited here — _resolveSceneGuids will do it
@@ -413,6 +424,8 @@ export function resolveMountsRec(
       world,
       guidKey,
       childVisited,
+      guidToHandle,
+      resolvedSceneHandles,
     );
 
     if (!childRes.ok) {
@@ -431,6 +444,7 @@ export function resolveMountsRec(
 
     // allocSharedRef + register in originIndex (D-7).
     const chRaw = unwrapHandle(world.allocSharedRef('SceneAsset', resolvedChild));
+    resolvedSceneHandles.set(guidKey, chRaw);
     registry._originIndex.set(resolvedChild, guidKey);
 
     // Replace source with live handle number (D-5: source is number|string).
@@ -445,9 +459,9 @@ export function resolveMountsRec(
 
 /**
  * Resolve one GUID string to a live user-tier handle (feat-20260713 M3 / w13
- * SSOT). Parses the GUID, dedups through `guidToHandle` (D-15/D-17: one
- * `allocSharedRef` per unique catalogued payload), and on a miss looks the
- * envelope up in the catalog + mints a shared ref. An unparseable / uncatalogued
+ * SSOT). Parses the GUID, uses `guidToHandle` as the per-resolution fast path,
+ * and on a miss looks the envelope up in the catalog + interns its shared ref
+ * by `(target, payload identity)` in the World. An unparseable / uncatalogued
  * GUID returns `AssetError(code='asset-not-found')` with a breadcrumb hint
  * (`fieldPath` + `location`) for AI-user debuggability (P3). Shared by the
  * entity-field fallback in `_resolveSceneGuids` and the override-value down-drill
@@ -488,7 +502,7 @@ export function resolveHandleGuid(
         }),
       );
     }
-    slot = unwrapHandle(world.allocSharedRef(envelope.payload.kind, envelope.payload));
+    slot = unwrapHandle(world.internSharedRef(envelope.payload.kind, envelope.payload));
     guidToHandle.set(guidKey, slot);
   }
   return ok(slot);
@@ -500,8 +514,9 @@ export function resolveHandleGuid(
  * shared fields hold numeric handles (D-2 — the ecs apply loop never sees a
  * GUID). Identification is delegated to the shared w12 core
  * ({@link extractMountOverrideHandleGuids}); resolution reuses the
- * `envelope.payload → world.allocSharedRef` path with the caller's `guidToHandle`
- * dedup map (D-15/D-17). Stop-on-first-error: an unparseable / uncatalogued GUID
+ * `envelope.payload → world.internSharedRef` path with the caller's
+ * `guidToHandle` fast path (D-15/D-17). Stop-on-first-error: an unparseable /
+ * uncatalogued GUID
  * returns `AssetError(code='asset-not-found')` with a breadcrumb hint (P3),
  * aborting before any spawn. Number elements pass through untouched (D-8).
  */

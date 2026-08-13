@@ -1,6 +1,7 @@
 // @forgeax/engine-runtime - RenderSystem record stage: frame-snapshot.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
+import type { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import type { ClusterBinScratch } from '../cluster-binner';
 
@@ -27,9 +28,27 @@ export function worldEntityKey(worldId: number, entityKey: number): number {
   return worldId * 4294967296 + entityKey; // 2^32 = 4294967296
 }
 
+/**
+ * Cross-frame cache entry for a material bind group whose source material and
+ * all resolved GPU resources are stable. The material snapshot identity is
+ * the extract-layer invalidation token; the builder only stores entries after
+ * all explicit resource handles resolved to resident GPU objects.
+ */
+export interface MaterialBgAssemblyCacheEntry {
+  readonly material: MaterialSnapshot;
+  /** Invalidates when any texture/sampler residency identity changes. */
+  readonly materialResourceEpoch: number;
+  readonly materialBgl: BindGroupLayout;
+  /** Buffer identity changes when the shared material capacity grows. */
+  readonly materialBuffer: Buffer;
+  readonly skylightResources: SkylightBindGroupResources;
+  readonly bindGroup: BindGroup;
+}
+
 import type { RenderGraph } from '@forgeax/engine-render-graph';
-import type { BindGroup } from '@forgeax/engine-rhi';
+import type { BindGroup, BindGroupLayout, Buffer, Texture } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, RenderPipelineAsset } from '@forgeax/engine-types';
+import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import type { RenderPipeline as RenderPipelineDef } from '../render-pipeline';
 import type { RenderPipelineContext } from '../render-pipeline-context';
@@ -37,6 +56,7 @@ import type { MeshGpuHandles } from '../render-system';
 import type {
   CameraSnapshot,
   DispatchEntry,
+  MaterialSnapshot,
   PointShadowSnapshot,
   RenderableSnapshot,
   SpotLightSnapshot,
@@ -130,6 +150,10 @@ export function clampPcfKernelSize(value: number | undefined): number {
  */
 export interface RenderFrameState {
   frameNumber: number;
+  /** Last successfully rendered static directional shadow atlas token. */
+  directionalShadowCache: DirectionalShadowCache | null;
+  /** Set by a directional shadow pass when this frame refreshed the atlas. */
+  directionalShadowCacheRecorded: boolean;
   /**
    * feat-20260529-rendergraph-pass-abstraction M4 / w13c fix: the per-frame
    * render graph is structurally static (the 4 pass execute fns are module-
@@ -257,6 +281,8 @@ export interface RenderFrameState {
    * keyed by `worldEntityKey(worldId, entityKey)`. Inner WeakMap unchanged.
    */
   readonly instancesBgPerEntity: Map<number, WeakMap<object, unknown>>;
+  /** Identity-keyed instances BGs shared across entities using the same buffer. */
+  readonly instancesBgShared: WeakMap<object, unknown>;
   /**
    * feat-20260622-handle-to-id-allocator-elimination M1 / w2: cross-entity
    * shared material bind group cache (OQ-1 option A). Outer key is the
@@ -265,6 +291,8 @@ export interface RenderFrameState {
    * `getOrCreatePerEntity` helper with outerKey string|number (D-1).
    */
   readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
+  /** Cross-frame fast path for fully-resident, immutable material snapshots. */
+  readonly materialBgAssemblyCache: Map<number, MaterialBgAssemblyCacheEntry>;
   /**
    * feat-20260622-handle-to-id-allocator-elimination M1 / w2: singleton
    * material bind group cache (D-6). Single flat Map<variant, BindGroup>
@@ -455,4 +483,41 @@ export interface ValidatedRenderable {
    * draw; `undefined` falls back to the WebGPU default 0 (semantic no-op).
    */
   readonly stencilReference: number | undefined;
+}
+
+/**
+ * Cross-frame validity token for the directional shadow atlas.
+ *
+ * The atlas is a render target, not authored state. Keeping its validity
+ * token beside the other RenderFrameState caches lets recordFrame skip a
+ * static caster submission without teaching the public render-pipeline
+ * contract about caching. Every source that can change caster depth is part
+ * of the token: world mutation, asset catalogue, graph/target identity, CSM
+ * matrices, and the GPU mesh-residency epoch.
+ *
+ * @internal
+ */
+export interface DirectionalShadowCache {
+  readonly worlds: readonly World[];
+  readonly worldStateTokens: readonly DirectionalShadowWorldState[];
+  readonly assetCatalogEpoch: number;
+  readonly pipelineHandle: number;
+  readonly graphTopologyKey: string | null;
+  readonly target: Texture;
+  readonly shadowMapSize: number;
+  readonly cascadeCount: number;
+  readonly lightViewProj: readonly Float32Array[];
+  readonly meshResidencyEpoch: number;
+}
+
+/**
+ * ECS state that can change the contents of a directional shadow map.
+ *
+ * The World mutation epoch also advances for runtime resource/time writes.
+ * Those writes do not change shadow casters, so the shadow cache deliberately
+ * tracks the narrower structure/component clocks instead of the broad clock.
+ */
+export interface DirectionalShadowWorldState {
+  readonly structureEpoch: number;
+  readonly componentMutationEpochs: readonly (number | undefined)[];
 }

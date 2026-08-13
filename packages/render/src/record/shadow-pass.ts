@@ -105,6 +105,7 @@ export function recordShadowPass(
   cascadeIndex: number = 0,
 ): void {
   const { runtime, pipelineState, validatedOrdered, meshBindGroup, dispatch, frameState } = c;
+  if (c.directionalShadowCacheReuse) return;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w28: write the per-pass
   // cascade index to the shared shadowCasterCascadeBuffer. The shadow
   // pass below uses an INDEPENDENT command encoder + own queue.submit, so
@@ -167,6 +168,7 @@ export function recordShadowPass(
   }
 
   if (shadowPipeline !== null && shadowView !== null && validatedOrdered.length > 0) {
+    frameState.directionalShadowCacheRecorded = true;
     // feat-20260529-rendergraph-pass-abstraction M4 / w14 (RD-4 verification
     // point): this INDEPENDENT 'render-system-shadow' command encoder + its
     // own queue.submit below is the runtime-side manual barrier that splits

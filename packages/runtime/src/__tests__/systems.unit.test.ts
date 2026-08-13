@@ -7569,13 +7569,24 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             setBindGroup: (
               group: number,
               _bindGroup: unknown,
-              dynamicOffsets?: readonly number[],
+              dynamicOffsets?: readonly number[] | Uint32Array,
+              dynamicOffsetsStart = 0,
+              dynamicOffsetsLength = dynamicOffsets?.length ?? 0,
             ) => {
-              spies.setBindGroup(group, _bindGroup, dynamicOffsets);
+              const capturedOffsets =
+                dynamicOffsets === undefined
+                  ? []
+                  : Array.from(
+                      dynamicOffsets.slice(
+                        dynamicOffsetsStart,
+                        dynamicOffsetsStart + dynamicOffsetsLength,
+                      ),
+                    );
+              spies.setBindGroup(group, _bindGroup, capturedOffsets);
               if (isGeometry) {
                 spies.geometryEvents.push({
                   kind: 'setBindGroup',
-                  call: { group, dynamicOffsets: dynamicOffsets ?? [] },
+                  call: { group, dynamicOffsets: capturedOffsets },
                 });
               }
               return undefined;

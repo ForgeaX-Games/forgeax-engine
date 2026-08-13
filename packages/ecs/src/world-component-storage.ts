@@ -16,7 +16,6 @@ import {
   isManagedBufferField,
   isManagedField,
   type ManagedArrayElementType,
-  parseManagedArraySchema,
   type ShapeOf,
   TYPE_METADATA,
 } from './component';
@@ -81,8 +80,13 @@ export class ComponentStorage {
 
     const fieldType = component.schema[fieldName];
     if (fieldType === undefined) return undefined;
-    const arrayMeta = parseManagedArraySchema(fieldType);
-    if (arrayMeta === null) return undefined;
+    // Component reflection already parses and freezes array metadata at
+    // registration time. Reusing it here keeps the per-entity zero-copy path
+    // parse-free; this accessor is called once for every renderable every
+    // frame. The field lookup also preserves the existing undefined result
+    // for non-array fields without reparsing arbitrary schema strings.
+    const arrayMeta = component.fields[fieldName]?.arrayMeta;
+    if (arrayMeta === undefined) return undefined;
 
     const col = fieldCols.get(fieldName);
     if (!col) return undefined;
@@ -91,8 +95,12 @@ export class ComponentStorage {
       const elementBytes = elementByteSize(arrayMeta.elementType);
       const arity = col.arity;
       const rowByteOffset = col.view.byteOffset + row * arity * elementBytes;
-      const rowBytes = new Uint8Array(col.view.buffer, rowByteOffset, arity * elementBytes);
-      return reinterpretSlotBytes(rowBytes, arrayMeta.elementType, arrayMeta.length);
+      return reinterpretBufferRegion(
+        col.view.buffer,
+        rowByteOffset,
+        arrayMeta.elementType,
+        arrayMeta.length,
+      );
     }
 
     const slotId = col.view[row] as number;
@@ -852,8 +860,7 @@ export class ComponentStorage {
       const elementBytes = elementByteSize(elementType);
       const arity = col.arity;
       const rowByteOffset = col.view.byteOffset + row * arity * elementBytes;
-      const rowBytes = new Uint8Array(col.view.buffer, rowByteOffset, arity * elementBytes);
-      return reinterpretSlotBytes(rowBytes, elementType, fixedLength);
+      return reinterpretBufferRegion(col.view.buffer, rowByteOffset, elementType, fixedLength);
     }
     const liveBytes = this.bufferPool.view(slotId);
     const countCol = fieldCols?.get(arrayCountColumnName(fieldName));
@@ -1080,6 +1087,15 @@ function reinterpretSlotBytes(
   bytes: Uint8Array,
   elementType: ManagedArrayElementType,
   elementCount: number,
+): ReturnType<typeof reinterpretBufferRegion> {
+  return reinterpretBufferRegion(bytes.buffer, bytes.byteOffset, elementType, elementCount);
+}
+
+function reinterpretBufferRegion(
+  buffer: ArrayBufferLike,
+  byteOffset: number,
+  elementType: ManagedArrayElementType,
+  elementCount: number,
 ):
   | Float32Array
   | Float64Array
@@ -1089,42 +1105,40 @@ function reinterpretSlotBytes(
   | Uint16Array
   | Int8Array
   | Uint8Array {
-  const buf = bytes.buffer;
-  const offset = bytes.byteOffset;
   // shared<X> template literals: column-stored as u32 handles, reinterpret
   // as Uint32Array. The brand is applied at the FieldValueType level;
   // runtime storage is plain u32 (feat-20260614 M5; replaces the retired
   // 'handle<X>' arm).
   if (elementType.startsWith('shared<')) {
-    return new Uint32Array(buf, offset, elementCount);
+    return new Uint32Array(buffer, byteOffset, elementCount);
   }
   switch (elementType) {
     case 'f32':
-      return new Float32Array(buf, offset, elementCount);
+      return new Float32Array(buffer, byteOffset, elementCount);
     case 'f64':
-      return new Float64Array(buf, offset, elementCount);
+      return new Float64Array(buffer, byteOffset, elementCount);
     case 'i32':
-      return new Int32Array(buf, offset, elementCount);
+      return new Int32Array(buffer, byteOffset, elementCount);
     case 'u32':
     case 'enum':
     case 'ref':
     case 'entity':
-      return new Uint32Array(buf, offset, elementCount);
+      return new Uint32Array(buffer, byteOffset, elementCount);
     case 'i16':
-      return new Int16Array(buf, offset, elementCount);
+      return new Int16Array(buffer, byteOffset, elementCount);
     case 'u16':
-      return new Uint16Array(buf, offset, elementCount);
+      return new Uint16Array(buffer, byteOffset, elementCount);
     case 'i8':
-      return new Int8Array(buf, offset, elementCount);
+      return new Int8Array(buffer, byteOffset, elementCount);
     case 'u8':
     case 'bool':
-      return new Uint8Array(buf, offset, elementCount);
+      return new Uint8Array(buffer, byteOffset, elementCount);
   }
   // Exhaustiveness fallthrough: TypeScript template-literal type
   // (`shared<${string}>`) is structurally not narrowed away by the
   // `startsWith` guard above, so this branch is unreachable yet TS still
   // requires a return path.
-  return new Uint32Array(buf, offset, elementCount);
+  return new Uint32Array(buffer, byteOffset, elementCount);
 }
 
 /**

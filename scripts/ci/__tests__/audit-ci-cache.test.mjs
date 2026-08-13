@@ -256,6 +256,93 @@ test('live key shape: runner-prefixed tsup dist entries are classified as low va
   assert.equal(report.activeBytesAfter, 0);
 });
 
+test('pressure observer: marks an over-limit snapshot without applying deletion', () => {
+  const report = run({
+    cachePages: [
+      {
+        total_count: 1,
+        actions_caches: [
+          {
+            id: 1,
+            key: 'self-hosted-linux-x64-forgeax-shard-ddc-over',
+            size_in_bytes: 7_918_954_216,
+          },
+        ],
+      },
+    ],
+    restoreSaveTimings: {},
+  });
+  assert.equal(report.thresholdStatus, 'fail');
+  assert.equal(report.deletionApplied, false);
+  assert.equal(report.familyStatus['merged-ddc'], 'preserved');
+});
+
+test('pressure observer: derives family bytes and keeps stale and unknown entries visible', () => {
+  const report = run({
+    cachePages: [
+      {
+        total_count: 5,
+        actions_caches: [
+          { id: 1, key: 'self-hosted-linux-x64-forgeax-shard-ddc-assets', size_in_bytes: 11 },
+          { id: 2, key: 'self-hosted-linux-x64-tsbuildinfo-v6-current', size_in_bytes: 22 },
+          { id: 3, key: 'self-hosted-linux-x64-tsbuildinfo-v5-stale', size_in_bytes: 33 },
+          { id: 4, key: 'self-hosted-linux-x64-cache-from-a-future-owner', size_in_bytes: 44 },
+          { id: 5, key: 'self-hosted-linux-x64-tsup-dist-runtime', size_in_bytes: 55 },
+        ],
+      },
+    ],
+    restoreSaveTimings: {},
+  });
+  assert.deepEqual(report.familyBytes, {
+    'merged-ddc': 11,
+    'tsbuildinfo-declarations': 55,
+    'unclassified-cache': 44,
+    'tsup-dist': 55,
+  });
+  assert.deepEqual(
+    report.staleEntries.map((entry) => entry.key),
+    ['self-hosted-linux-x64-tsbuildinfo-v5-stale'],
+  );
+  assert.deepEqual(
+    report.unknownEntries.map((entry) => entry.key),
+    ['self-hosted-linux-x64-cache-from-a-future-owner'],
+  );
+  assert.equal(report.familyStatus['merged-ddc'], 'preserved');
+  assert.equal(report.familyStatus['tsbuildinfo-declarations'], 'stale');
+  assert.equal(report.familyStatus['unclassified-cache'], 'unknown');
+  assert.equal(report.deletionApplied, false);
+});
+
+test('pressure observer: API failure is fail-closed and never reports deletion', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'ci-cache-audit-failure-'));
+  const bin = join(temp, 'bin');
+  const gh = join(bin, 'gh');
+  mkdirSync(bin);
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(' ') === 'repo view --json nameWithOwner --jq .nameWithOwner') {
+  process.stdout.write('ForgeaX-Games/forgeax-engine\\n');
+} else {
+  process.stderr.write('gh: Server Error (HTTP 503)\\n');
+  process.exit(1);
+}
+`,
+  );
+  chmodSync(gh, 0o755);
+  try {
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
+    delete env.GITHUB_REPOSITORY;
+    assert.throws(
+      () => execFileSync(process.execPath, [script], { encoding: 'utf8', env }),
+      (error) => error.status === 1 && error.stdout === '',
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('local front door: infers the authenticated repository outside GitHub Actions', () => {
   const report = runLiveWithoutActionsEnvironment();
   assert.equal(report.repository, 'ForgeaX-Games/forgeax-engine');

@@ -13,7 +13,7 @@ The authority map is [`asset-authority.schema.json`](../../asset-authority.schem
 Use [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs) to inspect the owner and runtime-source conclusion before changing a producer.
 
 > [!IMPORTANT]
-> Runtime material consumption is `configurePackIndex` -> `loadByGuid<MaterialAsset>` -> cooked readiness -> `world.allocSharedRef`. The registry returns the loaded payload and follows its dependency graph; it does not create an app-owned shader artifact or a parallel material authoring surface.
+> Runtime material consumption is `configurePackIndex` -> `loadByGuid<MaterialAsset>` -> cooked readiness -> `world.internSharedRef`. The registry returns the loaded payload and follows its dependency graph; it does not create an app-owned shader artifact or a parallel material authoring surface. Interning preserves one handle per catalogued payload identity inside a World; explicit `world.allocSharedRef` calls remain independent resources.
 
 ## MaterialAsset runtime recovery
 
@@ -37,8 +37,8 @@ Cook states are not interchangeable: `notCooked`, `ready/current`, `ready/stale`
 - **`AssetRegistry`** — instance-per-engine GUID -> payload catalogue. `catalog` /
   `loadByGuid` / `lookup` / `parseGuid` / `inspect` / `resolveName` / `packageOf` /
   `rename` / `invalidate` / `invalidateAll` / `instantiate`. Post-D-17 it stores
-  the PAYLOAD and mints no handles (column handles are minted on the World via
-  `world.allocSharedRef('Kind', payload)`). `Renderer.assets` is an `AssetRegistry`
+  the PAYLOAD and mints no handles (scene GUID resolution interns column handles
+  on the World via `world.internSharedRef('Kind', payload)`). `Renderer.assets` is an `AssetRegistry`
   assembled by `createRenderer` (which injects the post-spawn hook and concrete
   Web Audio loader; video is a default loader — see D-1 / D-2).
 - **`HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_QUAD` / `HANDLE_SPHERE` /

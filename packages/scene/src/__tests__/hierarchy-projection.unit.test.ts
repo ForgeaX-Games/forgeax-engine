@@ -94,4 +94,22 @@ describe('scene hierarchy projection', () => {
 
     expect(projectHierarchy(world).getParent(root)).toBeUndefined();
   });
+
+  it('reuses a stable World projection and invalidates it after a hierarchy mutation', () => {
+    const world = new World();
+    const firstParent = world.spawn().unwrap();
+    const secondParent = world.spawn().unwrap();
+    const child = childOf(world, firstParent);
+
+    const first = projectHierarchy(world);
+    expect(projectHierarchy(world)).toBe(first);
+    expect(first.getParent(child)).toBe(firstParent);
+
+    world.set(child, ChildOf, { parent: secondParent }).unwrap();
+
+    const second = projectHierarchy(world);
+    expect(second).not.toBe(first);
+    expect(second.getParent(child)).toBe(secondParent);
+    expect(projectHierarchy(world)).toBe(second);
+  });
 });

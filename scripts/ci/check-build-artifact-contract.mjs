@@ -624,6 +624,161 @@ function validateTimingRoster(contract) {
   return errors;
 }
 
+/**
+ * Validate the producer/consumer fan-out that is already represented by the
+ * artifact class, consumer, timing, provenance, and shard-family SSOTs.
+ *
+ * This intentionally derives the graph instead of introducing another list of
+ * producer or consumer names.  Shard families are the one place where a class
+ * is allowed to share an overlapping file glob, so their producer mapping is
+ * also the drift boundary for duplicate producers and class mismatches.
+ */
+function validateFanout(contract) {
+  if (contract.version < 3) return [];
+
+  const errors = [];
+  const artifactClasses = contract.artifactClasses;
+  if (!artifactClasses || typeof artifactClasses !== 'object') return errors;
+
+  const classNames = Object.keys(artifactClasses);
+  const producerRoster = new Set(
+    Array.isArray(contract.provenance?.producerRoster) ? contract.provenance.producerRoster : [],
+  );
+
+  for (const [className, definition] of Object.entries(artifactClasses)) {
+    const producer = definition?.producer;
+    if (typeof producer !== 'string' || producer.trim() === '') {
+      errors.push({
+        code: 'ci-artifact-contract-fanout-producer-missing',
+        actual: `artifact class "${className}" has no producer`,
+        expected: 'each artifact class declares one producer job in provenance.producerRoster',
+      });
+      continue;
+    }
+    if (producerRoster.size > 0 && !producerRoster.has(producer)) {
+      errors.push({
+        code: 'ci-artifact-contract-fanout-producer-missing',
+        actual: `artifact class "${className}" names undeclared producer "${producer}"`,
+        expected: `one of provenance.producerRoster: ${[...producerRoster].join(', ')}`,
+      });
+    }
+  }
+
+  const families = Array.isArray(contract.shardFamilies) ? contract.shardFamilies : [];
+  const seenFamilyIds = new Set();
+  const seenMembers = new Map();
+  for (const family of families) {
+    const familyId = family?.id;
+    if (typeof familyId !== 'string' || familyId.trim() === '') {
+      errors.push({
+        code: 'ci-artifact-contract-fanout-family-invalid',
+        actual: family ?? null,
+        expected: 'shard family has a non-empty unique id',
+      });
+    } else if (seenFamilyIds.has(familyId)) {
+      errors.push({
+        code: 'ci-artifact-contract-fanout-family-duplicate',
+        actual: `duplicate shard family "${familyId}"`,
+        expected: 'shard family ids are unique',
+      });
+    } else {
+      seenFamilyIds.add(familyId);
+    }
+
+    const members = Array.isArray(family?.members) ? family.members : [];
+    const mapping = family?.producerMapping;
+    if (
+      members.length === 0 ||
+      members.some((member) => typeof member !== 'string' || member.length === 0) ||
+      new Set(members).size !== members.length ||
+      !mapping ||
+      typeof mapping !== 'object' ||
+      Array.isArray(mapping)
+    ) {
+      errors.push({
+        code: 'ci-artifact-contract-fanout-family-invalid',
+        actual: family ?? null,
+        expected: 'shard family has unique members and a producerMapping object',
+      });
+      continue;
+    }
+
+    for (const member of members) {
+      const priorFamily = seenMembers.get(member);
+      if (priorFamily) {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-family-duplicate-member',
+          actual: `artifact class "${member}" appears in shard families "${priorFamily}" and "${familyId}"`,
+          expected: 'each shard artifact class belongs to one shard family',
+        });
+      } else {
+        seenMembers.set(member, familyId);
+      }
+
+      if (!artifactClasses[member]) {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-class-unknown',
+          actual: `shard family "${familyId}" references unknown class "${member}"`,
+          expected: `one of artifactClasses: ${classNames.join(', ')}`,
+        });
+        continue;
+      }
+
+      const mappedProducer = mapping[member];
+      if (typeof mappedProducer !== 'string' || mappedProducer.trim() === '') {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-producer-missing',
+          actual: `shard family "${familyId}" has no producer for class "${member}"`,
+          expected: 'producerMapping names the artifact class producer',
+        });
+      } else if (mappedProducer !== artifactClasses[member].producer) {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-class-mismatch',
+          actual: `class "${member}" declares producer "${artifactClasses[member].producer}" but shard mapping selects "${mappedProducer}"`,
+          expected: 'shard producerMapping must match artifactClasses.<class>.producer',
+        });
+      }
+    }
+
+    for (const mappedClass of Object.keys(mapping)) {
+      if (!members.includes(mappedClass)) {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-class-mismatch',
+          actual: `shard family "${familyId}" maps undeclared member "${mappedClass}"`,
+          expected: `producerMapping keys must be exactly members: ${members.join(', ')}`,
+        });
+      }
+    }
+
+    const producerClasses = new Map();
+    for (const member of members) {
+      const producer = mapping[member];
+      if (typeof producer !== 'string' || producer.trim() === '') continue;
+      const mappedClasses = producerClasses.get(producer) ?? [];
+      mappedClasses.push(member);
+      producerClasses.set(producer, mappedClasses);
+      if (producerRoster.size > 0 && !producerRoster.has(producer)) {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-producer-missing',
+          actual: `shard class "${member}" names undeclared producer "${producer}"`,
+          expected: `one of provenance.producerRoster: ${[...producerRoster].join(', ')}`,
+        });
+      }
+    }
+    for (const [producer, mappedClasses] of producerClasses) {
+      if (mappedClasses.length > 1) {
+        errors.push({
+          code: 'ci-artifact-contract-fanout-duplicate-producer',
+          actual: `producer "${producer}" is mapped to ${mappedClasses.join(', ')}`,
+          expected: 'each shard family member has one distinct producer',
+        });
+      }
+    }
+  }
+
+  return errors;
+}
+
 function validateProvenance(contract) {
   const errors = [];
   const classNames =
@@ -1066,6 +1221,7 @@ function main() {
     ...validateReturnEvidence(contract),
     ...validateTimingRoster(contract),
     ...validateProvenance(contract),
+    ...validateFanout(contract),
   ];
 
   // Validate workflow if requested

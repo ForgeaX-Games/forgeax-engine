@@ -57,6 +57,11 @@ import { computeViewMatrix } from './helpers';
 type RecordProfilePhase = (phase: RenderRecordPhase, action: () => void) => void;
 
 function graphExecutionPhase(passName: string): RenderGraphExecutionPhase {
+  // URP names directional CSM passes `shadowCascade0..N`; keep them in the
+  // bounded directional-shadow bucket instead of routing every cascade to
+  // `other`, so nested traces expose the real shadow owner without creating a
+  // phase per cascade.
+  if (passName.startsWith('shadowCascade')) return 'record/graph-execute/shadow';
   switch (passName) {
     case 'point-shadow':
       return 'record/graph-execute/point-shadow';

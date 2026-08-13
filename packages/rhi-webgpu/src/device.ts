@@ -1241,11 +1241,22 @@ function makeQueue(rawQueue: GPUQueue): RhiQueue {
       }
       try {
         if (size !== undefined) {
-          rawQueue.writeBuffer(rawBuffer, bufferOffset, data, writeStart, size);
+          rawQueue.writeBuffer(
+            rawBuffer,
+            bufferOffset,
+            data as GPUAllowSharedBufferSource,
+            writeStart,
+            size,
+          );
         } else if (dataOffset !== undefined) {
-          rawQueue.writeBuffer(rawBuffer, bufferOffset, data, writeStart);
+          rawQueue.writeBuffer(
+            rawBuffer,
+            bufferOffset,
+            data as GPUAllowSharedBufferSource,
+            writeStart,
+          );
         } else {
-          rawQueue.writeBuffer(rawBuffer, bufferOffset, data);
+          rawQueue.writeBuffer(rawBuffer, bufferOffset, data as GPUAllowSharedBufferSource);
         }
         return ok(undefined);
       } catch (e) {

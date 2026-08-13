@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 const cliPath = fileURLToPath(new URL('../../dist/cli.mjs', import.meta.url));
 const fixturePath = fileURLToPath(new URL('./fixtures/cli/valid-capture.json', import.meta.url));
+const partialFixturePath = fileURLToPath(
+  new URL('./fixtures/cli/partial-capture.json', import.meta.url),
+);
+const invalidFixturePath = fileURLToPath(
+  new URL('./fixtures/cli/invalid-version.json', import.meta.url),
+);
 
 function readFixture(): string {
   return readFileSync(fixturePath, 'utf8');
@@ -62,6 +68,59 @@ describe('profiler CLI public process contract', () => {
         expected: expect.any(String),
         hint: expect.any(String),
         detail: expect.any(Object),
+      },
+    });
+  });
+
+  it('compares two file artifacts deterministically through the built entry', () => {
+    const args = ['compare', '--left-file', fixturePath, '--right-file', partialFixturePath];
+    const first = runCli(args, 'stdin must not be read');
+    const second = runCli(args, 'different stdin must not be read');
+    const output = parseObject(first.stdout);
+
+    expect(first.status).toBe(0);
+    expect(first.stderr).toBe('');
+    expect(first.stdout).toBe(second.stdout);
+    expect(output).toMatchObject({
+      query: 'compare',
+      left: {
+        summary: { captureId: 'capture-0042' },
+        completeness: { status: 'complete' },
+      },
+      right: {
+        summary: { captureId: 'capture-0043' },
+        completeness: { status: 'partial' },
+      },
+      phases: expect.any(Array),
+    });
+  });
+
+  it('attributes an invalid compare artifact to its input side', () => {
+    const leftInvalid = runCli(
+      ['compare', '--left-file', invalidFixturePath, '--right-file', fixturePath],
+      '',
+    );
+    const rightInvalid = runCli(
+      ['compare', '--left-file', fixturePath, '--right-file', invalidFixturePath],
+      '',
+    );
+
+    expect(leftInvalid.status).not.toBe(0);
+    expect(parseObject(leftInvalid.stderr)).toEqual({
+      error: {
+        code: 'profile-artifact-incompatible',
+        expected: expect.any(String),
+        hint: expect.any(String),
+        detail: { path: '/schemaVersion', message: expect.any(String), side: 'left' },
+      },
+    });
+    expect(rightInvalid.status).not.toBe(0);
+    expect(parseObject(rightInvalid.stderr)).toEqual({
+      error: {
+        code: 'profile-artifact-incompatible',
+        expected: expect.any(String),
+        hint: expect.any(String),
+        detail: { path: '/schemaVersion', message: expect.any(String), side: 'right' },
       },
     });
   });

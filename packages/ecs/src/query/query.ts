@@ -61,6 +61,8 @@ export interface QueryRow<
   O extends readonly Component[] = readonly Component[],
 > {
   readonly entity: EntityHandle;
+  /** Test component presence without materialising its row object. */
+  has(component: R[number] | W[number] | O[number]): boolean;
   get<C extends R[number]>(component: C): ReadonlyRowShape<C>;
   get<C extends O[number]>(component: C): ReadonlyRowShape<C> | undefined;
   mut<C extends W[number]>(component: C): MutableRowShape<C>;
@@ -212,6 +214,10 @@ class QueryRowFacade<
   snapshot(): QueryRowFacade<R, W, O> {
     if (this.archetype === undefined) throw new Error('Query row is not bound.');
     return new QueryRowFacade<R, W, O>(this.world).bind(this.entity, this.archetype);
+  }
+
+  has(component: R[number] | W[number] | O[number]): boolean {
+    return this.archetype?.components.some((candidate) => candidate.id === component.id) === true;
   }
 
   get<C extends R[number]>(component: C): ReadonlyRowShape<C>;

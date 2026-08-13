@@ -103,6 +103,7 @@ import {
  *
  * Public API:
  *   - alloc(target, payload, onLastRelease?) -> Handle<T, 'shared'> (rc=1)
+ *   - intern(target, payload)        -> stable producer handle per target + object identity
  *   - resolve(handle)             -> Result<T, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
  *   - retain(handle)              -> Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
  *   - release(handle)             -> Result<void, SharedRefDoubleReleaseError | SharedRefStaleError | BuiltinSlotNotOwnedError>
@@ -114,6 +115,11 @@ export class SharedRefStore {
   private readonly refcounts = new Map<number, number>();
   private readonly freeSlots: number[] = [];
   private readonly releaseCallbacks = new Map<number, ((payload: unknown) => void) | undefined>();
+  private readonly internedByTarget = new Map<string, WeakMap<object, number>>();
+  private readonly internedKeys = new Map<
+    number,
+    { readonly target: string; readonly payload: object }
+  >();
   private nextSlot = BUILTIN_BASE;
 
   /**
@@ -162,6 +168,38 @@ export class SharedRefStore {
       this.releaseCallbacks.set(raw, onLastRelease as (payload: unknown) => void);
     }
     return toShared(raw);
+  }
+
+  /**
+   * Return the idempotent producer handle for one object payload in this
+   * store. Identity includes `target`, so the same object branded for two
+   * asset kinds does not alias.
+   *
+   * A cache hit deliberately does not retain: this is one producer grant,
+   * discovered repeatedly by an asset catalogue. Actual holders retain and
+   * release through the ECS write barrier. Callers needing independent
+   * grants or a per-handle deleter must use {@link alloc}.
+   */
+  intern<Target extends string, T extends object>(
+    target: Target,
+    payload: T,
+  ): Handle<Target, 'shared'> {
+    let byPayload = this.internedByTarget.get(target);
+    if (byPayload === undefined) {
+      byPayload = new WeakMap<object, number>();
+      this.internedByTarget.set(target, byPayload);
+    }
+
+    const existingRaw = byPayload.get(payload);
+    if (existingRaw !== undefined && this.payloads.has(existingRaw)) {
+      return toShared(existingRaw);
+    }
+
+    const handle = this.alloc(target, payload);
+    const raw = unwrapHandle(handle);
+    byPayload.set(payload, raw);
+    this.internedKeys.set(raw, { target, payload });
+    return handle;
   }
 
   /**
@@ -268,6 +306,14 @@ export class SharedRefStore {
     const cb = this.releaseCallbacks.get(raw);
     this.releaseCallbacks.delete(raw);
     const payload = this.payloads.get(raw);
+    const internedKey = this.internedKeys.get(raw);
+    if (internedKey !== undefined) {
+      const byPayload = this.internedByTarget.get(internedKey.target);
+      if (byPayload?.get(internedKey.payload) === raw) {
+        byPayload.delete(internedKey.payload);
+      }
+      this.internedKeys.delete(raw);
+    }
     this.refcounts.delete(raw);
     this.payloads.delete(raw);
     // Gen increment + retire (AC-07): bump gen; once it would exceed MAX_GEN

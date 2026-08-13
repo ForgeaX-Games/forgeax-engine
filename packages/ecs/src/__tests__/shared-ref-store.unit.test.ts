@@ -99,6 +99,46 @@ describe('w6 SharedRefStore: alloc + resolve', () => {
   });
 });
 
+describe('SharedRefStore.intern: producer identity', () => {
+  it('returns one producer handle for the same target and payload object', () => {
+    const store = new SharedRefStore();
+    const payload = { id: 1 };
+
+    const first = store.intern('MaterialAsset', payload);
+    const second = store.intern('MaterialAsset', payload);
+
+    expect(second).toBe(first);
+    expect(store.refcount(first)).toBe(1);
+    expect(store._liveCount()).toBe(1);
+  });
+
+  it('does not alias ordinary allocations or different targets', () => {
+    const store = new SharedRefStore();
+    const payload = { id: 1 };
+
+    const allocatedA = store.alloc('MaterialAsset', payload);
+    const allocatedB = store.alloc('MaterialAsset', payload);
+    const material = store.intern('MaterialAsset', payload);
+    const texture = store.intern('TextureAsset', payload);
+
+    expect(allocatedB).not.toBe(allocatedA);
+    expect(material).not.toBe(allocatedA);
+    expect(texture).not.toBe(material);
+  });
+
+  it('forgets the identity entry when the producer grant reaches zero', () => {
+    const store = new SharedRefStore();
+    const payload = { id: 1 };
+    const released = store.intern('MaterialAsset', payload);
+
+    expect(store.release(released).ok).toBe(true);
+    const next = store.intern('MaterialAsset', payload);
+
+    expect(next).not.toBe(released);
+    expect(store.resolve(next)).toMatchObject({ ok: true, value: payload });
+  });
+});
+
 // ─── w29 (D-10): retain + release + per-handle onLastRelease deleter ─────
 // M6 D-10: the global onLastRelease(globalCb) listener Set is deleted; the
 // release signal is a per-handle deleter passed as the third alloc argument
@@ -209,6 +249,13 @@ describe('w8 World.allocSharedRef: facade + AC-16 type inference', () => {
 
     expectTypeOf(handle).toEqualTypeOf<Handle<'SkinAsset', 'shared'>>();
     expect(world.sharedRefs.refcount(handle)).toBe(1);
+  });
+
+  it('World.internSharedRef preserves target handle inference', () => {
+    const world = new World();
+    const handle = world.internSharedRef('MaterialAsset', { kind: 'material' });
+
+    expectTypeOf(handle).toEqualTypeOf<Handle<'MaterialAsset', 'shared'>>();
   });
 
   it('explicit release of the alloc-grant takes rc to 0 and triggers the per-handle deleter', () => {

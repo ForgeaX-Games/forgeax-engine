@@ -377,6 +377,12 @@ jobs:
 `;
 }
 
+function repositoryContract() {
+  return JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+}
+
 // ============================================================================
 // t1: Contract schema validation fixtures
 // ============================================================================
@@ -760,6 +766,77 @@ test('t1: valid timing roster passes', async () => {
   try {
     const r = runChecker([fp]);
     assert.strictEqual(r.exitCode, 0, `valid timing roster should pass: ${r.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t1: shard producer mapping drift fails with a class mismatch', () => {
+  const contract = repositoryContract();
+  contract.artifactClasses['app-dist-1'].producer = 'app-shard-0';
+  const { dir, fp } = tmpContract(contract);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-fanout-class-mismatch');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t1: duplicate shard producer mapping fails closed', () => {
+  const contract = repositoryContract();
+  contract.artifactClasses['app-dist-1'].producer = 'app-shard-0';
+  contract.shardFamilies[0].producerMapping['app-dist-1'] = 'app-shard-0';
+  const { dir, fp } = tmpContract(contract);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-fanout-duplicate-producer');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t1: missing shard producer mapping fails with a producer error', () => {
+  const contract = repositoryContract();
+  delete contract.shardFamilies[0].producerMapping['app-dist-2'];
+  const { dir, fp } = tmpContract(contract);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-fanout-producer-missing');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t1: provenance payload omission fails with a coverage error', () => {
+  const contract = repositoryContract();
+  contract.provenance.payloadClasses = contract.provenance.payloadClasses.filter(
+    (className) => className !== 'app-dist-2',
+  );
+  const { dir, fp } = tmpContract(contract);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-artifact-contract-provenance-invalid');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('t1: timing roster rejects an undeclared consumer', () => {
+  const contract = repositoryContract();
+  contract.timingRoster[0].consumer = 'missing-consumer';
+  const { dir, fp } = tmpContract(contract);
+  try {
+    const result = runChecker([fp]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(
+      JSON.parse(result.stdout).code,
+      'ci-artifact-contract-timing-roster-unknown-consumer',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

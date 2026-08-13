@@ -2149,6 +2149,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -4411,6 +4412,7 @@
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-profiler": "workspace:*",
         "@forgeax/engine-remote": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
       },
@@ -4419,7 +4421,9 @@
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
+        "playwright": "^1.56.1",
         "vite": "8.0.10",
+        "ws": "^8.20.0",
       },
     },
     "apps/rhi-debug-viewer": {

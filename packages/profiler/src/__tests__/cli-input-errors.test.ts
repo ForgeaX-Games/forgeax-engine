@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readCliInput, runProfilerCli } from '../cli.js';
 
@@ -16,6 +17,27 @@ function expectStructuredError(
       expected: expect.any(String),
       hint: expect.any(String),
       detail: expect.anything(),
+    },
+  });
+}
+
+function expectStructuredErrorWithSide(
+  result: { stdout: string; stderr: string; exitCode: number },
+  code: string,
+  side: 'left' | 'right',
+): void {
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout).toBe('');
+  expect(JSON.parse(result.stderr)).toEqual({
+    error: {
+      code,
+      expected: expect.any(String),
+      hint: expect.any(String),
+      detail: {
+        side,
+        ...(code === 'cli-input-file-read-failed' ? { path: expect.any(String) } : {}),
+        message: expect.any(String),
+      },
     },
   });
 }
@@ -112,6 +134,38 @@ describe('profiler CLI input error contract', () => {
     expectStructuredError(
       runProfilerCli(['phase', '--source', 'app'], input),
       'cli-arguments-invalid',
+    );
+  });
+
+  it('requires two file inputs for compare and does not consume stdin', () => {
+    expect(
+      readCliInput(['compare', '--left-file', 'left.json', '--right-file', 'right.json'], () => {
+        throw new Error('stdin read');
+      }),
+    ).toBe('');
+    expectStructuredError(
+      runProfilerCli(['compare', '--left-file', 'left.json'], ''),
+      'cli-arguments-invalid',
+    );
+    expectStructuredError(
+      runProfilerCli(['summary', '--left-file', 'left.json', '--right-file', 'right.json'], '{}'),
+      'cli-arguments-invalid',
+    );
+  });
+
+  it('attributes unreadable compare files independently', () => {
+    const validPath = fileURLToPath(new URL('./fixtures/cli/valid-capture.json', import.meta.url));
+    const missingLeftPath = '/tmp/forgeax-profiler-missing-left-capture.json';
+    const missingRightPath = '/tmp/forgeax-profiler-missing-right-capture.json';
+    expectStructuredErrorWithSide(
+      runProfilerCli(['compare', '--left-file', missingLeftPath, '--right-file', validPath], ''),
+      'cli-input-file-read-failed',
+      'left',
+    );
+    expectStructuredErrorWithSide(
+      runProfilerCli(['compare', '--left-file', validPath, '--right-file', missingRightPath], ''),
+      'cli-input-file-read-failed',
+      'right',
     );
   });
 });

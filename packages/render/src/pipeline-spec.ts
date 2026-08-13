@@ -243,21 +243,37 @@ export function deriveBglShapeFromShader(
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Material snapshots hand the renderer immutable render-state objects. Keep
+ * the serialized suffix by object identity just like the vertex-layout
+ * digest below; the hot path otherwise sorts keys and serializes the same
+ * state once per renderable. Callers must not mutate a MaterialRenderState
+ * after passing it to the renderer (the PipelineSpec contract is immutable).
+ */
+const RENDER_STATE_HASH_CACHE = new WeakMap<object, string>();
+
+/**
  * Deterministic hash suffix for MaterialRenderState (sorted keys, JSON.stringify).
  *
  * Returns `''` when `renderState` is `undefined` or has zero entries,
  * preserving cache-key byte-compatibility with the pre-M1 shape.
  */
-function renderStateHash(renderState: MaterialRenderState | undefined): string {
+export function renderStateHash(renderState: MaterialRenderState | undefined): string {
   if (renderState === undefined) return '';
+  const cached = RENDER_STATE_HASH_CACHE.get(renderState);
+  if (cached !== undefined) return cached;
   const sorted = Object.keys(renderState).sort();
-  if (sorted.length === 0) return '';
+  if (sorted.length === 0) {
+    RENDER_STATE_HASH_CACHE.set(renderState, '');
+    return '';
+  }
   const payload: Record<string, unknown> = {};
   for (const k of sorted) {
     const v = renderState[k as keyof MaterialRenderState];
     if (v !== undefined) payload[k] = v;
   }
-  return `:${JSON.stringify(payload)}`;
+  const result = `:${JSON.stringify(payload)}`;
+  RENDER_STATE_HASH_CACHE.set(renderState, result);
+  return result;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -276,6 +292,29 @@ function djb2(s: string): number {
     hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0;
   }
   return hash >>> 0;
+}
+
+// Mesh assets treat their vertex-attribute map as immutable after extraction.
+// Renderer calls reuse that map for every submesh, so memoize only the
+// deterministic digest portion of cacheKeyOf; the rest of the key still
+// reflects every PipelineSpec axis on every call.
+const VERTEX_LAYOUT_DIGEST_CACHE = new WeakMap<object, number>();
+
+function vertexLayoutDigest(vertexLayout: VertexAttributeMap): number {
+  const key = vertexLayout as object;
+  const cached = VERTEX_LAYOUT_DIGEST_CACHE.get(key);
+  if (cached !== undefined) return cached;
+  const vlKeys = Object.keys(vertexLayout).sort();
+  const vlHashParts: string[] = [];
+  for (const k of vlKeys) {
+    const buf = vertexLayout[k as keyof VertexAttributeMap];
+    if (buf !== undefined) {
+      vlHashParts.push(`${k}:${buf.byteLength ?? (buf as ArrayBuffer).byteLength}`);
+    }
+  }
+  const digest = djb2(vlHashParts.join('|'));
+  VERTEX_LAYOUT_DIGEST_CACHE.set(key, digest);
+  return digest;
 }
 
 /**
@@ -299,16 +338,9 @@ export function cacheKeyOf(spec: PipelineSpec): string {
       ? `:${geometry.stripIndexFormat}`
       : '';
 
-  // Hash vertexLayout deterministically — Object.entries sorted for stability.
-  const vlKeys = Object.keys(geometry.vertexLayout).sort();
-  const vlHashParts: string[] = [];
-  for (const k of vlKeys) {
-    const buf = geometry.vertexLayout[k as keyof VertexAttributeMap];
-    if (buf !== undefined) {
-      vlHashParts.push(`${k}:${buf.byteLength ?? (buf as ArrayBuffer).byteLength}`);
-    }
-  }
-  const vlDigest = djb2(vlHashParts.join('|'));
+  // Hash vertexLayout deterministically — the digest is identity-cached for
+  // immutable mesh-asset maps reused across submeshes and frames.
+  const vlDigest = vertexLayoutDigest(geometry.vertexLayout);
 
   const uvSetCountSegment =
     geometry.shaderUvSetCount !== undefined ? `:uvsc${geometry.shaderUvSetCount}` : '';

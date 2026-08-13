@@ -7,6 +7,7 @@
 ```ts
 import {
   buildProfileModel,
+  compareProfileCaptures,
   createProfiler,
   validateProfileCapture,
 } from '@forgeax/engine-profiler';
@@ -40,6 +41,20 @@ Pass the same `profiler` to `createApp({ renderer, world, profiler })` or to the
 
 `ProfileCapture` is the portable boundary. It carries the fixed version, time unit, bounded frame and event evidence, owner phase catalog, and `completeness` status. `complete`, `partial`, and `overflow` are explicit outcomes; an overflow artifact remains useful and records its affected frame range.
 
+Compare two imported captures without adding product policy. The projection preserves each side's
+summary and completeness, unions phases by the full `source` / `parentSource` / `parentPhase` /
+`phase` identity, and leaves an absent or null fact unavailable. Present count and skip deltas, plus
+p95 duration deltas when both sides use a compatible time unit, are right minus left:
+
+```ts
+const comparison = compareProfileCaptures(leftJson, rightJson);
+if (!comparison.ok) {
+  console.error(comparison.error.detail.side, comparison.error.detail.path);
+} else {
+  console.log(comparison.value.phases);
+}
+```
+
 ## Limits and allocation evidence
 
 Always set both `frameLimit` and `eventLimit` to positive safe integers. The recorder retains bounded arrays and fixed records, reports dropped events after overflow, and never presents an overflow artifact as complete. A host can pass `allocationReport` to `createProfiler` to count profiler-owned event object allocations; the deterministic D-6 gate requires zero allocations while the profiler is off.
@@ -70,9 +85,12 @@ const started = profiler.startCapture({
 pnpm --filter @forgeax/engine-profiler run cli summary --file profile-capture.json
 pnpm --filter @forgeax/engine-profiler run cli frame --file profile-capture.json --frame-id 12
 pnpm --filter @forgeax/engine-profiler run cli phase --file profile-capture.json --source render --phase record
+pnpm --filter @forgeax/engine-profiler run cli compare --left-file before.json --right-file after.json
 ```
 
-The CLI reads one `ProfileCapture` JSON object from `--file` or stdin and emits structured JSON. It does not reconnect to a live App. The same artifact can be checked before analysis:
+The CLI reads one `ProfileCapture` JSON object from `--file` or two objects from
+`compare --left-file/--right-file` and emits structured JSON. Compare input failures identify the
+`left` or `right` side. It does not reconnect to a live App. The same artifact can be checked before analysis:
 
 This is a copyable schema-valid complete artifact. The owner catalog is part of the artifact, so a
 consumer can validate and analyze it without a separately maintained phase list.
@@ -135,6 +153,7 @@ Profiler owns capture records, bounds, allocation evidence, and offline projecti
 | `ProfileCapture` | Versioned artifact accepted by validation, model building, and the CLI. |
 | `validateProfileCapture(value)` | Validates schema and semantic invariants before offline use. |
 | `buildProfileModel(capture)` | Projects retained records into summaries without changing the artifact. |
+| `compareProfileCaptures(left, right)` | Projects two validated captures into side summaries and a deterministic phase union. |
 | `createProfileClock()` | Supplies the default monotonic microsecond clock. |
 
 The package root is the only supported import path for these entries. See `schema/profile-capture.schema.json` for the artifact contract and `scripts/bench/profiler-overhead.mjs` for the deterministic D-6 consumer gate.

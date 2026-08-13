@@ -72,6 +72,7 @@ import {
   type World,
 } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
+import { ChildOf } from '../components/child-of';
 import { Transform } from '../components/transform';
 import { SceneError } from '../errors';
 import { projectHierarchy, type SceneHierarchySnapshot } from './hierarchy-projection';
@@ -93,6 +94,10 @@ interface GraphLike {
 interface InternalWorldSurface {
   /** @internal */
   _getGraph(): GraphLike;
+  /** @internal */
+  _getStructureEpoch(): number;
+  /** @internal */
+  _getComponentMutationEpoch(componentId: number): number;
   /** @internal */
   /**
    * @internal Column-level zero-copy view of an `array<T, N>` / `buffer<N>` field.
@@ -165,6 +170,22 @@ const scratchPos = new Float32Array(3);
 const scratchQuat = new Float32Array(4);
 const scratchScale = new Float32Array(3);
 
+interface PropagationCacheEntry {
+  readonly childOfMutationEpoch: number;
+  readonly structureEpoch: number;
+  readonly transformMutationEpoch: number;
+  readonly hierarchy: SceneHierarchySnapshot;
+  readonly result: Result<void, SceneError>;
+}
+
+// The renderer driver runs the ECS Update schedule before draw(), while the
+// render extract path also calls this standalone helper for direct-draw users.
+// A stable World therefore used to derive every Transform.world twice per
+// frame. Local Transform edits, ChildOf edits, and structural changes are the
+// only authored invalidators; direct writes to the derived `world` column are
+// outside the Transform contract and are overwritten by this owner.
+const PROPAGATION_CACHE = new WeakMap<World, PropagationCacheEntry>();
+
 /**
  * Compose an entity's local TRS array columns (at `row`) into `out` (mat4).
  * `out` is a `FieldView` (the live `Transform.world` view, a `Float32Array` at
@@ -218,6 +239,19 @@ export function propagateTransforms(
   hierarchy: SceneHierarchySnapshot = projectHierarchy(world),
 ): Result<void, SceneError> {
   const internal = asInternal(world);
+  const structureEpoch = internal._getStructureEpoch();
+  const childOfMutationEpoch = internal._getComponentMutationEpoch(ChildOf.id);
+  const transformMutationEpoch = internal._getComponentMutationEpoch(Transform.id);
+  const cached = PROPAGATION_CACHE.get(world);
+  if (
+    cached !== undefined &&
+    cached.structureEpoch === structureEpoch &&
+    cached.childOfMutationEpoch === childOfMutationEpoch &&
+    cached.transformMutationEpoch === transformMutationEpoch &&
+    cached.hierarchy === hierarchy
+  ) {
+    return cached.result;
+  }
   const graph = internal._getGraph();
 
   // Collect a row locator per live entity carrying a Transform. The locator
@@ -259,7 +293,7 @@ export function propagateTransforms(
 
   const firstDiagnostic = hierarchy.diagnostics[0];
   if (firstDiagnostic !== undefined) {
-    return err(
+    const result = err(
       new SceneError({
         code: firstDiagnostic.code,
         expected: firstDiagnostic.expected,
@@ -267,8 +301,24 @@ export function propagateTransforms(
         detail: firstDiagnostic.detail,
       }),
     );
+    PROPAGATION_CACHE.set(world, {
+      structureEpoch,
+      childOfMutationEpoch,
+      transformMutationEpoch,
+      hierarchy,
+      result,
+    });
+    return result;
   }
-  return ok(undefined);
+  const result = ok(undefined);
+  PROPAGATION_CACHE.set(world, {
+    structureEpoch,
+    childOfMutationEpoch,
+    transformMutationEpoch,
+    hierarchy,
+    result,
+  });
+  return result;
 }
 
 /**

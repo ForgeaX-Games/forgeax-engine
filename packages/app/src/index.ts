@@ -109,6 +109,7 @@ export {
   unavailableExecutionCapabilities,
   validateExecutionBootstrapData,
 } from './execution';
+export { ensureFallbackCamera } from './fallback-camera';
 export type {
   BootstrapContext,
   BootstrapEntry,

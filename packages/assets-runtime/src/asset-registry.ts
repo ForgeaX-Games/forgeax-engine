@@ -353,6 +353,12 @@ export class AssetRegistry {
   // which invalidates every in-flight Promise regardless of GUID.
   readonly generations: Map<string, number> = new Map();
   globalGeneration: number = 0;
+  /**
+   * Monotonic payload-cache epoch. Render-side derived snapshots use this
+   * single stamp to skip re-walking an unchanged material parent chain on
+   * every frame; catalog/invalidation mutations advance it conservatively.
+   */
+  catalogEpoch: number = 0;
 
   // F20: per-cache Promise queue to serialise packIndexCache write operations
   // in transportOrFail. The "check -> new Map() -> set" three-step block is
@@ -662,6 +668,7 @@ export class AssetRegistry {
     if (entry !== undefined) this.packFileCache.delete(entry.packageUrl);
     this.packIndexCache?.delete(guidKey);
     this.generations.set(guidKey, (this.generations.get(guidKey) ?? 0) + 1);
+    this.catalogEpoch++;
   }
 
   /**
@@ -694,6 +701,7 @@ export class AssetRegistry {
     // intentional; do not normalise the two operations.
     this.packFileCache.clear();
     this.packIndexCache = undefined;
+    this.catalogEpoch++;
     return { clearedCount: count };
   }
 
@@ -846,7 +854,7 @@ export class AssetRegistry {
    * Schema-driven field detection (plan-strategy D-4): for each component
    * field whose Component.schema fieldType starts with `shared\<`, the
    * value is treated as a GUID string and resolved via `AssetGuid.parse` +
-   * catalogue lookup + `world.allocSharedRef` (feat-20260614 M8 D-15/D-17;
+   * catalogue lookup + `world.internSharedRef` (feat-20260614 M8 D-15/D-17;
    * the registry mints nothing). Unknown component names are silently passed
    * through (the ecs layer's additionalProperties check will catch unknowns at
    * spawn if appropriate).
@@ -861,18 +869,21 @@ export class AssetRegistry {
     world: World,
     sceneGuidKey?: string,
     _visitedMountGuids?: Set<string>,
+    _guidToHandle?: Map<string, number>,
+    _resolvedSceneHandles?: Map<string, number>,
   ): Result<SceneAsset, AssetError> {
     // feat-20260622 M3 / w8: reverse-decode from envelope.refs edges when
     // sceneGuidKey is provided and the catalog holds an envelope for this
     // scene. Each edge with sceneEntityId+sourceField.componentName carries
     // the (entityLocalId, componentName, fieldName, arrayIndex) triple —
     // no need to walk entities with resolveComponent reflection.
-    // D-15/D-17 dedup contract: the same catalogued GUID referenced from
-    // multiple nodes must resolve to ONE user-tier handle (one allocSharedRef
-    // per unique payload), so cross-node references share a single ref-counted
-    // slot. Mint once per GUID, reuse for every later occurrence.
+    // D-15/D-17 dedup contract: the same catalogued payload referenced from
+    // multiple nodes must resolve to ONE user-tier handle. The local GUID map
+    // avoids repeat lookups inside this traversal; World interning preserves
+    // payload identity across separate scene-resolution calls.
     const resolvedMap = new Map<string, number>();
-    const guidToHandle = new Map<string, number>();
+    const guidToHandle = _guidToHandle ?? new Map<string, number>();
+    const resolvedSceneHandles = _resolvedSceneHandles ?? new Map<string, number>();
     const sceneEnvelope =
       sceneGuidKey !== undefined ? this.assetCatalog.get(sceneGuidKey) : undefined;
     // Did the structured-edge branch actually resolve anything? Prod-loaded
@@ -914,7 +925,7 @@ export class AssetRegistry {
         const guidKey = ref.guid.toLowerCase();
         let resolvedSlot = guidToHandle.get(guidKey);
         if (resolvedSlot === undefined) {
-          resolvedSlot = unwrapHandle(world.allocSharedRef(payload.kind, payload));
+          resolvedSlot = unwrapHandle(world.internSharedRef(payload.kind, payload));
           guidToHandle.set(guidKey, resolvedSlot);
         }
 
@@ -1026,6 +1037,7 @@ export class AssetRegistry {
         world,
         mountVisited,
         guidToHandle,
+        resolvedSceneHandles,
       );
       if (sceneGuidKey !== undefined) mountVisited.delete(sceneGuidKey.toLowerCase());
       if (!resolvedMounts.ok) {
@@ -1136,6 +1148,7 @@ export class AssetRegistry {
       payload: stored,
       refs: refs ?? [],
     });
+    this.catalogEpoch++;
     this.loadState.registerReady(key, stored);
     // D-1: catalog() inline path defaults every GUID to the no-package state
     // (null). loadByGuid + builtin override via their own registerPackage calls

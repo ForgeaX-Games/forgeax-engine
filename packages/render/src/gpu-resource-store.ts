@@ -273,6 +273,10 @@ interface MeshGpuEntry {
  * GPU device via `configureGpuDevice` after `Renderer.ready` resolves.
  */
 export class GpuResourceStore {
+  /** Monotonic token for mesh GPU residency or contents changes. */
+  meshResidencyEpoch = 0;
+  /** Monotonic token for texture/sampler identities used by material bind groups. */
+  materialResourceEpoch = 0;
   private gpuDevice: MipmapBlitDevice | undefined = undefined;
   // Shader-module factory injected at `configureGpuDevice`; threaded into the
   // mipmap-pipeline prewarm + the IBL precompute path. `undefined` until wired.
@@ -317,6 +321,7 @@ export class GpuResourceStore {
     registerCube: RegisterCube,
     caps: RhiCaps,
   ): void {
+    this.meshResidencyEpoch += 1;
     this.gpuDevice = device;
     this.asyncCreateShaderModule = asyncCreateShaderModule;
     this.registerCube = registerCube;
@@ -361,6 +366,7 @@ export class GpuResourceStore {
    * make progress (plan-strategy D-3 / D-8).
    */
   destroyAll(): void {
+    if (this.meshGpuHandles.size > 0) this.meshResidencyEpoch += 1;
     // The cubemap path registers two entries (sourceId + cubeId) sharing one
     // GpuTexture wrapper, so destroyAll must dedupe on the wrapper identity
     // before forwarding `.destroy()` -- otherwise the second call surfaces
@@ -375,6 +381,9 @@ export class GpuResourceStore {
 
     for (const entry of this.textureGpuHandles.values()) {
       destroyTex(entry.texture);
+    }
+    if (this.textureGpuHandles.size > 0 || this.samplerGpuHandles.size > 0) {
+      this.materialResourceEpoch += 1;
     }
     this.textureGpuHandles.clear();
     this.samplerGpuHandles.clear();
@@ -431,6 +440,7 @@ export class GpuResourceStore {
     }
 
     this.textureGpuHandles.delete(id);
+    this.materialResourceEpoch += 1;
     return { freed, errors };
   }
 
@@ -461,6 +471,7 @@ export class GpuResourceStore {
     if (entry.indexBuffer !== null) destroyBuf(entry.indexBuffer);
 
     this.meshGpuHandles.delete(id);
+    this.meshResidencyEpoch += 1;
     return { freed: freed > 0 ? 1 : 0, errors };
   }
 
@@ -501,6 +512,8 @@ export class GpuResourceStore {
   releaseUnreferenced(liveSet: Set<number>): { freed: number; errors: RhiError[] } {
     let freed = 0;
     const errors: RhiError[] = [];
+    let meshResidencyChanged = false;
+    let materialResidencyChanged = false;
 
     for (const key of this.textureGpuHandles.keys()) {
       if (!liveSet.has(key)) {
@@ -516,12 +529,16 @@ export class GpuResourceStore {
             }
           }
           this.textureGpuHandles.delete(key);
+          materialResidencyChanged = true;
         }
       }
     }
 
     for (const key of this.samplerGpuHandles.keys()) {
-      if (!liveSet.has(key)) this.samplerGpuHandles.delete(key);
+      if (!liveSet.has(key)) {
+        this.samplerGpuHandles.delete(key);
+        materialResidencyChanged = true;
+      }
     }
 
     for (const key of this.cubemapGpuHandles.keys()) {
@@ -566,9 +583,13 @@ export class GpuResourceStore {
             }
           }
           this.meshGpuHandles.delete(key);
+          meshResidencyChanged = true;
         }
       }
     }
+
+    if (meshResidencyChanged) this.meshResidencyEpoch += 1;
+    if (materialResidencyChanged) this.materialResourceEpoch += 1;
 
     return { freed, errors };
   }
@@ -663,6 +684,7 @@ export class GpuResourceStore {
     const created = device.createSampler(descriptor);
     if (!created.ok) return created;
     this.samplerGpuHandles.set(key, created.value);
+    this.materialResourceEpoch += 1;
     return created;
   }
 
@@ -831,10 +853,20 @@ export class GpuResourceStore {
       dimension: '2d',
     });
     if (!viewRes.ok) return viewRes;
-    this.textureGpuHandles.set(cacheKey, {
+    const previous = this.textureGpuHandles.get(cacheKey);
+    const next = {
       texture: this.wrapTex(gpuTexture),
       view: viewRes.value,
-    });
+    };
+    this.textureGpuHandles.set(cacheKey, next);
+    this.materialResourceEpoch += 1;
+    if (
+      previous !== undefined &&
+      previous.texture !== next.texture &&
+      !previous.texture.isDestroyed
+    ) {
+      previous.texture.destroy();
+    }
     return ok(undefined);
   }
 
@@ -882,7 +914,16 @@ export class GpuResourceStore {
     });
     if (!viewRes.ok) return viewRes;
     const entry: TextureGpuEntry = { texture: this.wrapTex(gpuTexture), view: viewRes.value };
+    const previous = this.textureGpuHandles.get(cacheKey);
     this.textureGpuHandles.set(cacheKey, entry);
+    this.materialResourceEpoch += 1;
+    if (
+      previous !== undefined &&
+      previous.texture !== entry.texture &&
+      !previous.texture.isDestroyed
+    ) {
+      previous.texture.destroy();
+    }
     return ok(entry);
   }
 
@@ -1522,6 +1563,7 @@ export class GpuResourceStore {
       submeshes: renderData.submeshes,
     };
     this.meshGpuHandles.set(id, entry);
+    this.meshResidencyEpoch += 1;
     return ok(entry);
   }
 
@@ -1590,6 +1632,7 @@ export class GpuResourceStore {
         topology: entry.topology,
         submeshes: nextSubmeshes,
       });
+      this.meshResidencyEpoch += 1;
       return;
     }
 
@@ -1632,6 +1675,7 @@ export class GpuResourceStore {
       topology: entry.topology,
       submeshes: nextSubmeshes,
     });
+    this.meshResidencyEpoch += 1;
 
     // M-3 / w11: replace the legacy `(buf as any).destroy()` sneak path with
     // a structured `GpuBuffer.destroy()` that routes through

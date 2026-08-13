@@ -49,6 +49,23 @@ smoke also clicks the repaired action, checks deterministic capture, calls
 `dispose()` twice, and falsifies an incomplete image resource so readiness
 reports `resources`.
 
+## Production real-game UI matrix
+
+`smoke:ui-production` is the shipped Preview boundary for the real
+`game-default` HUD and Settings packs. Its consumer-owned matrix lives in
+`scripts/ui-real-scenario-matrix.mjs` and runs `default`, `extreme-data`, and
+`modal-focus` at fixed `320x180` and `960x540` viewports, repeating the matrix
+to compare deterministic DOM/projection evidence. Each case checks the
+catalogued Pack v2 rows, open ShadowRoots, positive font/canvas readiness,
+HUD projections, Settings defaults, modal focus/inert/action ownership, and
+post-message cleanup. PNGs are secondary evidence; readiness is established
+from the live DOM and existing game inspection projections.
+
+```sh
+FORGEAX_UI_PRODUCTION_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:ui-production
+```
+
 ## What the host proves
 
 | Check | Observable result |

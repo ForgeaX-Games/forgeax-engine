@@ -301,12 +301,24 @@ Offline subcommands (`inspect-offline`, `summary`, `trigger-browser`) do NOT rou
 idle -> armed -> snapshotting -> recording -> finalizing -> idle  (normal path, v2)
 idle -> armed -> recording -> finalizing -> idle                  (v1 path, no snapshotting)
 idle -> armed -> recording -> error                               (capture failure)
-error -> idle           (via disposeError())
+error -> idle           (via the public disposeError() recovery boundary)
 ```
 
 9 legal transitions: `idle->armed` (arm), `armed->snapshotting` (v2: frame-header snapshot window, calls snapshotResource for all live resources), `armed->recording` (v1 path when snapshotting is skipped), `snapshotting->recording` (snapshot complete, frame commands begin), `recording->idle` (N frames done, auto-finalize), `recording->error` (device.lost), `error->idle` (disposeError).
 
-3 illegal: duplicate arm returns `recorder-already-armed`; arm from error returns `recorder-already-armed`; finalize from error writes `valid: false`.
+3 illegal: duplicate arm returns `recorder-already-armed`; arm from error returns `recorder-not-attached` until `disposeError()`; finalize from error writes `valid: false`.
+
+### Capture failure recovery
+
+`disposeError()` is the one public recovery boundary for a failed capture. It
+clears the terminal error, invalidates pending snapshot generations, drops the
+failed tape data, and returns the recorder to `idle`; calling it from any other
+state is an idempotent no-op. Call it before retrying a direct `DebugRhiInstance`
+capture. The public `captureFramesToMemory()` browser helper and the Node
+`DebugRhiAdapter.captureFrames()` route perform that same check automatically
+when the recorder is already in `error`, so a retry does not require a process
+or app restart. This bounded recovery contract covers capture failures such as
+`snapshot-timeout`; it does not claim general GPU device-loss recovery.
 
 **Seed insertion point (v2 replay order):** During replay, events are processed in tape order. The bootstrap prefix carries `create*` events first, then `initialData` events, then frame commands. Replay follows: create resources -> seed initialData (writeBuffer/writeTexture from blobPool) -> dispatch frame commands. The `replayInitialData` handler returns `Result` — failures bubble up through `stepToImpl` as `seed-initial-data-failed` (not void-silent-return).
 
@@ -329,7 +341,7 @@ error -> idle           (via disposeError())
 | `rpc-target-not-wired` | `debugAdapter` not available in eval scope — ensure `createApp` is used (auto-wires `debugAdapter` alongside `world`, `renderer`, `assets`) |
 | `replay-dispose-busy` | in-flight inspect at draw indices `{inFlightDrawIndices}`; `await` them first |
 | `snapshot-readback-failed` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob). `.detail = {handleId, stage: 'copy' | 'map' | 'store'}` |
-| `snapshot-timeout` | frame-header resource snapshot exceeded its timeout and was cancelled. `.detail = {timeoutMs}`; the recorder enters `error` and requires `disposeError()` before retry |
+| `snapshot-timeout` | frame-header resource snapshot exceeded its timeout and was cancelled. `.detail = {timeoutMs}`; the recorder enters `error` and requires the public `disposeError()` recovery boundary before retry (the adapter routes invoke it automatically) |
 | `seed-initial-data-failed` | replayInitialData seed failed (handleId missing / dataHash missing / writeBuffer failed). `.detail = {handleId, stage: 'lookup' | 'write'}` |
 
 Each error object carries structured `.code` / `.expected` / `.hint` / `.detail` (discriminated union narrowed on `.code`). AI users consume via `switch (err.code)` exhaustive -- TypeScript catches missing branches at compile time.
@@ -533,4 +545,4 @@ The forgeax engine binds a `array<InstanceData>` buffer at `@group(3) @binding(0
 | OOS-8 | Browser pixel-deterministic replay | dawn-node only epsilon <= 0.01; browser: non-zero + structural only |
 | OOS-9 | URL param `?forgeax-debug=1` trigger | v2 (`FORGEAX_ENGINE_RHI_DEBUG=1` env only) |
 | OOS-10 | `executeBundles` / occlusion queries event recording | in `DEFERRED_COMMANDS`; replay support deferred |
-| OOS-11 | Auto-recovery from capture failure (recording -> idle) | v1: manual `disposeError()` required |
+| OOS-11 | General auto-recovery from capture failure (recording -> idle) | P9 closes bounded snapshot-failure retry through the public `disposeError()` boundary; general device-loss recovery remains outside this contract |

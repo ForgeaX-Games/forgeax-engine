@@ -69,6 +69,7 @@ import { err, ok, RhiError, validateDrawArgs } from '@forgeax/engine-rhi';
 import * as rhiWebgpu from '@forgeax/engine-rhi-webgpu';
 import {
   findVariantByKey,
+  type MaterialShaderManifestEntry,
   ShaderRegistry,
   type ShaderRegistryDevice,
 } from '@forgeax/engine-shader';
@@ -78,6 +79,7 @@ import type {
   ImportTransport,
   ManifestEntry,
   MaterialRenderState,
+  ParamSchemaEntry,
   PassKind,
   PrimitiveTopology,
   VertexAttributeMap,
@@ -1497,6 +1499,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // because the prewarm step runs strictly before the first frame's
   // `getMaterialShaderPipeline` lookup that would consume it).
   const materialShaderPipelineCache = new Map<string, RenderPipeline>();
+  const materialShaderManifestEntryCache = new Map<string, MaterialShaderManifestEntry>();
+  // Variant resolution only depends on the requested axes, device capability
+  // axes, and the manifest entry that owns the declarations. Cache it by the
+  // manifest's variants-array identity so hot replacement naturally gets a
+  // fresh result without adding a global strong reference to shader metadata.
+  const materialShaderVariantResolutionCache = new WeakMap<
+    object,
+    Map<string, string | undefined>
+  >();
   let group0MaterialLayout: {
     materialBgl: BindGroupLayout;
     pipelineLayout: PipelineLayout;
@@ -1515,10 +1526,39 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // meshArray, instances] that the PSO builds against. Built lazily on first
   // request and cached by shaderId; 4-or-fewer-texture shaders never enter the cache
   // (they reuse the shared layout, byte-for-byte the built-in shape — D-2).
-  const perShaderMaterialLayoutCache = new Map<
+  type PerShaderMaterialLayout = {
+    materialBgl: BindGroupLayout;
+    pipelineLayout: PipelineLayout;
+  };
+  type PerShaderMaterialLayoutCacheEntry = {
+    readonly source: string;
+    readonly paramSchema: readonly ParamSchemaEntry[];
+    readonly layout: PerShaderMaterialLayout | null;
+  };
+  const perShaderMaterialLayoutCache = new Map<string, PerShaderMaterialLayoutCacheEntry>();
+  // Material binding contracts are derived from WGSL source, but the lookup
+  // is also used by the per-submesh bind-group path. Cache the derived value
+  // per renderer so a frame does not re-run the comment stripping and regex
+  // scan for every visible submesh. Keep the source alongside the result so
+  // shader hot-replacement invalidates the entry naturally.
+  const materialShaderBindingContractCache = new Map<
     string,
-    { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout }
+    { source: string; contract: MaterialShaderBindingContract }
   >();
+  const getCachedMaterialShaderBindingContract = (
+    materialShaderId: string,
+  ): MaterialShaderBindingContract => {
+    const lookup = getShader().findMaterialArtifact(materialShaderId);
+    if (!lookup.ok) return 'render-material';
+    const cached = materialShaderBindingContractCache.get(materialShaderId);
+    if (cached?.source === lookup.value.source) return cached.contract;
+    const contract = resolveMaterialShaderBindingContract(lookup.value.source);
+    materialShaderBindingContractCache.set(materialShaderId, {
+      source: lookup.value.source,
+      contract,
+    });
+    return contract;
+  };
   const getOrBuildGroup0MaterialLayout = (): {
     materialBgl: BindGroupLayout;
     pipelineLayout: PipelineLayout;
@@ -1617,16 +1657,25 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // 'pbr-material-merged' + materialParamSchema) used by buildPbrPipelineLayouts.
   const getOrBuildPerShaderMaterialLayout = (
     materialShaderId: string,
-  ): { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout } | null => {
-    const cached = perShaderMaterialLayoutCache.get(materialShaderId);
-    if (cached !== undefined) return cached;
-    if (pipelineState === null) return null;
+  ): PerShaderMaterialLayout | null => {
     const lookup = getShader().findMaterialArtifact(materialShaderId);
     if (!lookup.ok) return null;
+    const cached = perShaderMaterialLayoutCache.get(materialShaderId);
+    if (cached?.source === lookup.value.source && cached.paramSchema === lookup.value.paramSchema) {
+      return cached.layout;
+    }
+    if (pipelineState === null) return null;
     const paramSchema = lookup.value.paramSchema;
     // 4-or-fewer user-region textures derive to the same shape as the shared
     // built-in BGL -> reuse it (D-2; no per-shader entry).
-    if (derive(paramSchema).textureFieldNames.size <= 4) return null;
+    if (derive(paramSchema).textureFieldNames.size <= 4) {
+      perShaderMaterialLayoutCache.set(materialShaderId, {
+        source: lookup.value.source,
+        paramSchema,
+        layout: null,
+      });
+      return null;
+    }
     const spec: PipelineSpec = {
       shader: { id: materialShaderId, passKind: 'forward', variantSet: undefined },
       attachments: { colorFormats: [], depthFormat: undefined, sampleCount: 1 },
@@ -1659,8 +1708,54 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       return null;
     }
     const built = { materialBgl: bglRes.value, pipelineLayout: plRes.value };
-    perShaderMaterialLayoutCache.set(materialShaderId, built);
+    perShaderMaterialLayoutCache.set(materialShaderId, {
+      source: lookup.value.source,
+      paramSchema,
+      layout: built,
+    });
     return built;
+  };
+  const resolveCachedMaterialShaderVariantSet = (
+    requestedVariantSet: string | undefined,
+    manifestEntry: import('@forgeax/engine-shader').MaterialShaderManifestEntry | undefined,
+  ): string | undefined => {
+    if (manifestEntry === undefined) {
+      return resolveMaterialShaderVariantSet(
+        requestedVariantSet,
+        [],
+        internals.device.caps.backendKind,
+        internals.device.caps.storageBuffer,
+      );
+    }
+    const variants = manifestEntry.variants;
+    let byRequest = materialShaderVariantResolutionCache.get(variants);
+    if (byRequest === undefined) {
+      byRequest = new Map();
+      materialShaderVariantResolutionCache.set(variants, byRequest);
+    }
+    const cacheKey = `${requestedVariantSet ?? '\u0000'}|${internals.device.caps.backendKind}|${internals.device.caps.storageBuffer ? '1' : '0'}`;
+    if (byRequest.has(cacheKey)) return byRequest.get(cacheKey);
+    const resolved = resolveMaterialShaderVariantSet(
+      requestedVariantSet,
+      variants,
+      internals.device.caps.backendKind,
+      internals.device.caps.storageBuffer,
+    );
+    byRequest.set(cacheKey, resolved);
+    return resolved;
+  };
+  const findMaterialShaderManifestEntry = (
+    materialShaderId: string,
+  ): MaterialShaderManifestEntry | undefined => {
+    const cached = materialShaderManifestEntryCache.get(materialShaderId);
+    if (cached !== undefined) return cached;
+    for (const candidate of getShader().materialShaderManifestEntries()) {
+      if (candidate.identifier === materialShaderId) {
+        materialShaderManifestEntryCache.set(materialShaderId, candidate);
+        return candidate;
+      }
+    }
+    return undefined;
   };
   // feat-20260622-s5 M3 / w17: the pipeline build is factored into a closure so
   // the recover() rebuild can re-run the SAME three-step assembly against the
@@ -1800,12 +1895,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const bindingContract =
       materialShaderId === undefined
         ? 'render-material'
-        : (() => {
-            const lookup = getShader().findMaterialArtifact(materialShaderId);
-            return lookup.ok
-              ? resolveMaterialShaderBindingContract(lookup.value.source)
-              : 'render-material';
-          })();
+        : getCachedMaterialShaderBindingContract(materialShaderId);
     const group0Layout = bindingContract === 'group-0' ? getOrBuildGroup0MaterialLayout() : null;
     const group0ResourceLayout =
       bindingContract === 'group-0-resource' && materialShaderId !== undefined
@@ -2089,19 +2179,16 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // the actual device capabilities. Without this, WebGL2 can build a
     // storage-buffer PSO around a uniform-buffer shader and only reject it at
     // queue submit as an invalid RenderPipeline.
-    let manifestEntry: import('@forgeax/engine-shader').MaterialShaderManifestEntry | undefined;
-    for (const candidate of getShader().materialShaderManifestEntries()) {
-      if (candidate.identifier === materialShaderId) {
-        manifestEntry = candidate;
-        break;
-      }
-    }
-    const resolvedVariantSet = resolveMaterialShaderVariantSet(
-      variantSet,
-      manifestEntry?.variants ?? [],
-      internals.device.caps.backendKind,
-      internals.device.caps.storageBuffer,
-    );
+    const ldrColorFormat: GPUTextureFormat =
+      colorFormatOverride ??
+      (pipelineState !== null
+        ? (pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat)
+        : ('bgra8unorm-srgb' as unknown as GPUTextureFormat));
+    // feat-20260629 M4: auto-fill shaderUvSetCount from naga reflection
+    // (stored in materialShaderUvSetCounts during prepareMaterialShaders).
+    const resolvedUvSetCount = shaderUvSetCount ?? materialShaderUvSetCounts.get(materialShaderId);
+    const manifestEntry = findMaterialShaderManifestEntry(materialShaderId);
+    const resolvedVariantSet = resolveCachedMaterialShaderVariantSet(variantSet, manifestEntry);
     // The record stage also composes engine capability axes for user shaders.
     // Keep only manifest-declared axes for non-engine material IDs: a plain
     // custom shader must not collapse that request to '' because '' is the
@@ -2126,9 +2213,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       effectiveVariantSet =
         filteredVariantParts.length === 0 ? undefined : filteredVariantParts.join('+');
     }
-    // feat-20260629 M4: auto-fill shaderUvSetCount from naga reflection
-    // (stored in materialShaderUvSetCounts during prepareMaterialShaders).
-    const resolvedUvSetCount = shaderUvSetCount ?? materialShaderUvSetCounts.get(materialShaderId);
     // feat-20260615-pipeline-spec-ssot M2-T2: cache key derived from PipelineSpec
     // 4-axis SSOT via cacheKeyOf(spec). The spec carries all 4 axes (shader /
     // attachments / geometry / renderState), replacing the legacy 8-segment string
@@ -2140,11 +2224,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // here let the cache key drift from the prewarm key on backends where
     // getPreferredCanvasFormat returns rgba8unorm (dawn-node, lavapipe, wgpu-wasm GLES),
     // forcing a redundant second PSO build on first-frame URP record path.
-    const ldrColorFormat: GPUTextureFormat =
-      colorFormatOverride ??
-      (pipelineState !== null
-        ? (pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat)
-        : ('bgra8unorm-srgb' as unknown as GPUTextureFormat));
     const colorFormat: GPUTextureFormat =
       passKind === 'shadow-caster'
         ? (undefined as unknown as GPUTextureFormat)
@@ -2387,9 +2466,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // custom shaders). Returns undefined for the ordinary 3-texture path so the
   // record stage falls back to the shared built-in materialBindGroupLayout.
   const getMaterialBindGroupLayout = (materialShaderId: string): BindGroupLayout | undefined => {
-    const lookup = getShader().findMaterialArtifact(materialShaderId);
-    if (!lookup.ok) return undefined;
-    const contract = resolveMaterialShaderBindingContract(lookup.value.source);
+    const contract = getCachedMaterialShaderBindingContract(materialShaderId);
     if (contract === 'group-0') {
       return getOrBuildGroup0MaterialLayout()?.materialBgl;
     }
@@ -2510,12 +2587,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     errorRegistry: internals.errorRegistry,
     healthRegistry: internals.healthRegistry,
     getMaterialShaderPipeline,
-    getMaterialShaderBindingContract: (materialShaderId) => {
-      const lookup = getShader().findMaterialArtifact(materialShaderId);
-      return lookup.ok
-        ? resolveMaterialShaderBindingContract(lookup.value.source)
-        : 'render-material';
-    },
+    getMaterialShaderBindingContract: getCachedMaterialShaderBindingContract,
     getParamSchema,
     getMaterialBindGroupLayout,
     metrics,
@@ -2552,19 +2624,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     pipelineId: URP_PIPELINE_ID,
   });
   if (!defaultInstall.ok) throw defaultInstall.error;
-  // m3-2: onFrameEnd injection point. The recorder subscribes via
-  // renderer._onFrameEnd(cb) to get frame-completion callbacks after
-  // renderSystem.draw(world). @internal — underscore-prefix, not part of
-  // the public Renderer interface in renderer.ts.
-  const _onFrameEndListeners = new Set<() => void>();
+  // One producer-owned completion signal for diagnostics, FPS reporting, and
+  // RHI capture. It fires only after the record stage reaches queue submission.
+  const frameEndListeners = new Set<() => void>();
   let surfaceReleased = false;
 
-  type RendererInternal = Renderer & {
-    /** @internal Register a frame-end listener. Returns an unsubscribe function. */
-    _onFrameEnd(listener: () => void): () => void;
-  };
-
-  const renderer: RendererInternal = {
+  const renderer: Renderer = {
     backend: 'webgpu',
     device: internals.device,
     // Keep engine-owned shader consumers on the exact backend pack selected
@@ -2600,6 +2665,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     },
     renderFeatureDiagnostics() {
       return internals.featureHost?.diagnostics() ?? [];
+    },
+    subscribeRenderFeatureDiagnostics(listener) {
+      return internals.featureHost?.subscribeDiagnostics(listener) ?? (() => undefined);
+    },
+    subscribeFrameEnd(listener) {
+      frameEndListeners.add(listener);
+      return () => {
+        frameEndListeners.delete(listener);
+      };
     },
     async installRenderFeature(
       feature: RenderFeature<unknown>,
@@ -2774,12 +2848,11 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           const w = worlds[wi];
           if (w !== undefined) glyphTextLayoutSystem(w, assets, gpuStore, wi);
         }
-        renderSystem.draw(worlds, options);
-        // m3-2: fire onFrameEnd listeners after the frame render completes,
-        // before returning the synchronous result. Recorder subscribes via
-        // renderer._onFrameEnd to inject frameMark events.
-        for (const fn of _onFrameEndListeners) {
-          fn();
+        const submitted = renderSystem.draw(worlds, options);
+        if (submitted) {
+          for (const fn of frameEndListeners) {
+            fn();
+          }
         }
         return ok(undefined);
       } catch (cause) {
@@ -3432,17 +3505,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // so the public surface stays opaque; callers cast at the test boundary.
     _internal_getPipelineState() {
       return pipelineState;
-    },
-    /**
-     * @internal Register a frame-end listener. Returns an unsubscribe function.
-     * Only non-null when FORGEAX_ENGINE_RHI_DEBUG=1 + recorder attached (m3-1 wiring).
-     * Fires after renderSystem.draw(world) completes each frame.
-     */
-    _onFrameEnd(listener: () => void): () => void {
-      _onFrameEndListeners.add(listener);
-      return () => {
-        _onFrameEndListeners.delete(listener);
-      };
     },
   };
   return renderer;

@@ -17,11 +17,11 @@ import { recordGeometryDraws } from './main-pass-geometry';
 import {
   applyMaterialTextureUvScales,
   applyParamSnapshotToUbo,
-  buildPbrMaterialUboPayload,
   buildPerSubmeshMaterialBg as buildPerSubmeshMaterialBgImpl,
   detectNineSliceScaleTooSmall,
   type PerSubmeshMaterialBgDeps,
   residentTextureView,
+  writePbrMaterialUboPayload,
 } from './main-pass-material';
 import { recordSpritePass } from './main-pass-sprite-draws';
 import { buildMatchedRenderableIndices } from './shadow-pass';
@@ -70,7 +70,9 @@ export function recordMainPass(
     geometryColorResolveView,
     dispatch,
     hdrpClusterBindGroup,
-    materialSlotStart,
+    materialSlotIndices,
+    materialSlots,
+    materialSlotOwners,
     materialSlotCount,
   } = c;
   // bug-20260615 M3 / m3-1: sampleCount is threaded through every
@@ -346,14 +348,9 @@ export function recordMainPass(
     // overwritten per-entity so unlit entities still produce a deterministic
     // payload (charter P3 explicit failure: zero-init via fresh ArrayBuffer).
     //
-    // feat-20260608 M5 amend / w16-a: per-submesh material UBO slot.
-    // Each entity now allocates `entry.source.materials.length` consecutive
-    // MATERIAL_PER_ENTITY_STRIDE-byte slots (one per submesh material). `materialSlotStart[i]` is the
-    // first-slot index (cumulative sum) so the j-th material of entity i
-    // lands at `(materialSlotStart[i] + j) * MATERIAL_PER_ENTITY_STRIDE`.
-    // Sprite entities and the legacy single-material path collapse to one
-    // slot (length=1), preserving the byte-stable single-material layout
-    // that render-system-record-pbr-ubo-stable.test.ts pins.
+    // Material snapshots are interned by extract-owned identity before this
+    // pass. Repeated scene instances therefore share one 256-byte UBO slot;
+    // materialSlotIndices maps each authored submesh material to that slot.
     // feat-city-glb Bug 5 (per-submesh transparency): shared per-submesh
     // material bind-group assembly, called by BOTH the geometry pass and the
     // LDR blend sub-pass so a transparent PBR submesh binds the identical
@@ -383,16 +380,22 @@ export function recordMainPass(
     const cachedMaterialUboPayload = c.materialUboPayloadCache;
     let materialUboPayload: Uint8Array;
     if (
-      cachedMaterialUboPayload?.validatedOrdered === validatedOrdered &&
+      cachedMaterialUboPayload?.materialSlots === materialSlots &&
       cachedMaterialUboPayload.materialSlotCount === materialSlotCount
     ) {
       materialUboPayload = cachedMaterialUboPayload.payload;
     } else {
       materialUboPayload = new Uint8Array(materialSlotCount * MATERIAL_PER_ENTITY_STRIDE);
-      for (let i = 0; i < validatedOrdered.length; i++) {
-        const entry = validatedOrdered[i];
-        if (entry === undefined) continue;
-        const entitySlotStart = materialSlotStart[i] ?? 0;
+      const slotPayload = new Uint8Array(STANDARD_PBR_UBO_SIZE);
+      const slotPayloadF32 = new Float32Array(
+        slotPayload.buffer,
+        slotPayload.byteOffset,
+        slotPayload.byteLength / 4,
+      );
+      for (let materialSlot = 0; materialSlot < materialSlots.length; materialSlot += 1) {
+        const mat = materialSlots[materialSlot];
+        const entry = validatedOrdered[materialSlotOwners[materialSlot] ?? -1];
+        if (mat === undefined || entry === undefined) continue;
 
         // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-2):
         // single unified Material UBO write path. Sprite materials now flow
@@ -404,113 +407,98 @@ export function recordMainPass(
         // walks `derive(paramSchema).uboLayout.entries` and writes each at
         // its std140 offset. The legacy sprite-specific UBO builder + the
         // sprite-vs-PBR branch are gone (AC-03).
-        const matsArr = entry.source.materials;
-        for (let mk = 0; mk < matsArr.length; mk++) {
-          const mat = matsArr[mk];
-          if (mat === undefined) continue;
-          const slotPayload = buildPbrMaterialUboPayload(mat);
-          // Schema-driven paramSnapshot overlay generalised in feat-20260625
-          // M1 / w3: the writer walks `derive(paramSchema).uboLayout.entries`
-          // and writes each numeric field at its std140 offset (plan-strategy
-          // section 2 D-2). The engine's stock PBR material ships
-          // `paramSnapshot: undefined`, so this is a no-op on the default
-          // PBR path -- the explicit field writes in buildPbrMaterialUboPayload
-          // already cover every byte. User shaders carrying a paramSnapshot
-          // (including the post-ablation sprite path) get their fields
-          // written at the derive-computed offsets; R-H gate keeps the
-          // helper snapshot-only, no asset get.
-          const materialShaderId = mat.materialShaderId;
-          const schema =
-            mat.materialParamSchema ??
-            (materialShaderId !== undefined
-              ? runtime.getParamSchema?.(materialShaderId)
-              : undefined);
-          applyParamSnapshotToUbo(slotPayload, schema, mat.paramSnapshot);
-          applyMaterialTextureUvScales(slotPayload, mat, world);
-          // Missing-texture detection: structural debug-pink fallback overrides
-          // the baseColor/colorTint slot when a bound baseColorTexture handle
-          // resolves to no GPU view. Runs for every textured material path
-          // (sprite / sprite-lit / standard-pbr / pbr-skin / unlit) — the bound
-          // texture would otherwise silently fall back to the 1x1 white view in
-          // the per-submesh BG (main-pass-material.ts), rendering flat with no
-          // warn / RhiError. Mirroring the telemetry here makes a missing/failed
-          // GLB texture immediately diagnosable instead of a silent flat render
-          // (feat-future-pbr-missing-texture-fallback-explicit; feedback
-          // 2026-07-04-glb-pbr-textures-not-applied-flat-render).
-          //
-          // Reads only `mat.baseColorTexture` + the GPU view registry (plan R-H
-          // gate: no asset.get<MaterialAsset> reach-back). The debug-pink write
-          // lands on f32[0..2], which is baseColor.rgb for the PBR/skin UBO and
-          // colorTint.rgb for the sprite UBO — same offset, so one override
-          // covers both.
-          {
-            const matHandleRaw = mat.baseColorTexture as
-              | Handle<'TextureAsset', 'shared'>
-              | undefined;
-            if (matHandleRaw !== undefined) {
-              const view = residentTextureView(world, store, runtime, matHandleRaw);
-              if (view === undefined) {
-                const rawId = matHandleRaw as unknown as number;
-                if (!frameState.warnedMissingBaseColorTextureHandles.has(rawId)) {
-                  frameState.warnedMissingBaseColorTextureHandles.add(rawId);
-                  console.warn(
-                    `[forgeax] baseColor texture ${rawId} missing GPU view, rendering debug pink (shader=${materialShaderId ?? '<none>'} entityIndex=${entry.renderableIndex})`,
-                  );
-                }
-                runtime.errorRegistry.fire(
-                  new RhiError({
-                    code: 'asset-not-registered',
-                    expected: 'material baseColor TextureAsset uploaded to GPU',
-                    hint: 'register + uploadTexture the baseColor texture before draw([world], { owner: 0 }); rendering falls back to debug pink until then',
-                    detail: { assetHandle: rawId },
-                  }),
-                );
-                // Debug pink override on slot 0 baseColor/colorTint.rgb (alpha preserved).
-                const payloadF32 = new Float32Array(slotPayload);
-                payloadF32[0] = 1.0;
-                payloadF32[1] = 0.4;
-                payloadF32[2] = 0.7;
-              }
-            }
-          }
-
-          // Sprite-only paramSnapshot-derived detection (9-slice geometry).
-          if (
-            materialShaderId === 'forgeax::sprite' ||
-            materialShaderId === 'forgeax::sprite-lit'
-          ) {
-            // 9-slice scale-too-small detection: anchors sourced from the
-            // post-w12 paramSnapshot.slicesAndMode vec4 entry.
-            const slicesAndMode = mat.paramSnapshot?.slicesAndMode as readonly number[] | undefined;
-            if (slicesAndMode !== undefined && slicesAndMode.length >= 4) {
-              const slicesArr: readonly [number, number, number, number] = [
-                slicesAndMode[0] ?? 0,
-                slicesAndMode[1] ?? 0,
-                slicesAndMode[2] ?? 0,
-                slicesAndMode[3] ?? 0,
-              ];
-              const anyNonZero =
-                slicesArr[0] !== 0 ||
-                slicesArr[1] !== 0 ||
-                slicesArr[2] !== 0 ||
-                slicesArr[3] !== 0;
-              if (anyNonZero) {
-                detectNineSliceScaleTooSmall(
-                  entry.source.transform.world,
-                  slicesArr,
-                  entry.renderableIndex,
-                  frameState.warnedNineSliceScaleEntities,
-                  runtime.metrics,
+        writePbrMaterialUboPayload(slotPayloadF32, mat);
+        // Schema-driven paramSnapshot overlay generalised in feat-20260625
+        // M1 / w3: the writer walks `derive(paramSchema).uboLayout.entries`
+        // and writes each numeric field at its std140 offset (plan-strategy
+        // section 2 D-2). The engine's stock PBR material ships
+        // `paramSnapshot: undefined`, so this is a no-op on the default
+        // PBR path -- the explicit field writes in buildPbrMaterialUboPayload
+        // already cover every byte. User shaders carrying a paramSnapshot
+        // (including the post-ablation sprite path) get their fields
+        // written at the derive-computed offsets; R-H gate keeps the
+        // helper snapshot-only, no asset get.
+        const materialShaderId = mat.materialShaderId;
+        const schema =
+          mat.materialParamSchema ??
+          (materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined);
+        applyParamSnapshotToUbo(slotPayloadF32, schema, mat.paramSnapshot);
+        applyMaterialTextureUvScales(slotPayloadF32, mat, world);
+        // Missing-texture detection: structural debug-pink fallback overrides
+        // the baseColor/colorTint slot when a bound baseColorTexture handle
+        // resolves to no GPU view. Runs for every textured material path
+        // (sprite / sprite-lit / standard-pbr / pbr-skin / unlit) — the bound
+        // texture would otherwise silently fall back to the 1x1 white view in
+        // the per-submesh BG (main-pass-material.ts), rendering flat with no
+        // warn / RhiError. Mirroring the telemetry here makes a missing/failed
+        // GLB texture immediately diagnosable instead of a silent flat render
+        // (feat-future-pbr-missing-texture-fallback-explicit; feedback
+        // 2026-07-04-glb-pbr-textures-not-applied-flat-render).
+        //
+        // Reads only `mat.baseColorTexture` + the GPU view registry (plan R-H
+        // gate: no asset.get<MaterialAsset> reach-back). The debug-pink write
+        // lands on f32[0..2], which is baseColor.rgb for the PBR/skin UBO and
+        // colorTint.rgb for the sprite UBO — same offset, so one override
+        // covers both.
+        {
+          const matHandleRaw = mat.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined;
+          if (matHandleRaw !== undefined) {
+            const view = residentTextureView(world, store, runtime, matHandleRaw);
+            if (view === undefined) {
+              const rawId = matHandleRaw as unknown as number;
+              if (!frameState.warnedMissingBaseColorTextureHandles.has(rawId)) {
+                frameState.warnedMissingBaseColorTextureHandles.add(rawId);
+                console.warn(
+                  `[forgeax] baseColor texture ${rawId} missing GPU view, rendering debug pink (shader=${materialShaderId ?? '<none>'} entityIndex=${entry.renderableIndex})`,
                 );
               }
+              runtime.errorRegistry.fire(
+                new RhiError({
+                  code: 'asset-not-registered',
+                  expected: 'material baseColor TextureAsset uploaded to GPU',
+                  hint: 'register + uploadTexture the baseColor texture before draw([world], { owner: 0 }); rendering falls back to debug pink until then',
+                  detail: { assetHandle: rawId },
+                }),
+              );
+              // Debug pink override on slot 0 baseColor/colorTint.rgb (alpha preserved).
+              slotPayloadF32[0] = 1.0;
+              slotPayloadF32[1] = 0.4;
+              slotPayloadF32[2] = 0.7;
             }
           }
-
-          materialUboPayload.set(slotPayload, (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE);
         }
+
+        materialUboPayload.set(slotPayload, materialSlot * MATERIAL_PER_ENTITY_STRIDE);
+      }
+
+      // Material UBO slots can share one snapshot identity, but nine-slice
+      // validity depends on each entity's transform. Preserve diagnostics per
+      // renderable instead of inheriting the first owner of a shared slot.
+      for (const entry of validatedOrdered) {
+        const mat = entry.source.material;
+        const materialShaderId = mat.materialShaderId;
+        if (materialShaderId !== 'forgeax::sprite' && materialShaderId !== 'forgeax::sprite-lit')
+          continue;
+        const slicesAndMode = mat.paramSnapshot?.slicesAndMode as readonly number[] | undefined;
+        if (slicesAndMode === undefined || slicesAndMode.length < 4) continue;
+        const slicesArr: readonly [number, number, number, number] = [
+          slicesAndMode[0] ?? 0,
+          slicesAndMode[1] ?? 0,
+          slicesAndMode[2] ?? 0,
+          slicesAndMode[3] ?? 0,
+        ];
+        if (slicesArr[0] === 0 && slicesArr[1] === 0 && slicesArr[2] === 0 && slicesArr[3] === 0)
+          continue;
+        detectNineSliceScaleTooSmall(
+          entry.source.transform.world,
+          slicesArr,
+          entry.renderableIndex,
+          frameState.warnedNineSliceScaleEntities,
+          runtime.metrics,
+        );
       }
       c.materialUboPayloadCache = {
-        validatedOrdered,
+        materialSlots,
         materialSlotCount,
         payload: materialUboPayload,
       };
@@ -527,6 +515,29 @@ export function recordMainPass(
     );
     if (!materialUboUpload.ok) throw materialUboUpload.error;
 
+    // Static material resources are a property of the frame-local material
+    // slot, not of each submesh draw. Resolve them once here so the geometry
+    // loop only selects a prepared binding. Video fields remain entity-bound:
+    // their current frame view is keyed by entityKey and must be resolved at
+    // the draw site.
+    const preparedMaterialBindGroups = new Array<BindGroup | undefined>(materialSlotCount);
+    for (let materialSlot = 0; materialSlot < materialSlotCount; materialSlot += 1) {
+      const material = materialSlots[materialSlot];
+      if (material === undefined || (material.videoTextureFields?.size ?? 0) > 0) continue;
+      const owner = validatedOrdered[materialSlotOwners[materialSlot] ?? -1];
+      if (owner === undefined) continue;
+      preparedMaterialBindGroups[materialSlot] = buildPerSubmeshMaterialBg(
+        material,
+        owner.source.entityKey,
+      );
+    }
+    const resolveMaterialBindGroup = (
+      materialSlot: number,
+      material: MaterialSnapshot,
+      entityKey: number,
+    ): BindGroup =>
+      preparedMaterialBindGroups[materialSlot] ?? buildPerSubmeshMaterialBg(material, entityKey);
+
     pass.setBindGroup(0, viewBindGroup as BindGroup);
 
     // Track which (mesh-vertex-buffer, mesh-index-buffer, pipeline) combo
@@ -540,10 +551,10 @@ export function recordMainPass(
         c,
         pass,
         matchedIndices,
-        materialSlotStart,
+        materialSlotIndices,
         sampleCount,
         meshGroup2,
-        buildPerSubmeshMaterialBg,
+        resolveMaterialBindGroup,
         passKind,
       );
     };
@@ -571,9 +582,9 @@ export function recordMainPass(
         c,
         pass,
         matchedIndices,
-        materialSlotStart,
+        materialSlotIndices,
         sampleCount,
-        buildPerSubmeshMaterialBg,
+        resolveMaterialBindGroup,
         skylightResources,
       );
     }

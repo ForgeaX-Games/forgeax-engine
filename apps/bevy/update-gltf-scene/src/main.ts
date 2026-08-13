@@ -23,7 +23,10 @@ const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (canvas === null) throw new Error('bevy-update-gltf-scene: missing canvas');
 
 type SubAsset = { readonly guid: string; readonly kind: string };
-type WindowEvidence = Window & { __bevyUpdateGltfSceneReady?: boolean };
+type WindowEvidence = Window & {
+  __bevyUpdateGltfSceneReady?: boolean;
+  __prepareUpdateGltfSceneCapture?: () => Promise<void>;
+};
 
 void bootstrap(canvas);
 
@@ -130,7 +133,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error(`[bevy-update-gltf-scene] app.start failed: ${started.error.code}`);
     return;
   }
-  (window as WindowEvidence).__bevyUpdateGltfSceneReady = true;
+  const evidenceWindow = window as WindowEvidence;
+  evidenceWindow.__prepareUpdateGltfSceneCapture = async (): Promise<void> => {
+    const updated = world.update(1 / 60);
+    if (!updated.ok) throw new Error(`capture preparation update failed: ${updated.error.code}`);
+    const drawn = app.renderer.draw([world], { owner: 0 });
+    if (!drawn.ok) throw new Error(`capture preparation draw failed: ${drawn.error.code}`);
+  };
+  evidenceWindow.__bevyUpdateGltfSceneReady = true;
   console.warn('[bevy-update-gltf-scene] instantiated SceneAsset descendants are moving');
 }
 

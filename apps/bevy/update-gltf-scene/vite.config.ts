@@ -1,5 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { gltfImporter } from '@forgeax/engine-gltf';
@@ -11,6 +12,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
+    vitePluginRhiDebug(),
     pluginPack({
       refresh: reloadAssetHost(),
       roots: [resolve(monorepoRoot, 'apps/hello/gltf/assets')],

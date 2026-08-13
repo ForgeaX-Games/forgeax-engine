@@ -2518,6 +2518,17 @@ describe('reserveArrayCapacity', () => {
       expect(error).toBeInstanceOf(ComponentNotPresentError);
       expect(error?.code).toBe('component-not-present');
     });
+
+    it('hasComponent checks presence without allocating a missing/stale Result error', () => {
+      const world = new World();
+      const A = defineComponent('RHasComponentA', { v: { type: 'f32' } });
+      const B = defineComponent('RHasComponentB', { w: { type: 'i32' } });
+      const e = world.spawn({ component: A, data: { v: 1 } }).unwrap();
+
+      expect(world.hasComponent(e, A)).toBe(true);
+      expect(world.hasComponent(e, B)).toBe(false);
+      expect(world.hasComponent(0xdeadbeef as never, A)).toBe(false);
+    });
   });
 
   describe('World.set — Result path', () => {

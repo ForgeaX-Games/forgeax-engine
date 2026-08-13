@@ -12,10 +12,59 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:process-e2e": "vitest run src/__tests__/process-e2e.test.ts",
+    "gauntlet": "node scripts/m15-gauntlet.mjs",
     "e2e:browser": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs",
     "smoke:rhi-debug": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs"
   },
   "forgeax": {
+    "gauntletScenario": {
+      "id": "m15-network-terminal-fault-fresh-session",
+      "script": "gauntlet",
+      "domains": [
+        "World and host contract",
+        "Simulation and media implementations"
+      ],
+      "packages": [
+        "@forgeax/engine-net",
+        "@forgeax/engine-net-websocket",
+        "@forgeax/multiplayer-snake"
+      ],
+      "risks": [
+        "baseline",
+        "live",
+        "behavioral",
+        "fault",
+        "recovery",
+        "identity",
+        "cleanup"
+      ],
+      "phaseInputs": [
+        "real Node WebSocket baseline",
+        "replacement/add/remove/spawn/despawn convergence",
+        "malformed terminal fault",
+        "trusted-state preservation",
+        "same-process fresh endpoint/session",
+        "fresh authority baseline",
+        "cleanup"
+      ],
+      "evidence": {
+        "frontDoors": [
+          "node-websocket-listener",
+          "node-websocket-client",
+          "multiplayer-snake-process-e2e"
+        ],
+        "legs": ["semantic", "live", "behavioral", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[m15-net] initial baseline and replacement: PASS",
+          "[m15-net] spawn and despawn convergence: PASS",
+          "[m15-net] malformed terminal fault and trusted-state preservation: PASS",
+          "[m15-net] same-process fresh session baseline and convergence: PASS",
+          "[m15-net] PASS - M15 terminal fault fresh session GREEN"
+        ]
+      }
+    },
     "rhiDebug": {
       "riskFamilies": ["materials-textures"]
     },

@@ -19,6 +19,9 @@
       "category": "glTF",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["scene-transform", "materials-textures"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-update-gltf-scene smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "demo bundle downstream of engine package sizes" },
@@ -41,6 +44,7 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",

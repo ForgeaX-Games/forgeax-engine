@@ -15,9 +15,10 @@
 // `pendingDispatch` array, then flushes them into the shared `dispatch[]`
 // only at the three renderable-push sites (all inside the cull-passed
 // branch). A culled entity `continue`s without flushing, so its pending
-// entries are naturally discarded. Every flush rewrites `renderableIndex`
-// to `renderables.length` at flush time — the slot the just-pushed
-// renderable occupies.
+// entries are naturally discarded. Each pending entry captures the current
+// `renderables.length`; no other entity can push before this entity survives
+// culling and takes that slot, so flush can publish the original entry without
+// allocating a second descriptor.
 //
 // Coverage matrix — this file exercises every push × flush combination the
 // runtime unit-test surface can reach:

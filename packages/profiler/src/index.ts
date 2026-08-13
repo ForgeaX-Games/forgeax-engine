@@ -1,5 +1,22 @@
 /** Creates the default monotonic microsecond clock. */
+
+/** Opt-in browser User Timing projection shared by editor and Play hosts. */
+export {
+  createUserTimingProfiler,
+  type UserTimingProfilerOptions,
+} from './browser-user-timing.js';
 export { createProfileClock } from './clock.js';
+export type {
+  ProfileComparisonError,
+  ProfileComparisonPhaseDelta,
+  ProfileComparisonPhaseFact,
+  ProfileComparisonPhaseIdentity,
+  ProfileComparisonPhaseRow,
+  ProfileComparisonProjection,
+  ProfileComparisonSide,
+} from './compare.js';
+/** Compares two validated captures without adding policy or mutating either input. */
+export { compareProfileCaptures } from './compare.js';
 /** Structured expected-failure vocabulary for profiler operations. */
 export type { ProfilerError, ProfilerErrorCode } from './errors.js';
 export type {

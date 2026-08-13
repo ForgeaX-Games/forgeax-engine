@@ -31,6 +31,7 @@ import type { GpuResourceStore } from './gpu-resource-store';
 import type {
   BindGroupCounts,
   DispatchCounts,
+  MaterialBgAssemblyCacheEntry,
   RenderFrameState,
   ValidatedRenderable,
 } from './record';
@@ -38,6 +39,7 @@ import type { PipelineState, RenderSystemRuntime } from './render-system';
 import type {
   CameraSnapshot,
   DispatchEntry,
+  MaterialSnapshot,
   SkyboxSnapshot,
   SkylightSnapshot,
 } from './render-system-extract';
@@ -244,6 +246,8 @@ export interface RenderPipelineData {
 export interface _StandardForwardSceneView {
   /** @internal Opt-in nested CPU observer inherited from recordFrame. */
   readonly profilePhase?: <T>(phase: RenderRecordPhase, action: () => T) => T;
+  /** @internal Skip directional caster recording when the atlas token is unchanged. */
+  readonly directionalShadowCacheReuse: boolean;
   /**
    * @internal — feat-20260614 M8 (D-19): the live World the record stage
    * resolves user-tier asset handles against. Asset payloads moved off the
@@ -313,15 +317,19 @@ export interface _StandardForwardSceneView {
    * identical to no plan.
    */
   readonly foldDispatchPlan: import('./render-system-fold').FoldDispatchPlan | null;
-  /** @internal Prefix table produced with the final dispatch order. */
-  readonly materialSlotStart: readonly number[];
-  /** @internal Cumulative material-slot count matching `materialSlotStart`. */
+  /** @internal Per-renderable material-index to deduplicated UBO-slot mapping. */
+  readonly materialSlotIndices: readonly (readonly number[])[];
+  /** @internal Unique material snapshots stored by the frame-local UBO table. */
+  readonly materialSlots: readonly MaterialSnapshot[];
+  /** @internal First renderable index associated with each unique slot. */
+  readonly materialSlotOwners: readonly number[];
+  /** @internal Number of unique material slots in `materialSlots`. */
   readonly materialSlotCount: number;
-  /** @internal Same-frame material bind-group assembly cache shared by main passes. */
-  readonly materialBgAssemblyCache: Map<number, import('@forgeax/engine-rhi').BindGroup>;
+  /** @internal Cross-frame material bind-group assembly cache shared by main passes. */
+  readonly materialBgAssemblyCache: Map<number, MaterialBgAssemblyCacheEntry>;
   /** @internal Per-frame material UBO bytes shared by repeated main passes. */
   materialUboPayloadCache?: {
-    readonly validatedOrdered: readonly ValidatedRenderable[];
+    readonly materialSlots: readonly MaterialSnapshot[];
     readonly materialSlotCount: number;
     readonly payload: Uint8Array;
   };

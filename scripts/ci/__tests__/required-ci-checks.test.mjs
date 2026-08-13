@@ -121,6 +121,17 @@ test('keeps an in-progress ci.yml run authoritative without treating its roster 
   assert.deepEqual(result.reasonCodes, ['run-not-terminal']);
 });
 
+test('keeps a pending ci.yml run authoritative while GitHub is scheduling it', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ status: 'pending' }),
+  });
+  assert.equal(result.status, 'normal-ci-run');
+  assert.equal(result.terminal, false);
+  assert.equal(result.complete, false);
+  assert.equal(result.fallbackEligible, false);
+  assert.deepEqual(result.reasonCodes, ['run-not-terminal']);
+});
+
 test('keeps ordinary push/main evidence outside PR required-context fallback', () => {
   const result = classifyRequiredContextAdmission({
     run: runFixture({ event: 'push' }),
@@ -129,6 +140,28 @@ test('keeps ordinary push/main evidence outside PR required-context fallback', (
   assert.equal(result.status, 'ordinary-push-main');
   assert.equal(result.event, 'push');
   assert.equal(result.fallbackEligible, false);
+});
+
+test('normalizes API-shaped event names before separating ordinary push/main evidence', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ event: undefined, event_name: 'PUSH' }),
+    jobs: completeRoster(),
+  });
+  assert.equal(result.status, 'ordinary-push-main');
+  assert.equal(result.event, 'push');
+  assert.equal(result.actionable, true);
+});
+
+test('keeps an operational incident skip fail-closed and actionable', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ event: 'push', operationalContext: 'GitHub incident operational' }),
+    jobs: completeRoster().map((job) => ({ ...job, conclusion: 'skipped' })),
+  });
+  assert.equal(result.status, 'operational-skip');
+  assert.equal(result.fallbackEligible, false);
+  assert.equal(result.actionable, true);
+  assert.deepEqual(result.reasonCodes, ['incident-skip']);
+  assert.equal(result.operationalMarker, 'github incident operational');
 });
 
 test('distinguishes the required-context skip and evidence-admission matrix', () => {
@@ -155,8 +188,52 @@ test('distinguishes the required-context skip and evidence-admission matrix', ()
     const result = classifyRequiredContextAdmission(input);
     assert.equal(result.status, expectedStatus);
     assert.equal(result.fallbackEligible, false, expectedStatus);
+    assert.equal(result.actionable, expectedStatus !== 'normal-ci-run', expectedStatus);
     assert.equal(result.terminal, expectedStatus !== 'api-error' || input.run !== undefined);
   }
+});
+
+test('retains duplicate required contexts as a partial roster instead of treating the set as complete', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: [...completeRoster(), jobFixture(REQUIRED_CHECK_NAMES[0])],
+  });
+  assert.equal(result.status, 'partial-roster');
+  assert.deepEqual(result.missingContexts, []);
+  assert.deepEqual(result.duplicateContexts, [REQUIRED_CHECK_NAMES[0]]);
+  assert.deepEqual(result.reasonCodes, ['duplicate-context']);
+  assert.equal(result.actionable, true);
+});
+
+test('rejects malformed job entries as partial and actionable roster evidence', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: [...completeRoster(), { id: 'malformed', conclusion: 'success' }],
+  });
+  assert.equal(result.status, 'partial-roster');
+  assert.deepEqual(result.malformedJobs, [completeRoster().length]);
+  assert.deepEqual(result.reasonCodes, ['malformed-roster']);
+  assert.equal(result.actionable, true);
+});
+
+test('classifies unknown terminal conclusions as API errors rather than synthetic success', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ conclusion: 'neutral' }),
+  });
+  assert.equal(result.status, 'api-error');
+  assert.deepEqual(result.reasonCodes, ['run-conclusion-unknown']);
+  assert.equal(result.fallbackEligible, false);
+  assert.equal(result.actionable, true);
+});
+
+test('classifies an explicit terminal run failure before looking for a roster', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ conclusion: 'failure' }),
+  });
+  assert.equal(result.status, 'genuine-failure');
+  assert.deepEqual(result.reasonCodes, ['run-failed']);
+  assert.equal(result.terminal, true);
+  assert.equal(result.actionable, true);
 });
 
 test('keeps an incomplete required job out of terminal coverage evidence', () => {

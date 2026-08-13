@@ -1,5 +1,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { ProfileComparisonProjection } from './compare.js';
+import { compareProfileCaptures } from './compare.js';
 import type { ProfileModel } from './model.js';
 import { buildProfileModel } from './model.js';
 
@@ -12,11 +14,14 @@ export interface ProfilerCliResult {
 type CliCommand =
   | { readonly kind: 'summary' }
   | { readonly kind: 'frame'; readonly frameId: number }
-  | { readonly kind: 'phase'; readonly source: 'app' | 'render'; readonly phase: string };
+  | { readonly kind: 'phase'; readonly source: 'app' | 'render'; readonly phase: string }
+  | { readonly kind: 'compare' };
 
 type CliArguments = {
   readonly command: CliCommand;
   readonly filePath?: string;
+  readonly leftFilePath?: string;
+  readonly rightFilePath?: string;
 };
 
 type CliError = {
@@ -28,7 +33,12 @@ type CliError = {
     | 'cli-query-invalid';
   readonly expected: string;
   readonly hint: string;
-  readonly detail: { readonly argument?: string; readonly path?: string; readonly message: string };
+  readonly detail: {
+    readonly argument?: string;
+    readonly path?: string;
+    readonly side?: 'left' | 'right';
+    readonly message: string;
+  };
 };
 
 function output(value: unknown): string {
@@ -57,11 +67,13 @@ function parsePositiveSafeInteger(value: string, argument: string): number | Cli
 }
 
 type ParseState = {
-  kind: 'summary' | 'frame' | 'phase';
+  kind: 'summary' | 'frame' | 'phase' | 'compare';
   frameId: number | undefined;
   source: 'app' | 'render' | undefined;
   phase: string | undefined;
   filePath: string | undefined;
+  leftFilePath: string | undefined;
+  rightFilePath: string | undefined;
 };
 
 function consumeFlag(args: readonly string[], index: number, state: ParseState): number | CliError {
@@ -76,6 +88,8 @@ function consumeFlag(args: readonly string[], index: number, state: ParseState):
     };
   }
   if (argument === '--file') state.filePath = value;
+  if (argument === '--left-file') state.leftFilePath = value;
+  if (argument === '--right-file') state.rightFilePath = value;
   if (argument === '--frame-id') {
     const parsed = parsePositiveSafeInteger(value, argument);
     if (typeof parsed !== 'number') return parsed;
@@ -97,6 +111,33 @@ function consumeFlag(args: readonly string[], index: number, state: ParseState):
 }
 
 function validateCommand(state: ParseState): CliError | undefined {
+  const hasCompareFile = state.leftFilePath !== undefined || state.rightFilePath !== undefined;
+  if (state.kind === 'compare') {
+    if (
+      state.leftFilePath === undefined ||
+      state.rightFilePath === undefined ||
+      state.filePath !== undefined ||
+      state.frameId !== undefined ||
+      state.source !== undefined ||
+      state.phase !== undefined
+    ) {
+      return {
+        code: 'cli-arguments-invalid',
+        expected: 'compare requires --left-file and --right-file and no single-artifact selectors',
+        hint: 'Pass compare --left-file <path> --right-file <path>.',
+        detail: { message: 'invalid compare input selectors' },
+      };
+    }
+    return undefined;
+  }
+  if (hasCompareFile) {
+    return {
+      code: 'cli-arguments-invalid',
+      expected: 'compare is the only command that accepts --left-file and --right-file',
+      hint: 'Use compare --left-file <path> --right-file <path> for two artifacts.',
+      detail: { message: 'compare file selectors used with another command' },
+    };
+  }
   if (
     state.kind === 'summary' &&
     (state.frameId !== undefined || state.source !== undefined || state.phase !== undefined)
@@ -146,6 +187,13 @@ function toCliArguments(state: ParseState): CliArguments {
       ...(state.filePath === undefined ? {} : { filePath: state.filePath }),
     };
   }
+  if (state.kind === 'compare') {
+    return {
+      command: { kind: state.kind },
+      leftFilePath: state.leftFilePath as string,
+      rightFilePath: state.rightFilePath as string,
+    };
+  }
   return {
     command: {
       kind: state.kind,
@@ -163,27 +211,33 @@ function parseArguments(args: readonly string[]): CliArguments | CliError {
     source: undefined,
     phase: undefined,
     filePath: undefined,
+    leftFilePath: undefined,
+    rightFilePath: undefined,
   };
   let index = 0;
   const first = args[0];
-  if (first === 'summary' || first === 'frame' || first === 'phase') {
+  if (first === 'summary' || first === 'frame' || first === 'phase' || first === 'compare') {
     state.kind = first;
     index = 1;
   } else if (first !== undefined && !first.startsWith('--')) {
     return {
       code: 'cli-arguments-invalid',
-      expected: 'command is summary, frame, or phase',
-      hint: 'Use summary, frame --frame-id <id>, or phase --source <source> --phase <name>.',
+      expected: 'command is summary, frame, phase, or compare',
+      hint: 'Use summary, frame --frame-id <id>, phase --source <source> --phase <name>, or compare --left-file <path> --right-file <path>.',
       detail: { argument: first, message: 'unknown command' },
     };
   }
   while (index < args.length) {
     const argument = args[index] as string;
-    if (!['--file', '--frame-id', '--source', '--phase'].includes(argument)) {
+    if (
+      !['--file', '--left-file', '--right-file', '--frame-id', '--source', '--phase'].includes(
+        argument,
+      )
+    ) {
       return {
         code: 'cli-arguments-invalid',
         expected: 'all arguments are declared CLI flags',
-        hint: 'Remove the unknown flag and use the documented summary, frame, or phase form.',
+        hint: 'Remove the unknown flag and use the documented summary, frame, phase, or compare form.',
         detail: { argument, message: 'unknown argument' },
       };
     }
@@ -221,6 +275,17 @@ function readArtifact(filePath: string | undefined, stdin: string): string | Cli
   return stdin;
 }
 
+function withSide(side: 'left' | 'right', error: CliError): CliError {
+  return { ...error, detail: { ...error.detail, side } };
+}
+
+function readCompareArtifact(filePath: string, side: 'left' | 'right'): unknown | CliError {
+  const input = readArtifact(filePath, '');
+  if (typeof input !== 'string') return withSide(side, input);
+  const artifact = parseArtifact(input);
+  return isCliError(artifact) ? withSide(side, artifact) : artifact;
+}
+
 function parseArtifact(input: string): unknown | CliError {
   try {
     return JSON.parse(input) as unknown;
@@ -244,7 +309,10 @@ function isCliError(value: unknown): value is CliError {
   );
 }
 
-function projectModel(command: CliCommand, model: ProfileModel): Record<string, unknown> {
+function projectModel(
+  command: Exclude<CliCommand, { readonly kind: 'compare' }>,
+  model: ProfileModel,
+): Record<string, unknown> {
   if (command.kind === 'summary') {
     return { query: 'summary', ...model.summary, phases: model.phases };
   }
@@ -277,10 +345,29 @@ function projectModel(command: CliCommand, model: ProfileModel): Record<string, 
   };
 }
 
+function projectComparison(value: ProfileComparisonProjection): Record<string, unknown> {
+  return { query: 'compare', ...value };
+}
+
 export function runProfilerCli(args: readonly string[], stdin: string): ProfilerCliResult {
   const parsedArguments = parseArguments(args);
   if ('code' in parsedArguments) {
     return { stdout: '', stderr: output({ error: parsedArguments }), exitCode: 2 };
+  }
+  if (parsedArguments.command.kind === 'compare') {
+    const left = readCompareArtifact(parsedArguments.leftFilePath as string, 'left');
+    if (isCliError(left)) return { stdout: '', stderr: output({ error: left }), exitCode: 2 };
+    const right = readCompareArtifact(parsedArguments.rightFilePath as string, 'right');
+    if (isCliError(right)) return { stdout: '', stderr: output({ error: right }), exitCode: 2 };
+    const comparison = compareProfileCaptures(left, right);
+    if (!comparison.ok) {
+      return { stdout: '', stderr: output({ error: comparison.error }), exitCode: 1 };
+    }
+    return {
+      stdout: output(projectComparison(comparison.value)),
+      stderr: '',
+      exitCode: 0,
+    };
   }
   const input = readArtifact(parsedArguments.filePath, stdin);
   if (typeof input !== 'string') {
@@ -298,7 +385,9 @@ export function runProfilerCli(args: readonly string[], stdin: string): Profiler
 }
 
 export function readCliInput(args: readonly string[], readStdin: () => string): string {
-  return args.includes('--file') ? '' : readStdin();
+  return args.some((argument) => ['--file', '--left-file', '--right-file'].includes(argument))
+    ? ''
+    : readStdin();
 }
 
 export function main(): void {

@@ -55,6 +55,12 @@ export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhi
 
   return {
     async captureFrames(frames: number, _label?: string) {
+      // A bounded snapshot failure leaves the recorder in its terminal error
+      // state so stale async readbacks cannot contaminate the next tape. The
+      // public adapter owns the retry boundary: dispose that failed capture
+      // before re-arming, using the same idempotent operation as the browser
+      // capture path.
+      if (debugInst.getState() === 'error') debugInst.disposeError();
       const armResult = debugInst.arm(frames);
       if (!armResult.ok) {
         throw armResult.error;

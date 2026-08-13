@@ -46,8 +46,12 @@ function makeRenderer(onDraw: (options: unknown) => void = () => {}): Renderer {
   } as unknown as Renderer;
 }
 
-function startSession(profiler: ReturnType<typeof createProfiler>, frameLimit = 2) {
-  const result = profiler.startCapture({ frameLimit, eventLimit: 64 });
+function startSession(
+  profiler: ReturnType<typeof createProfiler>,
+  frameLimit = 2,
+  eventLimit = 64,
+) {
+  const result = profiler.startCapture({ frameLimit, eventLimit });
   if (!result.ok) throw new Error(result.error.code);
   return result.value;
 }
@@ -149,6 +153,41 @@ describe('App profiler frame token', () => {
 
     const secondSession = startSession(profiler, 1);
     expect(secondSession.captureId).not.toBe(session.captureId);
+  });
+
+  it('recaptures complete data after an overflow without stale capture state', () => {
+    const profiler = createProfiler();
+    const scheduler = makeScheduler();
+    const loop = createFrameLoop({
+      world: new World(),
+      renderer: makeRenderer(),
+      now: () => 1000,
+      raf: scheduler.raf,
+      caf: scheduler.caf,
+      profiler,
+    });
+
+    const overflowSession = startSession(profiler, 1, 1);
+    loop.start().unwrap();
+    scheduler.tick(1000);
+    loop.stop().unwrap();
+
+    const overflow = profiler.latestCapture();
+    expect(overflow?.captureId).toBe(overflowSession.captureId);
+    expect(overflow?.completeness.status).toBe('overflow');
+    expect(overflow?.completeness.droppedEventCount).toBeGreaterThan(0);
+
+    const completeSession = startSession(profiler, 1, 64);
+    loop.start().unwrap();
+    scheduler.tick(1016);
+    loop.stop().unwrap();
+
+    const complete = profiler.latestCapture();
+    expect(complete?.captureId).toBe(completeSession.captureId);
+    expect(complete?.captureId).not.toBe(overflow?.captureId);
+    expect(complete?.completeness).toMatchObject({ status: 'complete', droppedEventCount: 0 });
+    expect(overflow?.completeness.status).toBe('overflow');
+    expect(profiler.activeCaptureId()).toBeUndefined();
   });
 
   it('publishes a partial artifact when the host stops before its frame boundary', () => {

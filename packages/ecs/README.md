@@ -1150,7 +1150,7 @@ Self-help affordances for stale refs:
 ## Managed handles carry a generation
 
 > [!IMPORTANT]
-> A `Handle<T, 'unique'>` (from a `ref<T>` schema field / `world.allocUniqueRef`) or `Handle<T, 'shared'>` (from `world.allocSharedRef`, the AssetRegistry path) packs `(generation << 24) | slot` via the shared codec in `@forgeax/engine-types` — the same SSOT codec ECS `EntityHandle` uses. Caching a handle past its holder's release-edge no longer silently resolves to the next payload: the store welds the slot's generation at `alloc` and compares it on every `resolve` / `retain` / `release`, returning a structured stale error (`'unique-ref-stale'` / `'shared-ref-stale'`) when the slot was released and re-allocated.
+> A `Handle<T, 'unique'>` (from a `ref<T>` schema field / `world.allocUniqueRef`) or `Handle<T, 'shared'>` (from `world.allocSharedRef`, or the AssetRegistry's identity-preserving `world.internSharedRef` path) packs `(generation << 24) | slot` via the shared codec in `@forgeax/engine-types` — the same SSOT codec ECS `EntityHandle` uses. `allocSharedRef` always creates an independent resource; `internSharedRef` returns one producer-owned handle per `(target, payload object)` in that World and is reserved for catalogued payloads without per-handle deleters. Caching a handle past its holder's release-edge no longer silently resolves to the next payload: the store welds the slot's generation at allocation and compares it on every `resolve` / `retain` / `release`, returning a structured stale error (`'unique-ref-stale'` / `'shared-ref-stale'`) when the slot was released and re-allocated.
 
 **Release edges** (the moments a handle's generation advances and old handles go stale):
 

@@ -18,6 +18,42 @@ function gatedFeature(): RenderFeature<{ readonly frame: number }> {
 }
 
 describe('render feature diagnostics and capability gate', () => {
+  it('notifies only lifecycle projection changes and stops after unsubscribe', () => {
+    const host = createRenderFeatureHost([gatedFeature()], caps(true)).unwrap();
+    let notifications = 0;
+    const unsubscribe = host.subscribeDiagnostics(() => {
+      notifications += 1;
+    });
+
+    expect(host.setStatus('synthetic.gated', 'active')).toEqual(ok(undefined));
+    expect(notifications).toBe(0);
+
+    expect(host.setStatus('synthetic.gated', 'disabled')).toEqual(ok(undefined));
+    expect(notifications).toBe(1);
+    expect(host.setStatus('synthetic.gated', 'active')).toEqual(ok(undefined));
+    expect(notifications).toBe(2);
+
+    unsubscribe();
+    expect(host.setStatus('synthetic.gated', 'disabled')).toEqual(ok(undefined));
+    expect(notifications).toBe(2);
+  });
+
+  it('isolates a throwing diagnostics observer from renderer lifecycle changes', () => {
+    const host = createRenderFeatureHost([gatedFeature()], caps(true)).unwrap();
+    let healthyNotifications = 0;
+    host.subscribeDiagnostics(() => {
+      throw new Error('observer failed');
+    });
+    host.subscribeDiagnostics(() => {
+      healthyNotifications += 1;
+    });
+
+    expect(host.setStatus('synthetic.gated', 'disabled')).toEqual(ok(undefined));
+    expect(host.diagnostics()[0]?.status).toBe('disabled');
+    expect(healthyNotifications).toBe(1);
+    expect(() => host.dispose()).not.toThrow();
+  });
+
   it('installs a late feature once and keeps identity conflicts explicit', () => {
     const host = createRenderFeatureHost([], caps(true)).unwrap();
     const feature = gatedFeature();

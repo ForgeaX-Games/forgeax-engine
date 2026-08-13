@@ -4,9 +4,9 @@
 import { HANDLE_NINESLICE_QUAD, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import {
-  type BindGroup,
   type RhiCommandEncoder,
   RhiError,
+  type Texture,
   type TextureView,
 } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, MeshAsset } from '@forgeax/engine-types';
@@ -21,6 +21,7 @@ import type {
   CameraSnapshot,
   DispatchEntry,
   ExtractedLights,
+  MaterialSnapshot,
   RenderableSnapshot,
   SkyboxSnapshot,
   SkylightSnapshot,
@@ -42,7 +43,11 @@ import {
   incrementFoldedDrawsMetric,
 } from '../render-system-fold';
 import type { RenderRecordPhase } from '../renderer';
-import { getTransparentSortConfig } from '../systems/transparent-sort-config';
+import {
+  getTransparentSortConfig,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+  TRANSPARENT_SORT_MODE_LAYER_Z,
+} from '../systems/transparent-sort-config';
 import {
   buildPerFrameBindGroups,
   prepareFrameLighting,
@@ -54,6 +59,8 @@ import {
 } from './frame-lighting';
 import {
   type BindGroupCounts,
+  type DirectionalShadowCache,
+  type DirectionalShadowWorldState,
   type DispatchCounts,
   makeZeroCameraFallbackSnapshot,
   type RenderFrameState,
@@ -71,10 +78,16 @@ import {
 import {
   driveLazyEquirectProjection,
   selectLazyEquirectHandle,
+  variantSetFromDefines,
   warnMultiSkybox,
   warnMultiSkylight,
 } from './helpers';
 import { computeSplitLdrSprite } from './main-pass-sprite';
+import {
+  buildMaterialSlotPlan,
+  findRenderablePrefixForSlotCapacity,
+  materialSlotCountForPrefix,
+} from './material-slot-plan';
 import { cleanPerEntityCache, ensureMeshSsboCapacity, uploadMeshSsboBatch } from './mesh-ssbo';
 import { writeViewUbo } from './view-ubo';
 
@@ -456,7 +469,9 @@ export function recordFrame(
     );
     const validatedOrdered = dispatchPlan.validatedOrdered;
     const foldDispatchPlan = dispatchPlan.foldDispatchPlan;
-    const materialSlotStart = dispatchPlan.materialSlotStart;
+    const materialSlotIndices = dispatchPlan.materialSlotIndices;
+    const materialSlots = dispatchPlan.materialSlots;
+    const materialSlotOwners = dispatchPlan.materialSlotOwners;
     const materialSlotCount = dispatchPlan.materialSlotCount;
 
     // D-2 (bug-20260527): LDR sprite pass split, generalised feat-20260625
@@ -530,6 +545,21 @@ export function recordFrame(
         );
       });
     }
+
+    const directionalShadowCache = runRecordProfilePhase(
+      profilePhase,
+      'record/scene-state/directional-shadow-cache',
+      () =>
+        prepareDirectionalShadowCache(
+          internals,
+          frameState,
+          worlds,
+          lights,
+          effectiveShadowMapSize,
+          validatedOrdered,
+        ),
+    );
+    frameState.directionalShadowCacheRecorded = false;
 
     const encoderResult = internals.device.createCommandEncoder({ label: 'render-system-frame' });
     if (!encoderResult.ok) {
@@ -608,9 +638,12 @@ export function recordFrame(
       hdrpClusterBindGroup,
       hdrpClusterMembershipBindGroup,
       foldDispatchPlan,
-      materialSlotStart,
+      materialSlotIndices,
+      materialSlots,
+      materialSlotOwners,
       materialSlotCount,
-      materialBgAssemblyCache: new Map<number, BindGroup>(),
+      materialBgAssemblyCache: frameState.materialBgAssemblyCache,
+      directionalShadowCacheReuse: directionalShadowCache.reuse,
       ...(profilePhase !== undefined ? { profilePhase } : {}),
     };
     // feat-20260601 M2 / w12 (D-B): the per-frame projected snapshot handed to
@@ -645,15 +678,178 @@ export function recordFrame(
     // Build (memoized) + execute the per-frame graph, then finish + submit the
     // shared encoder + reclaim retired transients. Extracted to
     // executeFrameGraph (M3/w18).
-    return runRecordProfilePhase(profilePhase, 'record/graph-execute', () =>
+    const submitted = runRecordProfilePhase(profilePhase, 'record/graph-execute', () =>
       executeFrameGraph(internals, frameState, passCtx, passData, encoder, profilePhase),
     );
+    if (submitted && !directionalShadowCache.reuse) {
+      frameState.directionalShadowCache = frameState.directionalShadowCacheRecorded
+        ? directionalShadowCache.next
+        : null;
+    }
+    return submitted;
   } finally {
     frameState.frameNumber += 1;
     // feat-20260608-cluster-lighting M5 / w22: clear HDRP once-per-frame fired
     // set so the next frame re-fires if the condition persists.
     frameState.hdrpOncePerFrameFired.clear();
   }
+}
+
+interface DirectionalShadowCacheDecision {
+  readonly reuse: boolean;
+  readonly next: DirectionalShadowCache | null;
+}
+
+function readWorldState(world: World): DirectionalShadowWorldState | null {
+  const internal = world as unknown as {
+    readonly _getStructureEpoch?: () => number;
+    readonly componentMutationEpochs?: readonly (number | undefined)[];
+  };
+  if (
+    typeof internal._getStructureEpoch !== 'function' ||
+    internal.componentMutationEpochs === undefined
+  ) {
+    return null;
+  }
+  return {
+    structureEpoch: internal._getStructureEpoch(),
+    componentMutationEpochs: internal.componentMutationEpochs,
+  };
+}
+
+function snapshotWorldState(world: World): DirectionalShadowWorldState | null {
+  const state = readWorldState(world);
+  return state === null
+    ? null
+    : {
+        structureEpoch: state.structureEpoch,
+        componentMutationEpochs: state.componentMutationEpochs.slice(),
+      };
+}
+
+function sameWorldState(cached: DirectionalShadowCache, worlds: readonly World[]): boolean {
+  if (cached.worlds.length !== worlds.length) return false;
+  for (let index = 0; index < worlds.length; index += 1) {
+    const world = worlds[index];
+    if (world === undefined || cached.worlds[index] !== world) return false;
+    const cachedState = cached.worldStateTokens[index];
+    const internal = world as unknown as {
+      readonly _getStructureEpoch?: () => number;
+      readonly componentMutationEpochs?: readonly (number | undefined)[];
+    };
+    const currentStructureEpoch = internal._getStructureEpoch?.();
+    const currentComponentMutationEpochs = internal.componentMutationEpochs;
+    if (
+      cachedState === undefined ||
+      currentStructureEpoch === undefined ||
+      currentComponentMutationEpochs === undefined
+    )
+      return false;
+    if (cachedState.structureEpoch !== currentStructureEpoch) return false;
+    if (cachedState.componentMutationEpochs.length !== currentComponentMutationEpochs.length) {
+      return false;
+    }
+    for (
+      let componentId = 0;
+      componentId < currentComponentMutationEpochs.length;
+      componentId += 1
+    ) {
+      if (
+        cachedState.componentMutationEpochs[componentId] !==
+        currentComponentMutationEpochs[componentId]
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function sameLightViewProj(
+  cached: DirectionalShadowCache,
+  current: readonly Float32Array[],
+): boolean {
+  if (cached.lightViewProj.length !== current.length) return false;
+  for (let matrixIndex = 0; matrixIndex < current.length; matrixIndex += 1) {
+    const previous = cached.lightViewProj[matrixIndex];
+    const next = current[matrixIndex];
+    if (previous === undefined || next === undefined || previous.length !== next.length) {
+      return false;
+    }
+    for (let valueIndex = 0; valueIndex < next.length; valueIndex += 1) {
+      if (previous[valueIndex] !== next[valueIndex]) return false;
+    }
+  }
+  return true;
+}
+
+function prepareDirectionalShadowCache(
+  internals: RenderSystemInternals,
+  frameState: RenderFrameState,
+  worlds: readonly World[],
+  lights: ExtractedLights,
+  shadowMapSize: number | undefined,
+  validatedOrdered: readonly ValidatedRenderable[],
+): DirectionalShadowCacheDecision {
+  const target = frameState.perFrameGraph?.getColorTargetTexture('shadowDepth') as
+    | Texture
+    | undefined;
+  const cascadeCount = lights.cascadeCount;
+  const lightViewProj = lights.lightViewProj;
+  if (
+    target === undefined ||
+    shadowMapSize === undefined ||
+    shadowMapSize <= 0 ||
+    cascadeCount === undefined ||
+    cascadeCount <= 0 ||
+    lightViewProj === undefined ||
+    validatedOrdered.length === 0
+  ) {
+    return { reuse: false, next: null };
+  }
+
+  const cached = frameState.directionalShadowCache;
+  const assetCatalogEpoch = internals.assets.catalogEpoch;
+  const meshResidencyEpoch = internals.gpuStore.meshResidencyEpoch;
+  if (
+    cached !== null &&
+    cached.target === target &&
+    cached.shadowMapSize === shadowMapSize &&
+    cached.cascadeCount === cascadeCount &&
+    cached.pipelineHandle === frameState.installedPipelineHandle &&
+    cached.graphTopologyKey === frameState.perFrameGraphTopologyKey &&
+    cached.assetCatalogEpoch === assetCatalogEpoch &&
+    cached.meshResidencyEpoch === meshResidencyEpoch &&
+    sameWorldState(cached, worlds) &&
+    sameLightViewProj(cached, lightViewProj)
+  ) {
+    return { reuse: true, next: null };
+  }
+
+  const worldStateTokens = worlds.map((world) => snapshotWorldState(world));
+  if (worldStateTokens.some((state) => state === null)) {
+    // A world that does not expose the ECS mutation tokens cannot safely
+    // participate in a static-shadow reuse decision. Keep the conservative
+    // path for custom/test worlds instead of collapsing token indexes with a
+    // filter and risking a false-positive match.
+    return { reuse: false, next: null };
+  }
+
+  return {
+    reuse: false,
+    next: {
+      worlds: worlds.slice(),
+      worldStateTokens: worldStateTokens as DirectionalShadowWorldState[],
+      assetCatalogEpoch,
+      pipelineHandle: frameState.installedPipelineHandle,
+      graphTopologyKey: frameState.perFrameGraphTopologyKey,
+      target,
+      shadowMapSize,
+      cascadeCount,
+      lightViewProj: lightViewProj.map((matrix) => new Float32Array(matrix)),
+      meshResidencyEpoch,
+    },
+  };
 }
 
 /**
@@ -814,23 +1010,6 @@ function validateRenderables(
 }
 
 /**
- * Convert the pass-owned boolean defines into the shader manifest's canonical
- * variant key. `true` is not collapsed to the empty key here: the renderer
- * must still merge its capability axes before resolving the manifest row.
- */
-export function variantSetFromDefines(
-  defines: Readonly<Record<string, string>> | undefined,
-): string | undefined {
-  if (defines === undefined) return undefined;
-  const entries = Object.entries(defines);
-  if (entries.length === 0) return undefined;
-  return entries
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([name, value]) => `${name}=${value}`)
-    .join('+');
-}
-
-/**
  * feat-20260704 M3/w18: build the dispatch-ordered render plan, extracted
  * verbatim from `recordFrame`. (1) M3/w26 dispatch-ordered reorder: reorder
  * `validated` to follow the transparent-dispatch order (extract-order fallback
@@ -850,7 +1029,9 @@ function buildDispatchPlan(
 ): {
   validatedOrdered: readonly ValidatedRenderable[];
   foldDispatchPlan: FoldDispatchPlan | null;
-  materialSlotStart: readonly number[];
+  materialSlotIndices: readonly (readonly number[])[];
+  materialSlots: readonly MaterialSnapshot[];
+  materialSlotOwners: readonly number[];
   materialSlotCount: number;
 } {
   // M3 / w26: dispatch-ordered render. The dispatch list is pre-sorted
@@ -893,25 +1074,26 @@ function buildDispatchPlan(
     validatedOrdered = ordered;
   }
 
-  const materialSlotStart: number[] = new Array(validatedOrdered.length);
-  let materialSlotCount = 0;
-  for (let i = 0; i < validatedOrdered.length; i++) {
-    materialSlotStart[i] = materialSlotCount;
-    const e = validatedOrdered[i];
-    if (e === undefined) continue;
-    materialSlotCount +=
-      e.source.material.materialShaderId === 'forgeax::sprite' ||
-      e.source.material.materialShaderId === 'forgeax::sprite-lit'
-        ? 1
-        : e.source.materials.length;
-  }
+  const materialGroups = validatedOrdered.map((entry): readonly MaterialSnapshot[] => {
+    const shaderId = entry.source.material.materialShaderId;
+    if (shaderId === 'forgeax::sprite' || shaderId === 'forgeax::sprite-lit') {
+      return [entry.source.material];
+    }
+    return entry.source.materials.length > 0 ? entry.source.materials : [entry.source.material];
+  });
+  const materialSlotPlan = buildMaterialSlotPlan(materialGroups);
+  let materialSlotIndices = materialSlotPlan.slotIndices;
+  let materialSlots = materialSlotPlan.slots;
+  let materialSlotOwners = materialSlotPlan.slotOwners;
+  let materialSlotCount = materialSlots.length;
 
   // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M3 / T-M3-04:
   // ensure the mesh-SSBO + material-UBO buffer pair is large enough to hold
-  // `validatedOrdered.length` slots BEFORE the first per-entity writeBuffer.
+  // the render plan BEFORE the first per-entity writeBuffer.
   // On `ok:false` the controller has already fired a structured RuntimeError
   // (`mesh-ssbo-ceiling-reached` / `mesh-ssbo-capacity-exceeded`); we truncate
-  // the draw list to `degradedToSlotCount` (graceful degradation per
+  // the draw list to the largest complete entity prefix whose cumulative
+  // material slots fit `degradedToSlotCount` (graceful degradation per
   // plan-strategy D-2): render the subset that fits, discard overflow, no
   // black frame. The helper is idempotent across same-frame re-calls (AC-09)
   // and short-circuits on length=0 / length<=slotCount (boundary table).
@@ -922,8 +1104,8 @@ function buildDispatchPlan(
   // The mesh + material buffer pair share `slotCount` (single allocator),
   // so we size against the larger of the two requirements: entity count
   // (mesh-SSBO consumer) vs cumulative material-slot count (material-UBO
-  // consumer). Sprite entities collapse to 1 slot per the materialSlotStart
-  // computation below, mirroring the same rule (sprite per-submesh OOS-1;
+  // consumer). Sprite entities collapse to 1 slot in the material table,
+  // mirroring the same rule (sprite per-submesh OOS-1;
   // post-w13 judgement key migrated to materialShaderId).
   //
   // feat-20260624 M1' / t7: sprite-lit treated identically to sprite
@@ -931,10 +1113,18 @@ function buildDispatchPlan(
   const neededSlots = Math.max(validatedOrdered.length, materialSlotCount);
   const meshSsboCapResult = ensureMeshSsboCapacity(internals, neededSlots);
   if (!meshSsboCapResult.ok) {
-    // Graceful degradation: truncate to pre-grow capacity, render the subset.
-    materialSlotCount = materialSlotStart[meshSsboCapResult.degradedToSlotCount] ?? 0;
-    materialSlotStart.length = meshSsboCapResult.degradedToSlotCount;
-    validatedOrdered = validatedOrdered.slice(0, meshSsboCapResult.degradedToSlotCount);
+    // Graceful degradation: the controller reports slots, but this stage
+    // consumes entities. Find a complete prefix instead of slicing at the
+    // numeric slot count; a multi-material entity can consume several slots.
+    const degradedRenderableCount = findRenderablePrefixForSlotCapacity(
+      materialSlotIndices,
+      meshSsboCapResult.degradedToSlotCount,
+    );
+    materialSlotCount = materialSlotCountForPrefix(materialSlotIndices, degradedRenderableCount);
+    materialSlotIndices = materialSlotIndices.slice(0, degradedRenderableCount);
+    materialSlots = materialSlots.slice(0, materialSlotCount);
+    materialSlotOwners = materialSlotOwners.slice(0, materialSlotCount);
+    validatedOrdered = validatedOrdered.slice(0, degradedRenderableCount);
   }
 
   // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
@@ -1026,7 +1216,14 @@ function buildDispatchPlan(
     incrementFoldedDrawsMetric(foldDispatchPlan, internals.metrics);
   }
 
-  return { validatedOrdered, foldDispatchPlan, materialSlotStart, materialSlotCount };
+  return {
+    validatedOrdered,
+    foldDispatchPlan,
+    materialSlotIndices,
+    materialSlots,
+    materialSlotOwners,
+    materialSlotCount,
+  };
 }
 
 /**
@@ -1117,11 +1314,43 @@ function computeFoldBuckets(
     return [];
   }
   const transparentSortCfg = getTransparentSortConfig(world);
-  const foldBuckets = foldDispatchBuckets(
-    transparentDispatch,
-    transparentSortCfg.mode,
-    renderables,
-  );
+
+  // Only layer-Z / layer-Y modes can produce non-singleton fold buckets.
+  // The other modes make one inert singleton per entry, which is discarded by
+  // buildFoldDispatchPlan. Returning the same empty plan here avoids allocating
+  // a transform matrix for every renderable when folding is disabled by mode.
+  if (
+    transparentSortCfg.mode !== TRANSPARENT_SORT_MODE_LAYER_Z &&
+    transparentSortCfg.mode !== TRANSPARENT_SORT_MODE_LAYER_Y
+  ) {
+    frameState.lastFoldBucketCount = 0;
+    return [];
+  }
+
+  // `transparentDispatch` is the legacy name for the complete sorted dispatch
+  // list. Opaque entries can never participate in the transparent-only fold
+  // plan, yet foldDispatchBuckets must preserve its general helper contract and
+  // therefore materializes an inert singleton (including a Float32Array(16))
+  // for each one. Filter only at this private production call site so the fold
+  // helper keeps its testable semantics while record avoids work whose result
+  // is provably discarded.
+  let transparentCount = 0;
+  for (const entry of transparentDispatch) {
+    if (renderables[entry.renderableIndex]?.material.transparent === true) {
+      transparentCount += 1;
+    }
+  }
+  if (transparentCount === 0) {
+    frameState.lastFoldBucketCount = 0;
+    return [];
+  }
+  const foldCandidates =
+    transparentCount === transparentDispatch.length
+      ? transparentDispatch
+      : transparentDispatch.filter(
+          (entry) => renderables[entry.renderableIndex]?.material.transparent === true,
+        );
+  const foldBuckets = foldDispatchBuckets(foldCandidates, transparentSortCfg.mode, renderables);
   // Count only fold-eligible buckets (bucketSize > 1) so the metric
   // surfaces fold actually reducing draws — singleton buckets under
   // mode bypass do not change draw count, so they do not contribute.

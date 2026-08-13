@@ -143,21 +143,22 @@ class RhiWgpuRenderPassEncoderImpl implements RhiRenderPassEncoder {
   setBindGroup(
     index: number,
     bindGroup: BindGroup,
-    dynamicOffsetsOrStart?: readonly number[] | Uint32Array | undefined,
-    dynamicOffsetsLength?: number | undefined,
+    dynamicOffsetsData?: readonly number[] | Uint32Array | undefined,
+    dynamicOffsetsDataStart?: number | undefined,
+    dynamicOffsetsDataLength?: number | undefined,
   ): void {
     if (this.raw.setBindGroup === undefined) return;
-    if (dynamicOffsetsLength !== undefined) {
+    if (dynamicOffsetsDataLength !== undefined) {
       this.raw.setBindGroup.call(
         this.raw,
         index,
         bindGroup,
-        dynamicOffsetsOrStart,
-        0,
-        dynamicOffsetsLength,
+        dynamicOffsetsData,
+        dynamicOffsetsDataStart ?? 0,
+        dynamicOffsetsDataLength,
       );
-    } else if (dynamicOffsetsOrStart !== undefined) {
-      this.raw.setBindGroup.call(this.raw, index, bindGroup, dynamicOffsetsOrStart);
+    } else if (dynamicOffsetsData !== undefined) {
+      this.raw.setBindGroup.call(this.raw, index, bindGroup, dynamicOffsetsData);
     } else {
       this.raw.setBindGroup.call(this.raw, index, bindGroup);
     }

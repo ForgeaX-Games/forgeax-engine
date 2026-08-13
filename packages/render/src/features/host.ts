@@ -136,6 +136,8 @@ export interface RenderFeatureHost {
   ): Result<void, RenderError>;
   recover(input: RenderFeatureRecoverInput): Result<void, RenderError>;
   diagnostics(): readonly RenderFeatureDiagnostics[];
+  /** Subscribe to lifecycle projection changes; unchanged active frames are silent. */
+  subscribeDiagnostics(listener: () => void): () => void;
   dispose(): Result<void, RenderError>;
 }
 
@@ -491,6 +493,7 @@ class FeatureHostImpl implements RenderFeatureHost {
   private disposed = false;
   private generation = 0;
   private lastRecoveryFrame: number | undefined;
+  private readonly diagnosticsListeners = new Set<() => void>();
   private readonly preparedBatchStates = new WeakMap<
     RenderFeaturePreparedResourceBatch,
     'unsubmitted' | 'submitted'
@@ -508,6 +511,17 @@ class FeatureHostImpl implements RenderFeatureHost {
 
   get features(): readonly RenderFeature<unknown>[] {
     return this.slots.map((slot) => slot.feature);
+  }
+
+  private publishDiagnosticsChanged(): void {
+    for (const listener of this.diagnosticsListeners) {
+      try {
+        listener();
+      } catch {
+        // Diagnostics are a projection of renderer state. An observer failure
+        // must not alter an already-applied feature lifecycle transition.
+      }
+    }
   }
 
   install(feature: RenderFeature<unknown>): Result<void, RenderError> {
@@ -529,6 +543,7 @@ class FeatureHostImpl implements RenderFeatureHost {
       status: 'active',
       latestError: undefined,
     });
+    this.publishDiagnosticsChanged();
     return ok(undefined);
   }
 
@@ -563,8 +578,12 @@ class FeatureHostImpl implements RenderFeatureHost {
     if (slot === undefined || this.disposed || slot.status === 'disposed') {
       return err(unknownFeatureError(identity, 'recover'));
     }
+    if (slot.status === status && slot.latestError === undefined && latestError === undefined) {
+      return ok(undefined);
+    }
     slot.status = status;
     slot.latestError = latestError === undefined ? undefined : freezeError(latestError);
+    this.publishDiagnosticsChanged();
     return ok(undefined);
   }
 
@@ -574,6 +593,7 @@ class FeatureHostImpl implements RenderFeatureHost {
     const owned = featureErrorForSlot(slot, error);
     slot.status = 'failed';
     slot.latestError = errorDescriptor(owned);
+    this.publishDiagnosticsChanged();
     return owned;
   }
 
@@ -661,6 +681,7 @@ class FeatureHostImpl implements RenderFeatureHost {
     this.advancePreparedGeneration();
     this.lastRecoveryFrame = input.frameNumber;
     let firstError: RenderError | undefined = retired.ok ? undefined : retired.error;
+    let diagnosticsChanged = false;
     for (const slot of this.slots) {
       if (slot.status === 'disposed') continue;
       const missing = missingCapability(slot.feature, input.caps);
@@ -672,6 +693,7 @@ class FeatureHostImpl implements RenderFeatureHost {
         );
         slot.status = 'disabled';
         slot.latestError = errorDescriptor(error);
+        diagnosticsChanged = true;
         if (firstError === undefined) firstError = error;
         continue;
       }
@@ -679,17 +701,27 @@ class FeatureHostImpl implements RenderFeatureHost {
       if (!recovered.ok) {
         slot.status = 'failed';
         slot.latestError = errorDescriptor(recovered.error);
+        diagnosticsChanged = true;
         if (firstError === undefined) firstError = recovered.error;
         continue;
       }
-      slot.status = 'active';
-      slot.latestError = undefined;
+      if (slot.status !== 'active' || slot.latestError !== undefined) {
+        slot.status = 'active';
+        slot.latestError = undefined;
+        diagnosticsChanged = true;
+      }
     }
+    if (diagnosticsChanged) this.publishDiagnosticsChanged();
     return firstError === undefined ? ok(undefined) : err(firstError);
   }
 
   diagnostics(): readonly RenderFeatureDiagnostics[] {
     return Object.freeze(this.slots.map(freezeDiagnostics));
+  }
+
+  subscribeDiagnostics(listener: () => void): () => void {
+    this.diagnosticsListeners.add(listener);
+    return () => this.diagnosticsListeners.delete(listener);
   }
 
   dispose(): Result<void, RenderError> {
@@ -718,6 +750,8 @@ class FeatureHostImpl implements RenderFeatureHost {
       slot.resources.length = 0;
       slot.status = 'disposed';
     }
+    this.publishDiagnosticsChanged();
+    this.diagnosticsListeners.clear();
 
     return firstError === undefined
       ? ok(undefined)

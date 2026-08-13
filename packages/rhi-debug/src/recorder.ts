@@ -1079,6 +1079,10 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     }
 
     s.state = RecorderState.Armed;
+    // A previous bounded snapshot may still be unwinding after its timeout.
+    // Its generation fence prevents stale cleanup from touching this capture;
+    // reset the suppression latch here so the new capture can record normally.
+    s._skipRecord = false;
     s.snapshotGeneration += 1;
     s.requestedFrames = frames;
     s.recordedFrames = 0;
@@ -1349,6 +1353,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     ) {
       s.state = RecorderState.Error;
       s.snapshotGeneration += 1;
+      s._skipRecord = false;
       s.valid = false;
       if (s.onFrameEndUnsubscribe) {
         s.onFrameEndUnsubscribe();
@@ -1361,6 +1366,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     if (s.state === RecorderState.Error) {
       s.state = RecorderState.Idle;
       s.snapshotGeneration += 1;
+      s._skipRecord = false;
       s.events = [];
       s.blobPool = new Map();
       s.valid = true;
@@ -1506,7 +1512,13 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         }
       }
     } finally {
-      s._skipRecord = prevSkip;
+      // A retry may begin before a timed-out readback promise settles. Do not
+      // let the stale generation restore its old suppression bit over the new
+      // capture's active snapshot; only the generation that acquired it may
+      // release it.
+      if (snapshotGeneration === undefined || s.snapshotGeneration === snapshotGeneration) {
+        s._skipRecord = prevSkip;
+      }
     }
 
     if (!snapshotIsActive()) return cancelled();
@@ -1563,7 +1575,12 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutResult = new Promise<Result<void, DebugError>>((resolve) => {
       timer = setTimeout(() => {
-        transitionToError();
+        // The caller may have timed out first, disposed the failed capture,
+        // and already started a new generation. A late timer from that stale
+        // snapshot must not poison the retry that now owns the recorder.
+        if (s.state === RecorderState.Snapshotting && s.snapshotGeneration === snapshotGeneration) {
+          transitionToError();
+        }
         resolve(makeErr(timeoutError()) as unknown as Result<void, DebugError>);
       }, timeoutMs);
     });
@@ -1573,10 +1590,18 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         runSnapshotAllLiveResources(snapshotGeneration),
         timeoutResult,
       ]);
-      if (!result.ok && s.state === RecorderState.Snapshotting) transitionToError();
+      if (
+        !result.ok &&
+        s.state === RecorderState.Snapshotting &&
+        s.snapshotGeneration === snapshotGeneration
+      ) {
+        transitionToError();
+      }
       return result;
     } catch (error) {
-      transitionToError();
+      if (s.state === RecorderState.Snapshotting && s.snapshotGeneration === snapshotGeneration) {
+        transitionToError();
+      }
       throw error;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -1610,7 +1635,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       try {
         await realDevice.queue.onSubmittedWorkDone();
       } finally {
-        s._skipRecord = prevSkip;
+        if (s.snapshotGeneration === snapshotGeneration) s._skipRecord = prevSkip;
       }
       if (s.snapshotProgress !== undefined) {
         s.snapshotProgress = { ...s.snapshotProgress, stage: 'resource-readback' };

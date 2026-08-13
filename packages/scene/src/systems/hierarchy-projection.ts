@@ -23,7 +23,26 @@ interface HierarchyGraph {
 interface InternalWorldSurface {
   /** @internal */
   _getGraph(): HierarchyGraph;
+  /** @internal Archetype/layout token used to invalidate derived projections. */
+  _getStructureEpoch(): number;
+  /** @internal Component mutation token used to invalidate derived projections. */
+  _getComponentMutationEpoch(componentId: number): number;
 }
+
+interface HierarchyProjectionCacheEntry {
+  readonly childOfMutationEpoch: number;
+  readonly structureEpoch: number;
+  readonly snapshot: SceneHierarchySnapshot;
+}
+
+// A World can be observed by the transform system, renderer visibility, and
+// editor projections in the same frame. Keep one World-local projection so
+// those consumers do not each rescan every archetype. Structure changes and
+// the ChildOf component's own mutation token are the invalidation keys; the
+// global mutation epoch is intentionally too broad because animation and
+// runtime-only component writes may advance it every frame. Direct table
+// writes are internal-only and must not mutate authored hierarchy state.
+const HIERARCHY_PROJECTION_CACHE = new WeakMap<World, HierarchyProjectionCacheEntry>();
 
 function readColumn(table: Table, componentId: number, fieldName: string): Uint32Array | undefined {
   return table.storage.get(componentId)?.fields.get(fieldName)?.view as Uint32Array | undefined;
@@ -52,7 +71,19 @@ function diagnostic(
 
 /** Build the only World-local projection of ChildOf parent facts. */
 export function projectHierarchy(world: World): SceneHierarchySnapshot {
-  const graph = (world as unknown as InternalWorldSurface)._getGraph();
+  const internal = world as unknown as InternalWorldSurface;
+  const childOfMutationEpoch = internal._getComponentMutationEpoch(ChildOf.id);
+  const structureEpoch = internal._getStructureEpoch();
+  const cached = HIERARCHY_PROJECTION_CACHE.get(world);
+  if (
+    cached !== undefined &&
+    cached.childOfMutationEpoch === childOfMutationEpoch &&
+    cached.structureEpoch === structureEpoch
+  ) {
+    return cached.snapshot;
+  }
+
+  const graph = internal._getGraph();
   const liveEntities = new Set<EntityHandle>();
   const authoredParents = new Map<EntityHandle, EntityHandle>();
 
@@ -118,11 +149,13 @@ export function projectHierarchy(world: World): SceneHierarchySnapshot {
 
   const stableParentOf = new Map(parentOf);
   const stableDiagnostics = Object.freeze(diagnostics.slice());
-  return {
+  const snapshot: SceneHierarchySnapshot = {
     parentOf: stableParentOf,
     diagnostics: stableDiagnostics,
     getParent(entity: EntityHandle): EntityHandle | undefined {
       return stableParentOf.get(entity);
     },
   };
+  HIERARCHY_PROJECTION_CACHE.set(world, { childOfMutationEpoch, structureEpoch, snapshot });
+  return snapshot;
 }

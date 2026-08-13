@@ -1,4 +1,7 @@
-import Ajv2020 from 'ajv/dist/2020.js';
+// Ajv ships this entry as CommonJS. Use the named constructor so Vite's
+// native ESM dev server does not assume a synthetic default export when the
+// profiler is imported by the browser runtime.
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import schemaDocument from '../schema/profile-capture.schema.json' with { type: 'json' };
 import type { ProfileCapture, ProfileRecord } from './generated/profile-capture.js';
 import type { ProfileResult } from './types.js';

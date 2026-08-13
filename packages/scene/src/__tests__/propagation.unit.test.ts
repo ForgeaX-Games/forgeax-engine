@@ -43,4 +43,25 @@ describe('scene propagation', () => {
     expect(first.get(firstRoot, Transform).unwrap().world[12]).toBeCloseTo(3);
     expect(second.get(secondRoot, Transform).unwrap().world[12]).toBeCloseTo(7);
   });
+
+  it('reuses a stable propagation result and invalidates it after a local edit', () => {
+    const world = new World();
+    const root = world.spawn({ component: Transform, data: { pos: [2, 0, 0] } }).unwrap();
+    const child = world
+      .spawn(
+        { component: Transform, data: { pos: [3, 0, 0] } },
+        { component: ChildOf, data: { parent: root } },
+      )
+      .unwrap();
+
+    const first = propagateTransforms(world);
+    const second = propagateTransforms(world);
+    expect(first).toBe(second);
+    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(5);
+
+    world.set(root, Transform, { pos: [7, 0, 0] }).unwrap();
+    const third = propagateTransforms(world);
+    expect(third).not.toBe(second);
+    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(10);
+  });
 });

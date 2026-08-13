@@ -26,6 +26,7 @@
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
+import { createProfiler } from '@forgeax/engine-profiler';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { populateDemoWorld } from '../../shared/src/populate-demo-world';
 
@@ -38,7 +39,11 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const appRes = await createApp(target, {}, { ...forgeaxBundlerAdapter() });
+  const appRes = await createApp(
+    target,
+    { profiler: createProfiler() },
+    { ...forgeaxBundlerAdapter() },
+  );
   if (!appRes.ok) {
     reportBootstrapError(appRes.error);
     return;

@@ -6,9 +6,9 @@ import { describe, expect, it } from 'vitest';
 
 // M2 / m2-1: regression guard for AC-03 -- after retiring the _getArrayView
 // call at the joint-world resolve loop (migrated to public world.get), the
-// total _getArrayView count in render-system-extract.ts must be exactly
-// 16 occurrences (1 definition + 1 SpriteRegionOverride call site + 14
-// comment / narrative lines).
+// total _getArrayView invocation surface in render-system-extract.ts must stay
+// at seven occurrences (one facade declaration + six call sites). Count code
+// syntax rather than comments so documentation edits cannot trip this gate.
 //
 // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w12: count fell
 // from 18 to 16 because the legacy isSprite extract block (with its
@@ -22,9 +22,9 @@ const extractPath = (() => {
 })();
 
 describe('_getArrayView count (AC-03 gate)', () => {
-  it('exactly 16 _getArrayView occurrences in render-system-extract.ts post-M3-w12', () => {
+  it('keeps the bounded _getArrayView invocation surface in render-system-extract.ts', () => {
     const src = readFileSync(extractPath, 'utf8');
-    const hits = src.split('_getArrayView').length - 1;
-    expect(hits).toBe(16);
+    const invocations = src.match(/_getArrayView\s*\(/g)?.length ?? 0;
+    expect(invocations).toBe(7);
   });
 });

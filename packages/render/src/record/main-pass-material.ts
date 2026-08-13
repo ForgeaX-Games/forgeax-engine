@@ -10,6 +10,8 @@ import {
 import {
   type BindGroup,
   type BindGroupEntry,
+  type BindGroupLayout,
+  type Buffer,
   err,
   ok,
   type RenderPipeline,
@@ -49,8 +51,27 @@ import {
   type MaterialPipelineReady,
   routeMaterialPipeline,
 } from '../renderer/material/pipeline-projection.js';
-import type { BindGroupCounts } from './frame-snapshot';
+import type { BindGroupCounts, MaterialBgAssemblyCacheEntry } from './frame-snapshot';
 import { extractEntryResourceHandle, getOrCreatePerEntity } from './mesh-ssbo';
+
+// Param schemas are immutable runtime contracts: the shader registry installs
+// them once and material snapshots only retain the same array reference. Keep
+// the expensive pure derivation on that identity so the per-submesh record
+// path does not rebuild the same UBO/texture maps for every visible material
+// on every frame. A WeakMap keeps this optimization bounded by the lifetime of
+// the schema owner and adds no global strong-reference lifetime.
+const DERIVED_PARAM_SCHEMA_CACHE = new WeakMap<
+  readonly ParamSchemaEntry[],
+  ReturnType<typeof derive>
+>();
+
+function derivedParamSchema(schema: readonly ParamSchemaEntry[]): ReturnType<typeof derive> {
+  const cached = DERIVED_PARAM_SCHEMA_CACHE.get(schema);
+  if (cached !== undefined) return cached;
+  const derived = derive(schema);
+  DERIVED_PARAM_SCHEMA_CACHE.set(schema, derived);
+  return derived;
+}
 
 // feat-20260601-customizable-render-pipeline-seam M2 / w12: the former
 // `RecordPassContext` (26-field full surface, including the `internals` kitchen-sink and
@@ -425,15 +446,21 @@ function materialTextureForField(
  * Asset dimensions remain logical; this is the sole record-stage projection
  * from a bound texture asset to its shader sampling coordinates.
  */
+type MaterialUboPayload = ArrayBuffer | Uint8Array | Float32Array;
+
+function materialUboFloatView(payload: MaterialUboPayload): Float32Array {
+  if (payload instanceof Float32Array) return payload;
+  return payload instanceof Uint8Array
+    ? new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)
+    : new Float32Array(payload);
+}
+
 export function applyMaterialTextureUvScales(
-  payload: ArrayBuffer | Uint8Array,
+  payload: MaterialUboPayload,
   material: MaterialSnapshot,
   world: World,
 ): void {
-  const f32 =
-    payload instanceof Uint8Array
-      ? new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)
-      : new Float32Array(payload);
+  const f32 = materialUboFloatView(payload);
   // Standard PBR grew two authored coat fields before the engine-owned UV
   // tail. Sprite, sprite-lit, unlit, and text keep their own 80-byte tail
   // position because their WGSL layouts do not carry clearcoat.
@@ -500,7 +527,7 @@ export function userRegionTextureFieldOrder(
   schema: Parameters<typeof derive>[0] | undefined,
 ): readonly string[] {
   if (schema === undefined || schema.length === 0) return BUILTIN_USER_REGION_TEXTURE_FIELDS;
-  const fields = [...derive(schema).textureFieldNames];
+  const fields = [...derivedParamSchema(schema).textureFieldNames];
   return fields.length === 0 ? BUILTIN_USER_REGION_TEXTURE_FIELDS : fields;
 }
 
@@ -576,7 +603,30 @@ export function detectNineSliceScaleTooSmall(
  */
 export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Array {
   const buf = new Uint8Array(STANDARD_PBR_UBO_SIZE);
-  const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+  writePbrMaterialUboPayload(buf, material);
+  return buf;
+}
+
+/**
+ * Write the standard material payload into caller-owned storage.
+ *
+ * The allocating wrapper above remains the byte-stable test/helper surface,
+ * while the frame recorder reuses one scratch slot for all materials. A
+ * scene with thousands of submeshes otherwise allocates one 304-byte
+ * Uint8Array per material per frame, creating avoidable GC pressure without
+ * changing any GPU-visible bytes.
+ */
+export function writePbrMaterialUboPayload(
+  buf: Uint8Array | Float32Array,
+  material: MaterialSnapshot,
+): void {
+  if (buf.byteLength < STANDARD_PBR_UBO_SIZE) {
+    throw new RangeError(
+      `writePbrMaterialUboPayload: expected at least ${STANDARD_PBR_UBO_SIZE} bytes, got ${buf.byteLength}`,
+    );
+  }
+  buf.fill(0);
+  const f32 = materialUboFloatView(buf);
   // Layout (issue-1: channelMap split per D-8) -- byte-equivalent to the
   // post-split sidecar paramSchema for default-standard-pbr (12 numeric
   // entries packed std140 into one merged UBO at binding(0)).
@@ -661,7 +711,6 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
     void f32Snap;
     void colorSnap;
   }
-  return buf;
 }
 
 /**
@@ -700,7 +749,7 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
  * record.test.ts; not part of the package's public surface).
  */
 export function applyParamSnapshotToUbo(
-  payload: ArrayBuffer | Uint8Array,
+  payload: MaterialUboPayload,
   paramSchema: readonly ParamSchemaEntry[] | undefined,
   paramSnapshot:
     | Readonly<Record<string, number | readonly number[] | string | undefined>>
@@ -708,11 +757,8 @@ export function applyParamSnapshotToUbo(
 ): void {
   if (paramSchema === undefined) return;
   if (paramSnapshot === undefined) return;
-  const f32 =
-    payload instanceof Uint8Array
-      ? new Float32Array(payload.buffer, payload.byteOffset, payload.byteLength / 4)
-      : new Float32Array(payload);
-  const { uboLayout } = derive(paramSchema);
+  const f32 = materialUboFloatView(payload);
+  const { uboLayout } = derivedParamSchema(paramSchema);
   for (const entry of uboLayout.entries) {
     const value = paramSnapshot[entry.name];
     if (value === undefined) continue;
@@ -767,9 +813,33 @@ export interface PerSubmeshMaterialBgDeps {
   readonly videoHighPerfAvailable: boolean;
   readonly skylightResources: SkylightBindGroupResources;
   readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
-  /** Same-frame final BG reuse keyed by the stable source material handle. */
-  readonly materialBgAssemblyCache: Map<number, BindGroup>;
+  /** Cross-frame final BG reuse keyed by the stable source material handle. */
+  readonly materialBgAssemblyCache: Map<number, MaterialBgAssemblyCacheEntry>;
   readonly bindGroupCounts: BindGroupCounts;
+}
+
+/** @internal Exported only so buffer-generation invalidation stays regression-tested. */
+export function isMaterialBgAssemblyCacheHit(
+  cached: MaterialBgAssemblyCacheEntry | undefined,
+  material: MaterialSnapshot,
+  materialBgl: BindGroupLayout,
+  materialBuffer: Buffer,
+  skylightResources: SkylightBindGroupResources,
+  materialResourceEpoch: number,
+): cached is MaterialBgAssemblyCacheEntry {
+  return (
+    cached?.material === material &&
+    cached.materialResourceEpoch === materialResourceEpoch &&
+    cached.materialBgl === materialBgl &&
+    cached.materialBuffer === materialBuffer &&
+    cached.skylightResources.irradianceView === skylightResources.irradianceView &&
+    cached.skylightResources.irradianceSampler === skylightResources.irradianceSampler &&
+    cached.skylightResources.prefilterView === skylightResources.prefilterView &&
+    cached.skylightResources.prefilterSampler === skylightResources.prefilterSampler &&
+    cached.skylightResources.brdfLutView === skylightResources.brdfLutView &&
+    cached.skylightResources.brdfLutSampler === skylightResources.brdfLutSampler &&
+    cached.skylightResources.intensityBuffer === skylightResources.intensityBuffer
+  );
 }
 
 export function buildPerSubmeshMaterialBg(
@@ -791,21 +861,36 @@ export function buildPerSubmeshMaterialBg(
   } = deps;
   const smMaterialHandle = submeshMaterial.materialHandle;
   const smHasVideoFields = (submeshMaterial.videoTextureFields?.size ?? 0) > 0;
-  if (smMaterialHandle !== undefined && !smHasVideoFields) {
-    const cached = materialBgAssemblyCache.get(smMaterialHandle);
-    if (cached !== undefined) return cached;
-  }
   const smShaderId = submeshMaterial.materialShaderId;
   const smPerShaderBgl =
     smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
+  const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
+  if (smMaterialHandle !== undefined && !smHasVideoFields) {
+    const cached = materialBgAssemblyCache.get(smMaterialHandle);
+    if (
+      isMaterialBgAssemblyCacheHit(
+        cached,
+        submeshMaterial,
+        smMaterialBgl,
+        pipelineState.materialUniformBuffer.buffer,
+        skylightResources,
+        store.materialResourceEpoch,
+      )
+    ) {
+      return cached.bindGroup;
+    }
+  }
   const smSchema =
     submeshMaterial.materialParamSchema ??
     (smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined);
   const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
+  let materialResourcesResident = true;
   const smSamplerForField = (field: string | undefined): Sampler => {
     const handle = field === undefined ? undefined : submeshMaterial.samplerHandles?.get(field);
     if (handle === undefined) return pipelineState.defaultSampler;
-    return residentSampler(world, store, runtime, handle) ?? pipelineState.defaultSampler;
+    const sampler = residentSampler(world, store, runtime, handle);
+    if (sampler === undefined) materialResourcesResident = false;
+    return sampler ?? pipelineState.defaultSampler;
   };
   const smBaseEntries: BindGroupEntry[] = [
     {
@@ -849,6 +934,7 @@ export function buildPerSubmeshMaterialBg(
       if (smHandle !== undefined) {
         const view = residentTextureView(world, store, runtime, smHandle);
         if (view !== undefined) smView = view;
+        else materialResourcesResident = false;
       }
     }
     smBaseEntries.push(
@@ -867,12 +953,14 @@ export function buildPerSubmeshMaterialBg(
   if (smEmissiveHandle !== undefined) {
     const view = residentTextureView(world, store, runtime, smEmissiveHandle);
     if (view !== undefined) smEmissiveView = view;
+    else materialResourcesResident = false;
   }
   let smOcclusionView: unknown = pipelineState.defaultWhiteTextureView;
   const smOcclusionHandle = submeshMaterial.occlusionTexture;
   if (smOcclusionHandle !== undefined) {
     const view = residentTextureView(world, store, runtime, smOcclusionHandle);
     if (view !== undefined) smOcclusionView = view;
+    else materialResourcesResident = false;
   }
   const smEmissiveAo: EmissiveAoBindGroupResources = {
     emissiveSampler: smSamplerForField('emissiveTexture'),
@@ -885,7 +973,6 @@ export function buildPerSubmeshMaterialBg(
     skylightResources,
     smEmissiveAo,
   );
-  const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
   const smBindGroup = getOrCreatePerEntity(
     materialBgShared,
     smShaderId ?? '',
@@ -902,8 +989,15 @@ export function buildPerSubmeshMaterialBg(
     },
     bindGroupCounts,
   );
-  if (smMaterialHandle !== undefined && !smHasVideoFields) {
-    materialBgAssemblyCache.set(smMaterialHandle, smBindGroup);
+  if (smMaterialHandle !== undefined && !smHasVideoFields && materialResourcesResident) {
+    materialBgAssemblyCache.set(smMaterialHandle, {
+      material: submeshMaterial,
+      materialResourceEpoch: store.materialResourceEpoch,
+      materialBgl: smMaterialBgl,
+      materialBuffer: pipelineState.materialUniformBuffer.buffer,
+      skylightResources,
+      bindGroup: smBindGroup,
+    });
   }
   return smBindGroup;
 }

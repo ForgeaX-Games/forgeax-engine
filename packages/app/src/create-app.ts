@@ -288,7 +288,7 @@ async function createAppFromCanvas(
   // When FORGEAX_ENGINE_RHI_DEBUG=1, wrap the RHI instance and createShaderModule
   // function before createRenderer so the proxy chain intercepts all
   // adapter/device/shader calls. The wrap happens BEFORE createRenderer;
-  // _onFrameEnd hookup happens AFTER (needs the renderer object).
+  // frame-completion hookup happens AFTER (needs the renderer object).
   let _debugInst: DebugRhiInstance | undefined;
   // Read FORGEAX_ENGINE_RHI_DEBUG from two sources (plan-strategy D-4):
   //   - browser: import.meta.env, statically replaced by the
@@ -479,7 +479,7 @@ async function createAppFromCanvas(
     throw e;
   }
 
-  // m3-1 (continued): hook up _onFrameEnd after createRenderer returns.
+  // m3-1 (continued): hook up frame completion after createRenderer returns.
   // The recorder receives frame-completion callbacks to inject frameMark
   // events. Only wired when FORGEAX_ENGINE_RHI_DEBUG=1.
   let _debugAdapter: unknown | undefined;
@@ -495,10 +495,7 @@ async function createAppFromCanvas(
       }
     });
 
-    const r = renderer as Renderer & {
-      _onFrameEnd(listener: () => void): () => void;
-    };
-    r._onFrameEnd(() => {
+    renderer.subscribeFrameEnd(() => {
       _debugInst.onFrameEnd();
     });
 
@@ -1407,6 +1404,10 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
         resumeAfterSurfaceRestore = true;
         execution.setEngineHealth('idle');
       }
+      // A surface handoff can be requested by an Update system while the
+      // current frame is still in progress. Let that frame reach renderer.draw
+      // before unconfiguring the surface; pause() only cancels the next rAF.
+      await Promise.resolve();
       const released = renderer.releaseSurface();
       if (!released.ok && resumeAfterSurfaceRestore) {
         loop.resume();

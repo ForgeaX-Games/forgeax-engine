@@ -17,6 +17,19 @@ import type {
 } from '../render-system-extract';
 import type { RenderFrameState } from './frame-snapshot';
 
+/** Convert pass-owned shader definitions into the manifest's canonical variant key. */
+export function variantSetFromDefines(
+  defines: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+  if (defines === undefined) return undefined;
+  const entries = Object.entries(defines);
+  if (entries.length === 0) return undefined;
+  return entries
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([name, value]) => `${name}=${value}`)
+    .join('+');
+}
+
 /**
  * Select the equirect source for the shared lazy projection.
  *

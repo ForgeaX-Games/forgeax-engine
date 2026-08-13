@@ -170,6 +170,7 @@ import {
   worldHasResource,
   worldInsertResource,
   worldInspect,
+  worldInternSharedRef,
   worldRemoveResource,
   worldRemoveSystem,
   worldReplaceSystem,
@@ -393,6 +394,8 @@ export class World {
   private mutationEpoch = 0;
   /** Monotonic revision for successful entity/component structure writes. */
   private structureEpoch = 0;
+  /** Last mutation epoch for each component id, used by component-owned projections. */
+  private readonly componentMutationEpochs: number[] = [];
   /** Free index slots (LIFO stack). */
   private readonly freeIndices: number[] = [];
   /**
@@ -572,14 +575,21 @@ export class World {
   _markComponentsAdded(entity: EntityHandle, componentIds: readonly number[]): void {
     const record = this.records[entityIndex(entity)];
     if (!this._recordIsLive(record, entityGeneration(entity))) return;
-    markComponentsAdded(this.graph, record, entity, componentIds, this._nextMutationEpoch());
+    const epoch = this._nextMutationEpoch();
+    markComponentsAdded(this.graph, record, entity, componentIds, epoch);
+    for (const componentId of componentIds) this.componentMutationEpochs[componentId] = epoch;
   }
 
   /** @internal Mark an existing component as changed at the current tick. */
   _markComponentChanged(entity: EntityHandle, componentId: number): void {
     const record = this.records[entityIndex(entity)];
     if (!this._recordIsLive(record, entityGeneration(entity))) return;
-    markComponentChanged(this.graph, record, entity, componentId, () => this._nextMutationEpoch());
+    let epoch: number | undefined;
+    markComponentChanged(this.graph, record, entity, componentId, () => {
+      epoch = this._nextMutationEpoch();
+      return epoch;
+    });
+    if (epoch !== undefined) this.componentMutationEpochs[componentId] = epoch;
   }
 
   /** @internal Mark one contiguous component range with a single epoch. */
@@ -591,7 +601,14 @@ export class World {
   ): void {
     const epochs = table.storage.get(componentId)?.epochs;
     if (epochs === undefined || rowCount === 0) return;
-    epochs.changed.fill(this._nextMutationEpoch(), rowStart, rowStart + rowCount);
+    const epoch = this._nextMutationEpoch();
+    epochs.changed.fill(epoch, rowStart, rowStart + rowCount);
+    this.componentMutationEpochs[componentId] = epoch;
+  }
+
+  /** @internal Latest mutation token for one component-owned projection. */
+  _getComponentMutationEpoch(componentId: number): number {
+    return this.componentMutationEpochs[componentId] ?? 0;
   }
 
   /** @internal Query facade write after the facade has already marked evidence. */
@@ -1067,6 +1084,20 @@ export class World {
   }
 
   /**
+   * Return one producer-owned shared handle per `(target, payload object)` in
+   * this World. Repeated discovery does not retain; ECS holders still retain
+   * and release through the normal write barrier. Asset catalogues use this
+   * when repeated scene instantiation resolves the same catalogued payload.
+   * Use {@link World.allocSharedRef} for independent resources or deleters.
+   */
+  internSharedRef<Target extends string, T extends object>(
+    target: Target,
+    payload: T,
+  ): Handle<Target, 'shared'> {
+    return worldInternSharedRef(this, target, payload);
+  }
+
+  /**
    * Check cardinality bound for a component before archetype mutation
    * (plan-strategy D-3). Returns `CardinalityExceededError` if adding one
    * more instance would exceed the declared `cardinality` of the component.
@@ -1082,6 +1113,21 @@ export class World {
     component: Component<string, S>,
   ): Result<ShapeOf<S>, EcsError> {
     return this.componentAccess.get(entity, component);
+  }
+
+  /**
+   * Test live component presence without constructing a Result error.
+   *
+   * Read projections commonly need to branch on optional components for many
+   * entities. Calling `get` for that branch allocates a structured
+   * ComponentNotPresentError on every ordinary miss (and StaleEntityError for
+   * a dangling handle). This predicate is deliberately non-throwing and
+   * returns false for both cases; callers that need the detailed error should
+   * continue to use `get`.
+   */
+  hasComponent(entity: EntityHandle, component: Component): boolean {
+    const archetype = this._getEntityArchetype(entity);
+    return archetype?.components.some((candidate) => candidate.id === component.id) === true;
   }
 
   _getArrayView(

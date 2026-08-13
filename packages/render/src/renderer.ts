@@ -211,6 +211,7 @@ export const RENDER_SCENE_STATE_PHASE_CATALOG = [
   'record/scene-state/fold-buckets',
   'record/scene-state/lighting-prep',
   'record/scene-state/ambient-resolution',
+  'record/scene-state/directional-shadow-cache',
   'record/scene-state/hdrp-cluster',
   ...RENDER_HDRP_CLUSTER_PHASE_CATALOG,
 ] as const;
@@ -718,6 +719,10 @@ export interface Renderer {
    * while rebuilding the active graph.
    */
   renderFeatureDiagnostics(): readonly RenderFeatureDiagnostics[];
+  /** Subscribe to feature lifecycle changes without polling every render frame. */
+  subscribeRenderFeatureDiagnostics(listener: () => void): () => void;
+  /** Subscribe after a `draw()` invocation reaches queue submission. */
+  subscribeFrameEnd(listener: () => void): () => void;
   /**
    * Install a feature after the renderer is ready. The renderer keeps feature
    * identity and lifecycle ownership in the same host as boot-time features;

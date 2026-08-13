@@ -23,6 +23,30 @@ describe('captureFramesToMemory', () => {
     expect(disposed).toBe(1);
   });
 
+  it('does not dispose an active capture before retrying', async () => {
+    let disposed = 0;
+    let state = 'armed';
+    const debugInst = {
+      arm: () => ({ ok: true as const }),
+      disposeError: () => {
+        disposed += 1;
+      },
+      snapshotAllLiveResources: async () => {
+        state = 'idle';
+        return { ok: true as const };
+      },
+      getState: () => state,
+      getEvents: () => [{ kind: 'frameMark' }],
+      getTape: () => ({ events: [], blobPool: new Map() }),
+      _getValid: () => true,
+    };
+
+    await expect(captureFramesToMemory(debugInst, 1)).resolves.toMatchObject({
+      valid: true,
+    });
+    expect(disposed).toBe(0);
+  });
+
   it('bounds a stuck frame-header snapshot and transitions the recorder to error', async () => {
     let transitionCount = 0;
     const debugInst = {

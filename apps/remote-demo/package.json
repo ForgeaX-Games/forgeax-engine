@@ -11,9 +11,66 @@
     "build": "vite build",
     "preview": "vite preview",
     "e2e:cli": "node scripts/e2e-cli.mjs",
-    "e2e:motion": "node scripts/e2e-motion.mjs"
+    "e2e:motion": "node scripts/e2e-motion.mjs",
+    "e2e:profiler-gauntlet": "node scripts/e2e-profiler-gauntlet.mjs"
   },
   "forgeax": {
+    "gauntletScenario": {
+      "id": "m13-remote-profiler-bounded-recapture",
+      "script": "e2e:profiler-gauntlet",
+      "domains": [
+        "Inspection, debugging, and development bridges",
+        "World and host contract"
+      ],
+      "packages": [
+        "@forgeax/engine-app",
+        "@forgeax/engine-profiler",
+        "@forgeax/engine-remote",
+        "@forgeax/remote-demo"
+      ],
+      "risks": [
+        "baseline",
+        "live",
+        "capability-refusal",
+        "bounded-overflow",
+        "stale-state",
+        "recovery",
+        "cleanup"
+      ],
+      "phaseInputs": [
+        "baseline",
+        "remote introspect/eval",
+        "profiler-not-enabled",
+        "undersized overflow",
+        "offline summary",
+        "same-process correctly-sized recapture",
+        "cleanup"
+      ],
+      "evidence": {
+        "frontDoors": [
+          "remote-live-browser",
+          "remote-introspect",
+          "profiler-cli",
+          "remote-contracts"
+        ],
+        "legs": ["semantic", "live", "behavioral", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[m13-profiler] profiler-not-enabled: PASS",
+          "[m13-profiler] RPC method roster: PASS",
+          "[m13-profiler] optional root discovery: PASS",
+          "[m13-profiler] undersized overflow artifact: PASS",
+          "[m13-profiler] overflow offline summary: PASS",
+          "[m13-profiler] same-process correctly-sized recapture: PASS",
+          "[m13-profiler] complete offline summary: PASS",
+          "[m13-profiler] stale overflow falsifier: PASS",
+          "[m13-profiler] real Browser evidence: PASS",
+          "[m13-profiler] cleanup: PASS",
+          "[m13-profiler] PASS - M13 remote profiler bounded recapture GREEN"
+        ]
+      }
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -39,6 +96,7 @@
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
@@ -51,6 +109,8 @@
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.71",
+    "playwright": "^1.56.1",
+    "ws": "^8.20.0"
   }
 }

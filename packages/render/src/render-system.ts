@@ -120,7 +120,12 @@ import type { MembershipTimingController } from './record/membership-timing';
 // handle stays internal (requirements line 155); this concept type is the public surface.
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type { RenderPipelineContext } from './render-pipeline-context';
-import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render-system-extract';
+import type {
+  CameraSnapshot,
+  DispatchEntry,
+  MaterialSnapshotCachesByWorld,
+  RenderableSnapshot,
+} from './render-system-extract';
 import { extractFrames } from './render-system-extract';
 import {
   type DrawOwnerOptions,
@@ -370,7 +375,8 @@ export const MATERIAL_PER_ENTITY_STRIDE = 512;
  * whose shader identity is `forgeax::default-standard-pbr`).
  */
 export interface RenderSystem {
-  draw(worlds: readonly World[], opts: DrawOwnerOptions): void;
+  /** Returns true only when this invocation reached queue submission. */
+  draw(worlds: readonly World[], opts: DrawOwnerOptions): boolean;
   observeCurrentFrame(
     options: FrameObservationOptions,
   ): Promise<Result<FrameObservation, ObservationUnavailableError>>;
@@ -1614,6 +1620,10 @@ export interface MeshGpuHandles {
 
 export function createRenderSystem(internals: RenderSystemInternals): RenderSystem {
   internals.profiler?.registerPhaseCatalog('render', RENDER_PHASE_CATALOG);
+  // Material handles are scoped to a World. Keep resolved snapshots scoped to
+  // this RenderSystem and this World so Edit/Play handles can never collide;
+  // WeakMap also lets a dropped Play world release its cache with the world.
+  const materialSnapshotCachesByWorld: MaterialSnapshotCachesByWorld = new WeakMap();
   const featureGpuWork = new Map<string, RenderFeatureGpuWorkResolver>();
   const getFeatureGpuWork = (featureIdentity: string): RenderFeatureGpuWorkResolver => {
     const existing = featureGpuWork.get(featureIdentity);
@@ -1660,6 +1670,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // raw (material-handle-based, cross-world collision semantically correct).
   const frameState: RenderFrameState = {
     frameNumber: 0,
+    directionalShadowCache: null,
+    directionalShadowCacheRecorded: false,
     perFrameGraph: null,
     perFrameGraphTopologyKey: null,
     retiredPerFrameGraphs: new Set(),
@@ -1703,8 +1715,12 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // material and instances caches (outer Map<entityKey, WeakMap>).
     materialBgPerEntity: new Map(),
     instancesBgPerEntity: new Map(),
+    instancesBgShared: new WeakMap(),
     // cross-entity shared material cache (outer Map<shaderId, WeakMap>).
     materialBgShared: new Map(),
+    // cross-frame material assembly cache; entries are only retained when all
+    // explicit texture/sampler handles resolved to resident GPU resources.
+    materialBgAssemblyCache: new Map(),
     // singleton material cache (flat Map<variant, BindGroup>; D-6).
     singletonMaterialCache: new Map(),
     // post-process bind group cache (bloom / fxaa / ssao): identity-keyed
@@ -2240,10 +2256,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       },
     });
   return {
-    draw(worlds: readonly World[], opts: DrawOwnerOptions): void {
+    draw(worlds: readonly World[], opts: DrawOwnerOptions): boolean {
       preparedWorlds = worlds;
       const profileSession = internals.profiler?.activeSession();
       let ownsProfileFrame = false;
+      let submitted = false;
       if (profileSession !== undefined && opts.profileFrame === undefined) {
         try {
           ownsProfileFrame = profileSession.beginFrame(++directFrameId).ok;
@@ -2301,6 +2318,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             internals.assets,
             internals.getPipelineState(),
             internals.gpuStore,
+            materialSnapshotCachesByWorld,
           ),
         );
         const {
@@ -2446,12 +2464,24 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // stays the singleton-resource owner (skybox equirect / transparent-sort
         // config / video provider) — those ARE resource-owner reads.
         const recordProfilePhase: RecordProfileRunner | undefined =
-          profileSession === undefined || profileSession.detail !== 'nested'
+          profileSession === undefined || profileSession.detail === 'owner'
             ? undefined
             : function recordProfilePhase<T>(phase: RenderRecordPhase, action: () => T): T {
+                // `passes` deliberately keeps only the graph-pass boundary.
+                // The same runner is also called by geometry/material helpers;
+                // invoking those wrappers would turn a pass probe into the
+                // high-overhead per-draw `nested` probe.
+                if (
+                  profileSession.detail === 'passes' &&
+                  (!phase.startsWith('record/graph-execute/') ||
+                    (phase.slice('record/graph-execute/'.length).includes('/') &&
+                      !phase.endsWith('/geometry-loop')))
+                ) {
+                  return action();
+                }
                 return runProfiledRenderPhase(profileSession, phase, action);
               };
-        const submitted = runProfiledRenderPhase(profileSession, 'record', () =>
+        submitted = runProfiledRenderPhase(profileSession, 'record', () =>
           recordFrame(
             internals,
             resourceWorld,
@@ -2508,6 +2538,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           }
         }
       }
+      return submitted;
     },
     pipelineDispatchCounts: dispatchCounts,
     observeCurrentFrame(options: FrameObservationOptions) {
@@ -2654,6 +2685,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         frameState.perFrameGraph = null;
         frameState.perFrameGraphTopologyKey = null;
       }
+      frameState.directionalShadowCache = null;
+      frameState.directionalShadowCacheRecorded = false;
       for (const retiredGraph of frameState.retiredPerFrameGraphs) {
         retiredGraph.drain();
       }
@@ -2684,6 +2717,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // lazily build a new graph from the preserved ECS / asset POD caches.
       frameState.perFrameGraph?.clearPendingDestroy();
       frameState.perFrameGraph = null;
+      frameState.directionalShadowCache = null;
+      frameState.directionalShadowCacheRecorded = false;
       for (const retiredGraph of frameState.retiredPerFrameGraphs) {
         retiredGraph.clearPendingDestroy();
       }
@@ -2700,6 +2735,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       frameState.materialBgPerEntity.clear();
       frameState.instancesBgPerEntity.clear();
       frameState.materialBgShared.clear();
+      frameState.materialBgAssemblyCache.clear();
       frameState.singletonMaterialCache.clear();
       frameState.postProcessBgCache = new WeakMap();
       // Post-process PSOs are cached outside frameState because the normal

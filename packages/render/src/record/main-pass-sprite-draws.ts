@@ -55,9 +55,13 @@ export function recordSpritePass(
   c: _InternalRenderPipelineContext,
   pass: RhiRenderPassEncoder,
   matchedIndices: Set<number> | null,
-  materialSlotStart: readonly number[],
+  materialSlotIndices: readonly (readonly number[])[],
   sampleCount: number,
-  buildPerSubmeshMaterialBg: (submeshMaterial: MaterialSnapshot, entityKey: number) => BindGroup,
+  resolveMaterialBindGroup: (
+    materialSlot: number,
+    submeshMaterial: MaterialSnapshot,
+    entityKey: number,
+  ) => BindGroup,
   skylightResources: SkylightBindGroupResources,
 ): boolean {
   const {
@@ -267,9 +271,9 @@ export function recordSpritePass(
       c,
       spritePass,
       matchedIndices,
-      materialSlotStart,
+      materialSlotIndices,
       sampleCount,
-      buildPerSubmeshMaterialBg,
+      resolveMaterialBindGroup,
     );
 
     spritePass.end();
@@ -294,9 +298,13 @@ function recordSpriteTransparentPbrDraws(
   c: _InternalRenderPipelineContext,
   spritePass: RhiRenderPassEncoder,
   matchedIndices: Set<number> | null,
-  materialSlotStart: readonly number[],
+  materialSlotIndices: readonly (readonly number[])[],
   sampleCount: number,
-  buildPerSubmeshMaterialBg: (submeshMaterial: MaterialSnapshot, entityKey: number) => BindGroup,
+  resolveMaterialBindGroup: (
+    materialSlot: number,
+    submeshMaterial: MaterialSnapshot,
+    entityKey: number,
+  ) => BindGroup,
 ): void {
   const { runtime, pipelineState, frameState, bindGroupCounts, validatedOrdered, meshBindGroup } =
     c;
@@ -319,7 +327,6 @@ function recordSpriteTransparentPbrDraws(
     if (entry.source.skin !== undefined || entry.source.instances !== undefined) continue;
 
     const matsForRebind = entry.source.materials;
-    const entityMatBaseOffset = (materialSlotStart[i] ?? 0) * MATERIAL_PER_ENTITY_STRIDE;
     if (entry.mesh.vertexBuffer !== lastPbrSubVertexBuffer) {
       spritePass.setVertexBuffer(0, entry.mesh.vertexBuffer.handle);
       lastPbrSubVertexBuffer = entry.mesh.vertexBuffer;
@@ -380,10 +387,9 @@ function recordSpriteTransparentPbrDraws(
       // Bind the per-submesh material BG first (mirrors the geometry pass
       // order), then resolve the PSO; a first-frame async-compile miss skips
       // only the draw, not the BG (one transient frame, PSO flows in next).
-      const subBg = buildPerSubmeshMaterialBg(submeshMaterial, entry.source.entityKey);
-      spritePass.setBindGroup(1, subBg, [
-        entityMatBaseOffset + matSlotIdx * MATERIAL_PER_ENTITY_STRIDE,
-      ]);
+      const materialSlot = materialSlotIndices[i]?.[matSlotIdx] ?? materialSlotIndices[i]?.[0] ?? 0;
+      const subBg = resolveMaterialBindGroup(materialSlot, submeshMaterial, entry.source.entityKey);
+      spritePass.setBindGroup(1, subBg, [materialSlot * MATERIAL_PER_ENTITY_STRIDE]);
 
       const subPipeline =
         runtime.getMaterialShaderPipeline?.(
@@ -449,6 +455,7 @@ function recordSpriteEntityDraws(
     validatedOrdered,
     meshBindGroup,
     foldDispatchPlan,
+    materialSlotIndices,
   } = c;
   // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
   let lastSpritePipelineHandle: any = null;
@@ -890,7 +897,8 @@ function recordSpriteEntityDraws(
       bindGroupCounts,
     );
 
-    spritePass.setBindGroup(1, spritePassBg, [i * MATERIAL_PER_ENTITY_STRIDE]);
+    const materialSlot = materialSlotIndices[i]?.[0] ?? 0;
+    spritePass.setBindGroup(1, spritePassBg, [materialSlot * MATERIAL_PER_ENTITY_STRIDE]);
     spritePass.setBindGroup(3, spriteInstancesBg);
     spritePass.drawIndexed(spriteEntry.mesh.indexCount, spriteInstanceCount, 0, 0, 0);
   }
