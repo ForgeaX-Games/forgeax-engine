@@ -32,12 +32,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateDrawArgs } from '../errors';
 
-// The two-index owner shape w6 will validate against.
-interface OwnerSplit {
-  readonly cameraOwner: number;
-  readonly resourceOwner: number;
-}
-
 // The role-carrying detail w7 will attach to the existing code. Declared
 // locally so this test states the future contract independent of the
 // (not-yet-updated) RhiOwnerOutOfRangeDetail export.
@@ -47,19 +41,10 @@ interface OwnerOutOfRangeRoleDetail {
   readonly worldCount: number;
 }
 
-// Future primitive signature: `validateDrawArgs(worldCount, { cameraOwner,
-// resourceOwner })`. We reach it through a typed alias; the calls turn green
-// once w6 evolves the real signature and w7 adds the `role` field.
-type ValidateDrawArgsOwnerSplit = (
-  worldCount: number,
-  owner: OwnerSplit,
-) => ReturnType<typeof validateDrawArgs>;
-const validateSplit = validateDrawArgs as unknown as ValidateDrawArgsOwnerSplit;
-
 describe('owner-out-of-range role detail (w3, AC-08)', () => {
   it("cameraOwner out of range -> code render-system-owner-out-of-range, detail.role === 'camera'", () => {
     // worldCount=2, cameraOwner=99 is out of range; resourceOwner=0 is valid.
-    const r = validateSplit(2, { cameraOwner: 99, resourceOwner: 0 });
+    const r = validateDrawArgs(2, { cameraOwner: 99, resourceOwner: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-owner-out-of-range');
@@ -72,7 +57,7 @@ describe('owner-out-of-range role detail (w3, AC-08)', () => {
 
   it("resourceOwner out of range -> code render-system-owner-out-of-range, detail.role === 'resource'", () => {
     // worldCount=2, cameraOwner=0 is valid; resourceOwner=99 is out of range.
-    const r = validateSplit(2, { cameraOwner: 0, resourceOwner: 99 });
+    const r = validateDrawArgs(2, { cameraOwner: 0, resourceOwner: 99 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-owner-out-of-range');
@@ -86,7 +71,7 @@ describe('owner-out-of-range role detail (w3, AC-08)', () => {
   it("both indices out of range -> reports the FIRST offender (camera), detail.role === 'camera'", () => {
     // Both out of range. D-3 / w6 orders the check cameraOwner-before-resource,
     // so the reported role is 'camera' (the first offender) with its own index.
-    const r = validateSplit(2, { cameraOwner: 7, resourceOwner: 8 });
+    const r = validateDrawArgs(2, { cameraOwner: 7, resourceOwner: 8 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-owner-out-of-range');

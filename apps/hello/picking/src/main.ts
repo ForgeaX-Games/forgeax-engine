@@ -52,6 +52,8 @@ bootstrap(canvas).catch((err: unknown) => {
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   const ctxResult = acquireCanvasContext(target);
   if (ctxResult.ok) {
     const cfgResult = ctxResult.value.configure({
@@ -224,7 +226,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const frame = (): void => {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error('[picking] draw error:', r.error);
     requestAnimationFrame(frame);
   };

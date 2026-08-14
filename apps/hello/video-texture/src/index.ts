@@ -161,6 +161,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
     // Step 3: build world
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
 
     // Register the host VideoElementProvider as a World Resource. The single
     // per-frame video upload path (the record stage's videoTextureView) reads
@@ -243,7 +245,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
     // Render loop.
     const frame = (): void => {
-      const r = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) {
         console.error('[video-texture] draw error:', r.error.code, r.error.hint);
       }

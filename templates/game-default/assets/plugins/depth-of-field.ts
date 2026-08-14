@@ -21,6 +21,7 @@ export interface DepthOfFieldHandle {
   readonly error?: string;
   setEnabled(enabled: boolean): void;
   reset(): void;
+  dispose(): void;
   snapshot(): DepthOfFieldSnapshot;
 }
 
@@ -48,27 +49,23 @@ export function installDepthOfField(world: World, renderer: Renderer | undefined
       error: 'Renderer is unavailable; depth-of-field remains disabled.',
       setEnabled: () => {},
       reset: () => {},
+      dispose: () => {},
       snapshot: () => ({ enabled: false, mode: 'off', focalDistance, aperture, effect: DEPTH_OF_FIELD_ID }),
     };
   }
-  renderer.postProcess.register(DEPTH_OF_FIELD_ID, {
+  const unregister = renderer.postProcess.register(DEPTH_OF_FIELD_ID, {
     source: dofShader.wgsl,
     reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
     params: { byteSize: DOF_PARAM_BYTES, defaultValue: params },
   });
-  const installed = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: 'forgeax::urp',
-    config: { postEffects: [DEPTH_OF_FIELD_ID] },
-  });
-  let enabled = initialEnabled && installed.ok;
+  let enabled = initialEnabled;
   const write = (): void => { world.set(paramsEntity, PostProcessParams, { data: packParams(enabled, focalDistance, aperture) }); };
   return {
     paramsEntity,
-    installed: installed.ok,
-    ...(installed.ok ? {} : { error: `${installed.error.code}: ${installed.error.hint}` }),
-    setEnabled(next: boolean): void { enabled = next && installed.ok; write(); },
-    reset(): void { enabled = initialEnabled && installed.ok; write(); },
+    installed: true,
+    setEnabled(next: boolean): void { enabled = next; write(); },
+    reset(): void { enabled = initialEnabled; write(); },
+    dispose: unregister,
     snapshot(): DepthOfFieldSnapshot {
       return { enabled, mode: enabled ? 'bokeh' : 'off', focalDistance, aperture, effect: DEPTH_OF_FIELD_ID };
     },

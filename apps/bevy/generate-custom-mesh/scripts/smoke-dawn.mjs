@@ -96,6 +96,8 @@ if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.cod
 
 const { buildCustomMeshWorld, makeCustomMeshTexture, toggleCustomMesh } = await import(resolve(here, '..', 'src', 'generate-custom-mesh.ts'));
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const texture = makeCustomMeshTexture();
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 const textureUpload = await renderer.store.uploadTexture(textureHandle, texture, {
@@ -112,14 +114,19 @@ if (!textureUpload.ok) {
 }
 const meshState = buildCustomMeshWorld(world, unwrapHandle(textureHandle));
 
-await renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(50);
 const beforePixels = await capture();
 toggleCustomMesh(meshState, renderer.store);
-await renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(50);
 const afterPixels = await capture();
-for (let i = 2; i < SMOKE_MIN_FRAMES; i++) await renderer.draw([world], { owner: 0 });
+for (let i = 2; i < SMOKE_MIN_FRAMES; i++) {
+  world.update().unwrap();
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+}
 const pixels = afterPixels;
 const refPath = resolve(here, '..', 'artifacts', 'generate-custom-mesh-ref.png');
 mkdirSync(dirname(refPath), { recursive: true });

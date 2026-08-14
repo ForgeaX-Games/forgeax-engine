@@ -108,6 +108,8 @@ const { buildRunConditionsWorld, readRunConditionState, UNLOCK_SECONDS } = await
   resolve(here, '..', 'src', 'run-conditions.ts'),
 );
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildRunConditionsWorld(world);
 let earlyFrame;
 let lateFrame;
@@ -137,7 +139,7 @@ async function capture() {
 
 for (let frame = 0; frame < FRAMES; frame++) {
   world.update(0.016).unwrap();
-  const draw = renderer.draw([world], { owner: 0 });
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
   if (frame === 60) {
     beforeUnlock = readRunConditionState(world, state);

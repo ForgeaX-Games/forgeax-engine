@@ -6,6 +6,7 @@
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ import { writeReferencePng } from '../../../../shared/png-codec.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..', '..');
+const { PNG } = createRequire(resolve(REPO_ROOT, 'packages/rhi-debug/package.json'))('pngjs');
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm3-browser-live'),
 );
@@ -66,6 +68,31 @@ function writeCapturePng(label, capture) {
   return path;
 }
 
+async function captureCanvasScreenshot(page, label) {
+  const bytes = await page.locator('#app').screenshot();
+  const path = resolve(ARTIFACT_DIR, `${label}.png`);
+  writeFileSync(path, bytes);
+  return { png: PNG.sync.read(bytes), path };
+}
+
+function changedPngPixels(before, after) {
+  if (before.width !== after.width || before.height !== after.height) {
+    return before.width * before.height + after.width * after.height;
+  }
+  let changed = 0;
+  for (let i = 0; i < before.data.length; i += 4) {
+    if (
+      before.data[i] !== after.data[i] ||
+      before.data[i + 1] !== after.data[i + 1] ||
+      before.data[i + 2] !== after.data[i + 2] ||
+      before.data[i + 3] !== after.data[i + 3]
+    ) {
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
 function resolveArtifact(path) {
   if (typeof path !== 'string') throw new Error('capture path is not a string');
   if (path.startsWith('/')) return path;
@@ -112,6 +139,48 @@ async function capture(page, label) {
   return { ...value, pngPath, stats: pixelStats(pixels) };
 }
 
+async function publicSwitchCapture(page, method, label) {
+  const result = await page.evaluate(async (methodName) => {
+    const api = globalThis.__learnRenderFramebuffers;
+    const readPixels = globalThis.__captureFramebuffers;
+    if (api === undefined || typeof readPixels !== 'function') {
+      throw new Error('public framebuffers recovery seam is unavailable');
+    }
+    const install = api[methodName]();
+    const raw = await readPixels();
+    const pixels = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+    let binary = '';
+    const chunk = 0x2000;
+    for (let i = 0; i < pixels.length; i += chunk) {
+      binary += String.fromCharCode(...pixels.subarray(i, i + chunk));
+    }
+    const canvas = document.querySelector('#app');
+    return {
+      install,
+      pixelsB64: btoa(binary),
+      width: canvas?.width ?? 0,
+      height: canvas?.height ?? 0,
+      hud: document.querySelector('#hud')?.textContent ?? '',
+      state: api.getState(),
+    };
+  }, method);
+  const pixels = decodePixels(result.pixelsB64);
+  if (result.width <= 0 || result.height <= 0 || pixels.length !== result.width * result.height * 4) {
+    throw new Error(`invalid ${label} capture dimensions: ${result.width}x${result.height}`);
+  }
+  const value = {
+    width: result.width,
+    height: result.height,
+    hud: result.hud,
+    pixels,
+    tape: null,
+    state: result.state,
+    install: result.install,
+  };
+  const pngPath = writeCapturePng(label, value);
+  return { ...value, pngPath, stats: pixelStats(pixels) };
+}
+
 try {
   const deadline = Date.now() + 30_000;
   while (!portUrl && Date.now() < deadline) await sleep(200);
@@ -153,10 +222,24 @@ try {
     await page.waitForTimeout(500);
 
     const baseline = await capture(page, 'pipeline-passthrough');
+    const paused = await page.evaluate(() => globalThis.__learnRenderFramebuffers?.pause());
+    if (paused?.ok !== true) throw new Error(`recovery pause failed: ${JSON.stringify(paused)}`);
+    // Use the compositor-visible canvas for the no-submit assertion. Chrome's
+    // createImageBitmap readback returns black after a WebGPU current texture
+    // expires without a replacement submission, while the visible canvas still
+    // retains the last healthy frame.
+    const healthyCanvas = await captureCanvasScreenshot(page, 'pipeline-healthy-canvas');
+    const cycle = await publicSwitchCapture(page, 'installCyclePipeline', 'pipeline-cycle-fault');
+    const cycleCanvas = await captureCanvasScreenshot(page, 'pipeline-cycle-fault-canvas');
+    const repaired = await publicSwitchCapture(page, 'installRepairedPipeline', 'pipeline-cycle-repaired');
+    const repairedCanvas = await captureCanvasScreenshot(page, 'pipeline-cycle-repaired-canvas');
+    const resumed = await page.evaluate(() => globalThis.__learnRenderFramebuffers?.resume());
+    if (resumed?.ok !== true) throw new Error(`recovery resume failed: ${JSON.stringify(resumed)}`);
     await page.keyboard.press('2');
     await page.waitForFunction(() => document.querySelector('#hud')?.textContent === 'inversion', undefined, { timeout: 10_000 });
     await page.waitForTimeout(500);
     const inversion = await capture(page, 'pipeline-inversion');
+    const inversionCanvas = await captureCanvasScreenshot(page, 'pipeline-inversion-canvas');
 
     await page.setViewportSize({ width: 640, height: 360 });
     await page.waitForFunction(
@@ -174,6 +257,11 @@ try {
     await page.waitForFunction(() => document.querySelector('#hud')?.textContent === 'edge-detection', undefined, { timeout: 10_000 });
     await page.waitForTimeout(500);
     const edge = await capture(page, 'pipeline-edge-resized');
+    const cleanup = await page.evaluate(() => {
+      const api = globalThis.__learnRenderFramebuffers;
+      if (api === undefined) throw new Error('public framebuffers recovery seam is unavailable');
+      return { first: api.dispose(), second: api.dispose(), state: api.getState() };
+    });
 
     const switchDelta = changedPixels(baseline, inversion);
     const edgeDelta = changedPixels(resized, edge);
@@ -196,15 +284,34 @@ try {
     writeFileSync(resolve(rhiDir, 'inspect.json'), `${JSON.stringify(inspect, null, 2)}\n`);
     writeFileSync(resolve(ARTIFACT_DIR, 'browser-live.json'), `${JSON.stringify({
       baseline: { width: baseline.width, height: baseline.height, hud: baseline.hud, stats: baseline.stats },
+      cycle: {
+        install: cycle.install,
+        code: cycle.state.cycleDiagnostic?.code,
+        cycle: cycle.state.cycleDiagnostic?.detail?.cycle ?? [],
+        drawSubmitted: cycle.state.cycleDrawSubmitted,
+        activePipelineId: cycle.state.activePipelineId,
+        healthyCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, cycleCanvas.png),
+      },
+      repaired: {
+        install: repaired.install,
+        activePipelineId: repaired.state.activePipelineId,
+        drawSubmitted: repaired.state.repairedDrawSubmitted,
+        passNames: repaired.state.lastPassNames,
+        executeOrder: repaired.state.repairedPassOrder,
+        recoveredBytes: changedPixels(baseline, repaired),
+        recoveredCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, repairedCanvas.png),
+      },
       inversion: { width: inversion.width, height: inversion.height, hud: inversion.hud, stats: inversion.stats },
       resized: { width: resized.width, height: resized.height, hud: resized.hud, stats: resized.stats },
       edge: { width: edge.width, height: edge.height, hud: edge.hud, stats: edge.stats },
       switchDelta,
+      switchCanvasPixels: changedPngPixels(repairedCanvas.png, inversionCanvas.png),
       edgeDelta,
       tape: retainedTape,
       report: retainedReport,
       draws: summary.draws?.length ?? 0,
       inspectedDraw: drawIdx,
+      cleanup,
     }, null, 2)}\n`);
 
     await page.close();
@@ -213,15 +320,30 @@ try {
     if (baseline.hud !== 'passthrough' || inversion.hud !== 'inversion' || edge.hud !== 'edge-detection') {
       throw new Error(`HUD did not track public pipeline switches: ${baseline.hud}, ${inversion.hud}, ${edge.hud}`);
     }
+    const cycleNames = cycle.state.cycleDiagnostic?.detail?.cycle ?? [];
+    if (cycle.state.cycleDiagnostic?.code !== 'cyclic-dependency' || !cycleNames.includes('cycle-pass-a') || !cycleNames.includes('cycle-pass-b')) {
+      throw new Error(`cycle diagnostic incomplete: ${JSON.stringify(cycle.state.cycleDiagnostic)}`);
+    }
+    if (cycle.state.cycleDrawSubmitted !== false || changedPngPixels(healthyCanvas.png, cycleCanvas.png) !== 0) {
+      throw new Error(`cycle contaminated/submitted: submitted=${cycle.state.cycleDrawSubmitted} canvasChanged=${changedPngPixels(healthyCanvas.png, cycleCanvas.png)}`);
+    }
+    if (repaired.state.repairedDrawSubmitted !== true || repaired.state.repairedPassOrder.join('>') !== 'repaired-stage-a>repaired-stage-b' || repaired.state.lastPassNames.join('>') !== 'repaired-stage-a>repaired-stage-b>main>post') {
+      throw new Error(`repaired pipeline evidence incomplete: ${JSON.stringify(repaired.state)}`);
+    }
+    if (changedPixels(baseline, repaired) !== 0) throw new Error(`repaired pixels did not recover: ${changedPixels(baseline, repaired)}`);
+    if (changedPngPixels(healthyCanvas.png, repairedCanvas.png) !== 0) throw new Error(`repaired canvas did not recover: ${changedPngPixels(healthyCanvas.png, repairedCanvas.png)}`);
+    if (!cleanup.first.ok || !cleanup.second.ok) throw new Error(`cleanup failed: ${JSON.stringify(cleanup)}`);
     if (switchDelta === null || switchDelta < 1000 || edgeDelta === null || edgeDelta < 1000) {
       throw new Error(`pipeline pixel deltas too small: switch=${switchDelta}, edge=${edgeDelta}`);
     }
+    if (changedPngPixels(repairedCanvas.png, inversionCanvas.png) === 0) throw new Error('healthy switch did not change the canvas');
     if (resized.width !== 640 || resized.height !== 360) throw new Error(`resize dimensions wrong: ${resized.width}x${resized.height}`);
     if (!Array.isArray(summary.draws) || summary.draws.length === 0 || inspect.drawCall === undefined) {
       throw new Error(`RHI inspect missing draw evidence: draws=${summary.draws?.length ?? 0}`);
     }
     console.log(`[m3-programmable] browser live artifacts: baseline=${baseline.pngPath} inversion=${inversion.pngPath} resized=${resized.pngPath} edge=${edge.pngPath}`);
     console.log(`[m3-programmable] browser live RHI: tape=${retainedTape} draws=${summary.draws.length} inspectedDraw=${drawIdx}`);
+    console.log(`[m24] browser live cycle/recovery: PASS cycle=cyclic-dependency cyclePasses=${cycle.state.cycleDiagnostic.detail.cycle.join('>')} cycleSubmitted=false repairedPasses=${repaired.state.lastPassNames.join('>')} recoveredBytes=0 healthyChangedPixels=${changedPixels(repaired, inversion)} cleanup=idempotent`);
     console.log(`[m3-programmable] browser live pipeline: PASS switchChangedPixels=${switchDelta} edgeChangedPixels=${edgeDelta} resized=${resized.width}x${resized.height}`);
   } finally {
     await browser.close();

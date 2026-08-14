@@ -169,6 +169,8 @@ for (let y = 0; y < TEX_H; y++) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const assets = renderer.assets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
@@ -260,7 +262,8 @@ const start = performance.now();
 let totalFrames = 0;
 const pixelReads = [];
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   totalFrames++;
   await delay(0);
 }

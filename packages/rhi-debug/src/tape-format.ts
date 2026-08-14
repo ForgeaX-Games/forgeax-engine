@@ -1,9 +1,9 @@
 // @forgeax/engine-rhi-debug/src/tape-format — serialize / deserialize round-trip for Tape.
 //
 // Shape:
-// - serializeTape(tape: Tape): { json: string; blob: Uint8Array }
+// - serializeTape(tape: Tape, options?): { json: string; blob: Uint8Array }
 //   json contains events array + formatVersion + rhiCapsRecorded + blobPool offset/size refs.
-//   blob is the concatenation of all unique blobs, deduplicated by hash.
+//   blob is the deduplicated stream, gzip-compressed when requested.
 // - deserializeTape(json: string, blob: Uint8Array): Result<Tape, DebugError>
 //   reconstructs Tape from json + blob byte stream.
 // - formatVersion != TAPE_FORMAT_VERSION -> reject 'tape-format-version-mismatch'.
@@ -13,6 +13,7 @@
 
 /// <reference types="@webgpu/types" />
 
+import pako from 'pako';
 import { DebugError } from './errors';
 import type {
   HandleId,
@@ -58,10 +59,19 @@ import type {
 
 export const TAPE_FORMAT_VERSION = 5 as const;
 
+/** Compression used for the on-disk blob stream. */
+export type TapeBlobCompression = 'none' | 'gzip';
+
+/** Stable wire default for finalized captures. */
+export const DEFAULT_TAPE_BLOB_COMPRESSION: TapeBlobCompression = 'gzip';
+
+/** Compression level balances capture latency with the very repetitive tape data. */
+export const TAPE_BLOB_COMPRESSION_LEVEL = 6 as const;
+
 /**
  * Set of tape format versions accepted by this runtime's deserializer.
  * v2/v3 tapes are accepted via backward-compat; destroy events are naturally
- * absent in older data. serialize always writes `formatVersion = TAPE_FORMAT_VERSION` (4).
+ * absent in older data. serialize always writes `formatVersion = TAPE_FORMAT_VERSION` (5).
  */
 export const SUPPORTED_TAPE_VERSIONS = new Set<number>([2, 3, 4, 5]);
 
@@ -108,6 +118,8 @@ interface SerializedTapeHeader {
   readonly formatVersion: number;
   readonly rhiCapsRecorded: RhiCapsRecorded;
   readonly blobEntries: readonly SerializedBlobEntry[];
+  /** Optional for v2-v5 compatibility; absent means the legacy raw stream. */
+  readonly blobCompression?: TapeBlobCompression;
 }
 
 // ============================================================================
@@ -122,10 +134,15 @@ interface SerializedTapeHeader {
  * blob, keyed by hash. Events retain their dataHash / wgslCode references
  * as-is (the hash string is the key into blobPool on both sides).
  *
+ * @param options - `blobCompression:'gzip'` stores the binary stream in a
+ *   portable gzip container; `'none'` keeps the legacy raw stream.
  * @returns json string (events + formatVersion + rhiCapsRecorded + blobEntries)
- *          and binary blob (concatenation of all unique blob ArrayBuffers).
+ *          and the selected binary blob stream.
  */
-export function serializeTape(tape: Tape): { json: string; blob: Uint8Array } {
+export function serializeTape(
+  tape: Tape,
+  options: { readonly blobCompression?: TapeBlobCompression } = {},
+): { json: string; blob: Uint8Array } {
   const uniqueHashes = Array.from(tape.blobPool.keys());
   const blobEntries: SerializedBlobEntry[] = [];
   const parts: Uint8Array[] = [];
@@ -148,10 +165,15 @@ export function serializeTape(tape: Tape): { json: string; blob: Uint8Array } {
     writePos += part.byteLength;
   }
 
+  const blobCompression = options.blobCompression ?? 'none';
+  const wireBlob =
+    blobCompression === 'gzip' ? pako.gzip(blob, { level: TAPE_BLOB_COMPRESSION_LEVEL }) : blob;
+
   const header: SerializedTapeHeader = {
     formatVersion: tape.formatVersion,
     rhiCapsRecorded: tape.rhiCapsRecorded,
     blobEntries,
+    blobCompression,
   };
 
   const json = JSON.stringify({
@@ -159,7 +181,7 @@ export function serializeTape(tape: Tape): { json: string; blob: Uint8Array } {
     events: tape.events,
   });
 
-  return { json, blob };
+  return { json, blob: wireBlob };
 }
 
 // ============================================================================
@@ -232,15 +254,57 @@ export function deserializeTape(json: string, blob: Uint8Array): Result<Tape, De
     );
   }
 
-  // Reconstruct blobPool from blob byte stream
+  const declaredCompression = header.blobCompression ?? 'none';
+  if (declaredCompression !== 'none' && declaredCompression !== 'gzip') {
+    return makeErr(
+      new DebugError({
+        code: 'tape-format-version-mismatch',
+        expected: "blobCompression is either 'none' or 'gzip'",
+        hint: `the tape declares unsupported blobCompression '${String(declaredCompression)}'; re-record or migrate the tape with a compatible runtime`,
+        detail: {
+          tapeVersion: header.formatVersion,
+          expectedVersion: TAPE_FORMAT_VERSION,
+        },
+      }),
+    );
+  }
+
+  // Existing harness captures predate the header field. Detect their gzip
+  // magic as a migration escape hatch so bulk compression does not rewrite
+  // multi-gigabyte report JSON files merely to add metadata.
+  const hasGzipMagic = blob.byteLength >= 2 && blob[0] === 0x1f && blob[1] === 0x8b;
+  const effectiveCompression =
+    declaredCompression === 'gzip' || (header.blobCompression === undefined && hasGzipMagic)
+      ? 'gzip'
+      : 'none';
+  let decodedBlob = blob;
+  if (effectiveCompression === 'gzip') {
+    try {
+      decodedBlob = pako.ungzip(blob);
+    } catch {
+      return makeErr(
+        new DebugError({
+          code: 'tape-format-version-mismatch',
+          expected: 'a valid gzip-compressed tape blob stream',
+          hint: 'the tape blob declares gzip or has gzip magic but cannot be decompressed; the binary artifact is corrupt',
+          detail: {
+            tapeVersion: header.formatVersion,
+            expectedVersion: TAPE_FORMAT_VERSION,
+          },
+        }),
+      );
+    }
+  }
+
+  // Reconstruct blobPool from the decoded blob byte stream
   const blobPool = new Map<string, ArrayBuffer>();
   for (const entry of header.blobEntries) {
-    if (entry.offset < 0 || entry.offset + entry.size > blob.byteLength) {
+    if (entry.offset < 0 || entry.offset + entry.size > decodedBlob.byteLength) {
       return makeErr(
         new DebugError({
           code: 'tape-handle-graph-broken',
           expected: 'blob entry offset+size within binary blob bounds',
-          hint: `blob entry '${entry.hash}' has offset=${entry.offset} size=${entry.size} but blob stream has byteLength=${blob.byteLength}`,
+          hint: `blob entry '${entry.hash}' has offset=${entry.offset} size=${entry.size} but decoded blob stream has byteLength=${decodedBlob.byteLength}`,
           detail: {
             danglingHandleId: entry.hash,
             referencingEventIndex: -1,
@@ -248,7 +312,7 @@ export function deserializeTape(json: string, blob: Uint8Array): Result<Tape, De
         }),
       );
     }
-    const bytes = blob.slice(entry.offset, entry.offset + entry.size);
+    const bytes = decodedBlob.slice(entry.offset, entry.offset + entry.size);
     blobPool.set(entry.hash, bytes.buffer as ArrayBuffer);
   }
 

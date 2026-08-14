@@ -93,11 +93,13 @@ export {
   type ResourceLifecycleSummary,
   type ResourceOrigin,
 } from './resource-lifecycle';
-export type { PassOffset } from './tape-format';
+export type { PassOffset, TapeBlobCompression } from './tape-format';
 export {
   computePassOffsets,
+  DEFAULT_TAPE_BLOB_COMPRESSION,
   deserializeTape,
   serializeTape,
+  TAPE_BLOB_COMPRESSION_LEVEL,
 } from './tape-format';
 export { decodeTexelRaw, decodeToRgba8, halfToFloat } from './texel-decode';
 export {

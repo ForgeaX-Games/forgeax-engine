@@ -34,6 +34,11 @@
       "types": "./dist/scanner.d.ts",
       "import": "./dist/scanner.mjs"
     },
+    "./cli-asset": {
+      "types": "./dist/cli-asset.d.ts",
+      "node": "./dist/cli-asset.mjs",
+      "default": null
+    },
     "./name": {
       "types": "./dist/deriveAssetName.d.ts",
       "import": "./dist/name.mjs"

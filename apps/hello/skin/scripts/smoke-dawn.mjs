@@ -298,6 +298,8 @@ if (!skeletonRec) {
 // w64: World holds the SharedRefStore minted handles need; create it before
 // any allocSharedRef. catalog stores GUID->payload for instantiate resolution.
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 assets.catalog(skeletonGuid, {
   kind: 'skeleton',
   inverseBindMatrices: skeletonRec.inverseBindMatrices,
@@ -544,7 +546,8 @@ const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 1
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

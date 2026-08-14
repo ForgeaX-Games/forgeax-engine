@@ -230,45 +230,120 @@ async function waitForProjection(page, expectedScore, expectedMission) {
 }
 
 async function openModal(page) {
+  const canvas = page.locator('#app');
+  await canvas.focus();
+  const focusBefore = await page.evaluate(() => document.activeElement === document.querySelector('#app'));
+  const open = page.locator(`[data-ui-asset="${REAL_UI_ASSETS.hud.guid}"] [data-ui-action="open-settings"]`);
+  const openBox = await open.boundingBox();
+  if (openBox === null) throw new Error('Settings open action has no pointer box');
+  await page.mouse.click(openBox.x + openBox.width / 2, openBox.y + openBox.height / 2);
+  await page.waitForFunction(
+    (settingsGuid) => document.querySelector(`[data-ui-asset="${settingsGuid}"]`)?.shadowRoot?.querySelector('[role="dialog"]')?.hidden === false,
+    REAL_UI_ASSETS.settings.guid,
+  );
+  const opened = await pageQuery(page, ({ hudGuid, settingsGuid, focusWasBefore }) => {
+    const root = document.querySelector('[data-forgeax-ui-root]');
+    const hud = root?.querySelector(`[data-ui-asset="${hudGuid}"]`);
+    const settings = root?.querySelector(`[data-ui-asset="${settingsGuid}"]`);
+    const settingsShadow = settings?.shadowRoot;
+    const dialog = settingsShadow?.querySelector('[role="dialog"]');
+    const panel = settingsShadow?.querySelector('[role="document"]');
+    if (!(hud instanceof HTMLElement) || !(settings instanceof HTMLElement) || !dialog || !panel) throw new Error('modal-focus controls are missing');
+    return { focusBefore: focusWasBefore, opened: !dialog.hidden, panelFocused: settingsShadow?.activeElement === panel, hudInert: hud.inert };
+  }, { hudGuid: REAL_UI_ASSETS.hud.guid, settingsGuid: REAL_UI_ASSETS.settings.guid, focusWasBefore: focusBefore });
+
+  const contrast = page.locator(`[data-ui-asset="${REAL_UI_ASSETS.settings.guid}"] [data-ui-setting="high-contrast"]`);
+  const panel = page.locator(`[data-ui-asset="${REAL_UI_ASSETS.settings.guid}"] [role="document"]`);
+  const readContrast = () => pageQuery(page, (settingsGuid) => {
+    const settings = document.querySelector(`[data-ui-asset="${settingsGuid}"]`);
+    const shadow = settings?.shadowRoot;
+    const highContrast = shadow?.querySelector('[data-ui-setting="high-contrast"]');
+    const panel = shadow?.querySelector('[role="document"]');
+    if (!(highContrast instanceof HTMLInputElement) || !(panel instanceof HTMLElement)) throw new Error('high-contrast control is missing');
+    const box = highContrast.getBoundingClientRect();
+    const width = Math.max(0, Math.min(box.right, innerWidth) - Math.max(box.left, 0));
+    const height = Math.max(0, Math.min(box.bottom, innerHeight) - Math.max(box.top, 0));
+    const style = getComputedStyle(panel);
+    return {
+      box: { x: box.x, y: box.y, width: box.width, height: box.height },
+      intersection: { width, height, area: width * height },
+      fullyWithinViewport: width * height >= box.width * box.height - 0.01,
+      checked: highContrast.checked,
+      role: highContrast.getAttribute('role') ?? 'checkbox',
+      accessibleName: highContrast.closest('label')?.textContent?.replace(/\s+/g, ' ').trim() ?? null,
+      panel: { overflowY: style.overflowY, clientHeight: panel.clientHeight, scrollHeight: panel.scrollHeight, scrollTop: panel.scrollTop },
+    };
+  }, REAL_UI_ASSETS.settings.guid);
+
+  const initialContrast = await readContrast();
+  let scrolledContrast = initialContrast;
+  if (!initialContrast.fullyWithinViewport) {
+    assert(['auto', 'scroll'].includes(initialContrast.panel.overflowY) && initialContrast.panel.scrollHeight > initialContrast.panel.clientHeight, `compact Settings has no visible scroll contract: ${JSON.stringify(initialContrast)}`);
+    const panelBox = await panel.boundingBox();
+    if (panelBox === null) throw new Error('Settings panel has no pointer region');
+    await page.mouse.move(panelBox.x + panelBox.width / 2, panelBox.y + panelBox.height / 2);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await page.mouse.wheel(0, 600);
+      await sleep(30);
+      scrolledContrast = await readContrast();
+      if (scrolledContrast.fullyWithinViewport) break;
+    }
+    assert(scrolledContrast.fullyWithinViewport, `compact Settings required control remains offscreen after pointer scroll: ${JSON.stringify(scrolledContrast)}`);
+  }
+
+  const beforePointer = await contrast.isChecked();
+  const pointerBox = await contrast.boundingBox();
+  if (pointerBox === null) throw new Error('High contrast control has no pointer box');
+  await page.mouse.click(pointerBox.x + pointerBox.width / 2, pointerBox.y + pointerBox.height / 2);
+  await page.waitForFunction(
+    (settingsGuid) => document.querySelector(`[data-ui-asset="${settingsGuid}"]`)?.shadowRoot?.querySelector('[data-ui-setting="high-contrast"]')?.checked === true,
+    REAL_UI_ASSETS.settings.guid,
+  );
+  const pointerChanged = (await contrast.isChecked()) !== beforePointer;
+
+  await page.keyboard.press('Space');
+  await page.waitForFunction(
+    (settingsGuid) => document.querySelector(`[data-ui-asset="${settingsGuid}"]`)?.shadowRoot?.querySelector('[data-ui-setting="high-contrast"]')?.checked === false,
+    REAL_UI_ASSETS.settings.guid,
+  );
+  const keyboardChanged = (await contrast.isChecked()) === beforePointer;
+
+  const finalBox = await contrast.boundingBox();
+  if (finalBox === null) throw new Error('High contrast control lost its pointer box');
+  await page.mouse.click(finalBox.x + finalBox.width / 2, finalBox.y + finalBox.height / 2);
+  await page.waitForFunction(
+    (settingsGuid) => document.querySelector(`[data-ui-asset="${settingsGuid}"]`)?.shadowRoot?.querySelector('[data-ui-setting="high-contrast"]')?.checked === true,
+    REAL_UI_ASSETS.settings.guid,
+  );
+  const finalContrast = await readContrast();
+  return { ...opened, contrast: { initial: initialContrast, scrolled: scrolledContrast, pointerChanged, keyboardChanged, final: finalContrast } };
+}
+
+async function closeModal(page) {
+  const close = page.locator(`[data-ui-asset="${REAL_UI_ASSETS.settings.guid}"] button[data-ui-action="close-settings"]`);
+  const closeBox = await close.boundingBox();
+  if (closeBox === null) throw new Error('Settings close action has no pointer box');
+  await page.mouse.click(closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2);
+  await page.waitForFunction(
+    (settingsGuid) => document.querySelector(`[data-ui-asset="${settingsGuid}"]`)?.shadowRoot?.querySelector('[role="dialog"]')?.hidden === true,
+    REAL_UI_ASSETS.settings.guid,
+  );
   return pageQuery(page, ({ hudGuid, settingsGuid }) => {
     const root = document.querySelector('[data-forgeax-ui-root]');
     const hud = root?.querySelector(`[data-ui-asset="${hudGuid}"]`);
     const settings = root?.querySelector(`[data-ui-asset="${settingsGuid}"]`);
-    const hudShadow = hud?.shadowRoot;
-    const settingsShadow = settings?.shadowRoot;
+    const dialog = settings?.shadowRoot?.querySelector('[role="dialog"]');
+    const open = hud?.shadowRoot?.querySelector('[data-ui-action="open-settings"]');
     const canvas = document.querySelector('#app');
-    const open = hudShadow?.querySelector('[data-ui-action="open-settings"]');
-    const dialog = settingsShadow?.querySelector('[role="dialog"]');
-    const panel = settingsShadow?.querySelector('[role="document"]');
-    const highContrast = settingsShadow?.querySelector('[data-ui-setting="high-contrast"]');
-    if (!(canvas instanceof HTMLCanvasElement) || !(hud instanceof HTMLElement) || !(settings instanceof HTMLElement) || !hudShadow || !settingsShadow || !open || !dialog || !panel || !(highContrast instanceof HTMLInputElement)) {
-      throw new Error('modal-focus controls are missing');
-    }
-    canvas.focus();
-    const focusBefore = document.activeElement === canvas;
-    open.click();
-    const opened = !dialog.hidden;
-    const panelFocused = settingsShadow.activeElement === panel;
-    const hudInert = hud.inert;
-    highContrast.click();
-    return { focusBefore, opened, panelFocused, hudInert, contrastChanged: highContrast.checked };
-  }, { hudGuid: REAL_UI_ASSETS.hud.guid, settingsGuid: REAL_UI_ASSETS.settings.guid });
-}
-
-async function closeModal(page) {
-  return pageQuery(page, ({ hudGuid, settingsGuid }) => {
-    const root = document.querySelector('[data-forgeax-ui-root]');
-    const settings = root?.querySelector(`[data-ui-asset="${settingsGuid}"]`);
-    const shadow = settings?.shadowRoot;
-    const dialog = shadow?.querySelector('[role="dialog"]');
-    const close = shadow?.querySelector('[data-ui-action="close-settings"]');
-    const canvas = document.querySelector('#app');
-    if (!dialog || !close || !(canvas instanceof HTMLCanvasElement)) throw new Error('modal close action is missing');
-    close.click();
+    if (!dialog || !(open instanceof HTMLElement) || !(canvas instanceof HTMLCanvasElement)) throw new Error('modal close action is missing');
     return {
       closed: dialog.hidden,
-      restoredFocus: document.activeElement === canvas,
-      hudInert: root?.querySelector(`[data-ui-asset="${hudGuid}"]`)?.inert ?? null,
+      restoredFocus: hud?.shadowRoot?.activeElement === open,
+      restoredFocusTarget: hud?.shadowRoot?.activeElement?.getAttribute('aria-label') ?? null,
+      documentFocus: { tag: document.activeElement?.tagName ?? null, id: document.activeElement?.id ?? null, asset: document.activeElement?.getAttribute('data-ui-asset') ?? null },
+      hudFocus: hud?.shadowRoot?.activeElement?.getAttribute('aria-label') ?? hud?.shadowRoot?.activeElement?.tagName ?? null,
+      settingsFocus: settings?.shadowRoot?.activeElement?.getAttribute('role') ?? settings?.shadowRoot?.activeElement?.tagName ?? null,
+      hudInert: hud?.inert ?? null,
     };
   }, { hudGuid: REAL_UI_ASSETS.hud.guid, settingsGuid: REAL_UI_ASSETS.settings.guid });
 }
@@ -345,7 +420,8 @@ async function executeScenario(page, origin, viewport, scenario, repeat) {
     const screenshotPath = resolve(MATRIX_ARTIFACT_DIR, `${repeat}-${viewport.id}-${scenario.id}.png`);
     if (scenario.id === 'modal-focus') {
       const opened = await openModal(page);
-      assert(opened.focusBefore && opened.opened && opened.panelFocused && opened.hudInert && opened.contrastChanged, `modal ownership failed: ${JSON.stringify(opened)}`);
+      assert(opened.focusBefore && opened.opened && opened.panelFocused && opened.hudInert, `modal ownership failed: ${JSON.stringify(opened)}`);
+      assert(opened.contrast.pointerChanged && opened.contrast.keyboardChanged && opened.contrast.final.fullyWithinViewport && opened.contrast.final.checked, `Settings action operability failed: ${JSON.stringify(opened.contrast)}`);
       await page.screenshot({ path: screenshotPath });
       const closed = await closeModal(page);
       assert(closed.closed && closed.restoredFocus && closed.hudInert === false, `modal cleanup failed: ${JSON.stringify(closed)}`);

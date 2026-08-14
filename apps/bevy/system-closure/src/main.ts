@@ -30,7 +30,32 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const host = globalThis as {
     __bevySystemClosureReady?: boolean;
     __bevySystemClosureState?: () => ReturnType<typeof readSystemClosureState>;
+    __prepareSystemClosureCapture?: () => Promise<void>;
   };
   host.__bevySystemClosureState = () => readSystemClosureState(app.world, state);
+  host.__prepareSystemClosureCapture = async () => {
+    let snapshot = readSystemClosureState(app.world, state);
+    for (let frame = 0; frame < 180 && !isCaptureReady(snapshot); frame += 1) {
+      const updated = app.world.update(1 / 60);
+      if (!updated.ok) throw updated.error;
+      const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!drawn.ok) throw drawn.error;
+      snapshot = readSystemClosureState(app.world, state);
+    }
+    if (!isCaptureReady(snapshot)) {
+      throw new Error('system-closure capture preparation lost closure evidence: ' + JSON.stringify(snapshot));
+    }
+  };
   host.__bevySystemClosureReady = true;
+}
+
+function isCaptureReady(snapshot: ReturnType<typeof readSystemClosureState>): boolean {
+  return (
+    snapshot.simpleRuns >= 1 &&
+    snapshot.statefulRuns >= 1 &&
+    snapshot.capturedRuns >= 1 &&
+    snapshot.statefulValue === snapshot.statefulRuns &&
+    snapshot.capturedValue > 7 &&
+    [snapshot.simpleX, snapshot.statefulX, snapshot.capturedX].every(Number.isFinite)
+  );
 }

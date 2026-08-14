@@ -6,7 +6,8 @@
 // Each original file body sits in its own block-scope so helper names
 // cannot collide; describe() inside still registers globally with vitest.
 
-import type { World } from '@forgeax/engine-ecs';
+import type { World, World as WorldType } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -193,7 +194,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -249,7 +250,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
       bindGroupCounts?: {
@@ -269,7 +270,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       readonly createBindGroup: number;
       readonly keys: readonly string[];
     };
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
   }
 
   function spawnBasicScene(
@@ -366,10 +367,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       spawnBasicScene(world, C, { entityCount: 2 });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Frame 1: cold start
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const count1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(count1).toBeGreaterThan(0);
 
@@ -388,7 +396,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       expect(meshKeys.length).toBe(1);
 
       // Frame 2: warm — all cache hits
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const count2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(count2).toBe(0);
 
@@ -417,18 +429,37 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       spawnBasicScene(world, C, { entityCount: 1 });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Warm: 3 frames
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countWarm = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countWarm).toBe(0);
 
       // Frames 4 through 8: all zero
       for (let i = 4; i <= 8; i++) {
-        draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        draw([world], { cameraOwner: 0, resourceOwner: 0 });
         const c = rs.bindGroupCounts?.createBindGroup ?? -1;
         expect(c, `frame ${i} createBindGroup must be 0`).toBe(0);
       }
@@ -495,12 +526,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Warm: 3 frames.
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countWarm = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countWarm).toBe(0);
 
@@ -514,7 +560,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         },
       });
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countMove1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countMove1).toBe(0);
 
@@ -528,14 +580,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         },
       });
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countMove2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countMove2).toBe(0);
     });
 
     it('AC-04: counter resets to 0 on each draw entry', async () => {
       // D-7/D-8: the createBindGroup counter is a closure-mutable object
-      // reset to 0 at draw([world], { owner: 0 }) entry.  Each frame's counter reflects
+      // reset to 0 at draw([world], { cameraOwner: 0, resourceOwner: 0 }) entry.  Each frame's counter reflects
       // only that frame's createBindGroup calls, not a cumulative total.
 
       const { createRenderer } = await setupWebGPU();
@@ -553,15 +611,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       spawnBasicScene(world, C, { entityCount: 1 });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Frame 1: cold
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const c1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(c1).toBeGreaterThan(0);
 
       // Frame 2: warm — reset to 0, all hits, stays 0
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const c2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(c2).toBe(0);
     });
@@ -611,18 +680,37 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       spawnBasicScene(world, C, { entityCount: 1 });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Warm.
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countWarm = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countWarm).toBe(0);
 
       // Frames 4-6: all zero.
       for (let i = 4; i <= 6; i++) {
-        draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        draw([world], { cameraOwner: 0, resourceOwner: 0 });
         expect(rs.bindGroupCounts?.createBindGroup ?? -1).toBe(0);
       }
     });
@@ -684,12 +772,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Warm without Skylight.
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countWarm = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countWarm).toBe(0);
 
@@ -700,12 +803,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       });
 
       // Draw with Skylight — must not crash.
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countAfter = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(typeof countAfter).toBe('number');
 
       // Draw again — cache must stay warm.
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countAfterWarm = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countAfterWarm).toBeGreaterThanOrEqual(0);
     });
@@ -872,7 +983,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -923,7 +1034,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
     }>;
@@ -936,7 +1047,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
   interface RendererForTest {
     bindGroupCounts?: { readonly createBindGroup: number };
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
   }
 
   function spawnBasicScene(
@@ -1016,15 +1127,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       spawnBasicScene(world, C);
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Frame 1: cold start — all caches empty
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
       // Frame 2: mesh cache hit (meshStorageBuffer handle init-time stable)
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame2).toBeLessThan(countFrame1);
     });
@@ -1045,11 +1167,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       spawnBasicScene(world, C);
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Warm the cache
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const baselineCount = rs.bindGroupCounts?.createBindGroup ?? -1;
 
       // Move the entity (Transform change): meshStorageBuffer CONTENT changes
@@ -1063,7 +1196,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         },
       });
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const afterMoveCount = rs.bindGroupCounts?.createBindGroup ?? -1;
       // Mesh cache should still hit — meshStorageBuffer handle unchanged
       // (new entity creates new material/instances BG misses, but mesh is frame-shared)
@@ -1232,7 +1371,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -1283,7 +1422,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -1366,9 +1505,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       const before = rs.bindGroupCounts?.createBindGroup;
       expect(typeof before).toBe('number');
 
-      (renderer as { draw: (w: unknown, o: { owner: number }) => void }).draw([world], {
-        owner: 0,
-      });
+      (
+        renderer as {
+          draw: (w: unknown, o: { cameraOwner: number; resourceOwner: number }) => void;
+        }
+      ).draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // After draw, counter should still be readable
       const after = rs.bindGroupCounts?.createBindGroup;
@@ -1424,15 +1565,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const rs = renderer as unknown as { bindGroupCounts?: { readonly createBindGroup: number } };
-      const draw = (renderer as { draw: (w: unknown, o: { owner: number }) => void }).draw.bind(
-        renderer,
-      );
+      const draw = (
+        renderer as {
+          draw: (w: unknown, o: { cameraOwner: number; resourceOwner: number }) => void;
+        }
+      ).draw.bind(renderer);
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup;
       expect(typeof countFrame1).toBe('number');
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup;
       expect(typeof countFrame2).toBe('number');
     });
@@ -1486,14 +1641,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const rs = renderer as unknown as { bindGroupCounts?: { readonly createBindGroup: number } };
-      const draw = (renderer as { draw: (w: unknown, o: { owner: number }) => void }).draw.bind(
-        renderer,
-      );
+      const draw = (
+        renderer as {
+          draw: (w: unknown, o: { cameraOwner: number; resourceOwner: number }) => void;
+        }
+      ).draw.bind(renderer);
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup as number;
 
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup as number;
 
       // After M2 caching: frame 2 counter <= frame 1 (cache hits reduce,
@@ -1664,7 +1833,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -1677,7 +1846,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
   interface RendererForTest {
     bindGroupCounts?: { readonly createBindGroup: number; readonly keys: readonly string[] };
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
   }
 
   async function importEcs(): Promise<{
@@ -1717,7 +1886,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
       bindGroupCounts?: { readonly createBindGroup: number };
@@ -1818,16 +1987,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       const world = new World();
       spawnBasicScene(world, C, { entityCount: 2 });
 
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
       const bc = renderer.bindGroupCounts;
 
       // Frame 1: cold start, creates bind groups
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame1 = bc?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
       // Frame 2: all caches hot => counter drops
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame2 = bc?.createBindGroup ?? -1;
       // With M2+M3 caches wired, frame 2 counter should be lower (hits from
       // view/mesh/material/instances).  This confirms entries exist in cache.
@@ -1895,11 +2075,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         },
       );
 
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
       const bc = renderer.bindGroupCounts;
 
       // Frame 1: populate caches
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame1 = bc?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
@@ -1908,7 +2095,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       // Frame 2 after despawn: no renderables => view/mesh BGs may not be
       // created (validated.length === 0), so counter may be 0.
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countFrame2 = bc?.createBindGroup ?? -1;
       // With no entities, the frame is a clear-pass-only path (Case E).
       // Counter should be 0 (no bind groups needed).
@@ -1991,12 +2182,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         },
       );
 
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
       const bc = renderer.bindGroupCounts;
 
       // Frames 1-2: warm caches with both entities
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countWarm = bc?.createBindGroup ?? -1;
       // After warming, counter should be 0 (all BGs hot)
       expect(countWarm).toBe(0);
@@ -2007,7 +2209,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       // Frame 3: only 1 surviving entity.  Its per-entity BGs should stay hit
       // from cache.  View/mesh are frame-shared and also stay hit (no resource
       // change).  Counter should remain 0.
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countAfterDespawn = bc?.createBindGroup ?? -1;
       expect(countAfterDespawn).toBe(0);
 
@@ -2081,12 +2287,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         },
       );
 
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
       const bc = renderer.bindGroupCounts;
 
       // Warm caches for entity1
-      draw([world], { owner: 0 });
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countWarm = bc?.createBindGroup ?? -1;
       expect(countWarm).toBe(0);
 
@@ -2094,7 +2311,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       w.despawn(entity1).unwrap();
 
       // Frame after despawn: no renderables
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countAfterDespawn = bc?.createBindGroup ?? -1;
       // With zero renderables, counter stays 0
       expect(countAfterDespawn).toBe(0);
@@ -2125,7 +2346,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       // entityKey, but the nested WeakMap chain maps the same GPU object refs
       // to the same leaf BindGroup.  The counter therefore stays low when the
       // handle set is unchanged (mock limitation, not a cache bug).
-      draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const countAfterRespawn = bc?.createBindGroup ?? -1;
       // Mock limitation: same object refs -> same WeakMap chain hit.  The entityKey
       // portion of the outer Map differs, but with 14 identical handle objects,
@@ -2146,7 +2371,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     //
     // Note: sentinel key survival (D-6, Issue#1) is validated by w16
     // (shadow-enabled stable frame ac-03 test) which uses the production
-    // cleanPerEntityCache path through real draw([world], { owner: 0 }).
+    // cleanPerEntityCache path through real draw([world], { cameraOwner: 0, resourceOwner: 0 }).
 
     it('(e) despawn then respawn many times keeps counter stable (no unbounded growth)', async () => {
       // Spawn 3 entities, warm cache, despawn all, respawn 3 new entities.
@@ -2224,7 +2449,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       }
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
+      const draw = renderer.draw.bind(renderer) as (
+        w: unknown,
+        o: { cameraOwner: number; resourceOwner: number },
+      ) => void;
 
       // Run 3 spawn/despawn cycles.  Each cycle spawns 3 entities, warms
       // the cache for 2 draws, then despawns all.
@@ -2235,12 +2463,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         // Frame 1: createBindGroup > 0 for cold view+mesh (cycle 1) or 0 if
         // view+mesh caches are still warm from a previous cycle.  We assert
         // the counter is a number (accessible) after draw.
-        draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        draw([world], { cameraOwner: 0, resourceOwner: 0 });
         const countFrame1 = rs.bindGroupCounts?.createBindGroup ?? -1;
         expect(countFrame1).toBeGreaterThanOrEqual(0);
 
         // Frame 2: warm — cache hits, counter == 0.
-        draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        draw([world], { cameraOwner: 0, resourceOwner: 0 });
         const countWarm = rs.bindGroupCounts?.createBindGroup ?? -1;
         expect(countWarm).toBe(0);
 
@@ -2252,7 +2488,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         // Draw after despawn: validated[] may be empty (Case E path), which
         // skips view/mesh BG creation. Counter should be 0 (nothing to create)
         // or >0 if view/mesh still needed (eg when other entities present).
-        draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        draw([world], { cameraOwner: 0, resourceOwner: 0 });
         const countAfterDespawn = rs.bindGroupCounts?.createBindGroup ?? -1;
         expect(countAfterDespawn).toBe(0);
       }

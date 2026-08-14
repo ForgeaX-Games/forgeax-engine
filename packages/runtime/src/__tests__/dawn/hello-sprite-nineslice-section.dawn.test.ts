@@ -52,6 +52,7 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from '../draw-published';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -274,7 +275,7 @@ async function renderOneFrame(opts: {
     },
   );
 
-  const drawn = renderer.draw([world], { owner: 0 });
+  const drawn = drawPublished(renderer, world);
   expect(drawn.ok).toBe(true);
   if (sharedDevice === undefined) throw new Error('device not captured');
   await sharedDevice.queue.onSubmittedWorkDone();

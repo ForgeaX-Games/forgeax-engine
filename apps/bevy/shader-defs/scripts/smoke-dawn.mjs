@@ -126,6 +126,8 @@ if (!geometry.ok) {
   process.exit(1);
 }
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const mesh = world.allocSharedRef('MeshAsset', geometry.value);
 const texture = world.allocSharedRef('TextureAsset', {
   kind: 'texture',
@@ -172,7 +174,8 @@ world.spawn({
 }).unwrap();
 
 for (let frame = 0; frame < SMOKE_MIN_FRAMES; frame += 1) {
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) console.error(`[smoke] draw frame ${frame} error: ${result.error.code}`);
   await delay(0);
 }

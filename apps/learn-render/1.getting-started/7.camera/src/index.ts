@@ -524,9 +524,11 @@ function installCaptureHooks(
     __captureCameraInput?: CameraInputCaptureHook;
   };
   const renderer = app.renderer;
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   win.__captureCamera = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { owner: 0 });
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(
@@ -558,7 +560,7 @@ function installCaptureHooks(
       },
       tick: async (): Promise<CameraInputState> => {
         world.update(1 / 60).unwrap();
-        renderer.draw([world], { owner: 0 });
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
         return readState();
       },
     };

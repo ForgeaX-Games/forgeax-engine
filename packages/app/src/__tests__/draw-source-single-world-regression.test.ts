@@ -4,7 +4,7 @@
 // not opt in.
 //
 // Two non-opt-in shapes must both reproduce the legacy call
-// `renderer.draw([world], { owner: 0 })` (feat-20260708 M3 / AC-03 wrapping):
+// `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` (feat-20260708 M3 / AC-03 wrapping):
 //
 //   1. `drawSource` absent entirely — the createApp/frame-loop caller passes no
 //      drawSource (the single-world AI-user default).
@@ -12,7 +12,7 @@
 //      that wired the seam but, this frame, has nothing multi-world to inject
 //      (e.g. editor with no partitioned viewport active).
 //
-// Both cases MUST call `renderer.draw([world], { owner: 0 })` with the loop's
+// Both cases MUST call `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` with the loop's
 // own single world and owner 0. This pins the AC-03 regression guarantee across
 // the new seam: adding drawSource never perturbs the single-world path.
 //
@@ -23,8 +23,8 @@
 //
 // Anchors:
 //   plan-strategy §2 D-3 (drawSource pull callback; absent / undefined -> single
-//     world path byte-identical to draw([world], { owner: 0 }))
-//   research F1 (frame-loop hardcodes renderer.draw([world], { owner: 0 }) — the
+//     world path byte-identical to draw([world], { cameraOwner: 0, resourceOwner: 0 }))
+//   research F1 (frame-loop hardcodes renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }) — the
 //     seam insertion point)
 
 import { World } from '@forgeax/engine-ecs';
@@ -42,6 +42,8 @@ function makeSpyRenderer(): { renderer: Renderer; calls: DrawCall[] } {
   const renderer = {
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true, value: undefined }),
+    attachWorld: () => ({ ok: true, value: undefined }),
+    detachWorld: () => {},
     draw(worlds: unknown, options: unknown): { ok: true; value: undefined } {
       calls.push({ worlds, options });
       return { ok: true, value: undefined };
@@ -105,7 +107,7 @@ const createFrameLoopWithDrawSource = createFrameLoop as unknown as (
 ) => ReturnType<typeof createFrameLoop>;
 
 describe('drawSource seam degrades to single-world path (w8, AC-03 regression)', () => {
-  it('no drawSource: draws [world] with { owner: 0 } every frame (legacy path)', () => {
+  it('no drawSource: draws the primary World with explicit camera and resource owners', () => {
     const world = new World();
     const { renderer, calls } = makeSpyRenderer();
     const { raf, caf, now, pump } = makeSyncScheduler();
@@ -121,13 +123,13 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
       const arr = call.worlds as unknown[];
       expect(arr.length).toBe(1);
       expect(arr[0]).toBe(world);
-      expect(call.options).toEqual({ owner: 0 });
+      expect(call.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     }
 
     loop.stop();
   });
 
-  it('drawSource returns undefined: still draws [world] with { owner: 0 } (no-inject frame)', () => {
+  it('drawSource returns undefined: still draws [world] with { cameraOwner: 0, resourceOwner: 0 } (no-inject frame)', () => {
     const world = new World();
     const { renderer, calls } = makeSpyRenderer();
     const { raf, caf, now, pump } = makeSyncScheduler();
@@ -144,7 +146,7 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
     pump(3);
 
     // The seam was consulted (pull callback fired) but the resulting draw is
-    // byte-identical to the legacy single-world call.
+    // identical to the primary-World call.
     expect(pulls).toBeGreaterThanOrEqual(3);
     expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const call of calls) {
@@ -152,7 +154,7 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
       const arr = call.worlds as unknown[];
       expect(arr.length).toBe(1);
       expect(arr[0]).toBe(world);
-      expect(call.options).toEqual({ owner: 0 });
+      expect(call.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     }
 
     loop.stop();
@@ -173,11 +175,11 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
     pump(1);
 
     expect(calls).toHaveLength(3);
-    expect(calls[0]?.options).toEqual({ owner: 0 });
+    expect(calls[0]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     expect(calls[1]?.worlds).toEqual([world, overlay]);
     expect(calls[1]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     expect(calls[2]?.worlds).toEqual([world]);
-    expect(calls[2]?.options).toEqual({ owner: 0 });
+    expect(calls[2]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     loop.stop();
   });
 });

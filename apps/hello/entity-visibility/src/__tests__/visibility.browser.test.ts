@@ -146,6 +146,8 @@ describe('entity visibility browser visual red test', () => {
           lostMessage = info.message;
         });
         const scene = createVisibilityDemoWorld();
+        const attached = renderer.attachWorld(scene.world);
+        if (!attached.ok) throw new Error(`renderer.attachWorld failed: ${attached.error.code}`);
         const scenePluginResult = await scenePlugin().build(scene.world);
         if (!scenePluginResult.ok)
           throw new Error(`scenePlugin.build failed: ${scenePluginResult.error.code}`);
@@ -153,7 +155,7 @@ describe('entity visibility browser visual red test', () => {
         const draw = async () => {
           const updateResult = scene.world.update(1 / 60);
           if (!updateResult.ok) throw new Error(`world.update failed: ${updateResult.error.code}`);
-          const result = renderer?.draw([scene.world], { owner: 0 });
+          const result = renderer?.draw([scene.world], { cameraOwner: 0, resourceOwner: 0 });
           if (result === undefined || !result.ok) {
             throw new Error(
               `renderer.draw failed: ${result?.ok === false ? result.error.code : 'missing-result'}`,

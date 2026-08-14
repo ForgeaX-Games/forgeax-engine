@@ -88,6 +88,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // feat-future-gltf-buildtime-cook.
   assets.configurePackIndex('/box-pack-index.json');
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   // Parse the gltf source so the IR -> POD adapter can register MeshAsset
   // / MaterialAsset / SceneAsset PODs against the GUIDs the meta sidecar
@@ -165,7 +167,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const frame = (): void => {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error('[gltf] draw error:', r.error);
     requestAnimationFrame(frame);
   };

@@ -23,6 +23,7 @@
 
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from '../draw-published';
 
 // Source-level structural check: common.wgsl must carry both the storage
 // and uniform declarations of the instances binding under #ifdef / #else
@@ -268,7 +269,7 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     );
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer.draw([world], { owner: 0 });
+      const r = drawPublished(renderer, world);
       if (!r.ok) throw new Error(`draw frame ${i} error: ${r.error.code}`);
     }
     await sharedDevice?.queue.onSubmittedWorkDone();

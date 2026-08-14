@@ -135,6 +135,49 @@ const EFFECTS: readonly EffectSpec[] = [
 // avoids stringly-typed drift between addColorTarget / addScenePass / addFullscreenPass.
 const OFFSCREEN_COLOR_KEY = 'offscreenColor';
 const OFFSCREEN_DEPTH_KEY = 'offscreenDepth';
+const CYCLE_PIPELINE_ID = 'learn-render-5-pipeline::cycle';
+const REPAIRED_PIPELINE_ID = 'learn-render-5-pipeline::repaired';
+const CYCLE_PASS_A = 'cycle-pass-a';
+const CYCLE_PASS_B = 'cycle-pass-b';
+const CYCLE_RESOURCE_A = 'cycle-resource-a';
+const CYCLE_RESOURCE_B = 'cycle-resource-b';
+const REPAIRED_PASS_A = 'repaired-stage-a';
+const REPAIRED_PASS_B = 'repaired-stage-b';
+const REPAIRED_RESOURCE_A = 'repaired-resource-a';
+const REPAIRED_RESOURCE_B = 'repaired-resource-b';
+
+type GraphConfigurator = (graph: RenderGraph<RenderPipelineContext>) => void;
+
+interface PipelineCycleDiagnostic {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: { readonly cycle: readonly string[] } | undefined;
+}
+
+interface PipelineRecoveryState {
+  activePipelineId: string | null;
+  cycleDiagnostic: PipelineCycleDiagnostic | null;
+  cycleDrawSubmitted: boolean | null;
+  repairedDrawSubmitted: boolean | null;
+  repairedPassOrder: string[];
+  lastPassNames: string[];
+  frameEndCount: number;
+  lastSubmittedPipelineId: string | null;
+  disposed: boolean;
+}
+
+const pipelineRecoveryState: PipelineRecoveryState = {
+  activePipelineId: null,
+  cycleDiagnostic: null,
+  cycleDrawSubmitted: null,
+  repairedDrawSubmitted: null,
+  repairedPassOrder: [],
+  lastPassNames: [],
+  frameEndCount: 0,
+  lastSubmittedPipelineId: null,
+  disposed: false,
+};
 
 /**
  * Build a single per-effect RenderPipeline.buildGraph closure: declare the
@@ -146,7 +189,7 @@ const OFFSCREEN_DEPTH_KEY = 'offscreenDepth';
  * One closure per effect (not one parameterised closure) so AI users grep
  * `addFullscreenPass` and find the per-effect call site listed by name.
  */
-function makeEffectPipeline(shaderId: string): RenderPipeline {
+function makeEffectPipeline(shaderId: string, configureGraph?: GraphConfigurator): RenderPipeline {
   return {
     buildGraph(
       ctx: RenderPipelineContext,
@@ -180,9 +223,11 @@ function makeEffectPipeline(shaderId: string): RenderPipeline {
         sample: 1,
         usage: 0x10, // RENDER_ATTACHMENT
       });
+      configureGraph?.(graph);
       addScenePass(graph, 'main', {
         color: OFFSCREEN_COLOR_KEY,
         depth: OFFSCREEN_DEPTH_KEY,
+        ...(configureGraph === undefined ? {} : { reads: [REPAIRED_RESOURCE_B] }),
         // feat-20260609 T-003: required pipeline-specific selector. URP forward
         // pass convention; matches the standard PBR / unlit material's
         // `LightMode: 'Forward'` pass tags so this offscreen render walks the
@@ -230,6 +275,67 @@ function makeEffectPipeline(shaderId: string): RenderPipeline {
   };
 }
 
+function makeCyclePipeline(): RenderPipeline {
+  return {
+    buildGraph(ctx: RenderPipelineContext, _data: RenderPipelineData): RenderGraph<RenderPipelineContext> | null {
+      const graph = new RenderGraph<RenderPipelineContext>();
+      graph.addResource(CYCLE_RESOURCE_A, { kind: 'buffer', lifetime: 'transient' });
+      graph.addResource(CYCLE_RESOURCE_B, { kind: 'buffer', lifetime: 'transient' });
+      graph.addPass(CYCLE_PASS_A, {
+        reads: [CYCLE_RESOURCE_B],
+        writes: [CYCLE_RESOURCE_A],
+      });
+      graph.addPass(CYCLE_PASS_B, {
+        reads: [CYCLE_RESOURCE_A],
+        writes: [CYCLE_RESOURCE_B],
+      });
+      const compileResult = graph.compile({
+        backendKind: ctx.runtime.device.caps.backendKind,
+        caps: ctx.runtime.device.caps,
+        device: ctx.runtime.device,
+      });
+      if (!compileResult.ok) {
+        const detail = compileResult.error.detail;
+        pipelineRecoveryState.cycleDiagnostic = {
+          code: compileResult.error.code,
+          expected: compileResult.error.expected,
+          hint: compileResult.error.hint,
+          detail: detail !== undefined && 'cycle' in detail ? { cycle: [...detail.cycle] } : undefined,
+        };
+        return null;
+      }
+      return graph;
+    },
+    execute(ctx: RenderPipelineContext): void {
+      ctx.frameState.perFrameGraph?.execute(ctx);
+    },
+  };
+}
+
+function configureRepairedGraph(graph: RenderGraph<RenderPipelineContext>): void {
+  pipelineRecoveryState.repairedPassOrder = [];
+  graph.addResource(REPAIRED_RESOURCE_A, { kind: 'buffer', lifetime: 'transient' });
+  graph.addResource(REPAIRED_RESOURCE_B, { kind: 'buffer', lifetime: 'transient' });
+  graph.addPass(REPAIRED_PASS_A, {
+    reads: [],
+    writes: [REPAIRED_RESOURCE_A],
+    execute: () => {
+      pipelineRecoveryState.repairedPassOrder.push(REPAIRED_PASS_A);
+    },
+  });
+  graph.addPass(REPAIRED_PASS_B, {
+    reads: [REPAIRED_RESOURCE_A],
+    writes: [REPAIRED_RESOURCE_B],
+    execute: () => {
+      pipelineRecoveryState.repairedPassOrder.push(REPAIRED_PASS_B);
+    },
+  });
+}
+
+function makeRepairedPipeline(): RenderPipeline {
+  return makeEffectPipeline('learn-render-5::passthrough', configureRepairedGraph);
+}
+
 // Module-level mutable closure so the named installPipelineByKey export
 // (called by both M5 dawn smoke and the keydown handler in section 3) can
 // install one of the 6 RenderPipelineAsset PODs registered inside
@@ -242,6 +348,131 @@ let activeRendererForInstall:
       ): { ok: true } | { ok: false; error: { code: string; hint?: string } };
     }
   | null = null;
+let activeAppForRecovery: App | null = null;
+let activeRendererForRecovery: App['renderer'] | null = null;
+let unsubscribeRecoveryFrameEnd: (() => void) | null = null;
+const registeredRecoveryPipelines = new Set<string>();
+
+type RecoveryInstallResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; hint: string } };
+
+function recoveryNotReady(): RecoveryInstallResult {
+  return {
+    ok: false,
+    error: {
+      code: 'pipelines-not-ready',
+      hint: 'await app.start() resolves before installing recovery pipelines',
+    },
+  };
+}
+
+function installRecoveryPipeline(
+  pipelineId: string,
+  pipeline: RenderPipeline,
+  asset: RenderPipelineAsset,
+): RecoveryInstallResult {
+  const renderer = activeRendererForRecovery;
+  if (renderer === null) return recoveryNotReady();
+  if (!registeredRecoveryPipelines.has(pipelineId)) {
+    try {
+      renderer.registerPipeline(pipelineId, pipeline);
+      registeredRecoveryPipelines.add(pipelineId);
+    } catch (cause) {
+      return {
+        ok: false,
+        error: {
+          code: 'pipeline-register-failed',
+          hint: cause instanceof Error ? cause.message : String(cause),
+        },
+      };
+    }
+  }
+  const installResult = renderer.installPipeline(asset);
+  if (!installResult.ok) {
+    return {
+      ok: false,
+      error: {
+        code: installResult.error.code,
+        hint: installResult.error.hint ?? '',
+      },
+    };
+  }
+  pipelineRecoveryState.activePipelineId = pipelineId;
+  return { ok: true };
+}
+
+export function installCyclePipeline(): RecoveryInstallResult {
+  return installRecoveryPipeline(
+    CYCLE_PIPELINE_ID,
+    makeCyclePipeline(),
+    { kind: 'render-pipeline', pipelineId: CYCLE_PIPELINE_ID },
+  );
+}
+
+export function installRepairedPipeline(): RecoveryInstallResult {
+  return installRecoveryPipeline(
+    REPAIRED_PIPELINE_ID,
+    makeRepairedPipeline(),
+    { kind: 'render-pipeline', pipelineId: REPAIRED_PIPELINE_ID },
+  );
+}
+
+export function pipelineRecoveryStateSnapshot(): PipelineRecoveryState {
+  return {
+    ...pipelineRecoveryState,
+    cycleDiagnostic:
+      pipelineRecoveryState.cycleDiagnostic === null
+        ? null
+        : {
+            ...pipelineRecoveryState.cycleDiagnostic,
+            detail:
+              pipelineRecoveryState.cycleDiagnostic.detail === undefined
+                ? undefined
+                : { cycle: [...pipelineRecoveryState.cycleDiagnostic.detail.cycle] },
+          },
+    repairedPassOrder: [...pipelineRecoveryState.repairedPassOrder],
+    lastPassNames: [...pipelineRecoveryState.lastPassNames],
+  };
+}
+
+export function disposePipelineRecovery(): RecoveryInstallResult {
+  const app = activeAppForRecovery;
+  const renderer = activeRendererForRecovery;
+  if (app === null || renderer === null) return recoveryNotReady();
+  if (pipelineRecoveryState.disposed) return { ok: true };
+  const stopResult = app.stop();
+  if (!stopResult.ok && stopResult.error.code !== 'app-not-started') {
+    return {
+      ok: false,
+      error: { code: stopResult.error.code, hint: stopResult.error.hint },
+    };
+  }
+  unsubscribeRecoveryFrameEnd?.();
+  unsubscribeRecoveryFrameEnd = null;
+  renderer.dispose();
+  renderer.dispose();
+  pipelineRecoveryState.disposed = true;
+  return { ok: true };
+}
+
+function transitionRecoveryApp(action: 'pause' | 'resume'): RecoveryInstallResult {
+  const app = activeAppForRecovery;
+  if (app === null) return recoveryNotReady();
+  const result = action === 'pause' ? app.pause() : app.resume();
+  if (!result.ok) {
+    return { ok: false, error: { code: result.error.code, hint: result.error.hint } };
+  }
+  return { ok: true };
+}
+
+export function pausePipelineRecovery(): RecoveryInstallResult {
+  return transitionRecoveryApp('pause');
+}
+
+export function resumePipelineRecovery(): RecoveryInstallResult {
+  return transitionRecoveryApp('resume');
+}
 
 /**
  * Install one of the 6 effect pipelines by its keyboard digit ('1' .. '6').
@@ -284,6 +515,7 @@ export function installPipelineByKey(
       },
     };
   }
+  pipelineRecoveryState.activePipelineId = asset.pipelineId;
   return { ok: true };
 }
 
@@ -553,6 +785,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     ['6', edgeAsset],
   ]);
   activeRendererForInstall = renderer;
+  activeAppForRecovery = app;
+  activeRendererForRecovery = renderer;
+  unsubscribeRecoveryFrameEnd = renderer.subscribeFrameEnd(() => {
+    pipelineRecoveryState.frameEndCount += 1;
+    pipelineRecoveryState.lastSubmittedPipelineId = pipelineRecoveryState.activePipelineId;
+  });
 
   const startRes = app.start();
   if (!startRes.ok) {
@@ -561,6 +799,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   installCaptureHook(app, world);
+  window.__learnRenderFramebuffers = {
+    installCyclePipeline,
+    installRepairedPipeline,
+    pause: pausePipelineRecovery,
+    resume: resumePipelineRecovery,
+    getState: pipelineRecoveryStateSnapshot,
+    dispose: disposePipelineRecovery,
+  };
 
   // Install effect 1 (passthrough) as the boot default. Subsequent presses of
   // keys 2..6 (handled in the keydown listener below) hot-swap pipelines via
@@ -623,9 +869,20 @@ function installCaptureHook(app: App, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureFramebuffers?: CaptureHook };
   const renderer = app.renderer;
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   win.__captureFramebuffers = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { owner: 0 });
+    const frameEndsBefore = pipelineRecoveryState.frameEndCount;
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const submitted = pipelineRecoveryState.frameEndCount > frameEndsBefore;
+    pipelineRecoveryState.lastPassNames = [...renderer.perFramePassNames];
+    if (pipelineRecoveryState.activePipelineId === CYCLE_PIPELINE_ID) {
+      pipelineRecoveryState.cycleDrawSubmitted = submitted;
+    }
+    if (pipelineRecoveryState.activePipelineId === REPAIRED_PIPELINE_ID) {
+      pipelineRecoveryState.repairedDrawSubmitted = submitted;
+    }
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(
@@ -640,5 +897,13 @@ declare global {
   interface Window {
     __captureFramebuffers?: () => Promise<Uint8Array>;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    __learnRenderFramebuffers?: {
+      installCyclePipeline: typeof installCyclePipeline;
+      installRepairedPipeline: typeof installRepairedPipeline;
+      pause: typeof pausePipelineRecovery;
+      resume: typeof resumePipelineRecovery;
+      getState: typeof pipelineRecoveryStateSnapshot;
+      dispose: typeof disposePipelineRecovery;
+    };
   }
 }

@@ -50,7 +50,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   evidenceGlobal.__prepareGenerateCustomMeshCapture = async () => {
     const updated = app.world.update(1 / 60);
     if (!updated.ok) throw updated.error;
-    const drawn = app.renderer.draw([app.world], { owner: 0 });
+    const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
     if (!drawn.ok) throw drawn.error;
   };
   Object.assign(evidenceGlobal, { __bevyGenerateCustomMeshReady: true, __bevyGenerateCustomMeshState: state });

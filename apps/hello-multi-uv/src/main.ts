@@ -828,6 +828,7 @@ if (!app.ok) {
   type PipelineChoice = 'standard' | 'custom';
   type PostChoice = 'passthrough' | 'inversion' | 'depth';
   let selectedPipeline: PipelineChoice = 'standard';
+  let releasePipeline: (() => void) | undefined;
   let selectedPost: PostChoice = 'passthrough';
   const pipelineAsset = (pipeline: PipelineChoice, post: PostChoice): RenderPipelineAsset => ({
     kind: 'render-pipeline',
@@ -868,6 +869,8 @@ if (!app.ok) {
       console.error('[hello-multi-uv] pipeline selection failed:', result.error);
       return;
     }
+    releasePipeline?.();
+    releasePipeline = result.value;
     selectedPipeline = pipeline;
     pipelineSelect.value = pipeline;
     pipelineStatus.textContent = `M3_PIPELINE=${pipeline}`;
@@ -898,6 +901,8 @@ if (!app.ok) {
       console.error('[hello-multi-uv] post selection failed:', result.error);
       return;
     }
+    releasePipeline?.();
+    releasePipeline = result.value;
     selectedPost = effect;
     postSelect.value = effect;
     postStatus.textContent = `M3_POST_EFFECT=${effect}`;

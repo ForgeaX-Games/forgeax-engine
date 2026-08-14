@@ -27,8 +27,8 @@
 //     world, singleton resources from B world")
 //   research F2 (extract:1671-1676 cameras + skylight/skybox/postProcess read
 //     the same ownerFrame — the split point)
-//   plan-strategy §2 D-3 (`{ owner }` -> `{ cameraOwner, resourceOwner }` two
-//     required indices) + §5.3 key test point + §3.3 interface example
+//   plan-strategy §2 D-3 (explicit `{ cameraOwner, resourceOwner }` required
+//     indices) + §5.3 key test point + §3.3 interface example
 
 import { World } from '@forgeax/engine-ecs';
 import { Camera, extractFrames, Skylight } from '@forgeax/engine-render/internal';

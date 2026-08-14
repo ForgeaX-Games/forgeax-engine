@@ -150,7 +150,7 @@ export function recordFrame(
       new RhiError({
         code: 'render-system-no-camera',
         expected: 'world has at least one entity with Transform + Camera',
-        hint: 'world.spawn({ component: Transform, data: { pos: [x, y, z], quat: [x, y, z, w], scale: [x, y, z] } }, { component: Camera, data: { fov, aspect, near, far, clearColor: [r, g, b, a] } }) before renderer.draw([world], { owner: 0 })',
+        hint: 'world.spawn({ component: Transform, data: { pos: [x, y, z], quat: [x, y, z, w], scale: [x, y, z] } }, { component: Camera, data: { fov, aspect, near, far, clearColor: [r, g, b, a] } }) before renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })',
       }),
     );
     activeCameras = [makeZeroCameraFallbackSnapshot()];
@@ -285,6 +285,39 @@ export function recordFrame(
     // 9 uniform buffer (it overflowed the WebGL2 fallback fragment uniform-buffer
     // budget). See the viewPayload construction (VIEW_PAYLOAD_FLOATS = 196).
 
+    const effectiveShadowMapSize = resolveShadowMapSize(internals, lights);
+
+    // A pipeline swap invalidates the memoized graph. Preflight that graph using
+    // the host canvas dimensions before acquiring the browser swap-chain texture:
+    // `getCurrentTexture()` can replace the visible canvas image even when graph
+    // compilation rejects the frame, so a failed topology must not perturb the
+    // last healthy submission. The actual target dimensions remain authoritative
+    // below and still drive the existing resize/recompile path.
+    // A zero epoch is the direct-recording/test fixture state: there is no
+    // installed pipeline whose failed build could perturb the surface.
+    if (frameState.perFrameGraph === null && frameState.installedPipelineHandle !== 0) {
+      const canvasTargetW = internals.canvas.width | 0;
+      const canvasTargetH = internals.canvas.height | 0;
+      if (canvasTargetW > 0 && canvasTargetH > 0) {
+        const preflightGraph = runRecordProfilePhase(profilePhase, 'record/render-graph', () =>
+          ensurePerFrameGraph(
+            internals,
+            frameState,
+            pipelineState,
+            camera,
+            lights,
+            skylight,
+            skylightCount,
+            skybox,
+            canvasTargetW,
+            canvasTargetH,
+            effectiveShadowMapSize,
+          ),
+        );
+        if (preflightGraph === null) return false;
+      }
+    }
+
     // Acquire the swap-chain texture + colour view + target dimensions (with
     // one reconfigure-and-retry on surface-outdated). Extracted to
     // acquireSwapChainTarget (M3/w18); returns null on unrecoverable failure
@@ -322,7 +355,6 @@ export function recordFrame(
     // to ensurePerFrameGraph (M3/w18); returns null on unrecoverable state
     // (buildGraph produced null, or recompile-on-resize failed), in which case
     // recordFrame bails after the finally-block frame advance.
-    const effectiveShadowMapSize = resolveShadowMapSize(internals, lights);
     const perFrameGraph = runRecordProfilePhase(profilePhase, 'record/render-graph', () =>
       ensurePerFrameGraph(
         internals,
@@ -954,7 +986,7 @@ function validateRenderables(
         new RhiError({
           code: 'asset-not-registered',
           expected: 'GPU mesh buffers uploaded for assetHandle',
-          hint: 'await renderer.ready before draw([world], { owner: 0 }); ensure AssetRegistry.configureGpuDevice ran so user meshes are uploaded',
+          hint: 'await renderer.ready before draw([world], { cameraOwner: 0, resourceOwner: 0 }); ensure AssetRegistry.configureGpuDevice ran so user meshes are uploaded',
           detail: { assetHandle: r.assetHandle },
         }),
       );

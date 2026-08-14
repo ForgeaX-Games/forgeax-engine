@@ -98,6 +98,8 @@ if (!ready.ok) {
   console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
   process.exit(1);
 }
+const attachment = app.renderer.attachWorld(app.world);
+if (!attachment.ok) throw attachment.error;
 
 const assets = app.renderer.assets;
 if (assets === null) {
@@ -123,7 +125,7 @@ for (let i = 0; i < framesTarget; i++) {
     console.error(`[smoke] FAIL - world.update frame=${i}: ${updated.error.code}`);
     process.exit(1);
   }
-  const drawn = app.renderer.draw([app.world], { owner: 0 });
+  const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawn.ok) console.error(`[smoke] draw frame=${i}: ${drawn.error.code}`);
   frames++;
   await delay(0);

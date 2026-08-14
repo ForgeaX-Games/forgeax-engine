@@ -94,6 +94,8 @@ if (!shaderRegistry.findMaterialArtifact(shaderId).ok) {
 const geometry = createBoxGeometry(1, 1, 1);
 if (!geometry.ok) throw new Error(`${geometry.error.code}: ${geometry.error.hint}`);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const mesh = world.allocSharedRef('MeshAsset', geometry.value);
 const values = { time: 0 };
 const material = world.allocSharedRef('MaterialAsset', {
@@ -142,7 +144,8 @@ async function capture(label) {
 
 for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
   values.time = frame / 60;
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
   await delay(0);
   if (frame === 60) await capture('early');

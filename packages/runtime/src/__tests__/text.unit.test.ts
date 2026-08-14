@@ -23,6 +23,7 @@ import {
   trackFontConcurrency,
   VERTEX_OFFSET,
 } from '@forgeax/engine-graphics-extras';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   GlyphText,
   glyphTextLayoutSystem,
@@ -59,8 +60,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     function makeFont(glyphs: Record<number, GlyphMetric>): FontAsset {
       return {
         kind: 'font',
-        atlas: 0 as never,
-        sampler: 0 as never,
+        atlas: AssetGuid.random(),
+        sampler: AssetGuid.random(),
         glyphs,
         common: {
           lineHeight: 12,
@@ -105,14 +106,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       beforeEach(() => resetGlyphBakeCache());
 
       it('(a) spawn GlyphText -> entity gains MeshFilter + MeshRenderer (AC-07)', () => {
-        const assets = makeRegistry();
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
         const e = spawnLabel(world, fontId, 'Hi');
 
         // Before the pass the entity carries only GlyphText + no MeshFilter column.
         expect(world.get(e, GlyphText).ok).toBe(true);
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
         // After one pass the layout system has baked + attached the render slots.
         expect(world.get(e, MeshFilter).ok).toBe(true);
         expect(world.get(e, MeshRenderer).ok).toBe(true);
@@ -149,7 +149,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           )
           .unwrap();
 
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
 
         // F-2 guard: MeshFilter.assetHandle reads back the registered mesh id.
         const mf = world.get(e, MeshFilter);
@@ -169,7 +169,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(passes.ok).toBe(true);
         const resolved = passes.unwrap();
         expect(resolved.passes[0]?.program.module).toBe('forgeax::msdf-text');
-        expect(resolved.values?.baseColorTexture).toMatchObject({ texture: expect.any(String) });
+        expect(resolved.values?.baseColorTexture).toMatchObject({
+          texture: expect.any(Uint8Array),
+        });
         expect(resolved.parameters).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ name: 'tintColor', type: 'color' }),
@@ -180,19 +182,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
 
       it('(b) dirty text -> updateMesh in place, assets size unchanged (AC-08)', () => {
-        const assets = makeRegistry();
         const world = new World();
         const fontId = registerFont(world, ASCII('HiABC'));
         const e = spawnLabel(world, fontId, 'Hi');
 
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
         const sizeAfterBake = world.sharedRefs._liveCount();
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const meshHandle = mf.assetHandle;
 
         // Mutate text -> next pass must updateMesh in place, not register a new mesh.
         world.set(e, GlyphText, { text: 'ABC' }).unwrap();
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
 
         expect(world.sharedRefs._liveCount()).toBe(sizeAfterBake); // no new registration (AC-08)
         const mf2 = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
@@ -200,29 +201,65 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
 
       it('(b2) clean re-pass does not register or mutate', () => {
-        const assets = makeRegistry();
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
         spawnLabel(world, fontId, 'Hi');
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
         const size1 = world.sharedRefs._liveCount();
-        glyphTextLayoutSystem(world, assets, gpuStore, 0); // no change -> no work
+        glyphTextLayoutSystem(world, gpuStore); // no change -> no work
         expect(world.sharedRefs._liveCount()).toBe(size1);
       });
 
-      it('(b3) empty first bake -> dirty text refreshes mesh payload bounds and draw range', () => {
+      it('(b2.1) bounds producer refs across slot reuse and tint changes', () => {
         const assets = makeRegistry();
+        const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
+        const first = spawnLabel(world, fontId, 'Hi');
+        glyphTextLayoutSystem(world, gpuStore);
+        const baseline = world.sharedRefs._liveCount();
+        const catalogBaseline = assets.assetCatalog.size;
+
+        for (let i = 0; i < 32; i++) {
+          world.set(first, GlyphText, { color: [i / 32, 0.5, 1, 1] }).unwrap();
+          glyphTextLayoutSystem(world, gpuStore);
+          expect(world.sharedRefs._liveCount()).toBe(baseline);
+          expect(assets.assetCatalog.size).toBe(catalogBaseline);
+        }
+
+        world.despawn(first).unwrap();
+        glyphTextLayoutSystem(world, gpuStore);
+        expect(world.sharedRefs._liveCount()).toBe(baseline - 2);
+        const replacement = spawnLabel(world, fontId, 'Hi');
+        glyphTextLayoutSystem(world, gpuStore);
+        expect(replacement).not.toBe(first);
+        expect(world.sharedRefs._liveCount()).toBe(baseline);
+      });
+
+      it('(b2.2) keeps runtime-derived materials out of the persistent catalog across Worlds', () => {
+        const assets = makeRegistry();
+        const catalogBaseline = assets.assetCatalog.size;
+
+        for (let i = 0; i < 16; i++) {
+          const world = new World();
+          const fontId = registerFont(world, ASCII('Hi'));
+          spawnLabel(world, fontId, 'Hi');
+          glyphTextLayoutSystem(world, gpuStore);
+          expect(assets.assetCatalog.size).toBe(catalogBaseline);
+        }
+      });
+
+      it('(b3) empty first bake -> dirty text refreshes mesh payload bounds and draw range', () => {
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
         const e = spawnLabel(world, fontId, '');
 
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const meshHandle = mf.assetHandle as unknown as Handle<'MeshAsset', 'shared'>;
         expect(resolveAssetHandle<MeshAsset>(world, meshHandle).unwrap().vertices.length).toBe(0);
 
         world.set(e, GlyphText, { text: 'Hi' }).unwrap();
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
 
         const mesh = resolveAssetHandle<MeshAsset>(world, meshHandle).unwrap();
         expect(mesh.vertices.length).toBeGreaterThan(0);
@@ -233,11 +270,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
 
       it('(c) baked mesh AABB is the conservative anchor-centered cube (non-degenerate)', () => {
-        const assets = makeRegistry();
         const world = new World();
         const fontId = registerFont(world, ASCII('HHHH'));
         const e = spawnLabel(world, fontId, 'HHHH');
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
 
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const mesh = resolveAssetHandle<MeshAsset>(
@@ -256,14 +292,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
 
       it('(f) 9th distinct font in one frame -> font-concurrency-exceeded (AC-20)', () => {
-        const assets = makeRegistry();
         const world = new World();
         // Spawn 9 labels each referencing a distinct registered font.
         for (let i = 0; i < 9; i++) {
           const fontId = registerFont(world, ASCII('A'));
           spawnLabel(world, fontId, 'A');
         }
-        const result = glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        const result = glyphTextLayoutSystem(world, gpuStore);
         expect(result.ok).toBe(false);
         if (!result.ok) {
           expect(result.error).toBeInstanceOf(TextError);
@@ -273,11 +308,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
 
       it('(g) empty-string GlyphText -> MeshFilter with a 0-vertex mesh', () => {
-        const assets = makeRegistry();
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
         const e = spawnLabel(world, fontId, '');
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
+        glyphTextLayoutSystem(world, gpuStore);
 
         expect(world.get(e, MeshFilter).ok).toBe(true);
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };

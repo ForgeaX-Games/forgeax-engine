@@ -186,6 +186,8 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
   if (!ready.ok || device === undefined) throw new Error('runtime Dawn renderer not ready');
 
   const world = new World();
+  const attachment = renderer.attachWorld(world);
+  if (!attachment.ok) throw attachment.error;
   const plane = createPlaneGeometry(2.8, 2.8);
   expect(plane.ok).toBe(true);
   if (!plane.ok) throw new Error('plane creation failed');
@@ -262,7 +264,8 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
     component: DirectionalLight,
     data: { direction: [0, 0, -1], color: [1, 1, 1], intensity: 1, castShadow: false },
   });
-  const drawn = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   expect(drawn.ok).toBe(true);
   if (!drawn.ok) throw new Error(`draw failed: ${drawn.error.code}`);
   await device.queue.onSubmittedWorkDone();

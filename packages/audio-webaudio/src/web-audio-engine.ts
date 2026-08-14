@@ -244,6 +244,7 @@ export class WebAudioEngine {
     }
     source.node.disconnect();
     source.sourceGain.disconnect();
+    source.panner?.disconnect();
     this.sources.delete(entityId);
   }
 

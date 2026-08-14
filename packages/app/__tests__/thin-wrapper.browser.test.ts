@@ -135,7 +135,6 @@ describe('createApp(canvas) thin wrapper -- (A) path success path (AC-09)', () =
         case 'app-not-started':
         case 'app-already-running':
         case 'app-canvas-detached':
-        case 'app-paused-while-stop':
         case 'app-system-update-failed':
           return `app:${err.code}`;
         default:

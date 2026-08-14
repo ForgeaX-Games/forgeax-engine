@@ -399,6 +399,8 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
     const ready = await renderer.ready;
     if (!ready.ok) throw new Error(`ForgeaX renderer unavailable: ${ready.error.code}`);
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
     const input = m1CaptureInputs[sceneCase.caseId];
     const m1Case = sceneCase.caseId.startsWith('default-') || sceneCase.caseId.startsWith('falsify-');
     const m2Case = m2AlphaCasesById.get(sceneCase.caseId);
@@ -433,13 +435,15 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
         });
       }
     }
-    const drawResult = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!drawResult.ok) throw new Error(`ForgeaX draw failed: ${drawResult.error.code}`);
     if (rendererKind === 'webgl') {
       // The WebGL2 fallback has no browser GPU-queue completion event under
       // headed Xvfb; compositor frames are its completion boundary.
       await waitForAnimationFrameOrTimeout();
-      const warmedDraw = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const warmedDraw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!warmedDraw.ok) throw new Error(`ForgeaX warmed draw failed: ${warmedDraw.error.code}`);
       await waitForAnimationFrameOrTimeout();
     }

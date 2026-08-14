@@ -1,5 +1,5 @@
 import { World } from '@forgeax/engine-ecs';
-import { rhi } from '@forgeax/engine-rhi-null';
+import { RhiNullAdapter, rhi } from '@forgeax/engine-rhi-null';
 import { describe, expect, it } from 'vitest';
 import { constructRenderer } from '../construct-renderer';
 
@@ -8,6 +8,118 @@ function manifestUrl(): string {
 }
 
 describe('factory contract', () => {
+  it('rolls back a post-process params buffer when its initial write fails', async () => {
+    const adapter = new RhiNullAdapter();
+    const deviceResult = await adapter.requestDevice();
+    expect(deviceResult.ok).toBe(true);
+    if (!deviceResult.ok) return;
+    const device = deviceResult.value;
+    device.queue.writeBuffer = () =>
+      ({
+        ok: false,
+        error: new Error('write failed'),
+      }) as never;
+    const failingRhi = {
+      requestAdapter: () =>
+        Promise.resolve({
+          ok: true as const,
+          value: { ...adapter, requestDevice: () => Promise.resolve(deviceResult) },
+        }),
+      acquireCanvasContext: rhi.acquireCanvasContext,
+      createShaderModule: rhi.createShaderModule,
+    };
+    const renderer = await constructRenderer(
+      { getContext: () => null },
+      { rhi: failingRhi as never },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    expect(() =>
+      renderer.postProcess.register('test::write-failure', {
+        source: 'fn main() {}',
+        params: { byteSize: 16, defaultValue: new Uint8Array(16) },
+      }),
+    ).toThrow('write failed');
+    const buffers = (device as import('@forgeax/engine-rhi-null').RhiNullDevice).bookkeeper
+      .allRecords()
+      .filter((record) => record.kind === 'Buffer');
+    expect(buffers.at(-1)?.destroyed).toBe(true);
+    renderer.dispose();
+  });
+
+  it('attaches derived-state systems once without putting writes in draw', async () => {
+    const renderer = await constructRenderer(
+      { getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    const world = new World();
+
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    expect(world.inspect().schedules.flatMap((schedule) => schedule.systems)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'renderDerivedEntities' })]),
+    );
+    renderer.dispose();
+  });
+
+  it('rejects a second renderer owner and releases attachment on dispose', async () => {
+    const first = await constructRenderer(
+      { getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    const second = await constructRenderer(
+      { getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    const world = new World();
+
+    expect(first.attachWorld(world).ok).toBe(true);
+    expect(second.attachWorld(world).ok).toBe(false);
+    first.dispose();
+    expect(second.attachWorld(world).ok).toBe(true);
+    second.dispose();
+  });
+
+  it('releases one World without disposing the shared Renderer', async () => {
+    const first = await constructRenderer(
+      { getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    const second = await constructRenderer(
+      { getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    const world = new World();
+
+    expect(first.attachWorld(world).ok).toBe(true);
+    first.detachWorld(world);
+    first.detachWorld(world);
+    expect(second.attachWorld(world).ok).toBe(true);
+    second.dispose();
+    first.dispose();
+  });
+
+  it('refuses an attached World whose latest update did not complete publication', async () => {
+    const renderer = await constructRenderer(
+      { getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    expect((await renderer.ready).ok).toBe(true);
+    const world = new World();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    expect(world.update().ok).toBe(true);
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+
+    expect(world.update(Number.NaN).ok).toBe(false);
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(false);
+    renderer.dispose();
+  });
+
   it('resolves a renderer for a host canvas and rejects missing input', async () => {
     const manifest = `data:application/json,${encodeURIComponent(JSON.stringify({ schemaVersion: '1.0.0', entries: [] }))}`;
     await expect(
@@ -27,10 +139,42 @@ describe('factory contract', () => {
     );
     expect(renderer.releaseSurface().ok).toBe(true);
     expect(renderer.releaseSurface().ok).toBe(true);
-    expect(renderer.draw([], { owner: 0 }).ok).toBe(false);
+    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(false);
     expect(renderer.restoreSurface().ok).toBe(true);
     expect(renderer.restoreSurface().ok).toBe(true);
-    expect(renderer.draw([], { owner: 0 }).ok).toBe(true);
+    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+  });
+
+  it('does not unconfigure a surface after its ownership was released', async () => {
+    let unconfigureCalls = 0;
+    const renderer = await constructRenderer(
+      { getContext: () => null },
+      {
+        rhi: {
+          ...rhi,
+          acquireCanvasContext: () => ({
+            ok: true as const,
+            value: {
+              configure: () => ({ ok: true as const, value: undefined }),
+              unconfigure: () => {
+                unconfigureCalls += 1;
+              },
+              getConfiguration: () => undefined,
+              getCurrentTexture: () => ({
+                ok: true as const,
+                value: { __brand: 'TextureView' },
+              }),
+            },
+          }),
+        },
+      } as never,
+      { shaderManifestUrl: manifestUrl() },
+    );
+
+    expect(renderer.releaseSurface().ok).toBe(true);
+    expect(unconfigureCalls).toBe(1);
+    renderer.dispose();
+    expect(unconfigureCalls).toBe(1);
   });
 
   it('keeps the real factory-owned GPU refusal structured on the null carrier', async () => {
@@ -69,7 +213,10 @@ describe('factory contract', () => {
       expect(ready.ok).toBe(true);
       const timing = renderer.membershipTiming;
       expect(timing?.start().ok).toBe(true);
-      expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+      const world = new World();
+      expect(renderer.attachWorld(world).ok).toBe(true);
+      expect(world.update().ok).toBe(true);
+      expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
       const report = await timing?.finish();
       expect(report?.ok).toBe(true);
       if (report?.ok) {
@@ -96,17 +243,20 @@ describe('factory contract', () => {
     const unsubscribe = renderer.subscribeFrameEnd(() => {
       completions += 1;
     });
+    const world = new World();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update().unwrap();
 
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(completions).toBe(1);
 
     expect(renderer.releaseSurface().ok).toBe(true);
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(false);
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(false);
     expect(completions).toBe(1);
 
     expect(renderer.restoreSurface().ok).toBe(true);
     unsubscribe();
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(completions).toBe(1);
   });
 
@@ -143,7 +293,10 @@ describe('factory contract', () => {
     renderer.subscribeFrameEnd(() => {
       completions += 1;
     });
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    const world = new World();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(completions).toBe(0);
   });
 });

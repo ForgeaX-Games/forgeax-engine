@@ -11,6 +11,7 @@ import { Transform } from '@forgeax/engine-scene';
 import { err, ok } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRenderer } from '../createRenderer';
+import { drawPublished } from './draw-published';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -388,7 +389,7 @@ describe('prepared graphics Dawn contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     await deviceRef.value?.queue.onSubmittedWorkDone();
 
     expect(renderer.renderFeatureDiagnostics()[0]?.status).toBe('active');
@@ -457,7 +458,7 @@ describe('prepared graphics Dawn contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     expect(errors.map((error) => error.code)).toEqual([
       'render-feature-prepared-state-mismatch',
       'render-feature-prepared-state-mismatch',
@@ -523,7 +524,7 @@ describe('prepared graphics Dawn contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
 
     expect(errors.map((error) => error.code)).toContain(code);
     expect(errors.some((error) => error.detail !== undefined)).toBe(true);
@@ -585,7 +586,7 @@ describe('prepared graphics Dawn contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     expect(renderer.renderFeatureDiagnostics()[0]?.status).toBe('disabled');
     expect(errors).toContain('render-feature-capability-missing');
   });

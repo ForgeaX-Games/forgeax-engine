@@ -11,12 +11,42 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs && node scripts/smoke-browser-cycle.mjs",
+    "smoke:gauntlet": "node scripts/smoke-gauntlet.mjs",
     "smoke:browser-live": "node scripts/smoke-browser-live.mjs"
   },
   "forgeax": {
     "rhiDebug": {
       "riskFamilies": ["raster-state"]
+    },
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-4-advanced-opengl-5-framebuffers smoke:gauntlet",
+    "gauntletScenario": {
+      "id": "m24-render-graph-cycle-reinstall-recovery",
+      "script": "smoke:gauntlet",
+      "domains": [
+        "Rendering and shader construction",
+        "Inspection, debugging, and development bridges"
+      ],
+      "packages": [
+        "@forgeax/engine-app",
+        "@forgeax/engine-render-graph",
+        "@forgeax/engine-render",
+        "@forgeax/engine-runtime",
+        "@forgeax/engine-rhi-debug"
+      ],
+      "risks": ["baseline", "dynamic", "live", "fault", "recovery", "behavioral", "visual", "cleanup"],
+      "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery", "cleanup"],
+      "evidence": {
+        "frontDoors": ["dawn-node", "render-graph-cycle", "browser-webgpu", "browser-live", "rhi-debug"],
+        "legs": ["semantic", "live", "gpu", "behavioral", "recovery", "visual"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[smoke] M24 cycle/recovery: PASS",
+          "[m24] browser cycle/recovery: PASS",
+          "[m24] browser live cycle/recovery: PASS"
+        ]
+      }
     },
     "metrics": {
       "bundle-size": {

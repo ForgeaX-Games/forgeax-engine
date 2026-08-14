@@ -5,10 +5,26 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { collectRhiDebugDraws, runRhiDebugBrowserAdmission } from '../../../shared/scripts/rhi-debug-browser-admission.mjs';
+import { verifyDemoCapture } from '../../../shared/scripts/rhi-debug-verify.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
 const errors = [];
+const appDir = resolve(repoRoot, 'apps/bevy/run-conditions');
+
+if (process.env.RUN_CONDITIONS_PUBLIC === '1') {
+  await verifyDemoCapture({
+    pkg: '@forgeax/bevy-run-conditions',
+    label: 'bevy run_conditions public captureFrame',
+    mode: 'structural',
+    capturePrepareHook: '__prepareRunConditionsCapture',
+    appDir,
+    assertTape: ({ tape }) => assertRunConditionsTape(tape.events),
+  });
+  process.exit(0);
+}
+
 let vite;
 let browser;
 let stopping = false;
@@ -76,4 +92,50 @@ try {
   await browser?.close();
   stopping = true;
   vite?.kill();
+}
+
+const publicExit = await runPublicCaptureFrame();
+if (publicExit !== 0) process.exit(publicExit);
+
+await runRhiDebugBrowserAdmission({
+  pkg: '@forgeax/bevy-run-conditions',
+  label: 'bevy run_conditions',
+  readyHook: '__bevyRunConditionsReady',
+  capturePrepareHook: '__prepareRunConditionsCapture',
+  screenshotPath: resolve(appDir, 'artifacts/run-conditions-rhi-debug.png'),
+  triggerLabel: 'run-conditions-public-trigger',
+  assertTape: ({ events }) => assertRunConditionsTape(events),
+  formatCapture: ({ capture, selected, inspected }) =>
+    `${capture.runId ?? 'remote'} drawOrdinal=${selected.drawOrdinal} ` +
+    `indexCount=${inspected.drawCall.indexCount} markerDraws=${selected.markerDraws}`,
+});
+
+function runPublicCaptureFrame() {
+  return new Promise((resolveExit, reject) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+      cwd: repoRoot,
+      env: { ...process.env, RUN_CONDITIONS_PUBLIC: '1' },
+      stdio: 'inherit',
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => resolveExit(code ?? 1));
+  });
+}
+
+function assertRunConditionsTape(events) {
+  const { draws } = collectRhiDebugDraws(events);
+  const markerDraws = draws.filter(
+    ({ event, pass, pipeline }) =>
+      event.kind === 'drawIndexed' &&
+      event.indexCount === 36 &&
+      event.instanceCount > 0 &&
+      pass?.colorAttachmentViewHandleIds?.length === 1 &&
+      pipeline?.desc?.primitive?.topology === 'triangle-list',
+  );
+  if (markerDraws.length !== 2) {
+    throw new Error(`expected two run-condition marker draws, got ${markerDraws.length} of ${draws.length} draws`);
+  }
+  const drawOrdinal = draws.indexOf(markerDraws[0]);
+  console.log(`[bevy run_conditions] semantic selector markerDraws=2 drawOrdinal=${drawOrdinal}`);
+  return { drawOrdinal, markerDraws: markerDraws.length };
 }

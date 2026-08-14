@@ -107,6 +107,8 @@ async function main(): Promise<void> {
     log('renderer ready, backend=' + renderer.backend);
 
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
 
     // Camera at z=3, same as hello-triangle defaults.
     world.spawn(
@@ -135,7 +137,8 @@ async function main(): Promise<void> {
       P.overCapacitySpawned = N;
 
       for (let f = 0; f < 10; f++) {
-        renderer.draw([world], { owner: 0 });
+        world.update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
         await new Promise((r) => requestAnimationFrame(r));
       }
 
@@ -144,7 +147,8 @@ async function main(): Promise<void> {
       log('done. errors=' + errors.length + ' ceiling=' + P.ceilingHitCount + ' exceeded=' + P.exceededHitCount);
 
       // One more draw + rAF to flush a frame for screenshot.
-      renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
       log('READY_FOR_SCREENSHOT');
@@ -160,7 +164,8 @@ async function main(): Promise<void> {
         { component: MeshRenderer, data: {} },
       );
 
-      renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       await new Promise((r) => requestAnimationFrame(r));
 
       // Trigger a submit-period validation error on the engine's OWN live
@@ -224,7 +229,8 @@ async function main(): Promise<void> {
 
         // Next frame with the same renderer must still render (AC-06).
         await new Promise((r) => requestAnimationFrame(r));
-        renderer.draw([world], { owner: 0 });
+        world.update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
         await new Promise((r) => requestAnimationFrame(r));
         await new Promise((r) => requestAnimationFrame(r));
         P.nextFrameAfterBadSubmit = true;
@@ -247,7 +253,8 @@ async function main(): Promise<void> {
         { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
         { component: MeshRenderer, data: {} },
       );
-      renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       await new Promise((r) => requestAnimationFrame(r));
       await new Promise((r) => requestAnimationFrame(r));
       log('READY_FOR_SCREENSHOT');

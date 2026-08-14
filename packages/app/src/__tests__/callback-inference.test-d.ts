@@ -27,6 +27,6 @@ appResult.then((result) => {
 createRenderer(canvas).then((created) => {
   created.ready.then((ready) => {
     if (!ready.ok) return;
-    void created.draw([world], { owner: 0 });
+    void created.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   });
 });

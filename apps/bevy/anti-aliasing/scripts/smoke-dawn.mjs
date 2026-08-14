@@ -100,6 +100,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 console.log(`[anti-aliasing] backend=${renderer.backend}`);
 const errors = [];
@@ -155,14 +157,16 @@ for (let i = 0; i < ANTIALIAS_MODES.length; i += 1) {
   if (antialias === undefined) continue;
   world.set(scene.camera, Camera, { antialias });
   for (let frame = 0; frame < modeFrames; frame += 1) {
-    const result = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!result.ok) drawErrors += 1;
     framesObserved += 1;
   }
   modePixels.push(await capturePixels());
 }
 for (let frame = framesObserved; frame < targetFrames; frame += 1) {
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) drawErrors += 1;
   framesObserved += 1;
 }

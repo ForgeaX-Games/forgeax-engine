@@ -9,18 +9,23 @@
 // needs pkg/ fails later with a clear error if neither release nor toolchain
 // is available.
 
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ensureWasm } from '../../../scripts/lib/ensure-wasm-lib.mjs';
-
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG = join(SCRIPT_DIR, '..', 'pkg');
+const presenceMarkers = [join(PKG, 'wgpu_wasm.js')];
+if (presenceMarkers.every(existsSync)) {
+  process.stdout.write('[wgpu-wasm] pkg/ WASM already present -- skipping fetch.\n');
+  process.exit(0);
+}
+const { ensureWasm } = await import('../../../scripts/lib/ensure-wasm-lib.mjs');
 
 process.exit(
   ensureWasm({
     pkgLabel: 'wgpu-wasm',
-    presenceMarkers: [join(PKG, 'wgpu_wasm.js')],
+    presenceMarkers,
     fetchScript: join(SCRIPT_DIR, 'fetch-wasm.mjs'),
     skipEnv: 'FORGEAX_SKIP_WGPU_WASM_FETCH',
     buildHint:

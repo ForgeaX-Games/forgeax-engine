@@ -1,0 +1,6 @@
+{
+  "id": "forgeax-sdk-game",
+  "name": "ForgeaX SDK Game",
+  "schemaVersion": "1.0.0",
+  "entry": "main.ts"
+}

@@ -261,6 +261,8 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     if (!ready.ok) return;
 
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
 
     // feat-20260614 M8: registerWithGuid deleted. catalog(guid, payload) feeds
     // loadByGuid; world.allocSharedRef mints the column handle the bridge needs.
@@ -311,7 +313,8 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
 
     let framesObserved = 0;
     for (let i = 0; i < TARGET_FRAMES; i++) {
-      const r = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(r.ok).toBe(true);
       framesObserved++;
     }

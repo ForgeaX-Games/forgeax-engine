@@ -54,9 +54,9 @@ import { defineSystem, defineSystemSet, ENTITY_NULL_RAW } from '@forgeax/engine-
 import { Transform } from '@forgeax/engine-scene';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
 import {
-  _resetAnimationWarnsForTests,
   emitAnimationDiagnostic,
   isAnimationDevMode,
+  _resetAnimationWarnsForTests as resetAnimationDiagnosticsForTests,
 } from '../animation-diagnostic';
 import { AnimationPlayer } from '../animation-player';
 import { AnimationTargetId, AnimationTargets } from '../animation-target';
@@ -71,7 +71,10 @@ import { resolveAnimationAsset } from '../resolve-animation-asset';
 export const ADVANCE_ANIMATION_PLAYER_SYSTEM = 'advanceAnimationPlayer' as const;
 export const AnimationSet = defineSystemSet({ name: 'animation' });
 
-export { _resetAnimationWarnsForTests };
+export function _resetAnimationWarnsForTests(world: World): void {
+  resetAnimationDiagnosticsForTests(world);
+  targetMapCacheByWorld.delete(world);
+}
 
 /**
  * Advance all AnimationPlayer components by dt, blend the N active clips per
@@ -223,16 +226,62 @@ function collectActiveSlotsAndAdvanceTimes(
  */
 interface TargetMap {
   readonly entities: ReadonlyMap<string, EntityHandle>;
+  readonly missingTransforms: ReadonlyMap<string, EntityHandle>;
   readonly duplicateIds: ReadonlySet<string>;
   readonly hasStaleTarget: boolean;
+  readonly resolvedClips: WeakMap<AnimationClip, readonly (EntityHandle | undefined)[]>;
+}
+
+interface WorldTargetMapCache {
+  structureEpoch: number;
+  targetsEpoch: number;
+  targetIdEpoch: number;
+  readonly players: Map<number, TargetMap>;
+}
+
+const targetMapCacheByWorld = new WeakMap<World, WorldTargetMapCache>();
+
+function targetMapForPlayer(world: World, player: EntityHandle): TargetMap {
+  const structureEpoch = world._getStructureEpoch();
+  const targetsEpoch = world._getComponentMutationEpoch(AnimationTargets.id);
+  const targetIdEpoch = world._getComponentMutationEpoch(AnimationTargetId.id);
+  let cache = targetMapCacheByWorld.get(world);
+  if (
+    cache === undefined ||
+    cache.structureEpoch !== structureEpoch ||
+    cache.targetsEpoch !== targetsEpoch ||
+    cache.targetIdEpoch !== targetIdEpoch
+  ) {
+    cache = {
+      structureEpoch,
+      targetsEpoch,
+      targetIdEpoch,
+      players: new Map(),
+    };
+    targetMapCacheByWorld.set(world, cache);
+  }
+
+  const cached = cache.players.get(player as number);
+  if (cached !== undefined) return cached;
+  const built = buildTargetMap(world, player);
+  cache.players.set(player as number, built);
+  return built;
 }
 
 function buildTargetMap(world: World, player: EntityHandle): TargetMap {
   const targets = world.get(player, AnimationTargets);
   if (!targets.ok) {
-    return { entities: new Map(), duplicateIds: new Set(), hasStaleTarget: false };
+    return {
+      entities: new Map(),
+      missingTransforms: new Map(),
+      duplicateIds: new Set(),
+      hasStaleTarget: false,
+      resolvedClips: new WeakMap(),
+    };
   }
   const result = new Map<string, EntityHandle>();
+  const missingTransforms = new Map<string, EntityHandle>();
+  const seen = new Set<string>();
   const ambiguous = new Set<string>();
   let hasStaleTarget = false;
   for (const raw of targets.value.targets) {
@@ -243,15 +292,25 @@ function buildTargetMap(world: World, player: EntityHandle): TargetMap {
       hasStaleTarget = true;
       continue;
     }
-    if (ambiguous.has(id.value.value)) continue;
-    if (result.has(id.value.value)) {
-      result.delete(id.value.value);
-      ambiguous.add(id.value.value);
+    const targetId = id.value.value;
+    if (ambiguous.has(targetId)) continue;
+    if (seen.has(targetId)) {
+      result.delete(targetId);
+      missingTransforms.delete(targetId);
+      ambiguous.add(targetId);
       continue;
     }
-    result.set(id.value.value, target);
+    seen.add(targetId);
+    if (world.get(target, Transform).ok) result.set(targetId, target);
+    else missingTransforms.set(targetId, target);
   }
-  return { entities: result, duplicateIds: ambiguous, hasStaleTarget };
+  return {
+    entities: result,
+    missingTransforms,
+    duplicateIds: ambiguous,
+    hasStaleTarget,
+    resolvedClips: new WeakMap(),
+  };
 }
 
 function tickEntityTargets(
@@ -260,7 +319,7 @@ function tickEntityTargets(
   entityRaw: number,
   activeSlots: ActiveSlot[],
 ): void {
-  const targetMap = buildTargetMap(world, entity);
+  const targetMap = targetMapForPlayer(world, entity);
 
   // Per-joint accumulator: lazily allocated when first channel writes.
   // A Map keyed by jointIndex keeps the typical case (a few animated
@@ -279,17 +338,11 @@ function tickEntityTargets(
   for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
     // biome-ignore lint/style/noNonNullAssertion: bounded by activeSlots.length
     const slot = activeSlots[slotIdx]!;
+    const resolvedTargets = resolveClipTargets(world, entityRaw, slot, targetMap);
     for (let chIdx = 0; chIdx < slot.clip.channels.length; chIdx++) {
       // biome-ignore lint/style/noNonNullAssertion: bounded by channels.length
       const channel = slot.clip.channels[chIdx]!;
-      const target = resolveChannelTarget(
-        world,
-        entityRaw,
-        slot.clipHandleRaw,
-        chIdx,
-        channel.targetId,
-        targetMap,
-      );
+      const target = resolvedTargets[chIdx];
       if (target === undefined) continue;
       const targetRaw = target as number;
 
@@ -324,6 +377,29 @@ function tickEntityTargets(
   }
 }
 
+function resolveClipTargets(
+  world: World,
+  player: number,
+  slot: ActiveSlot,
+  targetMap: TargetMap,
+): readonly (EntityHandle | undefined)[] {
+  const cached = targetMap.resolvedClips.get(slot.clip);
+  if (cached !== undefined) return cached;
+
+  const targets = slot.clip.channels.map((channel, channelIndex) =>
+    resolveChannelTarget(
+      world,
+      player,
+      slot.clipHandleRaw,
+      channelIndex,
+      channel.targetId,
+      targetMap,
+    ),
+  );
+  targetMap.resolvedClips.set(slot.clip, targets);
+  return targets;
+}
+
 function resolveChannelTarget(
   world: World,
   player: number,
@@ -347,6 +423,21 @@ function resolveChannelTarget(
   }
   const target = targetMap.entities.get(targetId);
   if (target === undefined) {
+    const transformMissingTarget = targetMap.missingTransforms.get(targetId);
+    if (transformMissingTarget !== undefined) {
+      emitTargetDiagnostic(
+        world,
+        player,
+        clip,
+        channel,
+        targetId,
+        'animation-target-transform-missing',
+        'transform-missing',
+        'attach Transform to the bound animation target',
+        transformMissingTarget as number,
+      );
+      return undefined;
+    }
     emitTargetDiagnostic(
       world,
       player,
@@ -358,20 +449,6 @@ function resolveChannelTarget(
       targetMap.hasStaleTarget
         ? 'remove the stale target relation or bind a live replacement'
         : 'bind the matching AnimationTargetId to this player',
-    );
-    return undefined;
-  }
-  if (!world.get(target, Transform).ok) {
-    emitTargetDiagnostic(
-      world,
-      player,
-      clip,
-      channel,
-      targetId,
-      'animation-target-transform-missing',
-      'transform-missing',
-      'attach Transform to the bound animation target',
-      target as number,
     );
     return undefined;
   }

@@ -118,6 +118,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildCameraZoomWorld(world);
 
 // --- readback helper (copy renderTarget → mapped buffer → tight RGBA) ---
@@ -150,7 +152,8 @@ const CAPTURE_LATE = Math.max(CAPTURE_EARLY + 1, Math.floor(SMOKE_MIN_FRAMES * 0
 const cameraQuery = world.query({ read: [Camera], with: [Transform, ZoomCamera] }).unwrap();
 let framesObserved = 0, earlyFrame, lateFrame, earlyZoom = Number.NaN, finalCamera;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 }); if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`); framesObserved++;
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`); framesObserved++;
   if (i === CAPTURE_EARLY) { earlyFrame = await capture(sharedDevice); earlyZoom = cameraZoomValue(world); }
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   stepCameraZoom(world, { switchProjection: i === Math.floor(SMOKE_MIN_FRAMES * 0.4), wheelDelta: i < Math.floor(SMOKE_MIN_FRAMES * 0.2) || i > Math.floor(SMOKE_MIN_FRAMES * 0.5) ? 1 : 0 });

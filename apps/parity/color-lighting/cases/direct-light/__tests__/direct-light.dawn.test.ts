@@ -206,8 +206,11 @@ async function capturePipelineEvidence(
       if (!install.ok) throw new Error(`HDRP install failed: ${install.error.code}`);
     }
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
     spawnHdrpScene(world, sceneCase);
-    renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     return await readHdrpEvidence(renderer, surface, sceneCase, pipelineId);
   } finally {
     renderer.dispose();

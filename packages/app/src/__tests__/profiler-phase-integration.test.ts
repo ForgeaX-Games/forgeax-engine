@@ -28,6 +28,8 @@ function makeRenderer(draw: (options: DrawOwnerOptions) => void): Renderer {
   return {
     backend: 'webgpu',
     ready: Promise.resolve({ ok: true, value: undefined }),
+    attachWorld: () => ({ ok: true, value: undefined }),
+    detachWorld: () => {},
     draw: (_worlds: World[], options: DrawOwnerOptions) => {
       draw(options);
       return { ok: true, value: undefined };

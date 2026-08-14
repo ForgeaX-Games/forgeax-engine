@@ -47,6 +47,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HANDLE_CUBE, HANDLE_TRIANGLE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import type { World as WorldType } from '@forgeax/engine-ecs';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
   createBoxGeometry,
@@ -63,6 +64,7 @@ import {
   type InputSnapshot,
 } from '@forgeax/engine-input';
 import { type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import {
   assertStorageBufferCap,
   bin,
@@ -3034,7 +3036,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -3197,7 +3199,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         renderer.onError((e) => errors.push(e.code));
 
         const world = await spawnScene(renderer, meshForTopology(topology));
-        renderer.draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         // Some dispatch verb must have fired for this topology's mesh.
         const dispatched = spies.draw.mock.calls.length + spies.drawIndexed.mock.calls.length;
@@ -3308,7 +3314,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -3459,7 +3465,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, vertexOnlyLineMesh());
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // The vertex-only mesh draws via the non-indexed path.
       expect(spies.draw).toHaveBeenCalled();
@@ -3481,7 +3491,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, indexedTriangleMesh());
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.setIndexBuffer).toHaveBeenCalled();
       expect(spies.drawIndexed).toHaveBeenCalled();
@@ -4008,7 +4022,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           opts?: unknown,
           bundler?: unknown,
         ) => Promise<{
-          draw: (worlds: unknown, opts: { owner: number }) => void;
+          draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
           ready: Promise<void>;
         }>;
       };
@@ -4020,9 +4034,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       );
       await renderer.ready;
       const world = new World();
-      // No throw: draw accepts a World. We do not assert specific recording
-      // here — that lives in render-system.test.ts (w14 / w15).
-      expect(() => renderer.draw([world], { owner: 0 })).not.toThrow();
+      const typedRenderer = renderer as unknown as RendererType;
+      const typedWorld = world as WorldType;
+      const attachment = typedRenderer.attachWorld(typedWorld);
+      if (!attachment.ok) throw attachment.error;
+      typedWorld.update().unwrap();
+      expect(typedRenderer.draw([typedWorld], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
       // Source-level guarantee: createRenderer.ts must use World as the draw
       // parameter type after the K-4 rewrite (D-S2: RenderSystem walks the
       // World query graph; charter proposition 5 single ECS-driven entry).
@@ -4051,7 +4068,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         'renderer-factory.ts',
       );
       const text = fs.readFileSync(createRendererSrc, 'utf8');
-      expect(text).toMatch(/draw\s*\(\s*\w+\s*:\s*World\b/);
+      expect(text).toMatch(/draw\s*\(\s*\w+\s*:\s*readonly World\[\]/);
       expect(text).not.toMatch(/draw\s*\(\s*\w+\s*:\s*RendererDrawTarget\b/);
     });
 
@@ -4065,7 +4082,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           opts?: unknown,
           bundler?: unknown,
         ) => Promise<{
-          draw: (worlds: unknown, opts: { owner: number }) => void;
+          draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
           ready: Promise<void>;
           onError: (cb: (err: { code: string }) => void) => () => void;
         }>;
@@ -4082,7 +4099,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e));
 
       // Call draw before awaiting ready - must fire onError + skip frame.
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(errors.some((e) => e.code === 'rhi-not-available')).toBe(true);
     });
   });
@@ -4111,7 +4132,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           opts?: unknown,
           bundler?: unknown,
         ) => Promise<{
-          draw: (worlds: unknown, opts: { owner: number }) => void;
+          draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
           ready: Promise<unknown>;
           onError: (cb: (err: { code: string; hint?: string }) => void) => () => void;
           assets: {
@@ -4139,7 +4160,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // surface is caught at extract (not record):
       //   - `await renderer.ready` resolves Result.ok (Step 2 guard skips
       //     dual createShaderModule because `registry.entries().length === 0`)
-      //   - on `renderer.draw([world], { owner: 0 })` the per-entity loop in
+      //   - on `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` the per-entity loop in
       //     `render-system-extract.ts` walks the material parent chain (none),
       //     finds zero passes, and fires
       //     `material-no-effective-pass` (MaterialError).
@@ -4223,7 +4244,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
       expect(world.update(1 / 60).ok).toBe(true);
 
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       // Property-access assertions only (charter P3 + P5: structured error
       // surface; no string-parse on `.message`).
       // The shared Material resolver reports an empty effective pass set at

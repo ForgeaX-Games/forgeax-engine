@@ -11,13 +11,16 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser-rhi-debug.mjs"
   },
   "forgeax": {
     "bevyExample": {
       "name": "system_param",
       "category": "ECS (Entity Component System)",
       "status": "implemented"
+    },
+    "rhiDebug": {
+      "riskFamilies": ["ecs-scheduling"]
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-system-param smoke",
     "metrics": {

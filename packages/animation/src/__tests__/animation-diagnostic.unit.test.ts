@@ -119,6 +119,46 @@ describe('animation runtime diagnostics', () => {
     expect(diagnostics(warn)).toHaveLength(3);
   });
 
+  it('reuses stable target bindings and invalidates them on owning ECS changes', async () => {
+    const world = new World();
+    const player = await playerWithClip(world);
+    const target = world.spawn({ component: Transform, data: {} }).unwrap() as EntityHandle;
+    world
+      .addComponent(target, { component: AnimationTargetId, data: { value: TARGET_ID } })
+      .unwrap();
+    world
+      .addComponent(player, { component: AnimationTargets, data: { targets: [target] } })
+      .unwrap();
+    const get = vi.spyOn(world, 'get');
+
+    world.update(0.25);
+    const bindingReadsAfterFirstUpdate = get.mock.calls.filter(
+      ([, component]) => component === AnimationTargets || component === AnimationTargetId,
+    ).length;
+    world.update(0.25);
+    const bindingReadsAfterStableUpdate = get.mock.calls.filter(
+      ([, component]) => component === AnimationTargets || component === AnimationTargetId,
+    ).length;
+
+    expect(bindingReadsAfterFirstUpdate).toBeGreaterThan(0);
+    expect(bindingReadsAfterStableUpdate).toBe(bindingReadsAfterFirstUpdate);
+
+    world.removeComponent(target, Transform).unwrap();
+    world.update(0.25);
+    const bindingReadsAfterStructuralChange = get.mock.calls.filter(
+      ([, component]) => component === AnimationTargets || component === AnimationTargetId,
+    ).length;
+    expect(bindingReadsAfterStructuralChange).toBeGreaterThan(bindingReadsAfterStableUpdate);
+
+    world.addComponent(target, { component: Transform, data: {} }).unwrap();
+    world.set(target, AnimationTargetId, { value: 'b'.repeat(32) }).unwrap();
+    world.update(0.25);
+    const bindingReadsAfterIdChange = get.mock.calls.filter(
+      ([, component]) => component === AnimationTargets || component === AnimationTargetId,
+    ).length;
+    expect(bindingReadsAfterIdChange).toBeGreaterThan(bindingReadsAfterStructuralChange);
+  });
+
   it('emits structured diagnostics for missing Transform, duplicate IDs, stale targets, and missing channels', async () => {
     const world = new World();
     const player = await playerWithClip(world);

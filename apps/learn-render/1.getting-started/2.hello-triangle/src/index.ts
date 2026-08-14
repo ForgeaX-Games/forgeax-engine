@@ -152,6 +152,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     });
     const world = new World();
     spawnTriangleScene(world, clearOnly);
+    const attached = renderer.attachWorld(world);
+    if (!attached.ok) {
+      reportBootstrapError('[learn-render 1.2 hello-triangle] attach failed:', attached.error);
+      return;
+    }
     // rAF-driven render loop - one `renderer.draw(world)` per compositor
     // tick. The engine-internal RenderSystem walks the World query graph
     // (Extract / Prepare / Record three stages) and submits one GPU
@@ -159,7 +164,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // registered to user schedule; renderer.draw(world) is the sole
     // invocation site).
     const tick = (): void => {
-      const drawn = renderer.draw([world], { owner: 0 });
+      const updated = world.update(1 / 60);
+      if (!updated.ok) {
+        reportBootstrapError('[learn-render 1.2 hello-triangle] update failed:', updated.error);
+        return;
+      }
+      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!drawn.ok) {
         reportBootstrapError('[learn-render 1.2 hello-triangle] draw failed:', drawn.error);
         return;
@@ -179,7 +189,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // packages/runtime/src/createRenderer.ts now (architecture
     // principle 1 SSOT).
     window.__captureHelloTriangle = async (): Promise<Uint8Array> => {
-      const drawn = renderer.draw([world], { owner: 0 });
+      world.update(1 / 60).unwrap();
+      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!drawn.ok) {
         reportBootstrapError(
           '[learn-render 1.2 hello-triangle] capture draw failed:',

@@ -91,6 +91,8 @@ if (!shaderRegistry.findMaterialArtifact(SHADER_ID).ok) {
 const pixels = makeTexturePixels();
 const texture = makeTextureAsset(pixels);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 const upload = await renderer.store.uploadTexture(textureHandle, texture, {
   bytes: pixels,
@@ -104,7 +106,8 @@ if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 if (!buildShaderMaterialWorld(world, unwrapHandle(textureHandle))) throw new Error('scene construction failed');
 
 for (let frame = 0; frame < FRAMES; frame += 1) {
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   await delay(0);
 }

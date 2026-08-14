@@ -55,7 +55,7 @@ describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
       | 'app-not-started'
       | 'app-already-running'
       | 'app-canvas-detached'
-      | 'app-paused-while-stop'
+      | 'app-frame-step-invalid'
       | 'app-system-update-failed'
       | 'app-pointer-lock-failed'
       | 'app-execution-tier-unavailable'
@@ -71,7 +71,7 @@ describe('AppErrorCode is the 12-member closed union (AC-07)', () => {
     expectTypeOf<'app-not-started'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-already-running'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-canvas-detached'>().toMatchTypeOf<AppErrorCode>();
-    expectTypeOf<'app-paused-while-stop'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-frame-step-invalid'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-system-update-failed'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-pointer-lock-failed'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-execution-tier-unavailable'>().toMatchTypeOf<AppErrorCode>();
@@ -117,18 +117,14 @@ describe('AppError.detail is discriminated per code (AC-07)', () => {
     }
   });
 
-  it('the other 3 codes carry empty-object detail {}', () => {
+  it('the other 2 codes carry empty-object detail {}', () => {
     const a = new AppError({ code: 'app-not-started', expected: '', hint: '', detail: {} });
     const b = new AppError({ code: 'app-already-running', expected: '', hint: '', detail: {} });
-    const c = new AppError({ code: 'app-paused-while-stop', expected: '', hint: '', detail: {} });
     if (a.code === 'app-not-started') {
       expectTypeOf(a.detail).toMatchTypeOf<Readonly<Record<string, never>>>();
     }
     if (b.code === 'app-already-running') {
       expectTypeOf(b.detail).toMatchTypeOf<Readonly<Record<string, never>>>();
-    }
-    if (c.code === 'app-paused-while-stop') {
-      expectTypeOf(c.detail).toMatchTypeOf<Readonly<Record<string, never>>>();
     }
   });
 
@@ -332,7 +328,7 @@ describe('exhaustive switch over (AppError | RhiError) compiles with no default 
           return 'b';
         case 'app-canvas-detached':
           return 'c';
-        case 'app-paused-while-stop':
+        case 'app-frame-step-invalid':
           return 'd';
         case 'app-system-update-failed':
           return 'e';
@@ -388,7 +384,7 @@ describe('dual-layer instanceof EngineEnvironmentError + switch pattern (D-6)', 
         case 'app-not-started':
         case 'app-already-running':
         case 'app-canvas-detached':
-        case 'app-paused-while-stop':
+        case 'app-frame-step-invalid':
         case 'app-system-update-failed':
         case 'app-pointer-lock-failed':
         case 'app-execution-tier-unavailable':

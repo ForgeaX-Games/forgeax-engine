@@ -51,7 +51,11 @@ describe('transparency post Dawn GPU integration', () => {
           expect(installed.ok).toBe(true);
           if (!installed.ok) throw new Error(installed.error.hint);
         }
-        const drawn = renderer.draw([makeWorld(sceneCase)], { owner: 0 });
+        const world = makeWorld(sceneCase);
+        const attachment = renderer.attachWorld(world);
+        if (!attachment.ok) throw attachment.error;
+        world.update().unwrap();
+        const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
         expect(drawn.ok).toBe(true);
         if (!drawn.ok) throw new Error(drawn.error.hint);
         await renderer.device.queue.onSubmittedWorkDone();

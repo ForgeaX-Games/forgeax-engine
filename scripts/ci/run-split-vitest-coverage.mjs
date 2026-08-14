@@ -47,25 +47,35 @@ function parsePositiveInt(value, name, { max = Number.POSITIVE_INFINITY } = {}) 
 
 function parseArgs(argv) {
   const options = {
+    coverage: true,
     coverageDir: 'coverage',
     dryRun: false,
     groupSize: defaultGroupSize,
     maxWorkers: defaultMaxWorkers,
     outputFile: 'vitest-coverage-out.json',
     projects: [],
+    vitestArgs: [],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === '--dry-run') {
+    if (argument === '--non-coverage') {
+      options.coverage = false;
+      continue;
+    } else if (argument === '--dry-run') {
       options.dryRun = true;
       continue;
     }
     const [key, inlineValue] = argument.split('=', 2);
     const value = inlineValue ?? argv[++index];
     if (key === '--project') {
-      if (!value) throw new Error('--project requires a value');
-      options.projects.push(value);
+      if (options.coverage) {
+        if (!value) throw new Error('--project requires a value');
+        options.projects.push(value);
+      } else {
+        options.vitestArgs.push(argument);
+        if (inlineValue === undefined && value !== undefined) options.vitestArgs.push(value);
+      }
     } else if (key === '--group-size') {
       options.groupSize = parsePositiveInt(value, '--group-size', { max: 12 });
     } else if (key === '--max-workers') {
@@ -76,8 +86,10 @@ function parseArgs(argv) {
     } else if (key === '--output-file') {
       if (!value) throw new Error('--output-file requires a value');
       options.outputFile = value;
-    } else {
+    } else if (options.coverage) {
       throw new Error(`unknown argument: ${argument}`);
+    } else {
+      options.vitestArgs.push(argument);
     }
   }
   return options;
@@ -93,7 +105,7 @@ function packageProjectNames() {
     .sort();
 }
 
-function allProjectNames() {
+export function allProjectNames() {
   return [...packageProjectNames(), '@forgeax/hello-triangle', 'unit'];
 }
 
@@ -133,27 +145,30 @@ function readReport(reportPath) {
   }
 }
 
-function runGroup({ cliPath, group, groupIndex, maxWorkers }) {
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'forgeax-vitest-coverage-'));
-  const coverageDir = path.join(tempDir, 'coverage');
-  const reportPath = path.join(tempDir, 'vitest.json');
-  const logPath = path.join(tempDir, 'vitest.log');
-  mkdirSync(coverageDir, { recursive: true });
-
+function runGroup({ cliPath, group, groupIndex, maxWorkers, coverage, vitestArgs }) {
+  const tempDir = coverage ? mkdtempSync(path.join(os.tmpdir(), 'forgeax-vitest-coverage-')) : null;
+  const coverageDir = tempDir === null ? null : path.join(tempDir, 'coverage');
+  const reportPath = tempDir === null ? null : path.join(tempDir, 'vitest.json');
+  const logPath = tempDir === null ? null : path.join(tempDir, 'vitest.log');
+  if (coverageDir !== null) mkdirSync(coverageDir, { recursive: true });
   const args = [
     cliPath,
     'run',
     ...group.flatMap((project) => ['--project', project]),
     `--maxWorkers=${maxWorkers}`,
-    '--typecheck',
-    '--coverage',
-    '--coverage.reporter=json',
-    `--coverage.reportsDirectory=${coverageDir}`,
-    ...coverageThresholds,
-    '--reporter=default',
-    '--reporter=json',
-    `--outputFile=${reportPath}`,
+    ...(coverage ? [] : vitestArgs),
   ];
+  if (coverage)
+    args.push(
+      '--typecheck',
+      '--coverage',
+      '--coverage.reporter=json',
+      `--coverage.reportsDirectory=${coverageDir}`,
+      ...coverageThresholds,
+      '--reporter=default',
+      '--reporter=json',
+      `--outputFile=${reportPath}`,
+    );
   const child = spawnSync(process.execPath, args, {
     cwd: rootDir,
     encoding: 'utf8',
@@ -163,27 +178,39 @@ function runGroup({ cliPath, group, groupIndex, maxWorkers }) {
   const stdout = child.stdout ?? '';
   const stderr = child.stderr ?? '';
   const log = `${stdout}${stderr}`;
-  writeFileSync(logPath, log);
+  if (logPath !== null) writeFileSync(logPath, log);
   process.stdout.write(stdout);
   process.stderr.write(stderr);
 
-  const report = readReport(reportPath);
-  const closeTimeoutOnly =
-    child.status !== 0 && log.includes('close timed out after 500ms') && greenReport(report);
   if (child.error) {
     throw new Error(`Vitest group ${groupIndex} could not start: ${child.error.message}`);
   }
-  if (child.status !== 0 && !closeTimeoutOnly) {
-    throw new Error(
-      `Vitest group ${groupIndex} failed with status ${child.status}; projects=${group.join(', ')}; log=${logPath}`,
-    );
+  if (child.signal) {
+    const error = new Error(`Vitest group ${groupIndex} terminated by ${child.signal}`);
+    error.signal = child.signal;
+    throw error;
   }
+  const report = coverage && reportPath !== null ? readReport(reportPath) : null;
+  const closeTimeoutOnly =
+    coverage &&
+    child.status !== 0 &&
+    log.includes('close timed out after 500ms') &&
+    greenReport(report);
+  if (child.status !== 0 && !closeTimeoutOnly) {
+    const error = new Error(
+      `Vitest group ${groupIndex} failed with status ${child.status}; projects=${group.join(', ')}; log=${logPath ?? 'inherited output'}`,
+    );
+    error.status = child.status ?? 1;
+    throw error;
+  }
+
+  if (!coverage) return { report: null, coveragePath: null, tempDir: null };
+
   if (!greenReport(report)) {
     throw new Error(
       `Vitest group ${groupIndex} reported failures; projects=${group.join(', ')}; report=${reportPath}`,
     );
   }
-
   const coveragePath = path.join(coverageDir, 'coverage-final.json');
   if (!existsSync(coveragePath)) {
     throw new Error(
@@ -291,13 +318,26 @@ function main() {
   try {
     for (const [index, group] of groups.entries()) {
       process.stderr.write(
-        `[vitest] coverage group ${index + 1}/${groups.length}: ${group.join(', ')}\n`,
+        `[vitest] ${options.coverage ? 'coverage' : 'bounded unit'} group ${index + 1}/${groups.length}: ${group.join(', ')}\n`,
       );
       groupResults.push(
-        runGroup({ cliPath, group, groupIndex: index + 1, maxWorkers: options.maxWorkers }),
+        runGroup({
+          cliPath,
+          group,
+          groupIndex: index + 1,
+          maxWorkers: options.maxWorkers,
+          coverage: options.coverage,
+          vitestArgs: options.vitestArgs,
+        }),
       );
     }
 
+    if (!options.coverage) {
+      process.stdout.write(
+        `[vitest] bounded unit passed: groups=${groups.length}, projects=${projects.length}\n`,
+      );
+      return;
+    }
     const outputFile = path.resolve(rootDir, options.outputFile);
     const coverageDir = path.resolve(rootDir, options.coverageDir);
     const aggregateReport = mergeReports(groupResults.map(({ report }) => report));
@@ -313,7 +353,8 @@ function main() {
     for (const { tempDir } of groupResults) rmSync(tempDir, { recursive: true, force: true });
   } catch (error) {
     process.stderr.write(`[vitest] split coverage failed: ${error.message}\n`);
-    process.exitCode = 1;
+    if (error.signal) process.kill(process.pid, error.signal);
+    process.exitCode = error.status ?? 1;
   }
 }
 
@@ -321,5 +362,6 @@ try {
   main();
 } catch (error) {
   process.stderr.write(`[vitest] split coverage failed: ${error.message}\n`);
+  if (error.signal) process.kill(process.pid, error.signal);
   process.exitCode = 1;
 }

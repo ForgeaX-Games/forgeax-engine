@@ -121,6 +121,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // references. The SceneInstanceContainer resolver looks tokens up by
     // name; pre-registering keeps the spawn surface compile-time stable.
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
 
     // Step 3: construct SceneAsset POD from room.pack.json with GUID strings
     // in handle fields (post-parseScenePayload intermediate state). The refs
@@ -228,7 +230,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
 
     const frame = (): void => {
-      const r = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) console.error('[room] draw error:', r.error);
       requestAnimationFrame(frame);
     };

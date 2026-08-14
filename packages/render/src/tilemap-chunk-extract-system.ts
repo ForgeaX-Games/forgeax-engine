@@ -75,7 +75,6 @@ import {
   Tilemap,
 } from './components';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
-import { worldEntityKey } from './record/frame-snapshot';
 
 // Module-scoped caches (charter P5 — engine-side memoisation; AI users
 // never reach in). Test harness can flush them via the reset helpers.
@@ -115,13 +114,13 @@ let atlasOnlyMaterialCache = new WeakMap<World, Map<string, number>>();
 // extractFrame's entity count proportional to visible tile count rather than
 // total map tile count (charter P5: engine-side memoisation / streaming).
 //
-// Design:
-//   layerStreamCache : layerKey → pre-bucketed specs by chunkIndex (built once
+// Design: one WeakMap entry per World owns three bounded maps:
+//   layers : layerKey → pre-bucketed specs by chunkIndex (built once
 //                      from bucketTileLayer, rebuilt on dirty). Avoids re-reading
 //                      the full tileset and re-materialising every frame.
-//   layerChunkStreamEntities : "${layerKey}:${chunkIdx}" → spawned entity ids
+//   chunkEntities : "${layerKey}:${chunkIdx}" → spawned entity ids
 //                      for that chunk (purged when chunk leaves frustum).
-//   layerChunkActive : layerKey → Set<chunkIdx> currently spawned.
+//   activeChunks : layerKey → Set<chunkIdx> currently spawned.
 //
 // bug-20260703-tilemap-chunk-stale-frustum-and-cull-overhang (D2): each entry
 // stores the ACTUAL world-space bounding box (union of every tile's post-TRS
@@ -147,9 +146,26 @@ interface StreamLayerCache {
   readonly layerOrder: number;
   readonly sortScope: SortScope;
 }
-const layerStreamCache = new Map<number, StreamLayerCache>();
-const layerChunkStreamEntities = new Map<string, number[]>();
-const layerChunkActive = new Map<number, Set<number>>();
+interface PerWorldStreamingCache {
+  readonly layers: Map<string, StreamLayerCache>;
+  readonly chunkEntities: Map<string, number[]>;
+  readonly activeChunks: Map<string, Set<number>>;
+}
+
+let streamingCacheByWorld = new WeakMap<World, PerWorldStreamingCache>();
+
+function streamingCache(world: World): PerWorldStreamingCache {
+  let cache = streamingCacheByWorld.get(world);
+  if (cache === undefined) {
+    cache = {
+      layers: new Map(),
+      chunkEntities: new Map(),
+      activeChunks: new Map(),
+    };
+    streamingCacheByWorld.set(world, cache);
+  }
+  return cache;
+}
 
 /**
  * Flush both material caches. Useful in test harnesses + after a
@@ -172,9 +188,7 @@ export function resetTilemapChunkExtractCache(): void {
  * caches (plan-strategy §2 D-3 + §2 D-5).
  */
 export function resetTilemapDerivedEntityTracker(): void {
-  layerStreamCache.clear();
-  layerChunkStreamEntities.clear();
-  layerChunkActive.clear();
+  streamingCacheByWorld = new WeakMap<World, PerWorldStreamingCache>();
 }
 
 /**
@@ -184,21 +198,25 @@ export function resetTilemapDerivedEntityTracker(): void {
  * appear here; a slot subsequently reused for a fresh TileLayer sees
  * empty caches and rebuilds from zero (plan-strategy §2 D-4).
  *
- * Parsing `layerChunkStreamEntities` key format `${worldId}:${layerKey}:
- * ${chunkIdx}` is intentional so callers observe cleanup on all three
- * maps without depending on the invariant `activeSet ↔ chunkStreamEntities
+ * Parsing the per-World `chunkEntities` key format `${entity}:${chunkIdx}`
+ * is intentional so callers observe cleanup on all three maps without
+ * depending on the invariant `activeSet ↔ chunkEntities
  * keys are paired` — the test then also cross-checks that invariant.
  */
-export function _peekPerCellStreamingLayerKeys(): readonly number[] {
+export function _peekPerCellStreamingLayerKeys(world: World): readonly number[] {
+  const cache = streamingCacheByWorld.get(world);
+  if (cache === undefined) return [];
   const out = new Set<number>();
-  for (const layerKey of layerStreamCache.keys()) out.add(layerKey);
-  for (const layerKey of layerChunkActive.keys()) out.add(layerKey);
-  for (const key of layerChunkStreamEntities.keys()) {
+  for (const layerKey of cache.layers.keys()) {
+    if (Number.isFinite(Number(layerKey))) out.add(Number(layerKey));
+  }
+  for (const layerKey of cache.activeChunks.keys()) {
+    if (Number.isFinite(Number(layerKey))) out.add(Number(layerKey));
+  }
+  for (const key of cache.chunkEntities.keys()) {
     const parts = key.split(':');
-    const middle = parts[1];
-    if (middle === undefined) continue;
-    const layerKey = Number(middle);
-    if (Number.isFinite(layerKey)) out.add(layerKey);
+    const entity = parts[0];
+    if (entity !== undefined && Number.isFinite(Number(entity))) out.add(Number(entity));
   }
   return Array.from(out);
 }
@@ -998,32 +1016,27 @@ interface LayerWork {
  * tweak-20260714 M4 diff-cleanup preamble (plan-strategy §2 D-4 +
  * requirements §5 AC-11 + §8 edge case #4).
  *
- * The per-cell streaming caches (`layerStreamCache` / `layerChunkActive` /
- * `layerChunkStreamEntities`) are module-scoped and outlive individual
- * TileLayer entities. When a TileLayer is despawned (or cascade-collected
- * via `world.despawn(tilemapEntity)`) the ECS mirrors clean up entities
- * and `Children.entities`, but these three Maps retain the dead layer's
- * entries indefinitely. On slot reuse (a fresh TileLayer landing on the
- * same entity slot -> the same `layerKey = worldEntityKey(worldId, slot)`)
- * the stale entries would corrupt rebuild: `activeSet` still lists old
+ * The per-cell streaming maps are owned by one weak World entry and outlive
+ * individual TileLayer entities while that World is alive. When a TileLayer
+ * is despawned (or cascade-collected via `world.despawn(tilemapEntity)`) the
+ * ECS mirrors clean up entities and `Children.entities`, but these maps retain
+ * the dead layer's entries until this diff. On slot reuse, the stale entries
+ * would corrupt rebuild: `activeSet` still lists old
  * chunkIndexes, and the rebuild branch would attempt to despawn stale
  * entity IDs before repopulating.
  *
- * Fix: at the top of each frame, diff "layerKeys currently in caches for
- * this worldId" against "layerKeys the fresh query returned". The set
+ * Fix: at the top of each frame, diff this World's cached layer keys against
+ * the fresh query. The set
  * difference names layers that vanished since the previous call; evict
  * their entries from all three Maps. `activeSet` is the SSOT for "which
  * chunkIndexes have entries under this layer" (each insertion / removal
- * pairs a `layerChunkStreamEntities` set/delete with an `activeSet` add/
- * delete), so cleanup iterates `activeSet` rather than prefix-scanning
- * `layerChunkStreamEntities.keys()` — O(chunks-per-dead-layer) instead
+ * pairs a `chunkEntities` set/delete with an `activeSet` add/delete), so
+ * cleanup iterates `activeSet` rather than scanning `chunkEntities.keys()` —
+ * O(chunks-per-dead-layer) instead
  * of O(total-cache-keys).
  *
- * Cross-world isolation: `layerKey = worldId * 2^32 + slot`
- * (`worldEntityKey`, `record/frame-snapshot.ts`), so
- * `Math.floor(layerKey / 2^32) === worldId` filters out entries that
- * belong to a different world. Those other worlds run their own extract
- * call and clean up their own dead layers there.
+ * Cross-world isolation is structural: the WeakMap key is the World object.
+ * No duplicated World id is retained in every layer/chunk key.
  *
  * Per-frame cost (OOS-3 invariant): the two `keys()` iterations scan
  * O(cache_size) ≤ O(all-ever-seen-layers-for-this-worldId). Typical
@@ -1031,39 +1044,36 @@ interface LayerWork {
  * matrix arithmetic. Actual eviction work only runs on frames where a
  * layer vanished — steady-state frames pay only the diff scan.
  */
-function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], worldId: number): void {
-  const WORLDID_STRIDE = 4294967296; // 2^32
-  const aliveLayerKeys = new Set<number>();
+function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], world: World): void {
+  const cache = streamingCache(world);
+  const aliveLayerKeys = new Set<string>();
   for (const w of work) {
-    aliveLayerKeys.add(
-      worldEntityKey(worldId, unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>)),
-    );
+    aliveLayerKeys.add(String(unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>)));
   }
-  const deadLayerKeys = new Set<number>();
-  for (const layerKey of layerChunkActive.keys()) {
-    if (Math.floor(layerKey / WORLDID_STRIDE) !== worldId) continue;
+  const deadLayerKeys = new Set<string>();
+  for (const layerKey of cache.activeChunks.keys()) {
     if (!aliveLayerKeys.has(layerKey)) deadLayerKeys.add(layerKey);
   }
-  for (const layerKey of layerStreamCache.keys()) {
-    if (Math.floor(layerKey / WORLDID_STRIDE) !== worldId) continue;
+  for (const layerKey of cache.layers.keys()) {
     if (!aliveLayerKeys.has(layerKey)) deadLayerKeys.add(layerKey);
   }
   for (const deadKey of deadLayerKeys) {
-    const activeSet = layerChunkActive.get(deadKey);
+    const activeSet = cache.activeChunks.get(deadKey);
     if (activeSet !== undefined) {
       for (const chunkIdx of activeSet) {
-        layerChunkStreamEntities.delete(`${worldId}:${deadKey}:${chunkIdx}`);
+        cache.chunkEntities.delete(`${deadKey}:${chunkIdx}`);
       }
-      layerChunkActive.delete(deadKey);
+      cache.activeChunks.delete(deadKey);
     }
-    layerStreamCache.delete(deadKey);
+    cache.layers.delete(deadKey);
   }
 }
 
 /**
  * Walk every TileLayer ChildOf-ing a Tilemap, extract its non-zero cells
- * into derived render entities. Called per-frame from `createRenderer.draw`
- * before the render system reads the world.
+ * into derived render entities. A Renderer attaches this system to FrameEnd;
+ * World's final publication then resolves newly-created Transform.world values before the
+ * read-only render walk begins.
  *
  * Two paths based on `TileLayer.sortScope`:
  *
@@ -1080,7 +1090,8 @@ function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], worldId: nu
  *     have ECS entities alive, keeping `extractFrame` iteration proportional
  *     to visible tile count rather than total map tile count.
  */
-export function tilemapChunkExtractSystem(world: World, worldId: number): void {
+export function tilemapChunkExtractSystem(world: World): void {
+  const streaming = streamingCache(world);
   const work: LayerWork[] = [];
   const tileLayerQuery = world.query({ read: [TileLayer, ChildOf] }).unwrap();
   for (const row of tileLayerQuery) {
@@ -1095,18 +1106,16 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
     });
   }
 
-  evictDeadPerCellStreamingCaches(work, worldId);
+  evictDeadPerCellStreamingCaches(work, world);
 
   // Compute the camera frustum once per frame — only needed when at least
   // one streaming (per-cell) layer exists. Null = always-visible fallback.
   let frustumPlanes: frustum.Frustum | null | undefined;
 
   for (const w of work) {
-    // D-1a #7: layerKey = worldEntityKey(worldId, entitySlot) for cross-world isolation.
-    const layerKey = worldEntityKey(
-      worldId,
-      unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>),
-    );
+    // The outer WeakMap owns World identity; this generation-bearing packed
+    // entity handle prevents aliasing when an ECS slot is reused.
+    const layerKey = String(unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>));
     // AC-04: decode via the canonical SortScope union; avoid relying on the
     // raw encoding (0='layer', 1='per-cell') leaking through this call site.
     // `decodeSortScope` is the SSOT used throughout `bucketTileLayer` (see
@@ -1167,21 +1176,21 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
 
     // ── Object streaming path (sortScope='per-cell') ───────────────────
     // Step 1: rebuild specs cache when dirty or first time.
-    if (w.dirty !== 0 || !layerStreamCache.has(layerKey)) {
+    if (w.dirty !== 0 || !streaming.layers.has(layerKey)) {
       // Despawn all currently-active chunks for this layer.
-      const activeSet = layerChunkActive.get(layerKey);
+      const activeSet = streaming.activeChunks.get(layerKey);
       if (activeSet !== undefined) {
         for (const chunkIdx of activeSet) {
-          const key = `${worldId}:${layerKey}:${chunkIdx}`;
-          const entities = layerChunkStreamEntities.get(key);
+          const key = `${layerKey}:${chunkIdx}`;
+          const entities = streaming.chunkEntities.get(key);
           if (entities !== undefined) {
             for (const e of entities) world.despawn(e as EntityHandle);
-            layerChunkStreamEntities.delete(key);
+            streaming.chunkEntities.delete(key);
           }
         }
         activeSet.clear();
       }
-      layerStreamCache.delete(layerKey);
+      streaming.layers.delete(layerKey);
 
       const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
       if (bucket !== undefined) {
@@ -1207,7 +1216,7 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
             bounds: computeChunkStreamBounds(bucket.tilemap, specs),
           });
         }
-        layerStreamCache.set(layerKey, {
+        streaming.layers.set(layerKey, {
           byChunk,
           tilemap: bucket.tilemap,
           layerOrder: bucket.layerOrder,
@@ -1219,7 +1228,7 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
       }
     }
 
-    const cache = layerStreamCache.get(layerKey);
+    const cache = streaming.layers.get(layerKey);
     if (cache === undefined) continue;
 
     // Step 2: lazy-compute camera frustum on first streaming layer.
@@ -1228,8 +1237,8 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
     }
 
     // Step 3: diff visible chunks against active set.
-    const activeSet = layerChunkActive.get(layerKey) ?? new Set<number>();
-    layerChunkActive.set(layerKey, activeSet);
+    const activeSet = streaming.activeChunks.get(layerKey) ?? new Set<number>();
+    streaming.activeChunks.set(layerKey, activeSet);
     const { tilemap } = cache;
 
     for (const [chunkIdx, entry] of cache.byChunk) {
@@ -1252,15 +1261,15 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
           );
           spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
         }
-        layerChunkStreamEntities.set(`${worldId}:${layerKey}:${chunkIdx}`, spawned);
+        streaming.chunkEntities.set(`${layerKey}:${chunkIdx}`, spawned);
         activeSet.add(chunkIdx);
       } else if (!visible && wasActive) {
         // Despawn per-cell entities for this newly-invisible chunk.
-        const key = `${worldId}:${layerKey}:${chunkIdx}`;
-        const entities = layerChunkStreamEntities.get(key);
+        const key = `${layerKey}:${chunkIdx}`;
+        const entities = streaming.chunkEntities.get(key);
         if (entities !== undefined) {
           for (const e of entities) world.despawn(e as EntityHandle);
-          layerChunkStreamEntities.delete(key);
+          streaming.chunkEntities.delete(key);
         }
         activeSet.delete(chunkIdx);
       }

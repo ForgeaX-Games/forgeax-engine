@@ -223,6 +223,8 @@ if (!marbleGuidRes.ok) {
 
 // World must exist before allocSharedRef mints any column handle.
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 const marbleHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(marbleDecoded)));
 console.log(`[learn-render-4-face-culling] registered marble handle id=${marbleHandle}`);
@@ -290,7 +292,7 @@ let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

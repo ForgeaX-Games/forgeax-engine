@@ -745,12 +745,14 @@ export function main(argv = process.argv.slice(2)) {
       for (const step of plan.steps) {
         const { command } = step;
         if (isLocalSharedProvenanceDownload(command)) {
-          provideLocalSharedProvenance(localGitHubRuntime(process.env).GITHUB_RUN_ATTEMPT);
+          if (!args.dryRun) {
+            provideLocalSharedProvenance(localGitHubRuntime(process.env).GITHUB_RUN_ATTEMPT);
+          }
           console.log(`[ci] local artifact substitute: ${command}`);
           continue;
         }
         if (isLocalShardReportsDownload(command)) {
-          provideLocalShardReports();
+          if (!args.dryRun) provideLocalShardReports();
           console.log(`[ci] local artifact substitute: ${command}`);
           continue;
         }

@@ -314,9 +314,10 @@ globalThis.performance.now = () => fakeNow;
 
 const frameStart = Date.now();
 let totalFrames = 0;
+app.renderer.attachWorld(world).unwrap();
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const drawResult = app.renderer.draw([world], { owner: 0 });
+  const drawResult = app.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawResult.ok) console.error(`[smoke] draw frame ${i} error: ${drawResult.error.code}`);
   totalFrames++;
   // Await each frame so async shadow/material PSOs can resolve before the

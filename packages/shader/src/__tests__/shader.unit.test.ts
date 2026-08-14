@@ -1538,7 +1538,7 @@ import {
     {
       file: 'lighting-directional.wgsl',
       importPath: 'forgeax_pbr::lighting_directional',
-      exportedFns: ['evalDirectional'],
+      exportedFns: ['evalDirectional', 'evalDirectionalNoShadow', 'evalDirectionalShadowFactor'],
       // lighting-directional reads view + shadowMap from forgeax_view::common
       // via #import; the helper itself declares no @group/@binding so the
       // zero-binding invariant still holds at the file level.
@@ -1602,6 +1602,30 @@ import {
       expect(codeOnly).not.toMatch(/fn\s+evalPoint\s*\(/);
       expect(codeOnly).not.toMatch(/fn\s+evalSpot\s*\(/);
       expect(codeOnly).not.toMatch(/fn\s+evalPunctualBody\s*\(/);
+    });
+
+    it('built-in PBR shaders evaluate directional CSM once and reuse it for clearcoat', () => {
+      for (const file of ['default-standard-pbr.wgsl', 'default-standard-pbr-skin.wgsl']) {
+        const codeOnly = stripComments(readSource(file));
+        expect(codeOnly.match(/evalDirectionalShadowFactor\s*\(/g)).toHaveLength(1);
+        expect(codeOnly).not.toMatch(/evalDirectional\s*\(/);
+        expect(codeOnly.match(/evalDirectionalNoShadow\s*\(/g)).toHaveLength(2);
+      }
+    });
+
+    it('directional CSM skips atlas projection and PCF beyond the authored shadow distance', () => {
+      const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
+      expect(codeOnly).toMatch(
+        /if\s*\(viewDepth\s*>\s*view\.splitPlanes\[count\s*-\s*1u\]\.x\)\s*\{\s*return\s+1\.0\s*;/,
+      );
+    });
+
+    it('directional PCF selects fixed 1x1, 3x3, or 5x5 paths without per-tap radius branches', () => {
+      const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
+      expect(codeOnly).toMatch(/if\s*\(kernel\s*==\s*1u\)/);
+      expect(codeOnly).toMatch(/if\s*\(kernel\s*==\s*3u\)/);
+      expect(codeOnly).not.toMatch(/abs\(x\)\s*>\s*halfI/);
+      expect(codeOnly).not.toMatch(/continue\s*;/);
     });
 
     it('default-standard-pbr.wgsl no longer inlines the TBN basis math directly', () => {

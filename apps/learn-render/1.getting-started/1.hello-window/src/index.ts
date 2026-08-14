@@ -122,6 +122,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       return;
     }
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
     spawnCameraOnly(world);
     // Drive the canvas through requestAnimationFrame so the swap-chain
     // sees a fresh clear-pass on every compositor tick (the LO 1.1
@@ -129,7 +131,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // bench-screenshot recorder + downstream pixel-parity) then observe
     // a stable cleared frame regardless of when they snapshot.
     const tick = (): void => {
-      const drawn = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!drawn.ok) {
         console.error('[learn-render 1.1 hello-window] draw failed:', drawn.error);
         return;
@@ -149,7 +152,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     type CaptureHook = () => Promise<Uint8Array>;
     const win = window as unknown as { __captureHelloWindow?: CaptureHook };
     win.__captureHelloWindow = async (): Promise<Uint8Array> => {
-      renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const r = await renderer.readPixels();
       if (!r.ok) throw new Error(`[learn-render 1.1 hello-window] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
       return r.value;

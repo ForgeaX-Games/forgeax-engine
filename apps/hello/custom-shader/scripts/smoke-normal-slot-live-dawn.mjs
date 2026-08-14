@@ -200,6 +200,8 @@ assert(ready.ok, `renderer.ready failed: ${ready.ok ? '' : ready.error.code}`);
 assert(renderer.backend === 'webgpu', `unexpected backend: ${renderer.backend}`);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const baseColorTexturePayload = {
   kind: 'texture', width: 2, height: 2, format: 'rgba8unorm-srgb',
   data: new Uint8Array([255, 96, 32, 255, 32, 96, 255, 255, 32, 96, 255, 255, 255, 96, 32, 255]),
@@ -321,7 +323,8 @@ async function readback(label) {
 }
 
 async function drawFrame(label) {
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   assert(result.ok, `${label} draw failed: ${result.ok ? '' : result.error.code}`);
   await sharedDevice.queue.onSubmittedWorkDone();
   await new Promise((resolve) => setTimeout(resolve, 0));

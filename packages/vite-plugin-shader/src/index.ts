@@ -43,6 +43,7 @@ import { MaterialHmrGraph } from './material/hmr.js';
 import { createMaterialSourceProvider } from './material/source-provider.js';
 import { SHADER_MANIFEST_PATH } from './shader-manifest-path.js';
 import {
+  loadPackagedEngineShaderInputs,
   loadSharedEngineShaderManifest,
   projectShaderManifestEntries,
 } from './shared-engine-inputs.js';
@@ -1898,6 +1899,8 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
   const wantPointShadows =
     typeof wantEngineEntries === 'object' && wantEngineEntries.pointShadows === true;
   let isServeMode = false;
+  const packagedProfile = `${wantPointShadows ? 'point' : 'base'}-${wantHdrpSsao ? 'ssao' : 'base'}`;
+  const usablePackagedEngineInputs = loadPackagedEngineShaderInputs(packagedProfile);
 
   let engineShaderRoots: string[];
   try {
@@ -1912,6 +1915,8 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
   } catch {
     engineShaderRoots = [resolve(process.cwd(), 'packages/shader/src')];
   }
+  const getEngineImports = (): Record<string, string> =>
+    usablePackagedEngineInputs?.imports ?? loadEngineImportsMap(engineShaderRoots);
 
   const currentMaterialPackages = (): string[] =>
     [
@@ -2050,7 +2055,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       const materialPackages = currentMaterialPackages();
       if (!wantEngineEntries && materialPackages.length === 0) return;
       const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
-      const eng = await loadEngineShaderEntries();
+      const eng = usablePackagedEngineInputs === null ? await loadEngineShaderEntries() : null;
       if (sharedManifest !== undefined) {
         const shared = loadSharedEngineShaderManifest(sharedManifest);
         for (const entry of shared.entries) {
@@ -2058,9 +2063,20 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         }
         state.materialShaders.push(...shared.materialShaders);
       }
-      await ensureAuthoredMaterialPackages(materialPackages, eng.imports);
+      if (
+        sharedManifest === undefined &&
+        wantEngineEntries &&
+        usablePackagedEngineInputs !== null
+      ) {
+        for (const entry of usablePackagedEngineInputs.entries) {
+          state.entries.set(`packaged:${entry.hash}`, { ...entry, uvSetCount: 0 });
+        }
+        state.materialShaders.push(...usablePackagedEngineInputs.materialShaders);
+      }
+      await ensureAuthoredMaterialPackages(materialPackages, getEngineImports());
       if (!wantEngineEntries) return;
-      if (sharedManifest !== undefined) return;
+      if (sharedManifest !== undefined || usablePackagedEngineInputs !== null) return;
+      if (eng === null) throw new Error('engine shader source inputs are unavailable');
       const packageMaterialShaders = await loadPackageMaterialShaderEntries(
         '@forgeax/engine-vfx-render',
       );
@@ -2180,7 +2196,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         authored = await findAuthoredMaterialForSource(
           materialPackages,
           sourcePath,
-          loadEngineImportsMap(engineShaderRoots),
+          getEngineImports(),
         );
         if (authored !== undefined) {
           installAuthoredMaterial(authored);
@@ -2220,7 +2236,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       if (isProjectMaterialModule) {
         isMaterialShader = true;
         materialShaderIdentifier = declaredModule;
-        engineImports = loadEngineImportsMap(engineShaderRoots);
+        engineImports = getEngineImports();
       }
 
       // Collect sibling `#import` sources so `compileShader` can resolve
@@ -2531,10 +2547,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         // by buildStart may be stale (or empty). Refresh authored materials
         // before priming the graph; this is the same compiler path used by
         // production builds and fails fast on a malformed material contract.
-        await ensureAuthoredMaterialPackages(
-          currentMaterialPackages(),
-          loadEngineImportsMap(engineShaderRoots),
-        );
+        await ensureAuthoredMaterialPackages(currentMaterialPackages(), getEngineImports());
 
         // The app entry can request the manifest before a lazily imported
         // custom WGSL module has reached this plugin's transform hook. Walk

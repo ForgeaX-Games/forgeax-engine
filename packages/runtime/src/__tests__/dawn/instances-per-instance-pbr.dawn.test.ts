@@ -37,6 +37,7 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from '../draw-published';
 
 const WIDTH = 512;
 const HEIGHT = 512;
@@ -223,7 +224,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     });
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer.draw([worldN], { owner: 0 });
+      const r = drawPublished(renderer, worldN);
       if (!r.ok) throw new Error(`draw N frame ${i} error: ${r.error.code}`);
     }
 
@@ -303,7 +304,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     });
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer.draw([world1], { owner: 0 });
+      const r = drawPublished(renderer, world1);
       if (!r.ok) throw new Error(`draw 1 frame ${i} error: ${r.error.code}`);
     }
     await device.queue.onSubmittedWorkDone();
@@ -490,9 +491,11 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
       },
       { component: Camera, data: { fov: (45 * Math.PI) / 180, aspect: 1, near: 0.1, far: 200 } },
     );
+    expect(renderer2.attachWorld(worldN2).ok).toBe(true);
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer2.draw([worldN2], { owner: 0 });
+      worldN2.update(1 / 60).unwrap();
+      const r = renderer2.draw([worldN2], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) throw new Error(`draw N frame ${i} error: ${r.error.code}`);
     }
 
@@ -561,9 +564,11 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
       },
       { component: Camera, data: { fov: (45 * Math.PI) / 180, aspect: 1, near: 0.1, far: 200 } },
     );
+    expect(renderer2.attachWorld(world12).ok).toBe(true);
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer2.draw([world12], { owner: 0 });
+      world12.update(1 / 60).unwrap();
+      const r = renderer2.draw([world12], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) throw new Error(`draw 1 frame ${i} error: ${r.error.code}`);
     }
     await device2.queue.onSubmittedWorkDone();

@@ -49,7 +49,7 @@ describe('tilemap extraction owner boundary', () => {
       .unwrap();
 
     resetTilemapChunkExtractCache();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
 
     const derived = world
       .inspect()

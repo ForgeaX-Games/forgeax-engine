@@ -129,6 +129,8 @@ const LIME = [0, 1, 0];
 const BLUE = [0, 0, 1];
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // ── Ground plane (flat cube), white PBR ─────────────────────────────────
 const whiteMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [1, 1, 1, 1] }));
@@ -274,7 +276,8 @@ const readCenter = (bytes, bytesPerRow, w, h) => {
 // Take an early readback at frame 5 to capture lit-brightness.
 const EARLY_FRAME = Math.min(5, TARGET_FRAMES - 1);
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 

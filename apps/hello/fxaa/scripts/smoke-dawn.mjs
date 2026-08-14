@@ -330,9 +330,12 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 
 // Pass 1: ANTIALIAS_NONE baseline.
 const worldNone = new World();
+const worldAttachment1 = renderer.attachWorld(worldNone);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 spawnScene(worldNone, ANTIALIAS_NONE);
 
-const drawNoneRes = renderer.draw([worldNone], { owner: 0 });
+worldNone.update().unwrap();
+const drawNoneRes = renderer.draw([worldNone], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawNoneRes.ok) {
   console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
   process.exit(1);
@@ -347,9 +350,12 @@ const pixelsNone = await doReadPixels();
 // pipelines, per-frame resources) is rebuilt from ECS data on each draw call.
 
 const worldFxaa = new World();
+const worldAttachment2 = renderer.attachWorld(worldFxaa);
+if (!worldAttachment2.ok) throw worldAttachment2.error;
 spawnScene(worldFxaa, ANTIALIAS_FXAA);
 
-const drawFxaaRes = renderer.draw([worldFxaa], { owner: 0 });
+worldFxaa.update().unwrap();
+const drawFxaaRes = renderer.draw([worldFxaa], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawFxaaRes.ok) {
   console.error(`[smoke] FAIL - draw (fxaa) failed: ${drawFxaaRes.error.code}`);
   process.exit(1);

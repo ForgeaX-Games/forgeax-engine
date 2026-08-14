@@ -7,5 +7,11 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["fx.ts", "__tests__/fx.test.ts"]
+  "include": [
+    "fx.ts",
+    "worktree.ts",
+    "vitest.fx.config.ts",
+    "__tests__/fx.test.ts",
+    "__tests__/worktree.test.ts"
+  ]
 }

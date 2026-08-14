@@ -1,8 +1,8 @@
 /**
  * Nominal label for one of the World-owned schedules.
  *
- * Worlds expose exactly the two built-in tokens below. A token is both a
- * registration scope and, for FixedUpdate, the intrinsic Update ordering anchor.
+ * Worlds expose the built-in tokens below. A token is both a registration
+ * scope and, for FixedUpdate, the intrinsic Update ordering anchor.
  */
 export interface ScheduleToken {
   readonly name: string;
@@ -20,7 +20,6 @@ export const Update = createScheduleToken('Update');
 export const FixedUpdate = createScheduleToken('FixedUpdate');
 /** End-of-outer-update schedule, after fixed steps and deferred commands. */
 export const FrameEnd = createScheduleToken('FrameEnd');
-
 export function isScheduleToken(value: unknown): value is ScheduleToken {
   return value === Update || value === FixedUpdate || value === FrameEnd;
 }

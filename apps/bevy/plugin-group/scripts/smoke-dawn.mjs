@@ -110,6 +110,8 @@ if (!ready.ok) {
 
 const eye = [-2, 2.5, 5];
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 world.spawn(
   { component: Transform, data: { pos: eye, quat: quat.fromLookAt(quat.create(), eye, [0, 0, 0], [0, 1, 0]), scale: [1, 1, 1] } },
   { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
@@ -123,7 +125,7 @@ if (!appResult.ok) {
 
 for (let index = 0; index < SMOKE_MIN_FRAMES; index += 1) {
   world.update(0.016);
-  await renderer.draw([world], { owner: 0 });
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(50);
 console.log = originalLog;

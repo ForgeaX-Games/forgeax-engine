@@ -21,6 +21,7 @@ import {
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from './draw-published';
 import {
   CALIBRATION_POSITIONS,
   calibrateThresholdX,
@@ -213,7 +214,7 @@ describe('M3 calibration runner (one-off)', () => {
 
     // Draw one frame to populate the shadow depth texture.
     const world = buildFixtureWorld();
-    const drawResult = renderer.draw([world], { owner: 0 });
+    const drawResult = drawPublished(renderer, world);
     expect(drawResult.ok).toBe(true);
 
     // In the single-session calibration workflow, M2 and M3 measurements

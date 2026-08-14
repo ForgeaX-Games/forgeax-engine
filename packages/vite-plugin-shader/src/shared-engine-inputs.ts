@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 
 export interface ShaderManifestInput {
@@ -22,6 +23,34 @@ export interface SharedMaterialShaderManifestEntry {
 
 export const SHARED_ENGINE_SHADERS_CLASS = 'shared-engine-shaders';
 export const SHARED_ENGINE_SHADERS_MANIFEST = 'shared-build-inputs/shaders/manifest.json';
+
+export function loadPackagedEngineShaderInputs(profile: string): {
+  readonly entries: ShaderManifestInput[];
+  readonly materialShaders: SharedMaterialShaderManifestEntry[];
+  readonly imports: Record<string, string>;
+} | null {
+  if (process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD === '1') return null;
+  const require = createRequire(import.meta.url);
+  let packageRoot: string;
+  try {
+    packageRoot = dirname(require.resolve('@forgeax/engine-vite-plugin-shader/package.json'));
+  } catch {
+    return null;
+  }
+  const inputRoot = resolve(packageRoot, 'dist/engine-inputs', profile);
+  const manifestPath = resolve(inputRoot, 'manifest.json');
+  const importsPath = resolve(inputRoot, 'imports.json');
+  if (!existsSync(manifestPath) || !existsSync(importsPath)) return null;
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    readonly entries?: ShaderManifestInput[];
+    readonly materialShaders?: SharedMaterialShaderManifestEntry[];
+  };
+  const imports = JSON.parse(readFileSync(importsPath, 'utf8')) as Record<string, string>;
+  if (manifest.entries === undefined || manifest.materialShaders === undefined) {
+    throw new Error(`packaged engine shader manifest is incomplete: ${manifestPath}`);
+  }
+  return { entries: manifest.entries, materialShaders: manifest.materialShaders, imports };
+}
 
 /**
  * Projects engine and app entries into an app-local manifest. Engine entry

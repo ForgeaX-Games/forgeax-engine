@@ -88,8 +88,10 @@ describe.skipIf(!browserReady)('zero-feature browser render baseline', () => {
     const errors: Array<{ code: string; hint: string }> = [];
     renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
     const world = makeBaselineWorld();
+    expect(renderer.attachWorld(world).ok).toBe(true);
     for (let frame = 0; frame < 8; frame += 1) {
-      expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+      world.update(1 / 60).unwrap();
+      expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
 

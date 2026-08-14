@@ -32,7 +32,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
   captureWindow.__prepareCameraPanCapture = async (): Promise<void> => {
     app.world.update(1 / 60).unwrap();
-    app.renderer.draw([app.world], { owner: 0 });
+    app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
   };
   const started = app.start();
   if (!started.ok) console.error('[bevy-camera-pan] app.start failed:', started.error);

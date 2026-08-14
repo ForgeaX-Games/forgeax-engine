@@ -198,7 +198,11 @@ describe('prepared graphics null integration', () => {
       return submit(buffers);
     };
 
-    const result = renderer.draw([new World()], { owner: 0 });
+    const world = new World();
+    const attachment = renderer.attachWorld(world);
+    if (!attachment.ok) throw attachment.error;
+    world.update().unwrap();
+    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     expect(result.ok).toBe(true);
     expect(renderer.perFramePassNames).toContain('synthetic.prepared::forward');
     expect(drawCount()).toBeGreaterThanOrEqual(2);
@@ -217,7 +221,11 @@ describe('prepared graphics null integration', () => {
       renderer.installPipeline({ kind: 'render-pipeline', pipelineId: 'synthetic::empty' }).ok,
     ).toBe(true);
     expect((await renderer.ready).ok).toBe(true);
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    const world = new World();
+    const attachment = renderer.attachWorld(world);
+    if (!attachment.ok) throw attachment.error;
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(renderer.perFramePassNames).not.toContain('synthetic.empty::forward');
     renderer.dispose();
   });

@@ -1,7 +1,7 @@
 // feat-20260708-composited-multi-world-rendering M3 / m3-t1 — AC-10 two new
 // RhiErrorCode members + the pure draw-args validation helper.
 //
-// Plan-strategy 2 D-5: renderer.draw(worlds, { owner }) validates its inputs at
+// Plan-strategy 2 D-5: renderer.draw(worlds, { cameraOwner, resourceOwner }) validates its inputs at
 // the entry (before any extract) and returns Result.err on:
 //   - empty worlds array        -> 'render-system-empty-worlds'
 //   - owner index out of range  -> 'render-system-owner-out-of-range'
@@ -21,8 +21,8 @@
 // + validation + test in one package (architecture-principles §1 SSOT + §3
 // Schema as Contract: the validator is the machine-checkable contract).
 //
-// AC-01 single path: only draw(worlds, { owner }) exists; there is no legacy
-// draw(world) overload. AC-02's owner-required compile-time narrowing is
+// AC-01 single path: only the explicit camera/resource owner form exists; there
+// is no draw(world) overload. AC-02's owner-required compile-time narrowing is
 // verified at the real hello-triangle callsite (m3-t2), not here.
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
@@ -91,7 +91,7 @@ describe('M3 / m3-t1 — RhiOwnerOutOfRangeDetail shape', () => {
 
 describe('M3 / m3-t1 — validateDrawArgs (D-5 draw entry validation)', () => {
   it('empty worlds -> err render-system-empty-worlds with a non-empty hint', () => {
-    const r = validateDrawArgs(0, 0);
+    const r = validateDrawArgs(0, { cameraOwner: 0, resourceOwner: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-empty-worlds');
@@ -104,7 +104,7 @@ describe('M3 / m3-t1 — validateDrawArgs (D-5 draw entry validation)', () => {
   });
 
   it('owner out of range (owner >= worldCount) -> err with detail { owner, worldCount }', () => {
-    const r = validateDrawArgs(1, 1);
+    const r = validateDrawArgs(1, { cameraOwner: 1, resourceOwner: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-owner-out-of-range');
@@ -118,7 +118,7 @@ describe('M3 / m3-t1 — validateDrawArgs (D-5 draw entry validation)', () => {
   });
 
   it('owner out of range (owner < 0) -> err render-system-owner-out-of-range', () => {
-    const r = validateDrawArgs(2, -1);
+    const r = validateDrawArgs(2, { cameraOwner: -1, resourceOwner: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-owner-out-of-range');
@@ -131,7 +131,7 @@ describe('M3 / m3-t1 — validateDrawArgs (D-5 draw entry validation)', () => {
   it('two codes are non-exclusive: empty array + out-of-range owner short-circuits to empty-worlds', () => {
     // Entry check order: the empty-worlds guard runs first, so an empty array
     // with a nonsense owner (5) never reaches the owner-range branch (D-5).
-    const r = validateDrawArgs(0, 5);
+    const r = validateDrawArgs(0, { cameraOwner: 5, resourceOwner: 5 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('render-system-empty-worlds');
@@ -139,13 +139,13 @@ describe('M3 / m3-t1 — validateDrawArgs (D-5 draw entry validation)', () => {
   });
 
   it('valid args (owner within [0, worldCount)) -> ok', () => {
-    expect(validateDrawArgs(1, 0).ok).toBe(true);
-    expect(validateDrawArgs(3, 0).ok).toBe(true);
-    expect(validateDrawArgs(3, 2).ok).toBe(true);
+    expect(validateDrawArgs(1, { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(validateDrawArgs(3, { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(validateDrawArgs(3, { cameraOwner: 2, resourceOwner: 2 }).ok).toBe(true);
   });
 
   it('returned errors are RhiError instances (structured, not thrown strings)', () => {
-    const r = validateDrawArgs(1, 9);
+    const r = validateDrawArgs(1, { cameraOwner: 9, resourceOwner: 0 });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error).toBeInstanceOf(RhiError);

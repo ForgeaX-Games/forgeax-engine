@@ -6,7 +6,7 @@
 // Each original file body sits in its own block-scope so helper names
 // cannot collide; describe() inside still registers globally with vitest.
 
-import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry, HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -23,7 +23,13 @@ import {
 } from '@forgeax/engine-render/internal';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
-import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
+import type {
+  Handle,
+  MaterialAsset,
+  MaterialPass,
+  MeshAsset,
+  TextureAsset,
+} from '@forgeax/engine-types';
 import { srgbChannelToLinear } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -399,6 +405,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           { component: MeshRenderer, data: {} },
         )
         .unwrap();
+
+      propagateTransforms(cameraWorld).unwrap();
+      propagateTransforms(sceneWorld).unwrap();
 
       const frame = extractFrames([cameraWorld, sceneWorld], { cameraOwner: 0, resourceOwner: 1 });
 
@@ -1174,6 +1183,43 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('render-system-extract heightTexture (4th texture) snapshot pass-through (M2 w3)', () => {
+    it('resolves a binary AssetGuid texture reference through the material owner path', () => {
+      const world = new World();
+      const assets = new AssetRegistry(makeShaderRegistryWithParallax());
+      const mesh = registerQuadMesh(world);
+      const textureGuid = AssetGuid.random();
+      assets.catalog(textureGuid, {
+        kind: 'texture',
+        width: 1,
+        height: 1,
+        format: 'rgba8unorm',
+        data: new Uint8Array([255, 255, 255, 255]),
+        colorSpace: 'linear',
+        mipmap: false,
+      } satisfies TextureAsset);
+      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+        kind: 'material',
+        passes: [PARALLAX_PASS],
+        values: { baseColorTexture: { texture: textureGuid } },
+      });
+
+      world
+        .spawn(
+          { component: Transform, data: identityTx() },
+          { component: MeshFilter, data: { assetHandle: mesh } },
+          { component: MeshRenderer, data: { materials: [matHandle] } },
+        )
+        .unwrap();
+      propagateTransforms(world);
+
+      const frame = extractFrame(world, prepareExtractContext(world, { assets }));
+      const textureHandle = frame.renderables[0]?.material.textureHandles?.get('baseColorTexture');
+      expect(textureHandle).toBeDefined();
+      expect(resolveAssetHandle<TextureAsset>(world, textureHandle as never).unwrap().kind).toBe(
+        'texture',
+      );
+    });
+
     it('MaterialSnapshot.textureHandles carries heightTexture handle (non-undefined, matches input)', () => {
       const world = new World();
       const assets = new AssetRegistry(makeShaderRegistryWithParallax());

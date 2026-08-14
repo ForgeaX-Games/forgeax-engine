@@ -408,6 +408,11 @@ export class World {
     [FixedUpdate, createSchedule(FixedUpdate)],
     [FrameEnd, createSchedule(FrameEnd)],
   ]);
+  private frameTransformPublisher: ((world: World) => void) | undefined;
+  private frameDerivedState:
+    | { readonly owner: object; readonly run: (world: World) => void }
+    | undefined;
+  private framePublicationComplete = false;
   /** Resource store: typed key-value global singletons. */
   private readonly resources: ResourceStore = createResourceStore();
   private readonly simulationParticipantRegistry = new SimulationParticipantRegistry();
@@ -708,6 +713,58 @@ export class World {
     Schedule
   > {
     return this.schedules;
+  }
+  /** @internal Install the single terminal Transform.world publication owner. */
+  _registerFrameTransformPublisher(
+    publisher: (world: World) => void,
+  ): 'registered' | 'already-registered' {
+    if (this.frameTransformPublisher === undefined) {
+      this.frameTransformPublisher = publisher;
+      return 'registered';
+    }
+    if (this.frameTransformPublisher !== publisher) {
+      throw new Error('World already has a different frame transform publisher.');
+    }
+    return 'already-registered';
+  }
+  /** @internal Attach one renderer-owned derived-state producer to this World. */
+  _attachFrameDerivedState(
+    owner: object,
+    run: (world: World) => void,
+  ): 'attached' | 'already-attached' | 'owner-conflict' {
+    if (this.frameDerivedState === undefined) {
+      this.frameDerivedState = { owner, run };
+      this.framePublicationComplete = false;
+      return 'attached';
+    }
+    return this.frameDerivedState.owner === owner ? 'already-attached' : 'owner-conflict';
+  }
+  /** @internal Detach only the renderer that currently owns derived-state production. */
+  _detachFrameDerivedState(owner: object): void {
+    if (this.frameDerivedState?.owner === owner) {
+      this.frameDerivedState = undefined;
+      this.framePublicationComplete = false;
+    }
+  }
+  /** @internal Invalidate the previous publication before an update attempt. */
+  _beginFramePublication(): void {
+    this.framePublicationComplete = false;
+  }
+  /** @internal World.update terminal pipeline; ordinary schedules cannot register here. */
+  _publishFrameTransforms(): void {
+    this.frameTransformPublisher?.(this);
+  }
+  /** @internal World.update terminal pipeline; renderer attachment is the sole owner. */
+  _deriveFrameRenderState(): void {
+    this.frameDerivedState?.run(this);
+  }
+  /** @internal Mark the terminal pipeline complete only after its final publication. */
+  _completeFramePublication(): void {
+    this.framePublicationComplete = true;
+  }
+  /** @internal Renderer read gate: ownership and terminal publication must both match. */
+  _isFramePublicationReady(owner: object): boolean {
+    return this.frameDerivedState?.owner === owner && this.framePublicationComplete;
   }
   /** @internal */ _getSharedRefs(): SharedRefStore {
     return this.sharedRefs;

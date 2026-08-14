@@ -113,6 +113,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildSsaoWorld(world, WIDTH / HEIGHT);
 console.log(`[bevy-ssao] scene meshes=${scene.meshCount}`);
 
@@ -166,7 +168,8 @@ let framesObserved = 0;
 let drawErrors = 0;
 function drawFrames(count) {
   for (let i = 0; i < count; i += 1) {
-    const result = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!result.ok) {
       drawErrors += 1;
       console.error(`[smoke] draw frame ${framesObserved} error: ${result.error.code}`);

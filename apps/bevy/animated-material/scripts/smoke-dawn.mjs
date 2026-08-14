@@ -68,6 +68,8 @@ renderer.onError((error) => errors.push(error));
 const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildAnimatedMaterialWorld(world, WIDTH / HEIGHT);
 const captures = [];
 const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
@@ -93,7 +95,8 @@ async function capture(label) {
 for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
   const elapsed = process.env.FALSIFY === 'freeze-material' ? 0 : frame * FIXED_DT;
   stepAnimatedMaterials(world, scene, elapsed);
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) errors.push(draw.error);
   if (frame === 0) await capture('early');
   if (frame === FRAME_COUNT - 1) await capture('late');

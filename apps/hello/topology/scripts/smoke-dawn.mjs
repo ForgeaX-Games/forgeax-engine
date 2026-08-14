@@ -325,6 +325,8 @@ if (useTriangleFalsify) {
 
 // w64: mint mesh + material as user-tier shared refs (register/get deleted M8).
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const meshHandle = world.allocSharedRef('MeshAsset', meshPayload);
 
 const materialHandle = world.allocSharedRef('MaterialAsset', {
@@ -433,7 +435,8 @@ spawnScene(world);
 // wireframe rendered as a filled blob. A single warm-up turn is acceptable
 // (one compile); a per-frame yield would mean the engine fix did not work.
 {
-  const warmRes = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const warmRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!warmRes.ok) {
     console.error(`[smoke] FAIL - warmup draw failed: ${warmRes.error.code}`);
     process.exit(1);
@@ -441,7 +444,8 @@ spawnScene(world);
 }
 await delay(0); // single event-loop turn: let the first unlit module compile land.
 for (let f = 1; f < FRAMES; f++) {
-  const drawRes = renderer.draw([world], { owner: 0 }); // tight, synchronous: no yield in steady state.
+  world.update().unwrap();
+  const drawRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); // tight, synchronous: no yield in steady state.
   if (!drawRes.ok) {
     console.error(`[smoke] FAIL - draw failed at frame ${f}: ${drawRes.error.code}`);
     process.exit(1);

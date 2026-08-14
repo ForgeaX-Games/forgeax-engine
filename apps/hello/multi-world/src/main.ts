@@ -2,7 +2,7 @@
 // (feat-20260708-composited-multi-world-rendering M5 / AC-12 / m5-i1).
 //
 // What this demo proves (the AI-user-facing shape of the feature):
-//   renderer.draw([worldA, worldB], { owner: 0 })
+//   renderer.draw([worldA, worldB], { cameraOwner: 0, resourceOwner: 0 })
 // merges renderables + lights from EVERY world into one frame, while cameras
 // and singleton render resources come only from the owner world (index 0).
 //
@@ -131,6 +131,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const worldA = buildWorldA();
   const worldB = buildWorldB();
+  const attachmentA = renderer.attachWorld(worldA);
+  if (!attachmentA.ok) throw attachmentA.error;
+  const attachmentB = renderer.attachWorld(worldB);
+  if (!attachmentB.ok) throw attachmentB.error;
 
   renderer.onError((e) => console.error('[multi-world] renderer.onError:', e.code, e.hint));
 
@@ -142,7 +146,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Composite both worlds every frame; world A (index 0) is the owner.
   const frame = (): void => {
-    const r = renderer.draw([worldA, worldB], { owner: 0 });
+    const updatedA = worldA.update(1 / 60);
+    const updatedB = worldB.update(1 / 60);
+    if (!updatedA.ok) {
+      console.error('[multi-world] world A update error:', updatedA.error);
+      requestAnimationFrame(frame);
+      return;
+    }
+    if (!updatedB.ok) {
+      console.error('[multi-world] world B update error:', updatedB.error);
+      requestAnimationFrame(frame);
+      return;
+    }
+    const r = renderer.draw([worldA, worldB], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error('[multi-world] draw error:', r.error);
     requestAnimationFrame(frame);
   };

@@ -145,11 +145,15 @@ export async function captureTransparencyForgeaxBrowser(
       if (!installed.ok) throw new Error(`transparent HDRP install failed: ${installed.error.code}`);
     }
     const world = makeTransparencyWorld(sceneCase);
-    const drawn = renderer.draw([world], { owner: 0 });
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
+    world.update().unwrap();
+    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!drawn.ok) throw new Error(`transparent ForgeaX draw failed: ${drawn.error.code}`);
     if (rendererKind === 'webgl') await waitForAnimationFrameOrTimeout();
     else await renderer.device.queue.onSubmittedWorkDone();
-    const warmed = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const warmed = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!warmed.ok) throw new Error(`transparent ForgeaX warmed draw failed: ${warmed.error.code}`);
     if (rendererKind === 'webgl') await waitForAnimationFrameOrTimeout();
     else await renderer.device.queue.onSubmittedWorkDone();

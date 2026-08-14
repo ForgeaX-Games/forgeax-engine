@@ -30,7 +30,33 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const host = globalThis as {
     __bevyComponentHooksReady?: boolean;
     __bevyComponentHooksState?: () => ReturnType<typeof readComponentHooksState>;
+    __prepareComponentHooksCapture?: () => Promise<void>;
   };
   host.__bevyComponentHooksState = () => readComponentHooksState(app.world, state);
+  host.__prepareComponentHooksCapture = async () => {
+    let snapshot = readComponentHooksState(app.world, state);
+    for (let frame = 0; frame < 180 && !isCaptureReady(snapshot); frame += 1) {
+      const updated = app.world.update(1 / 60);
+      if (!updated.ok) throw updated.error;
+      const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!drawn.ok) throw drawn.error;
+      snapshot = readComponentHooksState(app.world, state);
+    }
+    if (!isCaptureReady(snapshot)) {
+      throw new Error('component-hooks capture preparation lost lifecycle evidence: ' + JSON.stringify(snapshot));
+    }
+  };
   host.__bevyComponentHooksReady = true;
+}
+
+function isCaptureReady(snapshot: ReturnType<typeof readComponentHooksState>): boolean {
+  return (
+    snapshot.add === 2 &&
+    snapshot.insert === 3 &&
+    snapshot.discard === 2 &&
+    snapshot.remove === 1 &&
+    snapshot.indexSize === 1 &&
+    snapshot.rekey === 3 &&
+    snapshot.remaining === 0
+  );
 }

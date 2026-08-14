@@ -150,6 +150,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildScaleWorld(world);
 
 // --- readback helper (copy renderTarget → mapped buffer → tight RGBA) ---
@@ -188,7 +190,8 @@ let earlyFrame;
 let lateFrame;
 let visitedYAxis = false;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
   if (i === CAPTURE_EARLY) earlyFrame = await capture(sharedDevice);

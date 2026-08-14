@@ -368,7 +368,7 @@ function installCaptureHook(app: App, world: App['world']): void {
       };
     }
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { owner: 0 });
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (timing !== undefined && timingStarted) {
       const finished = await timing.finish();
       timingEvidence = finished.ok ? finished.value : { code: finished.error.code, detail: finished.error.hint };

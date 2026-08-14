@@ -177,7 +177,11 @@ renderer.onError((error) => {
   errors.push({ code: candidate.code, hint: candidate.hint, detail: candidate.detail });
 });
 const probe = installFaultProbe(renderer.device, states);
-const firstDraw = renderer.draw([makeWorld()], { owner: 0 });
+const firstWorld = makeWorld();
+const firstAttachment = renderer.attachWorld(firstWorld);
+if (!firstAttachment.ok) throw firstAttachment.error;
+firstWorld.update().unwrap();
+const firstDraw = renderer.draw([firstWorld], { cameraOwner: 0, resourceOwner: 0 });
 const firstDiagnostics = renderer.renderFeatureDiagnostics();
 const firstErrors = errors.slice();
 for (const entry of faulty) entry.state.repaired = true;
@@ -195,7 +199,12 @@ if (recoveryModes.has('renderer-recover')) {
   recoveryActions.push(recovered.ok ? 'renderer.recover()' : `renderer.recover():${recovered.error.code}`);
 }
 if (recoveryModes.has('next-frame')) recoveryActions.push('next-frame retry');
-const secondDraw = renderer.draw([makeWorld()], { owner: 0 });
+const secondWorld = makeWorld();
+renderer.detachWorld(firstWorld);
+const secondAttachment = renderer.attachWorld(secondWorld);
+if (!secondAttachment.ok) throw secondAttachment.error;
+secondWorld.update().unwrap();
+const secondDraw = renderer.draw([secondWorld], { cameraOwner: 0, resourceOwner: 0 });
 const secondDiagnostics = renderer.renderFeatureDiagnostics();
 const firstByIdentity = (identity: string) => firstDiagnostics.find((entry) => entry.identity === identity);
 const secondByIdentity = (identity: string) => secondDiagnostics.find((entry) => entry.identity === identity);

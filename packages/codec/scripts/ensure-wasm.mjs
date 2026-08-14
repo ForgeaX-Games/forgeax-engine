@@ -9,21 +9,26 @@
 // progress). Bare install stays fast; a consumer with neither a release nor a
 // setup.ts run gets the buildHint below.
 
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ensureWasm } from '../../../scripts/lib/ensure-wasm-lib.mjs';
-
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG = join(SCRIPT_DIR, '..', 'pkg');
+const presenceMarkers = [
+  join(PKG, 'basis_transcoder.wasm'),
+  join(PKG, 'encode', 'basis_encoder.wasm'),
+];
+if (presenceMarkers.every(existsSync)) {
+  process.stdout.write('[codec] pkg/ WASM already present -- skipping fetch.\n');
+  process.exit(0);
+}
+const { ensureWasm } = await import('../../../scripts/lib/ensure-wasm-lib.mjs');
 
 process.exit(
   ensureWasm({
     pkgLabel: 'codec',
-    presenceMarkers: [
-      join(PKG, 'basis_transcoder.wasm'),
-      join(PKG, 'encode', 'basis_encoder.wasm'),
-    ],
+    presenceMarkers,
     fetchScript: join(SCRIPT_DIR, 'fetch-wasm.mjs'),
     skipEnv: 'FORGEAX_SKIP_CODEC_WASM_FETCH',
     buildHint:

@@ -42,6 +42,8 @@ const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeAtlasPixels();
 const texture = { kind: 'texture', width: ATLAS_WIDTH, height: ATLAS_HEIGHT, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
@@ -76,7 +78,8 @@ for (let i = 0; i < FRAMES; i++) {
   if (frames.some((frame, index) => frame !== previous[index])) changes++;
   previous = frames;
   propagateTransforms(world);
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   if (i === 5) earlyFrame = await capture();
   if (i === FRAMES - 1) lateFrame = await capture();

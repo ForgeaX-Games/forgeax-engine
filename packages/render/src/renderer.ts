@@ -3,7 +3,7 @@
 // K-4 contract:
 //   - `Renderer.backend` is an opaque marker (`'webgpu'`); callers never
 //     branch on the underlying backend type, only on this string.
-//   - `Renderer.draw([world], { owner: 0 })` runs one frame for the supplied worlds.
+//   - `Renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` runs one frame for the supplied worlds.
 //   - `Renderer.onLost(cb)` registers a notify-only listener for device loss.
 //   - `Renderer.onError(cb)` registers a listener for RHI creation-time errors.
 //   - `Renderer.dispose()` releases GPU resources + detaches all listeners.
@@ -56,35 +56,14 @@ export type RendererBackend = 'webgpu';
  *   - `resourceOwner` — the world whose skylight / skybox / postProcessParams
  *                       are surfaced.
  *
- * Two accepted forms:
- *   - `{ owner }`                        — backward-compatible legacy form where
- *     the same world owns both (single-world callers + the app frame-loop; the
- *     hard cutover to the split form lands in M2).
- *   - `{ cameraOwner, resourceOwner }`   — the two-index split form (editor
- *     composite: scene camera + separate editor-overlay resource world).
+ * Both owners are always explicit. Single-world callers pass zero for both;
+ * composite callers may select different worlds.
  */
-export type DrawOwnerOptions = (
-  | { owner: number }
-  | { cameraOwner: number; resourceOwner: number }
-) & { readonly profileFrame?: ProfileFrameToken };
-
-/**
- * Normalize {@link DrawOwnerOptions} into the two-index split form. A legacy
- * `{ owner }` maps to `cameraOwner === resourceOwner === owner` (byte-identical
- * single-owner path); the split form passes through. World-free (plain number
- * math) so both the createRenderer draw facade and the internal RenderSystem
- * draw resolve owners through one SSOT helper (charter P5 consistent
- * abstraction).
- */
-export function resolveDrawOwners(options: DrawOwnerOptions): {
-  cameraOwner: number;
-  resourceOwner: number;
-} {
-  if ('owner' in options) {
-    return { cameraOwner: options.owner, resourceOwner: options.owner };
-  }
-  return { cameraOwner: options.cameraOwner, resourceOwner: options.resourceOwner };
-}
+export type DrawOwnerOptions = {
+  readonly cameraOwner: number;
+  readonly resourceOwner: number;
+  readonly profileFrame?: ProfileFrameToken;
+};
 
 /** Information attached to a device-loss notification. */
 export interface RendererLostInfo {
@@ -337,7 +316,7 @@ export interface RendererOptions {
  * | `ready` step 1 manifest load fails | settles err (`ShaderError 'manifest-malformed'` / `'shader-not-found'`) | no — surfaced through `await renderer.ready` |
  * | `ready` step 2 pipeline compile fails | settles err (`RhiError 'shader-compile-failed'` / `'feature-not-enabled'` / `'limit-exceeded'`) | no — surfaced through ready |
  * | `ready` step 3 asset upload fails | settles err (`RhiError 'limit-exceeded'` / `'webgpu-runtime-error'`) | no — surfaced through ready |
- * | `draw([world], { owner: 0 })` before `ready` settles (D-S4) | frame skipped | yes — `'rhi-not-available'` |
+ * | `draw([world], { cameraOwner: 0, resourceOwner: 0 })` before `ready` settles (D-S4) | frame skipped | yes — `'rhi-not-available'` |
  * | RenderSystem 0 Camera | frame skipped | yes — `'render-system-no-camera'` |
  * | RenderSystem N>1 Camera | first archetype hit rendered | yes — `'render-system-multi-camera'` |
  * | RenderSystem N>1 DirectionalLight | first archetype hit used | yes — `'render-system-multi-light'` |
@@ -445,19 +424,37 @@ export interface Renderer {
    *      `queue.writeBuffer` for cube + triangle vertex / index buffers.
    * Any step failure settles with `Result.err(RhiError)`.
    *
-   * Calling `draw([world], { owner: 0 })` before `ready` settles fires
+   * Calling `draw([world], { cameraOwner: 0, resourceOwner: 0 })` before `ready` settles fires
    * `onError` with `'rhi-not-available'` and skips the frame (D-S4).
    *
    * @example
    *   const renderer = await createRenderer(canvas);
    *   const ready = await renderer.ready;
    *   if (!ready.ok) throw ready.error;
-   *   const r = renderer.draw([world], { owner: 0 });
+   *   const attached = renderer.attachWorld(world);
+   *   if (!attached.ok) throw attached.error;
+   *   const updated = world.update(1 / 60);
+   *   if (!updated.ok) throw updated.error;
+   *   const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
    *   if (!r.ok) console.error(r.error);
    */
   readonly ready: Promise<RenderResult<void, RhiError>>;
   /** Backend-aware membership timing, present only when explicitly requested. */
   readonly membershipTiming?: MembershipTimingController;
+  /**
+   * Attach renderer-required derived-state systems to a World once.
+   *
+   * The systems run inside `World.update()`; `draw()` and its extract stage
+   * remain read-only consumers of the resulting World state. Reattaching the
+   * same World to this Renderer is a no-op.
+   */
+  attachWorld(world: World): RenderResult<void, RhiError>;
+  /**
+   * Release this Renderer's derived-state ownership of one World.
+   * Idempotent; after detach, draw rejects the World until it is attached and
+   * successfully updated again.
+   */
+  detachWorld(world: World): void;
   /**
    * Draw one frame for the supplied World (D-S2 + K-4 rewrite).
    *
@@ -480,7 +477,11 @@ export interface Renderer {
    *   });
    *   const ready = await renderer.ready;
    *   if (!ready.ok) throw ready.error;
-   *   const r = renderer.draw([world], { owner: 0 });
+   *   const attached = renderer.attachWorld(world);
+   *   if (!attached.ok) throw attached.error;
+   *   const updated = world.update(1 / 60);
+   *   if (!updated.ok) throw updated.error;
+   *   const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
    *   if (!r.ok) handleError(r.error);
    *
    * w24 — Result<void, RhiError> shape: returns Result.ok(undefined) on
@@ -495,11 +496,9 @@ export interface Renderer {
    * composited into one frame — renderables + lights merge from every world,
    * while cameras come from the `cameraOwner` world and singleton resources
    * (skylight / skybox / postProcessParams) come from the `resourceOwner`
-   * world. {@link DrawOwnerOptions} accepts either the legacy `{ owner }`
-   * single-owner form (cameraOwner === resourceOwner === owner) or the split
-   * `{ cameraOwner, resourceOwner }` form; one of the two is required (omitting
-   * both is a compile-time error). There is no legacy `draw(world)` overload.
-   * Single-world users pass `draw([world], { owner: 0 })` (the app frame-loop
+   * world. {@link DrawOwnerOptions} requires both authorities explicitly as
+   * `{ cameraOwner, resourceOwner }`.
+   * Single-world users pass `draw([world], { cameraOwner: 0, resourceOwner: 0 })` (the app frame-loop
    * does this wrapping transparently). Entry validation returns `Result.err`
    * before any extract on:
    *   - empty `worlds`               -> `'render-system-empty-worlds'`
@@ -512,13 +511,13 @@ export interface Renderer {
    * @example Composite two worlds (owner supplies both camera + resources):
    *   const scene = new World();   // camera + lights + geometry
    *   const overlay = new World(); // extra geometry, no camera
-   *   const r = renderer.draw([scene, overlay], { owner: 0 });
+   *   const r = renderer.draw([scene, overlay], { cameraOwner: 0, resourceOwner: 0 });
    *   if (!r.ok) handleError(r.error);
    *
    * @example Split owners (scene camera, editor-overlay resources):
    *   const r = renderer.draw([scene, editor], { cameraOwner: 0, resourceOwner: 1 });
    */
-  draw(worlds: World[], options: DrawOwnerOptions): RenderResult<void, RhiError>;
+  draw(worlds: readonly World[], options: DrawOwnerOptions): RenderResult<void, RhiError>;
   /**
    * Observe the producer-owned linear HDR attachment from the most recently
    * completed frame. This never reads the final display canvas.
@@ -540,7 +539,7 @@ export interface Renderer {
    * Apps that need bottom-left origin (parity comparisons against
    * `gl.readPixels`) Y-flip the result locally.
    *
-   * AI users typically: `renderer.draw([world], { owner: 0 })` to update the canvas,
+   * AI users typically: `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` to update the canvas,
    * then `await renderer.readPixels()` to sample. Output buffer length
    * is `canvas.width * canvas.height * 4`.
    *
@@ -691,7 +690,7 @@ export interface Renderer {
    * statistics collected during the extract stage. `culled` is the count
    * of entities removed from renderables by frustum culling; `total` is
    * the count that reached the culling decision point. Both are zero
-   * before the first `draw([world], { owner: 0 })` or when no `MeshRenderer` entities
+   * before the first `draw([world], { cameraOwner: 0, resourceOwner: 0 })` or when no `MeshRenderer` entities
    * are in the world.
    */
   readonly frustumStats: { readonly culled: number; readonly total: number };
@@ -703,7 +702,7 @@ export interface Renderer {
   /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
-   * before the first `draw([world], { owner: 0 })` call; populated lazily when the
+   * before the first `draw([world], { cameraOwner: 0, resourceOwner: 0 })` call; populated lazily when the
    * per-frame graph is built. Read-only introspection surface so smoke
    * tests can assert the declarative pass chain is wired without reaching
    * into engine internals.
@@ -732,7 +731,7 @@ export interface Renderer {
   installRenderFeature(feature: RenderFeature<unknown>): Promise<RenderResult<void, RenderError>>;
   /**
    * feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
-   * createBindGroup counter. Reset to 0 on every `draw([world], { owner: 0 })` call,
+   * createBindGroup counter. Reset to 0 on every `draw([world], { cameraOwner: 0, resourceOwner: 0 })` call,
    * bumped per cache-miss in the record stage. Stable-frame AC-03
    * asserts `createBindGroup === 0` when all bind groups are cached.
    * AI users read this getter to verify cache effectiveness without
@@ -755,7 +754,7 @@ export interface Renderer {
    * AI users consume `err.code` by property access. On success the next `draw` rebuilds the
    * per-frame graph through the newly installed pipeline (runtime hot-swap).
    */
-  installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError>;
+  installPipeline(asset: RenderPipelineAsset): Result<() => void, PipelineError>;
   /**
    * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / F-2 fix-up:
    * fullscreen post-process registration channel. `postProcess.register(id, entry)`
@@ -772,7 +771,7 @@ export interface Renderer {
     register(
       id: string,
       entry: import('./fullscreen-post-process-pass').PostProcessShaderEntry,
-    ): void;
+    ): () => void;
   };
   /**
    * feat-20260612-skin-palette-per-frame-upload M1 / m1-1: test-only access

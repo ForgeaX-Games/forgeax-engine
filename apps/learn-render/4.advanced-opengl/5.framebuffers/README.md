@@ -55,6 +55,9 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers" smoke
 
 # Typecheck
 pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers" typecheck
+
+# Full M24 gauntlet: Dawn, Browser, and Browser-live recovery journeys
+pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers" smoke:gauntlet
 ```
 
 ## Controls
@@ -132,6 +135,39 @@ The smoke harness:
 - `FORGEAX_SMOKE_FALSIFY=1` flips the assertion: expects the inequality to be **violated** (exit != 0), confirming the smoke is testing a real difference.
 
 Total frames: 300 minimum (`SMOKE_MIN_FRAMES`). Zero RHI errors required (bus monitored at exit).
+
+## Same-process topology recovery
+
+The public `window.__learnRenderFramebuffers` seam also exercises a failed
+pipeline install and recovery without rebuilding the Renderer, App, or page:
+
+```ts
+const framebuffers = window.__learnRenderFramebuffers;
+framebuffers?.pause();
+framebuffers?.installCyclePipeline();
+// getState().cycleDiagnostic.detail.cycle contains both pass names.
+framebuffers?.installRepairedPipeline();
+framebuffers?.resume();
+framebuffers?.dispose();
+framebuffers?.dispose(); // idempotent
+```
+
+The cyclic pipeline is deliberately declared as `cycle-pass-a` reading the
+resource written by `cycle-pass-b`, and vice versa. `RenderGraph.compile()`
+returns its existing structured `cyclic-dependency` error; the frame is
+rejected before swap-chain acquisition, so the last healthy canvas image is
+unchanged and no frame-end submission is observed. The repaired pipeline has
+the declared order `repaired-stage-a -> repaired-stage-b -> main -> post`,
+renders through the same Renderer, and then switches back to the inversion
+effect to prove later healthy pipeline installation still works.
+
+The browser journey uses a visible canvas screenshot for the no-contamination
+oracle. A raw `renderer.readPixels()` after a rejected browser frame can observe
+an expired current WebGPU texture even though the last presented canvas image is
+healthy; `subscribeFrameEnd()` is the submission oracle. The complete
+`smoke:gauntlet` output includes the Dawn pixel path, the same-page Chrome
+cycle/recovery path, and the Browser-live pause/fault/reinstall/resize/cleanup
+path. Browser artifacts are written under `FORGEAX_M24_ARTIFACT_DIR` when set.
 
 ## Key files
 

@@ -63,6 +63,8 @@ const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildViewportToWorldWorld(world);
 let early;
 let late;
@@ -75,7 +77,8 @@ for (let i = 0; i < MIN_FRAMES; i++) {
     throw new Error(`[smoke] viewport ray missed ground at frame ${i}`);
   }
   propagateTransforms(world);
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) throw new Error(`draw failed: ${draw.error.code}`);
   frames++;
   if (i === Math.min(10, MIN_FRAMES - 1)) {

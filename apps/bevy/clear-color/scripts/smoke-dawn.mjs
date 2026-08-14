@@ -122,6 +122,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { buildClearColorWorld, stepClearColor } = await import(resolve(here, '..', 'src', 'clear-color.ts'));
 buildClearColorWorld(world);
 
@@ -146,7 +148,8 @@ function spaceSnapshot() {
 // --- render initial frames (blue-ish) ---
 for (let f = 0; f < 5; f++) {
   stepClearColor(world, noInputSnapshot());
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) { console.error(`[smoke] FAIL - draw error: ${r.error.code}`); process.exit(1); }
 }
 await delay(100);
@@ -180,13 +183,15 @@ if (initB > 120 && initG < initB) {
 
 // --- inject Space rising edge (toggle to purple) ---
 stepClearColor(world, spaceSnapshot());
-renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 stepClearColor(world, noInputSnapshot());
 
 // render a few more frames
 for (let f = 0; f < 5; f++) {
   stepClearColor(world, noInputSnapshot());
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(100);
 

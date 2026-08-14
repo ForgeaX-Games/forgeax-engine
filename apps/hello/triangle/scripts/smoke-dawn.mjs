@@ -86,6 +86,8 @@ const { renderer, errors } = await bootRenderer({
   shaderManifestUrl: MANIFEST_URL,
   rawDeviceForContextConfigureFn: () => shim.sharedDevice,
 });
+const attachment = renderer.attachWorld(world);
+if (!attachment.ok) throw attachment.error;
 
 // w25 — Renderer.ready resolves Result<void, RhiError>; branch on `.ok`.
 const ready = await renderer.ready;
@@ -96,11 +98,11 @@ if (!ready.ok) {
 
 // Frame loop + readback (deterministic; ~60fps * 5000ms = 300 frames default).
 // feat-20260708-composited-multi-world-rendering M3: migrated to the new
-// draw(worlds, { owner }) signature (D-8 integration probe). The
-// `renderer.draw([world], { owner: 0 })` literal is preserved as the thunk body
+// explicit draw-owner signature (D-8 integration probe). The
+// `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` literal is preserved as the thunk body
 // so charter prop 6 shared-symbol grep (smoke-coverage-gate.mjs) still finds it.
 const { framesObserved, pixelSamples, device } = await runFrameLoopAndReadback({
-  draw: () => renderer.draw([world], { owner: 0 }),
+  draw: () => { world.update().unwrap(); return renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); },
   shim,
   width: WIDTH,
   height: HEIGHT,

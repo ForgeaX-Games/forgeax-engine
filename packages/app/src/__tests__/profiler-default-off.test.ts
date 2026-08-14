@@ -9,6 +9,8 @@ function makeRenderer(): Renderer {
   return {
     backend: 'webgpu',
     ready: Promise.resolve({ ok: true, value: undefined }),
+    attachWorld: () => ({ ok: true, value: undefined }),
+    detachWorld: () => {},
     draw: () => ({ ok: true, value: undefined }),
     onError: () => () => {},
     onLost: () => () => {},

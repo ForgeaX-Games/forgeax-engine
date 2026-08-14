@@ -117,13 +117,19 @@ async function bootstrap(): Promise<void> {
   }
 
   const urpWorld = new World();
+  const worldAttachment1 = urpRenderer.attachWorld(urpWorld);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   const hdrpWorld = new World();
+  const worldAttachment2 = hdrpRenderer.attachWorld(hdrpWorld);
+  if (!worldAttachment2.ok) throw worldAttachment2.error;
   populateScene(urpRenderer, urpWorld);
   populateScene(hdrpRenderer, hdrpWorld);
 
   // Initial draw so canvases have content before the first capture call.
-  urpRenderer.draw([urpWorld], { owner: 0 });
-  hdrpRenderer.draw([hdrpWorld], { owner: 0 });
+  urpWorld.update().unwrap();
+  urpRenderer.draw([urpWorld], { cameraOwner: 0, resourceOwner: 0 });
+  hdrpWorld.update().unwrap();
+  hdrpRenderer.draw([hdrpWorld], { cameraOwner: 0, resourceOwner: 0 });
 
   declareCaptureHooks(urpRenderer, urpWorld, hdrpRenderer, hdrpWorld);
 }
@@ -198,7 +204,8 @@ function declareCaptureHooks(
   hdrpWorld: World,
 ): void {
   const captureFor = (renderer: Renderer, world: World): (() => Promise<Uint8Array>) => async () => {
-    renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(

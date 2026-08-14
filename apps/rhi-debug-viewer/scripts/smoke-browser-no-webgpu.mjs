@@ -26,9 +26,16 @@ import { buildHelloCubeFixture } from '../fixtures/build-hello-cube-tape.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const APP_DIR = resolve(HERE, '..');
+const INPUT_TAPE_PATH = process.env.FORGEAX_RHI_DEBUG_TAPE_PATH;
+const INPUT_REPORT_PATH = process.env.FORGEAX_RHI_DEBUG_REPORT_PATH;
 // Zero-binary invariant: synthesise the fixture in memory, write to a temp dir.
 const FIXTURES_DIR = mkdtempSync(resolve(tmpdir(), 'rhi-debug-viewer-fixture-'));
-{
+const viewerFirstAnswerStartedAt = performance.now();
+const inputPair =
+  INPUT_TAPE_PATH !== undefined && INPUT_REPORT_PATH !== undefined
+    ? { binPath: resolve(INPUT_TAPE_PATH), jsonPath: resolve(INPUT_REPORT_PATH) }
+    : null;
+if (inputPair === null) {
   const { blob, report } = buildHelloCubeFixture();
   writeFileSync(resolve(FIXTURES_DIR, 'frame-0.tape.bin'), blob);
   writeFileSync(resolve(FIXTURES_DIR, 'frame-0.report.json'), JSON.stringify(report, null, 2));
@@ -90,8 +97,8 @@ console.log('[smoke-no-webgpu] page loaded');
 // ============================================================================
 // Upload fixtures
 // ============================================================================
-const binPath = resolve(FIXTURES_DIR, 'frame-0.tape.bin');
-const jsonPath = resolve(FIXTURES_DIR, 'frame-0.report.json');
+const binPath = inputPair?.binPath ?? resolve(FIXTURES_DIR, 'frame-0.tape.bin');
+const jsonPath = inputPair?.jsonPath ?? resolve(FIXTURES_DIR, 'frame-0.report.json');
 const fileInput = page.locator('input[type="file"][accept=".tape.bin,.json"]');
 await fileInput.setInputFiles([binPath, jsonPath]);
 
@@ -100,9 +107,32 @@ await fileInput.setInputFiles([binPath, jsonPath]);
 // ============================================================================
 try {
   await page.waitForSelector('[data-forgeax-load-status="loaded"]', { timeout: 10000 });
+  console.log(
+    `[smoke-no-webgpu] consumerAnswer=${JSON.stringify({
+      consumer: 'viewer',
+      status: 'observed',
+      wallTimeMs: Math.max(0, Math.round(performance.now() - viewerFirstAnswerStartedAt)),
+      source: 'browser-smoke-no-webgpu',
+      boundary: 'existing viewer model ready',
+      affectedScope: 'viewer first answer',
+      recoveryAction: 'Inspect the load-status and retained tape/report pair.',
+    })}`,
+  );
   console.log('[smoke-no-webgpu] AC-09.1 GREEN: load-status=loaded (tree + bindings usable)');
 } catch {
   const currentStatus = await page.getAttribute('[data-forgeax-load-status]', 'data-forgeax-load-status');
+  console.error(
+    `[smoke-no-webgpu] consumerAnswer=${JSON.stringify({
+      consumer: 'viewer',
+      status: 'failed',
+      source: 'browser-smoke-no-webgpu',
+      boundary: 'existing viewer model ready',
+      reasonCode: 'viewer-load-incomplete',
+      affectedScope: 'viewer first answer',
+      recoveryAction: 'Inspect Vite output and the retained tape/report pair.',
+      detail: `load-status=${currentStatus}`,
+    })}`,
+  );
   console.error(`[smoke-no-webgpu] AC-09.1 RED: load-status is "${currentStatus}", expected "loaded"`);
   await browser.close();
   viteProc.kill('SIGTERM');
@@ -114,6 +144,15 @@ try {
 // ============================================================================
 try {
   await page.waitForSelector('[data-forgeax-rt-status="no-webgpu"]', { timeout: 10000 });
+  console.log(
+    `[smoke-no-webgpu] capability=${JSON.stringify({
+      consumer: 'viewer',
+      status: 'unavailable',
+      reasonCode: 'no-webgpu',
+      affectedScope: 'viewer texture preview',
+      recoveryAction: 'Run the existing viewer smoke on a WebGPU-capable host.',
+    })}`,
+  );
   console.log('[smoke-no-webgpu] AC-09.2 GREEN: RT panel status is no-webgpu');
 } catch {
   const rtStatus = await page.getAttribute('[data-forgeax-rt-status]', 'data-forgeax-rt-status');

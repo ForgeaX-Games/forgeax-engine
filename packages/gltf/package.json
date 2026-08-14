@@ -18,6 +18,11 @@
       "types": "./dist/node-file-entry.d.ts",
       "import": "./dist/node-file-entry.mjs"
     },
+    "./cli-gltf": {
+      "types": "./dist/cli-gltf.d.ts",
+      "node": "./dist/cli-gltf.mjs",
+      "default": null
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

@@ -126,11 +126,14 @@ if (!ready.ok) {
 
 const { buildLinesWorld } = await import(resolve(here, '..', 'src', 'lines.ts'));
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildLinesWorld(world);
 
 // --- render at SMOKE_MIN_FRAMES ---
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  await renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(50);
 

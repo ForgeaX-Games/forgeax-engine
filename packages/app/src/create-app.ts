@@ -774,6 +774,7 @@ async function createAppFromCanvas(
 
   const buildArgs: BuildAppArgs = {
     renderer,
+    rendererDispose: () => renderer.dispose(),
     world,
     pluginRegistry: pluginResult.value,
     executionControl,
@@ -1157,6 +1158,7 @@ async function createAppFromAssemble(
 
 interface BuildAppArgs {
   readonly renderer: Renderer;
+  readonly rendererDispose?: () => void;
   readonly world: World;
   /** Plugin registry from runPlugins -- exposed on App.pluginRegistry for inspector consumption. */
   readonly pluginRegistry: Map<string, Plugin>;
@@ -1191,7 +1193,7 @@ interface BuildAppArgs {
   /**
    * feat-20260709-editor-world-partition-editorworld-super-composite / M2 / D-3:
    * per-frame draw-source pull forwarded verbatim into the frame-loop. Absent =>
-   * legacy single-world path. Both createApp forms (canvas + assemble) forward
+   * the allocation-free primary-World path. Both createApp forms (canvas + assemble) forward
    * it from their respective options object.
    */
   readonly drawSource?: () =>
@@ -1218,6 +1220,7 @@ interface BuildAppArgs {
 async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiError>> {
   const {
     renderer,
+    rendererDispose,
     world,
     inputBackend,
     audioBackend,
@@ -1314,7 +1317,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     onError: dispatch,
   };
   // M2 / D-3: forward the optional draw-source pull into the frame-loop. Absent
-  // => the loop keeps the legacy single-world draw path.
+  // => the loop keeps the allocation-free primary-World draw path.
   if (args.drawSource !== undefined) {
     Object.assign(loopOpts, { drawSource: args.drawSource });
   }
@@ -1336,13 +1339,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     setLastError: (e) => {
       lastError = e;
     },
-    // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M6 /
-    // AC-08: stop-reason path chains into the M5 Renderer.dispose()
-    // 6-step cascade (createRenderer.ts:1774). The funnel's `invoked`
-    // latch + Renderer.dispose's own latch make double-stop a no-op.
-    rendererDispose: () => {
-      renderer.dispose();
-    },
+    ...(rendererDispose === undefined ? {} : { rendererDispose }),
     // feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 /
     // F23: canvas form wraps createWebAudioBackend().destroy() into
     // audioBackendDispose; assemble form does NOT pass this (host owns

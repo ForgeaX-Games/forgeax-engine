@@ -27,6 +27,7 @@ import { Transform } from '@forgeax/engine-scene';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createRenderer } from '../index';
+import { drawPublished } from './draw-published';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -236,7 +237,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     spawnCubeScene(world);
 
     for (let f = 0; f < 300; f++) {
-      const drawn = renderer.draw([world], { owner: 0 });
+      const drawn = drawPublished(renderer, world);
       expect(drawn.ok).toBe(true);
     }
     await device.queue.onSubmittedWorkDone();
@@ -281,7 +282,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
 
     // Install A (config.passCount=1) + draw -> one custom pass.
     expect(renderer.installPipeline(assetA).ok).toBe(true);
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     const passesAfterA = [...renderer.perFramePassNames];
 
     // Install B (same logic id, config.passCount=2) + draw -> the install bumps the
@@ -290,7 +291,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     // if installPipeline dropped config (the verify-round-1 defect) passesAfterB would equal
     // passesAfterA and the assertion below would fail.
     expect(renderer.installPipeline(assetB).ok).toBe(true);
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     const passesAfterB = [...renderer.perFramePassNames];
 
     await device.queue.onSubmittedWorkDone();
@@ -352,7 +353,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     // which after M3 is rewritten on top of addColorTarget / addScenePass /
     // addFullscreenPass. The end-to-end signature is observable through pixel
     // readback + perFramePassNames.
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 
     // AC-15 / R-PERFPASS: the urp pass names are preserved post-rewrite.
@@ -483,7 +484,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
       },
     );
 
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(drawPublished(renderer, world).ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 
     const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;

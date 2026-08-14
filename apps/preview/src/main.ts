@@ -462,7 +462,6 @@ function reportCreateError(err: CanvasAppError): {
       case 'app-not-started':
       case 'app-already-running':
       case 'app-canvas-detached':
-      case 'app-paused-while-stop':
       case 'app-system-update-failed':
       case 'app-pointer-lock-failed':
         console.error(`[preview] AppError ${err.code}: ${err.hint}`);

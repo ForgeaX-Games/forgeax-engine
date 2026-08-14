@@ -5,9 +5,9 @@
 // studio's scripts/fx.spec.ts intent (command routing + report formatting +
 // flag parsing) but uses vitest (engine convention) instead of bun:test.
 //
-// Run in isolation via `pnpm test:fx` (path-scoped) — the root `scripts` vitest
-// project is not in the test:unit filter set, so this file is gated through the
-// dedicated script + a portability-bun CI step, not the `unit` project.
+// Run in isolation via `pnpm test:fx` (the dedicated scripts-only Vitest config)
+// — this file is gated through the dedicated script + a portability-bun CI step,
+// not the full workspace project graph.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -18,9 +18,11 @@ import {
   findOrphanSubmoduleDirs,
   formatStepReport,
   parseSubmodulePaths,
+  parseSubmoduleStatusPaths,
   resolveCommand,
   type StepResult,
   stashPopArgsForRef,
+  submoduleUpdateAllArgs,
   submoduleUpdateArgs,
   troubleshootHints,
   updateShouldStash,
@@ -37,7 +39,7 @@ describe('package.json wiring', () => {
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(pkg.scripts.fx).toBe('bun scripts/fx.ts');
     expect(pkg.scripts['test:fx']).toBe(
-      'vitest run --project=scripts scripts/__tests__/fx.test.ts',
+      'vitest run --config scripts/vitest.fx.config.ts scripts/__tests__/fx.test.ts scripts/__tests__/worktree.test.ts',
     );
     expect(pkg.scripts.typecheck).toContain('tsc -p scripts/tsconfig.json');
   });
@@ -60,6 +62,11 @@ describe('resolveCommand', () => {
       type: 'internal',
       command: 'ci',
       args: ['--group', 'smoke-fleet-1'],
+    });
+    expect(resolveCommand(['worktree', 'feature-name'])).toEqual({
+      type: 'internal',
+      command: 'worktree',
+      args: ['feature-name'],
     });
   });
 
@@ -103,9 +110,36 @@ describe('submoduleUpdateArgs', () => {
       'update',
       '--init',
       '--recursive',
+      '--depth',
+      '1',
+      '--jobs',
+      '1',
       '--',
       'forgeax-engine-assets',
     ]);
+  });
+
+  it('keeps the all-submodule bootstrap shallow and single-job', () => {
+    expect(submoduleUpdateAllArgs()).toEqual([
+      'submodule',
+      'update',
+      '--init',
+      '--recursive',
+      '--depth',
+      '1',
+      '--jobs',
+      '1',
+    ]);
+  });
+});
+
+describe('parseSubmoduleStatusPaths', () => {
+  it('extracts initialized, shallow, and dirty status paths', () => {
+    expect(
+      parseSubmoduleStatusPaths(
+        [' 280094a assets', '-abcdef0 nested/child', '+1234567 dirty'].join('\n'),
+      ),
+    ).toEqual(['assets', 'nested/child', 'dirty']);
   });
 });
 

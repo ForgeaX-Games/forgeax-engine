@@ -200,6 +200,8 @@ if (!meshAsset || !matAsset) {
 console.log(`[smoke] mesh vertices=${meshAsset.payload.vertices.length} submeshes=${meshAsset.payload.submeshes.length}`);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // feat-20260614 M8: AssetRegistry register* deleted; mint user-tier column
 // handles via world.allocSharedRef (bare Handle, not a Result).
@@ -230,7 +232,8 @@ if (!ready.ok) {
 
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) {
     const code = r.error && typeof r.error === 'object' && 'code' in r.error ? r.error.code : 'unknown';
     errors.push(code);

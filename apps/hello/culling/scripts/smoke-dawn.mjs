@@ -130,7 +130,6 @@ const {
 } = await import('@forgeax/engine-assets-runtime');
 
 const world = new World();
-
 // Spawn DirectionalLight
 world.spawn({
   component: DirectionalLight,
@@ -153,6 +152,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 console.log(`[culling] backend=${renderer.backend}`);
 
@@ -240,7 +241,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
     scale: [1, 1, 1],
   });
 
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
 
   const stats = renderer.frustumStats;

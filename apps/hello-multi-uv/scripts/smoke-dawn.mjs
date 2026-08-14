@@ -204,7 +204,6 @@ const { Transform } = await import('@forgeax/engine-scene');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 
 const world = new World();
-
 const baseColorTexture = {
   kind: 'texture',
   width: 2,
@@ -390,6 +389,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 console.log(`[hello-multi-uv] backend=${renderer.backend}`);
 
@@ -432,7 +433,8 @@ if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
 // not prewarmed.
 const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 for (let warm = 0; warm < 16; warm++) {
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   await yieldTick();
 }
 
@@ -440,7 +442,8 @@ const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, 300);
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

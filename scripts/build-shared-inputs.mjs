@@ -80,7 +80,12 @@ await build({
         return id === virtualEntry ? 'export {};' : null;
       },
     },
-    forgeaxShader(),
+    forgeaxShader({
+      engineEntries: {
+        pointShadows: process.argv.includes('--point-shadows'),
+        hdrpSsao: process.argv.includes('--hdrp-ssao'),
+      },
+    }),
   ],
   build: {
     emptyOutDir: true,

@@ -52,10 +52,9 @@ test('CI harness materialization uses a blob-filtered docs-only clone', () => {
     /- name: Materialize harness documentation[\s\S]*?FORGEAX_HARNESS_SPARSE_DOCS: '1'/g,
   );
   assert.equal(materializeSteps?.length, 2);
-  assert.match(
-    readFileSync(resolve('scripts/sync-harness.mjs'), 'utf8'),
-    /--filter=blob:none[\s\S]*--sparse/,
-  );
+  const syncHarness = readFileSync(resolve('scripts/sync-harness.mjs'), 'utf8');
+  assert.match(syncHarness, /--filter=blob:none[\s\S]*--sparse/);
+  assert.match(syncHarness, /\['fetch', '--quiet', '--depth=1', 'origin', 'main'\]/);
 });
 
 test('browser WebGPU project bounds workers to protect the shared device', () => {

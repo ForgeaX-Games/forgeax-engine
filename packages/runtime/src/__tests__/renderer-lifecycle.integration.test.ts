@@ -21,9 +21,9 @@ describe('renderer lifecycle assembly', () => {
   it('keeps dispose idempotent after ready and draw', async () => {
     const renderer = await createRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
     await renderer.ready;
-    renderer.draw([], { owner: 0 });
+    renderer.draw([], { cameraOwner: 0, resourceOwner: 0 });
     renderer.dispose();
     renderer.dispose();
-    expect(renderer.draw([], { owner: 0 }).ok).toBe(false);
+    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(false);
   });
 });

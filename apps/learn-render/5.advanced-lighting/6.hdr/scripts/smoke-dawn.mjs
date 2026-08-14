@@ -367,6 +367,8 @@ const woodTexAsset = {
   mipmap: woodDecoded.mipmap,
 };
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // Catalogue the wood texture under its GUID, then mint a shared-ref column handle.
 assets.catalog(woodGuidRes.value, woodTexAsset);
@@ -584,7 +586,7 @@ let framesObserved = 0;
 // the wall-pixel readback below to observe real geometry.
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw hdr frame ${i} error: ${r.error.code}`);
   framesObserved++;
   await sharedDevice.queue.onSubmittedWorkDone();
@@ -621,7 +623,7 @@ if (!FALSIFY) {
 
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw ldr frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

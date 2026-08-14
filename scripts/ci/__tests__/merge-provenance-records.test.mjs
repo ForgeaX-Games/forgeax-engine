@@ -71,6 +71,12 @@ function fixture(values) {
     );
   return root;
 }
+function rawFixture(entries) {
+  const root = mkdtempSync(join(tmpdir(), 'provenance-raw-'));
+  for (const [name, value] of entries)
+    writeFileSync(join(root, name), typeof value === 'string' ? value : JSON.stringify(value));
+  return root;
+}
 function run(dir, contractPath = contract, aggregateAttempt = 2) {
   const out = join(dir, 'merged.json');
   const githubOutput = join(dir, 'github-output');
@@ -156,6 +162,29 @@ test('t15b: merges four immutable producer records with selected artifact IDs', 
     assert.equal(artifactIds.filter((artifactId) => artifactId === 'core-transfer').length, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rejects unknown producer identities and non-object JSON records before roster selection', () => {
+  const scenarios = [
+    {
+      dir: () => fixture([...records(), record('unexpected-producer', [])]),
+      code: 'ci-provenance-producer-unknown',
+    },
+    {
+      dir: () => rawFixture([['provenance-invalid-a1.json', 'null']]),
+      code: 'ci-provenance-record-invalid',
+    },
+  ];
+  for (const { dir: makeDir, code } of scenarios) {
+    const dir = makeDir();
+    try {
+      const result = run(dir);
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).code, code);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 

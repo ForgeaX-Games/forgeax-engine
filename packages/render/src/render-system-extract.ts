@@ -102,7 +102,14 @@ import {
   resolveAssetHandle,
   walkMaterialPassesOverSharedRefs,
 } from '@forgeax/engine-assets-runtime';
-import type { Archetype, EntityHandle, ErrorContext, FieldView, World } from '@forgeax/engine-ecs';
+import type {
+  Archetype,
+  Component,
+  EntityHandle,
+  ErrorContext,
+  FieldView,
+  World,
+} from '@forgeax/engine-ecs';
 import {
   Entity,
   InstanceTransformsStrideMismatchError,
@@ -113,13 +120,9 @@ import {
   SpriteInstancesRequiresSpriteShaderError,
 } from '@forgeax/engine-ecs';
 import { box3, frustum, type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { RhiError } from '@forgeax/engine-rhi';
-import {
-  projectHierarchy,
-  propagateTransforms,
-  type SceneHierarchySnapshot,
-  Transform,
-} from '@forgeax/engine-scene';
+import { projectHierarchy, type SceneHierarchySnapshot, Transform } from '@forgeax/engine-scene';
 import {
   JointCountMismatchError,
   JointEntityDanglingError,
@@ -188,7 +191,6 @@ import { isStandardPbrMaterialShader } from './pbr-pipeline';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
-import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 
 export interface CameraSnapshot {
   /** World-space camera translation (mat4.getTranslation of Transform.world). */
@@ -1122,7 +1124,7 @@ type WorldInternalView = World & {
    */
   _getArrayView(
     entity: EntityHandle,
-    component: typeof Transform,
+    component: Component,
     fieldName: string,
   ): FieldView | undefined;
   /**
@@ -1353,23 +1355,32 @@ function resolveVideoFieldHandle(
   assetsRef: AssetRegistry,
 ): Handle<'VideoAsset', 'shared'> | undefined {
   const texture = materialTextureValue(value);
-  const textureRef = texture?.texture ?? (typeof value === 'string' ? value : undefined);
-  if (typeof textureRef !== 'string') return undefined;
-  const payload = assetsRef.lookup(textureRef);
+  const textureGuid = assetReferenceText(texture?.texture ?? value);
+  if (textureGuid === undefined) return undefined;
+  const payload = assetsRef.lookup(textureGuid);
   if (payload === undefined || payload.kind !== 'video') return undefined;
   // M4: intern so a video GUID mints one stable VideoAsset handle per World
   // instead of a fresh slot every frame. The transient per-frame view is
   // resolved downstream by this handle (DynamicTextureStore); minting the
   // handle once does not freeze the view (P5: handle != frame data).
-  return internSharedRefFromGuid(world, assetsRef, textureRef, 'VideoAsset');
+  return internSharedRefFromGuid(world, assetsRef, textureGuid, 'VideoAsset');
 }
 
 function materialTextureValue(value: unknown): MaterialTextureValue | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const textureValue = value as Partial<MaterialTextureValue>;
-  return typeof textureValue.texture === 'number' || typeof textureValue.texture === 'string'
+  return typeof textureValue.texture === 'number' ||
+    typeof textureValue.texture === 'string' ||
+    textureValue.texture instanceof Uint8Array
     ? (textureValue as MaterialTextureValue)
     : undefined;
+}
+
+function assetReferenceText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (value instanceof Uint8Array && value.byteLength === 16)
+    return AssetGuid.format(value as never);
+  return undefined;
 }
 
 function materialNormalScale(values: Readonly<Record<string, unknown>>): number {
@@ -2280,7 +2291,6 @@ export interface PreparedExtractContext {
   readonly cullCameras: readonly CameraSnapshot[] | undefined;
   readonly hierarchy: SceneHierarchySnapshot;
   readonly visibility: VisibilitySnapshot;
-  readonly transformError: import('@forgeax/engine-scene').SceneError | undefined;
 }
 
 export function prepareExtractContext(
@@ -2295,7 +2305,6 @@ export function prepareExtractContext(
   } = {},
 ): PreparedExtractContext {
   const hierarchy = projectHierarchy(world);
-  const transformResult = propagateTransforms(world, hierarchy);
   return {
     assets: options.assets,
     pipelineState: options.pipelineState,
@@ -2305,7 +2314,6 @@ export function prepareExtractContext(
     cullCameras: options.cullCameras,
     hierarchy,
     visibility: resolveVisibility(world, hierarchy),
-    transformError: transformResult.ok ? undefined : transformResult.error,
   };
 }
 
@@ -2335,10 +2343,55 @@ export function extractFrames(
     skinPaletteAllocator.resetForFrame();
   }
 
+  // The ordinary game path owns exactly one World. extractFrame already emits
+  // the canonical single-world shape: worldId=0, sorted dispatch, owner
+  // cameras/resources, visibility projections, and CSM matrices fitted to its
+  // own camera. Returning that snapshot directly avoids routing every frame
+  // through the multi-world reconciliation machinery below (ordering arrays,
+  // Maps, and per-renderable/dispatch object copies). This is an intra-frame
+  // structural fast path, not a cross-frame cache; every ECS query and derived
+  // snapshot is still refreshed on every call.
+  const onlyWorld = worlds.length === 1 ? worlds[0] : undefined;
+  const failedWorlds = new Set<World>();
+  if (onlyWorld !== undefined && cameraOwner === 0 && resourceOwner === 0) {
+    try {
+      const prepared = prepareExtractContext(onlyWorld, {
+        ...(assets !== undefined ? { assets } : {}),
+        ...(pipelineState !== undefined ? { pipelineState } : {}),
+        ...(gpuStore !== undefined ? { gpuStore } : {}),
+        ...(materialSnapshotCachesByWorld === undefined
+          ? {}
+          : {
+              materialSnapshotCache:
+                materialSnapshotCachesByWorld.get(onlyWorld) ??
+                (() => {
+                  const cache: MaterialSnapshotCache = new Map();
+                  materialSnapshotCachesByWorld.set(onlyWorld, cache);
+                  return cache;
+                })(),
+            }),
+      });
+      return extractFrame(onlyWorld, prepared);
+    } catch (err) {
+      try {
+        (onlyWorld as World & { _routeError(err: Error, ctx: ErrorContext): void })._routeError(
+          err as Error,
+          {
+            severity: Severity.Error,
+            systemName: 'RenderSystem.extractFrames(world[0])',
+          },
+        );
+      } catch {
+        // The World error channel may throw under the default policy.
+      }
+      failedWorlds.add(onlyWorld);
+    }
+  }
+
   // ── D-2: per-world extract with error isolation ────────────────────────
   //
-  // Each world runs propagateTransforms → tilemapChunkExtractSystem →
-  // extractFrame. Failure in one world is caught, routed to that world's
+  // Each world runs extractFrame over the final state published by
+  // world.update(). Failure in one world is caught, routed to that world's
   // _routeError (systemName carries worldId for source identification),
   // and the world's contribution is skipped (AC-09 graceful degradation).
 
@@ -2358,11 +2411,8 @@ export function extractFrames(
 
   for (const wi of extractionOrder) {
     const world = worlds[wi];
-    if (world === undefined) continue;
+    if (world === undefined || failedWorlds.has(world)) continue;
     try {
-      // Tilemap materialization must precede hierarchy projection so derived
-      // entities participate in the same World-local snapshot.
-      tilemapChunkExtractSystem(world, wi);
       const isCameraOwner = wi === cameraOwner;
       const cameraOwnerFrame = framesByWorld.get(cameraOwner);
       const prepared = prepareExtractContext(world, {
@@ -2383,15 +2433,6 @@ export function extractFrames(
         cull: isCameraOwner ? 'self' : 'external',
         ...(cameraOwnerFrame === undefined ? {} : { cullCameras: cameraOwnerFrame.cameras }),
       });
-      if (prepared.transformError !== undefined) {
-        (world as World & { _routeError(err: Error, ctx: ErrorContext): void })._routeError(
-          prepared.transformError as unknown as Error,
-          {
-            severity: Severity.Error,
-            systemName: `RenderSystem.extractFrames(world[${wi}]) (propagateTransforms)`,
-          },
-        );
-      }
       const frame = extractFrame(world, prepared);
 
       framesByWorld.set(wi, frame);
@@ -3460,8 +3501,6 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     // `skeleton` holds the packed Handle<SkeletonAsset>; `joints` holds
     // the packed Entity u32 array (N x one u32 each).
     const skinSkeletonView = skin?.skeleton;
-    // m2-6: per-entity Skin.joints[] is read via `world.get(entity, Skin)`
-    // inside the row loop (D-6); the column-bundled view is no longer needed.
 
     let archVersion = 0;
     if (hasInstances || hasSpriteInstances) {
@@ -3785,7 +3824,8 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               // before validation. A number is an already-minted column handle.
               let handle: Handle<'TextureAsset', 'shared'>;
               const textureRef = materialTextureRef(raw);
-              if (typeof textureRef === 'string') {
+              const textureGuid = assetReferenceText(textureRef);
+              if (textureGuid !== undefined) {
                 if (assets === null || assets === undefined) return undefined;
                 // M4: intern so the GUID mints one stable handle per World
                 // instead of a fresh slot every frame (GPU residency relies on
@@ -3793,7 +3833,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
                 const interned = internSharedRefFromGuid(
                   world,
                   assets,
-                  textureRef,
+                  textureGuid,
                   'TextureAsset',
                   (h) => {
                     if (gpuStore) gpuStore.evictTexture(h);
@@ -3844,16 +3884,17 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
             ): Handle<B, 'shared'> | undefined => {
               const value = materialTextureRef(raw);
               if (typeof value === 'number') return value as unknown as Handle<B, 'shared'>;
-              if (typeof value === 'string') {
+              const guid = assetReferenceText(value);
+              if (guid !== undefined) {
                 if (assets === null || assets === undefined) return undefined;
                 // M4: intern the GUID -> column-handle resolution (one stable
                 // handle per (world, guid, brand), reused across frames).
                 if (gpuStore !== undefined && brand === 'TextureAsset') {
-                  return internSharedRefFromGuid(world, assets, value, brand, (handle) => {
+                  return internSharedRefFromGuid(world, assets, guid, brand, (handle) => {
                     gpuStore.evictTexture(handle as Handle<'TextureAsset', 'shared'>);
                   });
                 }
-                return internSharedRefFromGuid(world, assets, value, brand);
+                return internSharedRefFromGuid(world, assets, guid, brand);
               }
               return undefined;
             };
@@ -4170,11 +4211,11 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               continue;
             }
             const skeleton = skeletonRes.value;
-            // (b) Validate joint-count agreement; D-6: world.get public API.
-            const skinRes = world.get(entity, Skin);
-            if (!skinRes.ok) continue;
-            const skinJoints = skinRes.value.joints as unknown as Uint32Array | readonly number[];
-            const jointsLength = (skinJoints as { length: number } | undefined)?.length ?? 0;
+            // (b) Reuse the Skin row already read for its skeleton handle;
+            // the old path repeated a second whole-row world.get here.
+            const skinJoints = skin?.joints;
+            if (skinJoints === undefined) continue;
+            const jointsLength = skinJoints.length;
             if (jointsLength !== skeleton.jointCount) {
               worldInternal._routeError(
                 new JointCountMismatchError(
@@ -4189,25 +4230,26 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               );
               continue;
             }
-            // (c) Per-joint Transform.world resolve via public world.get (D-2
-            // retire _getArrayView for joint reads; Result.err codes
-            // 'stale-entity' / 'component-not-present' are dangling-equivalent).
+            // (c) Resolve only each joint's Transform.world column. The
+            // transient view is consumed before any structural mutation and
+            // therefore preserves the same dangling-joint behavior without
+            // constructing every other Transform field.
             // Build mat4 list eagerly so write happens once per entity (no
             // half-written slice on dangling).
             const jointWorlds = new Array<Mat4>(skeleton.jointCount);
             let jointDangling = -1;
             for (let jIdx = 0; jIdx < skeleton.jointCount; jIdx++) {
-              const jointEntityRaw = (skinJoints as Uint32Array | readonly number[])[jIdx] ?? 0;
+              const jointEntityRaw = skinJoints[jIdx] ?? 0;
               const jointEntity = jointEntityRaw as unknown as EntityHandle;
-              const r = world.get(jointEntity, Transform);
-              if (!r.ok) {
+              const jointWorld = worldInternal._getArrayView(jointEntity, Transform, 'world');
+              if (jointWorld === undefined) {
                 jointDangling = jIdx;
                 break;
               }
               // The view aliases the column-stored 16-float mat4 (column-major).
               // Allocator's writeJointPalette expects a Mat4-shaped Float32Array.
               // brand-cast-ok: reinterpret an existing storage view, no alloc.
-              jointWorlds[jIdx] = r.value.world as unknown as Mat4;
+              jointWorlds[jIdx] = jointWorld as unknown as Mat4;
             }
             if (jointDangling >= 0) {
               worldInternal._routeError(
@@ -4331,10 +4373,9 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
           // (3) count mismatch — transforms.length / 16 === regions.length / 4
           // (transforms.length=0 + regions.length=0 is the zero-instance lawful
           // boundary; both derivations are 0 and equality holds, so no fire).
-          const spriteRes = world.get(entity, SpriteInstances);
-          if (spriteRes.ok) {
-            const transforms = spriteRes.value.transforms;
-            const regions = spriteRes.value.regions;
+          const transforms = worldInternal._getArrayView(entity, SpriteInstances, 'transforms');
+          const regions = worldInternal._getArrayView(entity, SpriteInstances, 'regions');
+          if (transforms !== undefined && regions !== undefined) {
             const transformsLength = transforms.length;
             const regionsLength = regions.length;
             // Stride sanity: transforms must be mod 16, regions must be mod 4.
@@ -4438,12 +4479,11 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         }
 
         if (hasInstances) {
-          const instRes = world.get(entity, Instances);
-          if (!instRes.ok) {
+          const transforms = worldInternal._getArrayView(entity, Instances, 'transforms');
+          if (transforms === undefined) {
             flushPendingDispatch(pendingDispatch);
             renderables.push(baseRenderable);
           } else {
-            const transforms = instRes.value.transforms;
             const actualLength = transforms.length;
             if (actualLength % 16 !== 0) {
               worldInternal._routeError(new InstanceTransformsStrideMismatchError(actualLength), {

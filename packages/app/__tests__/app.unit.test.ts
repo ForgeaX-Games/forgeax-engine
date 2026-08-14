@@ -89,6 +89,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
   function makeRendererStubEF(drawImpl?: (w: World) => unknown): Renderer {
     return {
+      attachWorld: () => ({ ok: true, value: undefined }),
       draw(w: World): unknown {
         if (drawImpl !== undefined) {
           return drawImpl(w);
@@ -240,9 +241,9 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
       it('no listener + silenceUnhandledErrors=true -> error dropped, console.error NOT called', () => {
         const fan = makeFanout({ silenceUnhandledErrors: true });
         const synth: AppError = new AppError({
-          code: 'app-paused-while-stop',
-          expected: 'state must be running',
-          hint: 'resume() first then stop()',
+          code: 'app-already-running',
+          expected: 'state must not be running',
+          hint: 'stop() before starting again',
           detail: {},
         });
         fan.fire(synth);
@@ -357,7 +358,6 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     'app-not-started',
     'app-already-running',
     'app-canvas-detached',
-    'app-paused-while-stop',
     'app-frame-step-invalid',
     'app-system-update-failed',
     'app-pointer-lock-failed',
@@ -548,11 +548,10 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         expect(stringCause.message).toContain('plain-string-throw');
       });
 
-      it('other 3 codes carry empty-object detail {}', () => {
+      it('other 2 codes carry empty-object detail {}', () => {
         const empties: AppErrorCode[] = [
           'app-not-started',
           'app-already-running',
-          'app-paused-while-stop',
         ];
         for (const code of empties) {
           const err = new AppError({
@@ -579,7 +578,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
               return 'b';
             case 'app-canvas-detached':
               return 'c';
-            case 'app-paused-while-stop':
+            case 'app-frame-step-invalid':
               return 'd';
             case 'app-system-update-failed':
               return 'e';
@@ -673,9 +672,10 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
   function makeRendererStubFL(): { renderer: Renderer; drawCalls: readonly World[][] } {
     // feat-20260708-composited-multi-world-rendering M3: draw is now
-    // draw(worlds, { owner }); the stub records the worlds array per call.
+    // draw(worlds, { cameraOwner, resourceOwner }); the stub records the worlds array per call.
     const drawCalls: World[][] = [];
     const renderer = {
+      attachWorld: () => ({ ok: true, value: undefined }),
       draw(worlds: readonly World[]): void {
         drawCalls.push([...worlds]);
       },
@@ -775,22 +775,22 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         expect(loop.getState()).toBe('running');
       });
 
-      it('running -> idle: stop() ok', () => {
+      it('running -> stopped: stop() is terminal', () => {
         loop.start();
         const r = loop.stop();
         expect(r.ok).toBe(true);
-        expect(loop.getState()).toBe('idle');
+        expect(loop.getState()).toBe('stopped');
+        const restart = loop.start();
+        expect(restart.ok).toBe(false);
+        if (!restart.ok) expect(restart.error.code).toBe('app-not-started');
       });
 
-      it("paused -> err: stop() while paused returns 'app-paused-while-stop'", () => {
+      it('paused -> stopped: stop() terminates the paused loop', () => {
         loop.start();
         loop.pause();
         const r = loop.stop();
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('app-paused-while-stop');
-        }
-        expect(loop.getState()).toBe('paused');
+        expect(r.ok).toBe(true);
+        expect(loop.getState()).toBe('stopped');
       });
 
       it("idle -> err: stop() while idle returns 'app-not-started'", () => {
@@ -813,20 +813,28 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     });
 
     describe('frame-loop frame-order contract (AC-04)', () => {
-      it('rAF tick invokes world.update(1 / 60).unwrap() then renderer.draw(world) in fixed sequence', () => {
+      it('rAF tick attaches the World, updates it, then draws in fixed sequence', () => {
         const world = new World();
         const { renderer, drawCalls } = makeRendererStubFL();
         const updateSpy = vi.spyOn(world, 'update');
         const now = makeNowFakeFL([0, 16]);
         const { raf, pendingCallbacks } = makeRafFakeFL();
         const callOrder: string[] = [];
+        (renderer as unknown as { attachWorld: (w: World) => { ok: true; value: undefined } }).attachWorld = (
+          w,
+        ) => {
+          expect(w).toBe(world);
+          callOrder.push('attach');
+          return { ok: true, value: undefined };
+        };
         updateSpy.mockImplementation(() => {
           callOrder.push('update');
+          return { ok: true, value: undefined };
         });
         const origDraw = renderer.draw;
-        (renderer as { draw: (w: readonly World[], o: { owner: number }) => void }).draw = (
+        (renderer as { draw: (w: readonly World[], o: { cameraOwner: number; resourceOwner: number }) => void }).draw = (
           w: readonly World[],
-          o: { owner: number },
+          o: { cameraOwner: number; resourceOwner: number },
         ): void => {
           callOrder.push('draw');
           origDraw.call(renderer, w as World[], o);
@@ -834,7 +842,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         const loop = createFrameLoop({ world, renderer, now, raf });
         loop.start();
         pendingCallbacks[0]?.(0);
-        expect(callOrder).toEqual(['update', 'draw']);
+        expect(callOrder).toEqual(['attach', 'update', 'draw']);
         expect(drawCalls).toHaveLength(1);
         // M3 / AC-03: the frame-loop wraps the single world into [world].
         expect(drawCalls[0]).toEqual([world]);
@@ -990,6 +998,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     return {
       backend: 'webgpu' as const,
       ready,
+      attachWorld: () => ({ ok: true, value: undefined }),
       draw(): void {
         // no-op
       },

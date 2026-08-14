@@ -30,6 +30,7 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from '../draw-published';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -319,7 +320,7 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     });
 
     for (let f = 0; f < 5; f++) {
-      const drawn = renderer.draw([world], { owner: 0 });
+      const drawn = drawPublished(renderer, world);
       expect(drawn.ok).toBe(true);
     }
     await device.queue.onSubmittedWorkDone();
@@ -524,7 +525,7 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     });
 
     for (let f = 0; f < 5; f++) {
-      const drawn = renderer.draw([world], { owner: 0 });
+      const drawn = drawPublished(renderer, world);
       expect(drawn.ok).toBe(true);
     }
     await device.queue.onSubmittedWorkDone();

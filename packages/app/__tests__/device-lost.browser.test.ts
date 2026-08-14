@@ -78,6 +78,10 @@ function makeFakeRenderer(opts?: {
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true, value: undefined }),
     health: () => ({ reason: state.reason, recoverable: state.reason === 'device-lost' }),
+    attachWorld(): Result<void, never> {
+      return { ok: true, value: undefined };
+    },
+    detachWorld(): void {},
     draw(): void {
       state.drawCalls++;
     },

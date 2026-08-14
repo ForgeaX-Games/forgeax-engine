@@ -254,6 +254,25 @@ test('isolates simultaneous metrics and WebKit failures in the exact required ro
   assert.deepEqual(result.reasonCodes, ['required-context-failed']);
 });
 
+test('emits a deterministic simultaneous coverage and browser failure packet', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: completeRoster()
+      .map((job) =>
+        job.name === 'coverage-pnpm' || job.name === 'vitest-browser'
+          ? { ...job, conclusion: 'failure' }
+          : job,
+      )
+      .reverse(),
+  });
+  assert.equal(REQUIRED_CHECK_NAMES.length, 19);
+  assert.equal(result.status, 'genuine-failure');
+  assert.equal(result.actionable, true);
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.failedContexts, ['coverage-pnpm', 'vitest-browser']);
+  assert.deepEqual(result.reasonCodes, ['required-context-failed']);
+});
+
 test('keeps an incomplete required job out of terminal coverage evidence', () => {
   const result = classifyRequiredContextAdmission({
     run: runFixture(),

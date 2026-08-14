@@ -4672,6 +4672,34 @@
         "@webgpu/types": "^0.1.71",
       },
     },
+    "packages/devkit": {
+      "name": "@forgeax/engine-devkit",
+      "version": "0.0.0",
+      "bin": {
+        "forgeax": "./dist/cli.mjs",
+      },
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-fbx": "workspace:*",
+        "@forgeax/engine-font": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-physics": "workspace:*",
+        "@forgeax/engine-shader-compiler": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-vfx-compiler": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "vite": "8.0.10",
+        "vitest": "4.1.5",
+      },
+      "devDependencies": {
+        "@types/node": "^20.14.0",
+      },
+    },
     "packages/ecs": {
       "name": "@forgeax/engine-ecs",
       "version": "0.0.0",
@@ -5038,6 +5066,7 @@
       "dependencies": {
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+        "pako": "^1.0.11",
         "pngjs": "^7.0.0",
       },
       "devDependencies": {
@@ -5807,6 +5836,8 @@
     "@forgeax/engine-ddc": ["@forgeax/engine-ddc@workspace:packages/ddc"],
 
     "@forgeax/engine-debug-draw": ["@forgeax/engine-debug-draw@workspace:packages/debug-draw"],
+
+    "@forgeax/engine-devkit": ["@forgeax/engine-devkit@workspace:packages/devkit"],
 
     "@forgeax/engine-ecs": ["@forgeax/engine-ecs@workspace:packages/ecs"],
 

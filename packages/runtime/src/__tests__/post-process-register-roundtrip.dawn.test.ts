@@ -124,6 +124,15 @@ describe('feat-20260604 M3 F-2 fix-up: postProcess.register + addFullscreenPass 
     expect(err.detail?.id).toBe('test::roundtrip-B');
   });
 
+  it('unregisters a realm-owned entry so a later realm can reuse the id', async () => {
+    const r = await setupRenderer();
+    const unregister = r.postProcess.register('test::realm-owned', { source: 'fn main() {}' });
+    unregister();
+    expect(() =>
+      r.postProcess.register('test::realm-owned', { source: 'fn main() {}' }),
+    ).not.toThrow();
+  });
+
   it('renderer.postProcess.register throws params-size-mismatch when params.byteSize < 16 (live fail-fast)', async () => {
     // feat-20260621 AC-A3: the eager params-UBO guard must fire on the REAL
     // register() path (not just on a hand-constructed PostProcessError). byteSize

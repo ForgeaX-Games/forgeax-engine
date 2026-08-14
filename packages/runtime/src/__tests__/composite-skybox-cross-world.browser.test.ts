@@ -160,7 +160,12 @@ async function readbackAfterComposite(
   worlds: World[],
   canvasId: string,
 ): Promise<Uint8Array> {
+  for (const world of worlds) {
+    const attached = renderer.attachWorld(world);
+    if (!attached.ok) throw attached.error;
+  }
   for (let i = 0; i < FRAMES; i++) {
+    for (const world of worlds) world.update(1 / 60).unwrap();
     const r = renderer.draw(worlds, { cameraOwner: 0, resourceOwner: 1 });
     if (!r.ok) throw new Error(`renderer.draw frame ${i} failed: ${r.error.code}`);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));

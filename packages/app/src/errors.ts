@@ -1,15 +1,14 @@
-// @forgeax/engine-app -- AppError + closed AppErrorCode union (13 members) +
+// @forgeax/engine-app -- AppError + closed AppErrorCode union (12 members) +
 // APP_ERROR_HINTS / APP_EXPECTED + discriminated AppErrorDetail per code.
 //
 // Shape:
-//   - AppErrorCode = closed union 13 members (charter P4 closed-union
+//   - AppErrorCode = closed union 12 members (charter P4 closed-union
 //     exhaustive switch needs no default fallback; tsc strict mode guards
 //     completeness; AGENTS.md "Errors are structured" + AC-07).
 //     Members:
 //       - 'app-not-started'
 //       - 'app-already-running'
 //       - 'app-canvas-detached'
-//       - 'app-paused-while-stop'
 //       - 'app-system-update-failed'
 //       - 'app-pointer-lock-failed'
 //     Plan-strategy D-3 lock: device-lost stays on RhiErrorCode (18-member
@@ -36,7 +35,7 @@
 //     non-canonical fields like `{ state: 'running' }` on the
 //     'app-already-running' arm.
 //
-//   - APP_ERROR_HINTS / APP_EXPECTED are 13-key Records keyed by AppErrorCode;
+//   - APP_ERROR_HINTS / APP_EXPECTED are 12-key Records keyed by AppErrorCode;
 //     one private policy owner supplies both projections. The focused policy-owner
 //     proof asserts that every code has the exact expected and hint strings.
 //
@@ -52,14 +51,13 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
 
 /**
- * Closed AppErrorCode union (13 members).
+ * Closed AppErrorCode union (12 members).
  *
  * | code | trigger |
  * |:--|:--|
  * | `'app-not-started'` | `stop()` / `pause()` / `resume()` invoked while the rAF loop is in the terminal `'idle'` or `'stopped'` state (post-device-lost terminal sink). The handle has no live frame to interrupt; AI users either call `start()` first or accept that this handle is dead and rebuild via `createApp({...})`. |
  * | `'app-already-running'` | second `start()` invocation against an already-running handle; the call is a no-op state-machine-wise (state preserved). |
  * | `'app-canvas-detached'` | `createApp(canvas)` thin wrapper found `canvas.isConnected === false` at entry. Detail carries optional `canvasId` so the host can surface the offending canvas in a multi-canvas page (D-2 minor). |
- * | `'app-paused-while-stop'` | `stop()` invoked while the rAF loop is `'paused'`. AI users must `resume()` then `stop()` (matches the React component-unmount-then-stop pattern). |
  * | `'app-system-update-failed'` | `world.update(...)` or `world.removeSystem(Update, ...)` (input-attach cleanup path) threw or returned `Result.err`; the original failure value is forwarded on `detail.cause` so AI users can two-level narrow (`detail.cause instanceof EcsError` etc.). `detail.systemName` is optional and present when the call site can name the offending system (e.g. input-attach reports `FRAME_START_SCAN_SYSTEM_NAME`). |
  * | `'app-pointer-lock-failed'` | `attachInputAuto`'s `onLockError` callback received a lock failure from the input backend. `detail.path` carries `'w3c'` (W3C `requestPointerLock` rejection) or `'provider'` (host-injected `lockProvider.requestLock` throw/reject). `detail.cause` carries the original rejection value verbatim. The host recovers by remaining in unlocked state; the next trusted click will retry the lock request. |
  *
@@ -150,8 +148,8 @@ export interface AppDetailExecutionRebuildFailed {
 }
 
 /**
- * Empty-detail shape for the 3 codes that carry no payload
- * (`'app-not-started'`, `'app-already-running'`, `'app-paused-while-stop'`).
+ * Empty-detail shape for the 2 codes that carry no payload
+ * (`'app-not-started'`, `'app-already-running'`).
  *
  * Modelled as `Readonly<Record<string, never>>` so literal builders use
  * `{}` while still narrowing under tsc strict (no extra property allowed).
@@ -287,7 +285,7 @@ type AppErrorVariant<C extends AppErrorCode> = AppErrorClass & {
 };
 
 /**
- * Public AppError type — discriminated union of the 6 variants.
+ * Public AppError type — discriminated union of the policy variants.
  *
  * AI-user form (charter P3 explicit failure):
  *
@@ -297,7 +295,6 @@ type AppErrorVariant<C extends AppErrorCode> = AppErrorClass & {
  *     case 'app-not-started':         return 'call start() first';
  *     case 'app-already-running':     return 'state preserved; ignore';
  *     case 'app-canvas-detached':     return `reattach ${err.detail.canvasId ?? 'canvas'}`;
- *     case 'app-paused-while-stop':   return 'resume() then stop()';
  *     case 'app-system-update-failed':
  *       return err.detail.cause instanceof Error ? err.detail.cause.message : 'unknown';
  *     case 'app-pointer-lock-failed':
@@ -339,7 +336,7 @@ export const AppError: AppErrorConstructor = AppErrorClass as unknown as AppErro
  * code surfaces. AI users read this as the L2 detail (charter F2 priority
  * text); `.hint` carries the recovery action.
  *
- * 13 keys; the focused policy-owner proof locks the exact key set and values.
+ * 12 keys; the focused policy-owner proof locks the exact key set and values.
  * locks the count and non-emptiness of every entry.
  */
 type AppErrorPolicy = { readonly expected: string; readonly hint: string };
@@ -358,10 +355,6 @@ const appErrorPolicy = {
   'app-canvas-detached': {
     expected: 'canvas.isConnected === true at createApp(canvas) entry',
     hint: 'append the canvas to the document tree before calling createApp(canvas), or use the assemble entry createApp({ renderer, world }) when the host already manages canvas lifetime',
-  },
-  'app-paused-while-stop': {
-    expected: 'state must be "running" to stop; paused handles must resume() before stop()',
-    hint: 'call resume() then stop(), or treat stop-while-paused as a host bug and audit the lifecycle',
   },
   'app-frame-step-invalid': {
     expected:

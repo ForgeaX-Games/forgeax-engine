@@ -81,28 +81,28 @@ describe('tilemap dirty rebuild (M0 baseline)', () => {
   it('first frame: dirty=0 + never-built layer still spawns derived entities', () => {
     const { world } = setup();
     expect(countDerived(world)).toBe(0);
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     expect(countDerived(world)).toBe(2);
   });
 
   it('idempotent: second pass without dirty flag does not duplicate entities', () => {
     const { world } = setup();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const after1 = countDerived(world);
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const after2 = countDerived(world);
     expect(after2).toBe(after1);
   });
 
   it('markTileLayerDirty triggers a full rebuild on the next pass', () => {
     const { world, layer } = setup();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     expect(countDerived(world)).toBe(2);
     // Mutate the tiles array in place + mark dirty.
     const tiles = world.get(layer, TileLayer).unwrap().tiles as Uint32Array;
     tiles[1] = 1; // adds a non-zero cell
     markTileLayerDirty(world, layer).unwrap();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     expect(countDerived(world)).toBe(3);
   });
 });
@@ -202,7 +202,7 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     // 8x8 cells + chunkSize=4 → 4 chunks; one atlas → 1 SpriteInstances
     // entity per (chunk, atlas) group → 4 derived entities total.
     const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
 
     const kids = readChildrenIds(world, layer);
     expect(kids.length).toBe(4);
@@ -211,7 +211,7 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
 
   it("terrain path (sortScope='layer'): markTileLayerDirty + rebuild purges OLD entities via Children.entities snapshot, spawns NEW entities with ChildOf.parent = layer", () => {
     const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
 
     // Capture handles from the first build BEFORE dirty; these must be
     // despawned after the second pass. If purgeDerivedEntities were still
@@ -223,7 +223,7 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     for (const k of oldKids) expect(isAlive(world, k)).toBe(true);
 
     markTileLayerDirty(world, layer).unwrap();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
 
     // Every OLD handle must now be dead — this is the load-bearing
     // observation that Children.entities was the source of truth used
@@ -255,12 +255,12 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     // the mirror stayed empty. With I-1 fixed, every cycle purges the prior
     // N and re-attaches exactly N, and the mirror list reflects it.
     const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     expect(readChildrenIds(world, layer).length).toBe(4);
 
     for (let cycle = 0; cycle < 3; cycle++) {
       markTileLayerDirty(world, layer).unwrap();
-      tilemapChunkExtractSystem(world, 0);
+      tilemapChunkExtractSystem(world);
 
       // Children.entities repopulates to exactly N (never sticks at 0).
       const kids = readChildrenIds(world, layer);
@@ -280,11 +280,11 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     // never-built equivalence the plan-strategy §2 D-3 edge case 3 relies
     // on: populated Children + dirty=0 is the "skip" case.
     const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const kids1 = readChildrenIds(world, layer);
     expect(kids1.length).toBe(4);
 
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const kids2 = readChildrenIds(world, layer);
     expect(kids2.length).toBe(4);
     for (let i = 0; i < kids1.length; i++) expect(kids2[i]).toBe(kids1[i]);

@@ -117,7 +117,7 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
     tiles[0] = 1; // (0, 0)
     tiles[1] = 1; // (1, 0)
     const { world } = setup({ cols: 2, rows: 1, tileSize: [32, 16], tiles });
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const xs = readDerivedTransforms(world)
       .map((t) => t.posX)
       .sort((a, b) => a - b);
@@ -128,7 +128,7 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
   it('default tileSize (1, 1) on a 1x1 cell anchored at (0, 0)', () => {
     const tiles = new Uint32Array([1]);
     const { world } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const transforms = readDerivedTransforms(world);
     expect(transforms.length).toBe(1);
     const t = transforms[0];
@@ -144,7 +144,7 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
   it('flipH alone negates scaleX, flipV alone negates scaleY (per-cell sign)', () => {
     const tiles = new Uint32Array([encodeTileBits(1, true, false, false, false)]);
     const { world } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
-    tilemapChunkExtractSystem(world, 0);
+    tilemapChunkExtractSystem(world);
     const t = readDerivedTransforms(world)[0];
     if (t === undefined) throw new Error('expected one derived Transform');
     expect(t.scaleX).toBe(-1);

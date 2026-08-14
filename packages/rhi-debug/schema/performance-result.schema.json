@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://forgeax.dev/schemas/rhi-debug/performance-result-1.0.json",
+  "$id": "https://forgeax.dev/schemas/rhi-debug/performance-result-2.0.json",
   "title": "ForgeaX RHI-debug performance result",
-  "description": "Observed performance evidence for one real app capture. Missing public observations stay unavailable.",
+  "description": "Bounded performance evidence for one retained RHI-debug campaign.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,11 +12,13 @@
     "observations",
     "scaleInputs",
     "artifacts",
+    "memory",
+    "capabilities",
     "verdicts",
     "contractCheck"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "2.0" },
     "identity": { "$ref": "#/$defs/identity" },
     "experiment": { "$ref": "#/$defs/experiment" },
     "observations": {
@@ -24,28 +26,26 @@
       "additionalProperties": false,
       "required": ["off", "idle", "capture", "finalize", "analyze"],
       "properties": {
-        "off": { "$ref": "#/$defs/observation" },
-        "idle": { "$ref": "#/$defs/observation" },
-        "capture": { "$ref": "#/$defs/observation" },
-        "finalize": { "$ref": "#/$defs/observation" },
-        "analyze": { "$ref": "#/$defs/observation" }
+        "off": { "$ref": "#/$defs/stageWithoutChildren" },
+        "idle": { "$ref": "#/$defs/stageWithChildren" },
+        "capture": { "$ref": "#/$defs/stageWithChildren" },
+        "finalize": { "$ref": "#/$defs/stageWithChildren" },
+        "analyze": { "$ref": "#/$defs/stageWithChildren" }
       }
     },
     "scaleInputs": { "$ref": "#/$defs/scaleInputs" },
     "artifacts": { "$ref": "#/$defs/artifacts" },
-    "verdicts": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["tapeValidity", "replayFidelity", "appOracle"],
-      "properties": {
-        "tapeValidity": { "$ref": "#/$defs/verdict" },
-        "replayFidelity": { "$ref": "#/$defs/verdict" },
-        "appOracle": { "$ref": "#/$defs/verdict" }
-      }
-    },
+    "memory": { "$ref": "#/$defs/memory" },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "verdicts": { "$ref": "#/$defs/verdicts" },
     "contractCheck": { "$ref": "#/$defs/contractCheck" }
   },
   "$defs": {
+    "nonNegativeNumber": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
     "nonNegativeInteger": {
       "type": "integer",
       "minimum": 0,
@@ -59,7 +59,14 @@
     "identity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["engine", "app", "backend", "environment"],
+      "required": [
+        "engine",
+        "app",
+        "backend",
+        "backendEvidence",
+        "captureRunId",
+        "environment"
+      ],
       "properties": {
         "engine": {
           "type": "object",
@@ -80,6 +87,16 @@
           }
         },
         "backend": { "type": "string", "minLength": 1 },
+        "backendEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["backend", "source"],
+          "properties": {
+            "backend": { "type": "string", "minLength": 1 },
+            "source": { "type": "string", "minLength": 1 }
+          }
+        },
+        "captureRunId": { "type": "string", "minLength": 1 },
         "environment": {
           "type": "object",
           "additionalProperties": false,
@@ -103,7 +120,295 @@
         "retainedTrialIndex": { "$ref": "#/$defs/positiveInteger" }
       }
     },
-    "observation": {
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction"],
+      "properties": {
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "observedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wallTimeMs", "source", "boundary"],
+      "properties": {
+        "status": { "const": "observed" },
+        "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "source": { "type": "string", "minLength": 1 },
+        "boundary": { "type": "string", "minLength": 1 }
+      }
+    },
+    "unavailableValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction"],
+      "properties": {
+        "status": { "const": "unavailable" },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "diagnosticValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wallTimeMs", "source", "boundary", "reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction"],
+      "properties": {
+        "status": { "enum": ["incomplete", "failed"] },
+        "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "source": { "type": "string", "minLength": 1 },
+        "boundary": { "type": "string", "minLength": 1 },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "child": {
+      "oneOf": [
+        { "$ref": "#/$defs/observedChild" },
+        { "$ref": "#/$defs/unavailableChild" },
+        { "$ref": "#/$defs/diagnosticChild" }
+      ]
+    },
+    "observedChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wallTimeMs", "source", "boundary", "window"],
+      "properties": {
+        "status": { "const": "observed" },
+        "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "source": { "type": "string", "minLength": 1 },
+        "boundary": { "type": "string", "minLength": 1 },
+        "window": { "$ref": "#/$defs/window" }
+      }
+    },
+    "unavailableChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction"],
+      "properties": {
+        "status": { "const": "unavailable" },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "diagnosticChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wallTimeMs", "source", "boundary", "reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction"],
+      "properties": {
+        "status": { "enum": ["incomplete", "failed"] },
+        "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "source": { "type": "string", "minLength": 1 },
+        "boundary": { "type": "string", "minLength": 1 },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startMs", "endMs"],
+      "properties": {
+        "startMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "endMs": { "$ref": "#/$defs/nonNegativeNumber" }
+      }
+    },
+    "stageChildren": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["telemetryBookkeeping"],
+      "properties": {
+        "telemetryBookkeeping": { "$ref": "#/$defs/child" }
+      }
+    },
+    "captureChildren": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "queueWait", "readback"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/child" },
+        "queueWait": { "$ref": "#/$defs/child" },
+        "readback": { "$ref": "#/$defs/child" }
+      }
+    },
+    "finalizeChildren": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serialization", "persistence"],
+      "properties": {
+        "serialization": { "$ref": "#/$defs/child" },
+        "persistence": { "$ref": "#/$defs/child" }
+      }
+    },
+    "analyzeChildren": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cliFirstAnswer", "viewerFirstAnswer"],
+      "properties": {
+        "cliFirstAnswer": { "$ref": "#/$defs/child" },
+        "viewerFirstAnswer": { "$ref": "#/$defs/child" }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "control", "scope"],
+      "properties": {
+        "enabled": { "$ref": "#/$defs/comparisonIdentity" },
+        "control": { "$ref": "#/$defs/comparisonIdentity" },
+        "scope": { "type": "string", "minLength": 1 }
+      }
+    },
+    "comparisonIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workload",
+        "environment",
+        "samplePolicy",
+        "oracle",
+        "readbackPlacement",
+        "persistenceBaseline",
+        "controlFlags"
+      ],
+      "properties": {
+        "workload": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "minLength": 1 },
+        "samplePolicy": { "type": "string", "minLength": 1 },
+        "oracle": { "type": "string", "minLength": 1 },
+        "readbackPlacement": { "type": "string", "minLength": 1 },
+        "persistenceBaseline": { "type": "string", "minLength": 1 },
+        "controlFlags": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "relativeOverhead": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonNegativeNumber" },
+        { "$ref": "#/$defs/unavailableValue" }
+      ]
+    },
+    "controlValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/observedValue" },
+        { "$ref": "#/$defs/unavailableValue" }
+      ]
+    },
+    "observedStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wallTimeMs", "source", "boundary", "children", "remainderMs", "control", "comparison", "absoluteOverheadMs", "relativeOverheadPercent"],
+      "properties": {
+        "status": { "const": "observed" },
+        "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "source": { "type": "string", "minLength": 1 },
+        "boundary": { "type": "string", "minLength": 1 },
+        "children": { "type": "object" },
+        "remainderMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "control": { "$ref": "#/$defs/controlValue" },
+        "comparison": { "$ref": "#/$defs/comparison" },
+        "absoluteOverheadMs": {
+          "oneOf": [
+            { "$ref": "#/$defs/nonNegativeNumber" },
+            { "$ref": "#/$defs/unavailableValue" }
+          ]
+        },
+        "relativeOverheadPercent": { "$ref": "#/$defs/relativeOverhead" }
+      }
+    },
+    "observedCaptureStage": {
+      "allOf": [
+        { "$ref": "#/$defs/observedStage" },
+        {
+          "properties": {
+            "children": { "$ref": "#/$defs/captureChildren" }
+          }
+        }
+      ]
+    },
+    "observedIdleStage": {
+      "allOf": [
+        { "$ref": "#/$defs/observedStage" },
+        {
+          "properties": {
+            "children": { "$ref": "#/$defs/stageChildren" }
+          }
+        }
+      ]
+    },
+    "observedFinalizeStage": {
+      "allOf": [
+        { "$ref": "#/$defs/observedStage" },
+        {
+          "properties": {
+            "children": { "$ref": "#/$defs/finalizeChildren" }
+          }
+        }
+      ]
+    },
+    "observedAnalyzeStage": {
+      "allOf": [
+        { "$ref": "#/$defs/observedStage" },
+        {
+          "properties": {
+            "children": { "$ref": "#/$defs/analyzeChildren" }
+          }
+        }
+      ]
+    },
+    "unavailableStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction", "children"],
+      "properties": {
+        "status": { "const": "unavailable" },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 },
+        "children": { "type": "object" }
+      }
+    },
+    "diagnosticStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wallTimeMs", "source", "boundary", "reasonCode", "affectedScope", "expectedPrecondition", "recoveryAction", "children"],
+      "properties": {
+        "status": { "enum": ["incomplete", "failed"] },
+        "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+        "source": { "type": "string", "minLength": 1 },
+        "boundary": { "type": "string", "minLength": 1 },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "affectedScope": { "type": "string", "minLength": 1 },
+        "expectedPrecondition": { "type": "string", "minLength": 1 },
+        "recoveryAction": { "type": "string", "minLength": 1 },
+        "children": { "type": "object" }
+      }
+    },
+    "stageWithChildren": {
+      "oneOf": [
+        { "$ref": "#/$defs/observedIdleStage" },
+        { "$ref": "#/$defs/observedCaptureStage" },
+        { "$ref": "#/$defs/observedFinalizeStage" },
+        { "$ref": "#/$defs/observedAnalyzeStage" },
+        { "$ref": "#/$defs/unavailableStage" },
+        { "$ref": "#/$defs/diagnosticStage" }
+      ]
+    },
+    "stageWithoutChildren": {
       "oneOf": [
         {
           "type": "object",
@@ -111,21 +416,101 @@
           "required": ["status", "wallTimeMs", "source", "boundary"],
           "properties": {
             "status": { "const": "observed" },
-            "wallTimeMs": { "$ref": "#/$defs/nonNegativeInteger" },
-            "source": { "enum": ["app-public-boundary", "runner-cli"] },
+            "wallTimeMs": { "$ref": "#/$defs/nonNegativeNumber" },
+            "source": { "type": "string", "minLength": 1 },
             "boundary": { "type": "string", "minLength": 1 }
           }
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["status", "reason"],
-          "properties": {
-            "status": { "const": "unavailable" },
-            "reason": { "type": "string", "minLength": 1 }
-          }
+          "allOf": [
+            { "$ref": "#/$defs/unavailableValue" },
+            { "not": { "required": ["children"] } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/diagnosticValue" },
+            { "not": { "required": ["children"] } }
+          ]
         }
       ]
+    },
+    "memoryValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value", "unit", "source"],
+          "properties": {
+            "status": { "enum": ["observed", "estimated"] },
+            "value": { "$ref": "#/$defs/nonNegativeInteger" },
+            "unit": { "const": "bytes" },
+            "source": { "type": "string", "minLength": 1 }
+          }
+        },
+        { "$ref": "#/$defs/unavailableValue" }
+      ]
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tapeBytes", "logicalResourceBytes", "driverAllocationBytes"],
+      "properties": {
+        "tapeBytes": { "$ref": "#/$defs/memoryValue" },
+        "logicalResourceBytes": { "$ref": "#/$defs/memoryValue" },
+        "driverAllocationBytes": { "$ref": "#/$defs/memoryValue" }
+      }
+    },
+    "capability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source"],
+          "properties": {
+            "status": { "const": "available" },
+            "source": { "type": "string", "minLength": 1 }
+          }
+        },
+        { "$ref": "#/$defs/unavailableValue" }
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["browserVite", "gpuTiming"],
+      "properties": {
+        "browserVite": { "$ref": "#/$defs/capability" },
+        "gpuTiming": { "$ref": "#/$defs/capability" }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "basis"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "unavailable"] },
+        "basis": { "type": "string", "minLength": 1 }
+      }
+    },
+    "verdicts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tapeValidity", "replayFidelity", "appOracle", "baselineAdmission"],
+      "properties": {
+        "tapeValidity": { "$ref": "#/$defs/verdict" },
+        "replayFidelity": { "$ref": "#/$defs/verdict" },
+        "appOracle": { "$ref": "#/$defs/verdict" },
+        "baselineAdmission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "basis"],
+          "properties": {
+            "status": { "enum": ["pass", "fail"] },
+            "basis": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
     },
     "scaleInputs": {
       "type": "object",
@@ -140,8 +525,9 @@
     "artifacts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["paths", "bytes"],
+      "required": ["captureRunId", "paths", "bytes"],
       "properties": {
+        "captureRunId": { "type": "string", "minLength": 1 },
         "paths": {
           "type": "object",
           "additionalProperties": false,
@@ -163,15 +549,6 @@
             "total": { "$ref": "#/$defs/nonNegativeInteger" }
           }
         }
-      }
-    },
-    "verdict": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "basis"],
-      "properties": {
-        "status": { "enum": ["pass", "fail", "unavailable"] },
-        "basis": { "type": "string", "minLength": 1 }
       }
     },
     "contractCheck": {

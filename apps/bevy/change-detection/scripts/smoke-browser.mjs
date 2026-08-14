@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { collectRhiDebugDraws, runRhiDebugBrowserAdmission } from '../../../shared/scripts/rhi-debug-browser-admission.mjs';
+import { verifyDemoCapture } from '../../../shared/scripts/rhi-debug-verify.mjs';
 
 const repoRoot = new URL('../../../../', import.meta.url).pathname;
+const appDir = resolve(repoRoot, 'apps/bevy/change-detection');
 const errors = [];
 let vite;
 let browser;
@@ -13,6 +18,18 @@ const waitFor = async (predicate, label) => {
   while (Date.now() < deadline) { if (await predicate()) return; await sleep(100); }
   throw new Error(`[smoke] timed out waiting for ${label}`);
 };
+
+if (process.env.CHANGE_DETECTION_PUBLIC === '1') {
+  await verifyDemoCapture({
+    pkg: '@forgeax/bevy-change-detection',
+    label: 'bevy change_detection public captureFrame',
+    mode: 'structural',
+    capturePrepareHook: '__prepareChangeDetectionCapture',
+    appDir,
+    assertTape: ({ tape }) => assertChangeDetectionTape(tape.events),
+  });
+  process.exit(0);
+}
 
 try {
   vite = spawn('pnpm', ['-F', '@forgeax/bevy-change-detection', 'dev'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -34,4 +51,52 @@ try {
 } finally {
   await browser?.close();
   vite?.kill();
+}
+
+const publicExit = await runPublicCaptureFrame();
+if (publicExit !== 0) process.exit(publicExit);
+
+await runRhiDebugBrowserAdmission({
+  pkg: '@forgeax/bevy-change-detection',
+  label: 'bevy change_detection',
+  readyHook: '__bevyChangeDetectionReady',
+  capturePrepareHook: '__prepareChangeDetectionCapture',
+  screenshotPath: resolve(appDir, 'artifacts/change-detection-rhi-debug.png'),
+  triggerLabel: 'change-detection-public-trigger',
+  assertTape: ({ events }) => assertChangeDetectionTape(events),
+  formatCapture: ({ capture, selected, inspected }) =>
+    String(capture.runId ?? 'remote') +
+    ' drawOrdinal=' + String(selected.drawOrdinal) +
+    ' indexCount=' + String(inspected.drawCall.indexCount) +
+    ' markerDraws=' + String(selected.markerDraws),
+});
+
+function runPublicCaptureFrame() {
+  return new Promise((resolveExit, reject) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+      cwd: repoRoot,
+      env: { ...process.env, CHANGE_DETECTION_PUBLIC: '1' },
+      stdio: 'inherit',
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => resolveExit(code ?? 1));
+  });
+}
+
+function assertChangeDetectionTape(events) {
+  const { draws } = collectRhiDebugDraws(events);
+  const markerDraws = draws.filter(
+    ({ event, pass, pipeline }) =>
+      event.kind === 'drawIndexed' &&
+      event.indexCount === 36 &&
+      event.instanceCount > 0 &&
+      pass?.colorAttachmentViewHandleIds?.length === 1 &&
+      pipeline?.desc?.primitive?.topology === 'triangle-list',
+  );
+  if (markerDraws.length !== 2) {
+    throw new Error('expected two change-detection marker draws, got ' + markerDraws.length + ' of ' + draws.length + ' draws');
+  }
+  const drawOrdinal = draws.indexOf(markerDraws[0]);
+  console.log('[bevy change_detection] semantic selector markerDraws=2 drawOrdinal=' + drawOrdinal);
+  return { drawOrdinal, markerDraws: markerDraws.length };
 }

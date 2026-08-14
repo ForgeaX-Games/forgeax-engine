@@ -170,6 +170,10 @@ export function getInspectOfflineHelp(): string {
     'Output:',
     '  JSON InspectReport with frameIdx, drawIdx, passIdx, bindings, drawCall, and rt (PNG path).',
     '  Requires an importable dawn-node backend (@forgeax/engine-rhi-webgpu or -rhi-wgpu).',
+    '',
+    'Performance result recovery:',
+    '  The result schema is packages/rhi-debug/schema/performance-result.schema.json.',
+    '  Rerun the existing pnpm rhi-debug-performance command for missing or failed retained evidence.',
   ].join('\n');
 }
 
@@ -196,6 +200,16 @@ export function getSummaryHelp(): string {
     'Output:',
     '  JSON FrameModel with meta (totalDraws/totalPasses/hasCompute), tree, draws',
     '  (each with pipelineState), commands, and resources.',
+    '',
+    'Performance result telemetry:',
+    '  The single result authority is packages/rhi-debug/schema/performance-result.schema.json.',
+    '  Stages: off, idle, capture, finalize, analyze.',
+    '  Children: telemetryBookkeeping; snapshot, queueWait, readback; serialization, persistence;',
+    '  cliFirstAnswer, viewerFirstAnswer.',
+    '  Times use wallTimeMs, child windows, remainderMs, and overhead fields in milliseconds or percent.',
+    '  States are observed, unavailable, incomplete, or failed; unavailable values carry recoveryAction.',
+    '  Compare matching workload, environment, samplePolicy, and scope before claiming overhead.',
+    '  tapeBytes and logicalResourceBytes are bytes; driverAllocationBytes is unavailable without a source.',
   ].join('\n');
 }
 

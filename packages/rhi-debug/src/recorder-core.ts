@@ -14,7 +14,7 @@
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
 import type { PassOffset } from './tape-format';
-import { computePassOffsets, serializeTape } from './tape-format';
+import { computePassOffsets, DEFAULT_TAPE_BLOB_COMPRESSION, serializeTape } from './tape-format';
 
 /** Shared upper bound for the asynchronous frame-header GPU snapshot. */
 export const SNAPSHOT_TIMEOUT_MS = 30_000;
@@ -189,7 +189,9 @@ export function finalizeToMemory(debugInst: {
   const tape = tapeOrErr;
 
   const runId = generateRunId();
-  const { json, blob } = serializeTape(tape);
+  const { json, blob } = serializeTape(tape, {
+    blobCompression: DEFAULT_TAPE_BLOB_COMPRESSION,
+  });
   const passOffsets = computePassOffsets(tape.events);
   const valid = debugInst._getValid();
 

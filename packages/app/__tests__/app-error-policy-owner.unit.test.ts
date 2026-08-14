@@ -13,7 +13,6 @@ const CODES_IN_POLICY_ORDER = [
   'app-not-started',
   'app-already-running',
   'app-canvas-detached',
-  'app-paused-while-stop',
   'app-frame-step-invalid',
   'app-system-update-failed',
   'app-pointer-lock-failed',
@@ -29,7 +28,6 @@ const EXPECTED_IN_POLICY_ORDER = [
   'state must be "running" or "paused" to accept stop/pause/resume; "idle" / "stopped" terminal sinks reject',
   'state must be "idle" or "paused" to start; "running" handles ignore subsequent start() calls',
   'canvas.isConnected === true at createApp(canvas) entry',
-  'state must be "running" to stop; paused handles must resume() before stop()',
   'stepFrame(deltaSeconds) runs only while the App is paused and deltaSeconds is finite and non-negative',
   'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(Update, name) returns Result.ok during cleanup',
   'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
@@ -45,7 +43,6 @@ const HINTS_IN_POLICY_ORDER = [
   'check getState() before calling stop/pause/resume; rebuild the handle via createApp({...}) when the previous one terminated on device-lost',
   'call stop() first or audit start() call sites; the second start() is a no-op so state is preserved',
   'append the canvas to the document tree before calling createApp(canvas), or use the assemble entry createApp({ renderer, world }) when the host already manages canvas lifetime',
-  'call resume() then stop(), or treat stop-while-paused as a host bug and audit the lifecycle',
   'pause the App before deterministic stepping and pass an explicit finite delta; resume after the bounded step sequence completes',
   'inspect detail.cause for the original thrown value (EcsError / RhiError / host system bug); detail.systemName names the offending system when the call site can supply it',
   'remain in unlocked state; the next trusted click will automatically retry the lock request. inspect detail.path ("w3c" or "provider") and detail.cause to determine the root cause',
@@ -58,9 +55,9 @@ const HINTS_IN_POLICY_ORDER = [
 ] as const;
 
 describe('AppError policy owner', () => {
-  it('projects the exact thirteen-code policy surface with stable own-key order', () => {
-    expect(CODES_IN_POLICY_ORDER).toHaveLength(13);
-    expect(new Set(CODES_IN_POLICY_ORDER).size).toBe(13);
+  it('projects the exact twelve-code policy surface with stable own-key order', () => {
+    expect(CODES_IN_POLICY_ORDER).toHaveLength(12);
+    expect(new Set(CODES_IN_POLICY_ORDER).size).toBe(12);
 
     for (const policy of [APP_EXPECTED, APP_ERROR_HINTS]) {
       expect(Object.keys(policy)).toEqual(CODES_IN_POLICY_ORDER);

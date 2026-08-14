@@ -29,9 +29,9 @@ describe('runtime assembly contract', () => {
     const renderer = await createRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
     const ready = await renderer.ready;
     expect(ready.ok).toBe(true);
-    expect(renderer.draw([], { owner: 0 }).ok).toBe(true);
+    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     renderer.dispose();
-    expect(renderer.draw([], { owner: 0 }).ok).toBe(false);
+    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(false);
   });
 
   it('preserves structured environment rejection when no backend is available', async () => {

@@ -128,6 +128,8 @@ if (!ready.ok) {
 const GOLD = [1.0, 0.847, 0.569, 1.0];
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // ── 11×5 PBR sphere grid (x: -5..5, y: -2..2) ─────────────────────────
 for (let y = -2; y <= 2; y++) {
@@ -196,7 +198,8 @@ let leftStripAvg = 0;
 let rightStripAvg = 0;
 
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 

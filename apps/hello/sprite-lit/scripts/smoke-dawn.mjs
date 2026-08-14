@@ -415,10 +415,13 @@ async function renderCase({ includePoint, includeSpot, label }) {
     return { ok: false, error: `world build (${label}): ${buildRes.error.code}` };
   }
   const world = buildRes.world;
+  const attached = renderer.attachWorld(world);
+  if (!attached.ok) return { ok: false, error: `world attach (${label}): ${attached.error.code}` };
   let draws = 0;
   let drawErrors = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) drawErrors++;
     draws++;
   }

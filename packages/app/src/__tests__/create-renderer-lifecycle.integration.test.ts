@@ -11,7 +11,7 @@ describe('app-facing renderer lifecycle', () => {
     } as unknown as Renderer;
     const ready = await renderer.ready;
     expect(ready.ok).toBe(true);
-    expect(renderer.draw([], { owner: 0 }).ok).toBe(true);
+    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     renderer.dispose();
     renderer.dispose();
     expect(events).toEqual(['dispose', 'dispose']);

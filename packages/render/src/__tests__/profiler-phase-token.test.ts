@@ -30,7 +30,11 @@ describe('Render profiler token and skip contract', () => {
       captureId: 'capture-0001',
       frameId: 3,
     };
-    const options: DrawOwnerOptions = { owner: 0, profileFrame: token };
+    const options: DrawOwnerOptions = {
+      cameraOwner: 0,
+      resourceOwner: 0,
+      profileFrame: token,
+    };
     expect(options).toMatchObject({ profileFrame: token });
   });
 

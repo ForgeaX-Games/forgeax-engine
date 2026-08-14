@@ -30,7 +30,30 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const host = globalThis as {
     __bevySystemParamReady?: boolean;
     __bevySystemParamState?: () => ReturnType<typeof readSystemParamState>;
+    __prepareSystemParamCapture?: () => Promise<void>;
   };
   host.__bevySystemParamState = () => readSystemParamState(app.world, state);
+  host.__prepareSystemParamCapture = async () => {
+    let snapshot = readSystemParamState(app.world, state);
+    for (let frame = 0; frame < 180 && !isCaptureReady(snapshot); frame += 1) {
+      const updated = app.world.update(1 / 60);
+      if (!updated.ok) throw updated.error;
+      const drawn = app.renderer.draw([app.world], { owner: 0 });
+      if (!drawn.ok) throw drawn.error;
+      snapshot = readSystemParamState(app.world, state);
+    }
+    if (!isCaptureReady(snapshot)) {
+      throw new Error('system-param capture preparation lost system parameter evidence: ' + JSON.stringify(snapshot));
+    }
+  };
   host.__bevySystemParamReady = true;
+}
+
+function isCaptureReady(snapshot: ReturnType<typeof readSystemParamState>): boolean {
+  return (
+    snapshot.runs >= 1 &&
+    snapshot.playerCount === 3 &&
+    snapshot.resourceValue === 3 &&
+    Number.isFinite(snapshot.counterX)
+  );
 }

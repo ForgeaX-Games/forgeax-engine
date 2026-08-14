@@ -225,7 +225,7 @@ if (new URLSearchParams(location.search).has('m8-probe')) {
       switchRender,
       injectFault,
       recover,
-      draw: () => app.renderer.draw([world], { owner: 0 }),
+      draw: () => app.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }),
       capture: () => (app as typeof app & { _debugAdapter?: unknown })._debugAdapter,
     },
   });

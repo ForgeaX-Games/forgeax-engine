@@ -10,6 +10,130 @@ Thanks for your interest! This monorepo runs **two package managers in parallel*
 
 If you use `corepack enable`, pnpm comes bundled with the right version automatically.
 
+## Linux Emscripten 6.0.2 without external xz
+
+This is a Linux-only CI path for Emscripten `6.0.2`. It uses the Python standard
+library `lzma` reader and a controlled lane `PATH` that preserves the required
+Node, pnpm, Python, and Git launchers while hiding `xz`, `unxz`, `xz-utils`,
+`xzcat`, `xzdec`, and `pixz`. It never installs or falls back to an external xz
+tool. macOS and Windows keep the upstream `emscripten-core/setup-emsdk@v16`
+path and their existing step order.
+
+The single provisioning entry point is
+[`scripts/ci/setup-emscripten-no-xz.py`](scripts/ci/setup-emscripten-no-xz.py).
+Its cache is an acceleration layer, not a correctness input. A ready cache must
+match these five fingerprint fields:
+
+| Field | Meaning |
+|:--|:--|
+| `emscriptenVersion` | The locked Emscripten version: `6.0.2`. |
+| `releaseIdentity` | The direct Linux x86_64 release tool identity. |
+| `runnerOs` | The observed runner OS: `Linux`. |
+| `runnerArch` | The observed runner architecture: `x86_64`. |
+| `bootstrapInputDigest` | The normalized digest of the lock, helper, and `.nvmrc` inputs. |
+
+The workflow prepares the `.nvmrc` Node first. The helper records the expected
+version, actual version, normalized executable path, `EMSDK_NODE`, executable
+SHA-256, and bundled-Node exclusions. This keeps the system Node as the only
+Node authority.
+
+For a Linux cold bootstrap, prepare the archive from the repository lock before
+calling the bootstrap helper. The preparation script validates the lock-derived
+URL, SHA-256, and content length with Python's standard library. The bootstrap
+helper then receives the archive, release metadata, and lock-derived digest:
+
+### Short verification path
+
+Run these checks from the repository root:
+
+```bash
+node --test scripts/ci/__tests__/setup-emscripten-no-xz.test.mjs scripts/ci/__tests__/emscripten-no-xz-evidence.test.mjs
+pnpm run lint
+pnpm test:layout
+pnpm ci:paths-check
+pnpm ci:channel-align
+python3 -m py_compile scripts/ci/setup-emscripten-no-xz.py scripts/ci/prepare-emscripten-no-xz-archive.py
+actionlint -shellcheck='' .github/workflows/ci.yml .github/workflows/nightly.yml .github/workflows/emscripten-no-xz-evidence.yml
+python3 scripts/forgeax/check_english_only.py --code scripts/ci/setup-emscripten-no-xz.py scripts/ci/prepare-emscripten-no-xz-archive.py scripts/ci/evidence/emscripten-no-xz.mjs scripts/ci/__tests__/setup-emscripten-no-xz.test.mjs scripts/ci/__tests__/emscripten-no-xz-evidence.test.mjs
+python3 scripts/forgeax/check_english_only.py CONTRIBUTING.md
+git diff --check
+```
+
+The direct cold bootstrap command used by Linux jobs is:
+
+```bash
+archive_dir="${RUNNER_TEMP:-/tmp}/emscripten-no-xz"
+archive="$archive_dir/wasm-binaries.tar.xz"
+mkdir -p "$archive_dir"
+python3 scripts/ci/prepare-emscripten-no-xz-archive.py \
+  --lock scripts/ci/emscripten-no-xz.lock.json \
+  --archive "$archive"
+python3 scripts/ci/setup-emscripten-no-xz.py \
+  --version 6.0.2 \
+  --lock scripts/ci/emscripten-no-xz.lock.json \
+  --archive "$archive" \
+  --release-metadata scripts/ci/emscripten-no-xz.lock.json \
+  --archive-sha256 "$(python3 -c 'import json; print(json.load(open("scripts/ci/emscripten-no-xz.lock.json"))["archiveSha256"])')" \
+  --cache-dir emsdk-cache \
+  --evidence-output artifacts/emscripten-bootstrap.json
+```
+
+After an exact cache restore, the warm path does not download the archive. It
+must validate the cache fingerprint explicitly:
+
+```bash
+python3 scripts/ci/setup-emscripten-no-xz.py --version 6.0.2 --lock scripts/ci/emscripten-no-xz.lock.json --validate-cache --cache-dir emsdk-cache
+```
+
+Warm exact-cache validation is not cold archive proof; a cache miss must return
+to the preparation command above.
+
+This command requires a real Linux x86_64 runner. A Darwin arm64 checkout can
+run the static, schema, helper, layout, lint, path, channel, and English-only
+checks, but it cannot prove Linux cold/warm compilation or macOS/Windows
+nightly acceptance. Those results must remain `unproven` until the matching
+runner executes them.
+
+### Cold and warm evidence
+
+The independent workflow is
+[`emscripten-no-xz-evidence.yml`](.github/workflows/emscripten-no-xz-evidence.yml).
+It clears Emscripten cache state, consumer outputs, consumer caches, and release
+hydration sources before each consumer lane. The existing `fbx` and `codec`
+build entry points then invoke `emcc`; no consumer flags, public APIs, or
+generated `pkg/` files are changed or committed.
+
+| Lane | Required result | Evidence artifact |
+|:--|:--|:--|
+| Cold | `status=ready`, `mode=cold`, `cache.status=cold-created` | `artifacts/emscripten/cold/evidence.json` |
+| Warm | `status=ready`, `mode=warm`, `cache.status=exact-valid`, `comparison.equivalent=true` | `artifacts/emscripten/warm/evidence.json` |
+
+Each envelope records the source SHA, runner identity, controlled xz facts,
+cache fingerprint, Node identity, compiler identity, both consumer invocations,
+the complete six-file output set, per-file SHA-256 values, and consumer gate
+results. The schema is
+[`scripts/ci/evidence/emscripten-no-xz.schema.json`](scripts/ci/evidence/emscripten-no-xz.schema.json).
+
+The known Linux evidence is workflow run `31685331312`, with cold job run
+`94399940428` and warm job run `94402063505`. The Darwin host has no real
+macOS or Windows nightly run IDs; their platform acceptance is intentionally
+not claimed by local checks.
+
+<details>
+<summary>Troubleshooting by stage</summary>
+
+| Stage | Symptom | Recovery |
+|:--|:--|:--|
+| `node-authority` | Version, path, or `EMSDK_NODE` mismatch | Re-run the workflow Node setup from `.nvmrc`; do not select an emsdk-bundled Node. |
+| `archive` | Python `lzma` is unavailable or archive validation fails | Use a Python build with stdlib `lzma`; fix the pinned archive or unsafe member. Do not install xz as a fallback. |
+| `cache` | `partial`, `invalid`, `mismatch`, or `unavailable` status | Delete the disposable cache and rerun the cold lane. A cache miss must not change the result. |
+| `compiler` | `emcc` is missing or fingerprint fields differ | Discard the cache, verify the locked release identity and runner architecture, then rerun cold. |
+| `consumer` | `fbx` or `codec` invocation/gate fails | Keep consumer outputs and hydration sources cleared, inspect the stage diagnostic, and rerun only the failed consumer after fixing its prerequisite. |
+| `comparison` | Warm output set or SHA-256 values differ | Confirm the same source SHA, exact cache key, Node executable SHA, and six fresh output files before rerunning warm. |
+| `platform` | A local Darwin check is being treated as Linux or nightly proof | Stop and label the remote result `unproven`; use the matching Linux, macOS, or Windows runner. |
+
+</details>
+
 ## Rust toolchain (only when modifying `packages/wgpu-wasm/`)
 
 `@forgeax/engine-wgpu-wasm` is the **only** Rust crate in the monorepo — a single wasm-bindgen crate merging `wgpu 29` (RHI raw bindings) and `naga 29` (three-phase shader pipeline), produced by `feat-20260511-naga-rhi-wgpu-merge`. It replaced the two earlier crates (`naga-wasm-shim` + `rhi-wgpu/crate`), which are archived. Two TS-only thin shells consume its raw bindings: `@forgeax/engine-rhi-wgpu` (RHI) and `@forgeax/engine-naga` (shader tooling) — neither contains Rust anymore.

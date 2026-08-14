@@ -125,6 +125,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { buildScreenshotWorld, stepScreenshot } = await import(resolve(here, '..', 'src', 'screenshot.ts'));
 buildScreenshotWorld(world);
 
@@ -149,7 +151,8 @@ function spaceSnapshot() {
 // --- render initial frames ---
 for (let f = 0; f < 5; f++) {
   stepScreenshot(world, noInputSnapshot());
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) { console.error(`[smoke] FAIL - draw error: ${r.error.code}`); process.exit(1); }
 }
 await delay(100);

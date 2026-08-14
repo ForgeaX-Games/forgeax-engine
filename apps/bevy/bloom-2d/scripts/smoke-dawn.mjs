@@ -61,6 +61,8 @@ const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildBloom2dWorld(world);
 console.log(`[bloom-2d] backend=${renderer.backend} quads=${scene.quadCount} bright=${scene.brightCount}`);
 
@@ -81,7 +83,10 @@ async function capture() {
 
 function draw(count) {
   let drawErrors = 0;
-  for (let i = 0; i < count; i += 1) if (!renderer.draw([world], { owner: 0 }).ok) drawErrors += 1;
+  for (let i = 0; i < count; i += 1) {
+    world.update().unwrap();
+    if (!renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok) drawErrors += 1;
+  }
   return drawErrors;
 }
 

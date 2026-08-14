@@ -81,9 +81,11 @@ try {
     { component: Transform, data: {} },
     { component: DirectionalLight, data: { direction: [0, -1, 0] } },
   );
+  renderer.attachWorld(world).unwrap();
   let frames = 0;
   for (; frames < 300; frames += 1) {
-    const drawn = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!drawn.ok) throw new Error(`RhiNull frame ${frames + 1} failed: ${drawn.error.code}`);
   }
 

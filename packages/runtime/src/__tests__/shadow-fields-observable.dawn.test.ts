@@ -25,6 +25,7 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from './draw-published';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -284,7 +285,7 @@ async function renderConfig(
   spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
   let de = 0;
   for (let i = 0; i < 300; i++) {
-    const r = renderer.draw([w], { owner: 0 });
+    const r = drawPublished(renderer, w);
     if (!r.ok) de++;
   }
   if (de > 0) throw new Error(`draw errors: ${de}`);
@@ -390,7 +391,7 @@ async function renderConfigWithSpy(
   spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
   let de = 0;
   for (let i = 0; i < 10; i++) {
-    const r = renderer.draw([w], { owner: 0 });
+    const r = drawPublished(renderer, w);
     if (!r.ok) de++;
   }
   if (de > 0) throw new Error(`draw errors: ${de}`);

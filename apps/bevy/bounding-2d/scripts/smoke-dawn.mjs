@@ -121,6 +121,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildBounding2dWorld(world);
 propagateTransforms(world);
 
@@ -149,7 +151,8 @@ async function capture(device) {
 let frame;
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) console.error(`[smoke] draw frame ${i} error: ${result.error.code}`);
   framesObserved++;
   if (i === 5) frame = await capture(sharedDevice);

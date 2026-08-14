@@ -118,7 +118,9 @@ describe('finalizeToMemory (w1)', () => {
       } as RhiCallEvent,
     ];
     const tape = makeSimpleTape(tapeEvents);
-    const { json: directJson, blob: directBlob } = serializeTape(tape);
+    const { json: directJson, blob: directBlob } = serializeTape(tape, {
+      blobCompression: 'gzip',
+    });
     const debugInst = createMockDebugInst({ tape });
     const result = finalizeToMemory(debugInst);
 

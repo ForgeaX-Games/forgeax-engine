@@ -1,10 +1,12 @@
 import { FixedUpdate, Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-runtime - propagateTransforms system (root-down world mat4 derivation).
 //
-// Triggered by `registerPropagateTransforms(world)` which binds the system
-// into the ECS schedule with `before: [<RenderSystem-shaped system name>]`
-// ordering, i.e. the 'pre-render' slot (plan-strategy §D-P2 + requirements
-// §AC-04 / §AC-12). Derives every entity's resolved `Transform.world` mat4
+// Triggered by `registerPropagateTransforms(world)`, which binds the owner to
+// the ECS schedules. Update serves transform-dependent gameplay systems;
+// World's internal terminal pipeline publishes the final result after later
+// pose/gameplay writes and every ordinary schedule, before `world.update()`
+// returns. Rendering only reads this state. Derives
+// each affected entity's resolved `Transform.world` mat4
 // (column-major array<f32, 16>) from the chain:
 //
 //   root   (Without<ChildOf>): world = compose(local.TRS)
@@ -17,28 +19,22 @@ import { FixedUpdate, Update } from '@forgeax/engine-ecs';
 // zero-copy accessor (`world._getArrayView`). It never decomposes back to the
 // local columns (plan-strategy §2 D-3: compose -> multiply, no decompose)
 // and never reads/writes the legacy global-transform component (retired in M4).
-// Every entity with a Transform is processed every frame (the flat opt-out is
-// gone; requirements §3): a flat entity gets `world = compose(local)` with no
-// extra component registration (AC-06).
+// Structural or hierarchy changes rebuild the projection. Local Transform
+// changes recompute only the edited entity and its descendants; unchanged
+// entities retain their already-published world matrix.
 //
 // The stale-ChildOf path fires when a ChildOf.parent field references an
 // entity that has been despawned or never existed; architecture-principles
 // #5 Fail Fast stance -- one entity's subtree is reported; other entities
 // continue (charter proposition 9 graceful degradation). The error bubbles
-// through the return Result; the caller (Renderer driver or test harness)
-// decides whether to route through `Renderer.onError` fan-out or short-
-// circuit the frame.
+// through the return Result; the ECS schedule routes a thrown SceneError via
+// the World error handler, while direct callers handle the Result themselves.
 //
 // Design notes:
-//   - 'pre-render' ordering is expressed via `before: [renderSystemName]`
-//     on the SystemDescriptor (the forgeax ECS DAG scheduler uses before /
-//     after edges, not Bevy-style stage strings; plan-strategy §D-P2 names
-//     the slot 'pre-render' as a conceptual anchor, not a literal schedule
-//     key). Because RenderSystem is NOT registered in the ECS schedule
-//     (`Renderer.draw(world)` invokes it directly), the registration helper
-//     accepts an optional anchor system name; when omitted, the system
-//     runs unconstrained and its ordering vs RenderSystem is enforced by
-//     the Renderer driver (which calls `world.update()` before `draw`).
+//   - `beforeSystemName` orders the Update pass before a transform-dependent
+//     gameplay system. World remains the final publication owner. The
+//     Renderer is intentionally outside the ECS schedule and never derives
+//     transforms; drivers call `world.update()` before `draw()`.
 //   - Table iteration reads `world._getGraph()` (engine-internal access;
 //     not public API). The row's full packed Entity u32 is read directly from
 //     the essential id=0 `Entity` column (`table.storage.get(Entity.id)
@@ -86,6 +82,7 @@ import { projectHierarchy, type SceneHierarchySnapshot } from './hierarchy-proje
 export const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
 export const PROPAGATE_TRANSFORMS_FIXED_SYSTEM = 'propagateTransformsFixed' as const;
 export const TransformSet = defineSystemSet({ name: 'transform' });
+export const TransformFixedSet = defineSystemSet({ name: 'transform-fixed' });
 
 interface GraphLike {
   readonly tables: ReadonlyArray<Table | undefined>;
@@ -175,14 +172,32 @@ interface PropagationCacheEntry {
   readonly structureEpoch: number;
   readonly transformMutationEpoch: number;
   readonly hierarchy: SceneHierarchySnapshot;
+  readonly liveMap: ReadonlyMap<EntityHandle, RowLocator>;
+  readonly childrenOf: ReadonlyMap<EntityHandle, readonly EntityHandle[]>;
   readonly result: Result<void, SceneError>;
 }
 
-// The renderer driver runs the ECS Update schedule before draw(), while the
-// render extract path also calls this standalone helper for direct-draw users.
-// A stable World therefore used to derive every Transform.world twice per
-// frame. Local Transform edits, ChildOf edits, and structural changes are the
-// only authored invalidators; direct writes to the derived `world` column are
+function transformChangedEpoch(table: Table, row: number): number {
+  return table.storage.get(Transform.id)?.epochs.changed[row] ?? 0;
+}
+
+function indexChildren(
+  hierarchy: SceneHierarchySnapshot,
+  liveMap: ReadonlyMap<EntityHandle, RowLocator>,
+): ReadonlyMap<EntityHandle, readonly EntityHandle[]> {
+  const children = new Map<EntityHandle, EntityHandle[]>();
+  for (const entity of liveMap.keys()) {
+    const parent = hierarchy.getParent(entity);
+    if (parent === undefined) continue;
+    const siblings = children.get(parent);
+    if (siblings === undefined) children.set(parent, [entity]);
+    else siblings.push(entity);
+  }
+  return children;
+}
+
+// Local Transform edits, ChildOf edits, and structural changes are the only
+// authored invalidators. Direct writes to the derived `world` column are
 // outside the Transform contract and are overwritten by this owner.
 const PROPAGATION_CACHE = new WeakMap<World, PropagationCacheEntry>();
 
@@ -220,9 +235,8 @@ function composeLocalInto(out: FieldView, table: Table, row: number): void {
 }
 
 /**
- * Execute one propagateTransforms pass over the World. Derives `Transform.world`
- * (resolved world mat4) for every entity with a `Transform` (root or child)
- * per plan-strategy §2 D-3.
+ * Execute one propagation pass. A structural/hierarchy change derives every
+ * Transform; a local edit derives only that entity and its descendants.
  *
  * @returns `Result<void, SceneError>` -- `ok(void)` when every entity's parent
  *   chain resolves; `err(SceneError({ code: 'hierarchy-broken' }))` on the
@@ -258,16 +272,43 @@ export function propagateTransforms(
   // pins the entity's live Transform.world view so parent lookups hit the
   // in-memory slot directly (no world.get materialisation). Building the map
   // doubles as the live-set membership check (liveMap.has(entity)).
-  const liveMap = new Map<EntityHandle, RowLocator>();
-  for (const table of graph.tables) {
-    if (!table) continue;
-    if (!componentPresent(table, Transform.id)) continue;
+  const canIncrement =
+    cached !== undefined &&
+    cached.structureEpoch === structureEpoch &&
+    cached.childOfMutationEpoch === childOfMutationEpoch &&
+    cached.hierarchy === hierarchy;
+  const liveMap = canIncrement
+    ? cached.liveMap
+    : (() => {
+        const rebuilt = new Map<EntityHandle, RowLocator>();
+        for (const table of graph.tables) {
+          if (!table || !componentPresent(table, Transform.id)) continue;
+          for (let row = 0; row < table.size; row++) {
+            const entity = readEntityAt(table, row);
+            const worldView = internal._getArrayView(entity, Transform, 'world');
+            if (worldView !== undefined) rebuilt.set(entity, { table, row, entity, worldView });
+          }
+        }
+        return rebuilt;
+      })();
+  const childrenOf = canIncrement ? cached.childrenOf : indexChildren(hierarchy, liveMap);
 
-    for (let row = 0; row < table.size; row++) {
-      const entity = readEntityAt(table, row);
-      const worldView = internal._getArrayView(entity, Transform, 'world');
-      if (worldView === undefined) continue; // defensive: missing world slot
-      liveMap.set(entity, { table, row, entity, worldView });
+  const affected = new Set<EntityHandle>();
+  if (canIncrement) {
+    const pending: EntityHandle[] = [];
+    for (const loc of liveMap.values()) {
+      if (transformChangedEpoch(loc.table, loc.row) <= cached.transformMutationEpoch) continue;
+      affected.add(loc.entity);
+      pending.push(loc.entity);
+    }
+    for (let index = 0; index < pending.length; index += 1) {
+      const parent = pending[index];
+      if (parent === undefined) continue;
+      for (const child of childrenOf.get(parent) ?? []) {
+        if (affected.has(child)) continue;
+        affected.add(child);
+        pending.push(child);
+      }
     }
   }
 
@@ -275,6 +316,7 @@ export function propagateTransforms(
   // component presence, decides whether a malformed edge was cut.
   const processed = new Set<EntityHandle>();
   for (const loc of liveMap.values()) {
+    if (canIncrement && !affected.has(loc.entity)) continue;
     if (hierarchy.getParent(loc.entity) !== undefined) continue;
     composeLocalInto(loc.worldView, loc.table, loc.row);
     processed.add(loc.entity);
@@ -286,8 +328,16 @@ export function propagateTransforms(
   const localMat = mat4.create() as unknown as Float32Array;
 
   for (const selfLoc of liveMap.values()) {
+    if (canIncrement && !affected.has(selfLoc.entity)) continue;
     if (processed.has(selfLoc.entity)) continue;
-    const r = resolveEntity(selfLoc, hierarchy, liveMap, processed, localMat);
+    const r = resolveEntity(
+      selfLoc,
+      hierarchy,
+      liveMap,
+      processed,
+      localMat,
+      canIncrement ? affected : undefined,
+    );
     if (!r.ok) return r;
   }
 
@@ -306,6 +356,8 @@ export function propagateTransforms(
       childOfMutationEpoch,
       transformMutationEpoch,
       hierarchy,
+      liveMap,
+      childrenOf,
       result,
     });
     return result;
@@ -316,6 +368,8 @@ export function propagateTransforms(
     childOfMutationEpoch,
     transformMutationEpoch,
     hierarchy,
+    liveMap,
+    childrenOf,
     result,
   });
   return result;
@@ -333,10 +387,12 @@ export function propagateTransforms(
 function resolveEntity(
   selfLoc: RowLocator,
   hierarchy: SceneHierarchySnapshot,
-  liveMap: Map<EntityHandle, RowLocator>,
+  liveMap: ReadonlyMap<EntityHandle, RowLocator>,
   processed: Set<EntityHandle>,
   localMat: Float32Array,
+  affected?: ReadonlySet<EntityHandle>,
 ): Result<void, SceneError> {
+  if (affected !== undefined && !affected.has(selfLoc.entity)) return ok(undefined);
   if (processed.has(selfLoc.entity)) return ok(undefined);
 
   const parentEntity = hierarchy.getParent(selfLoc.entity);
@@ -354,7 +410,7 @@ function resolveEntity(
   }
 
   // Ensure the parent's world slot is fresh this frame before multiplying.
-  const parentResult = resolveEntity(parentLoc, hierarchy, liveMap, processed, localMat);
+  const parentResult = resolveEntity(parentLoc, hierarchy, liveMap, processed, localMat, affected);
   if (!parentResult.ok) return parentResult;
 
   // world(self) = parent.world x compose(self.local). Compose into a scratch
@@ -403,45 +459,54 @@ export const PropagateTransformsFixed: SystemHandle<readonly []> = defineSystem(
 });
 
 /**
- * Register `propagateTransforms` into the ECS schedule as the
- * 'pre-render' system (plan-strategy §D-P2).
+ * Register Transform derivation in the ECS schedules.
  *
  * The forgeax ECS DAG scheduler orders systems via `before` / `after` edges
  * on `SystemDescriptor`. Because RenderSystem is not registered in the
- * ECS schedule (`Renderer.draw(world)` invokes it outside the schedule),
- * 'pre-render' translates here to:
+ * ECS schedule (rendering reads the terminal publication outside the schedule):
  *
  *   - If `options.beforeSystemName` is provided, the system runs before
  *     that system (e.g. a user-authored 'presentation' system).
- *   - Otherwise, the system runs unconstrained; the Renderer driver
- *     ensures ordering by calling `world.update()` (which runs the
- *     schedule) before `renderer.draw(world)`.
+ *   - World owns the terminal publication callback outside the public schedule
+ *     graph, so no ordinary system can invalidate Transform.world after it.
  *
  * @example Driver registers once per World:
  *   const world = new World();
  *   registerPropagateTransforms(world);
  *   // ...spawn entities...
  *   world.update();            // propagateTransforms runs here
- *   renderer.draw(world);      // reads Transform.world column
+ *   renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); // reads Transform.world column
  */
 export function registerPropagateTransforms(
   world: World,
   options: { beforeSystemName?: string } = {},
 ): void {
+  if (
+    world._registerFrameTransformPublisher(runTerminalTransformPublication) === 'already-registered'
+  ) {
+    return;
+  }
   if (options.beforeSystemName !== undefined) {
     // Optional ordering edge: register a descriptor carrying the same name/fn
     // plus a `before` edge. The `before` (not `fn`) overlay keeps the real fn
     // intact (D-4: no spread-over-fn).
-    world.addSystems(Update, TransformSet, [
-      {
-        name: PROPAGATE_TRANSFORMS_SYSTEM,
-        queries: [],
-        fn: PropagateTransforms.fn,
-        before: [options.beforeSystemName],
-      },
-    ]);
-    return;
+    world
+      .addSystems(Update, TransformSet, [
+        {
+          name: PROPAGATE_TRANSFORMS_SYSTEM,
+          queries: [],
+          fn: PropagateTransforms.fn,
+          before: [options.beforeSystemName],
+        },
+      ])
+      .unwrap();
+  } else {
+    world.addSystems(Update, TransformSet, [PropagateTransforms]).unwrap();
   }
-  world.addSystems(Update, TransformSet, [PropagateTransforms]);
-  world.addSystems(FixedUpdate, TransformSet, [PropagateTransformsFixed]);
+  world.addSystems(FixedUpdate, TransformFixedSet, [PropagateTransformsFixed]).unwrap();
+}
+
+function runTerminalTransformPublication(world: World): void {
+  const result = propagateTransforms(world);
+  if (!result.ok) throw result.error;
 }

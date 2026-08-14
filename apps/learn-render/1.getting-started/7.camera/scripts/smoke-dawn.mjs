@@ -321,6 +321,8 @@ const cameraSystem = {
 };
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 // LO 1.7 unlit material: mint a user-tier column handle from the unlit
 // MaterialAsset POD (M8 D-17). orange teaching colour (1, 0.5, 0.2).
 const matHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
@@ -378,7 +380,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   // Note: world.update(1 / 60).unwrap() runs the frame-start scan system (refreshing
   // InputSnapshot) + the camera system (consuming it) in DAG order.
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

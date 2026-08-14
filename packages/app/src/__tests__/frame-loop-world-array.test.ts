@@ -3,18 +3,18 @@
 //
 // The app frame-loop is the single point that shields single-world AI users from
 // the multi-world draw signature: internally it wraps the current World into
-// `[world]` and passes `{ owner: 0 }` (plan-strategy §7 M3). Engine.create /
+// `[world]` and passes `{ cameraOwner: 0, resourceOwner: 0 }` (plan-strategy §7 M3). Engine.create /
 // createApp public API is unchanged — the user still hands over one World.
 //
 // This test drives createFrameLoop directly (injected now / raf / caf seams) with
 // a spy renderer and asserts the exact call shape:
-//   renderer.draw([world], { owner: 0 })
+//   renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })
 //
 // Test-first (red before m3-i3): the frame-loop currently calls
 // renderer.draw(world). After migration these assertions pass and the single
 // world identity path (worldId 0) is preserved (AC-03 regression guarantee).
 
-import { World } from '@forgeax/engine-ecs';
+import { Update, World } from '@forgeax/engine-ecs';
 import type { Renderer } from '@forgeax/engine-render';
 import { describe, expect, it, vi } from 'vitest';
 import { createFrameLoop } from '../internal/frame-loop';
@@ -29,6 +29,10 @@ function makeSpyRenderer(): { renderer: Renderer; calls: DrawCall[] } {
   const renderer = {
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true, value: undefined }),
+    attachWorld(): { ok: true; value: undefined } {
+      return { ok: true, value: undefined };
+    },
+    detachWorld(): void {},
     draw(worlds: unknown, options: unknown): { ok: true; value: undefined } {
       calls.push({ worlds, options });
       return { ok: true, value: undefined };
@@ -76,7 +80,60 @@ function makeSyncScheduler() {
 }
 
 describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with owner 0', () => {
-  it('calls renderer.draw([world], { owner: 0 }) once per running frame', () => {
+  it('attaches once before the first update without moving drawSource ahead of update', () => {
+    const events: string[] = [];
+    const world = new World();
+    world
+      .addSystem(Update, {
+        name: 'observeUpdateOrder',
+        queries: [],
+        fn: () => events.push('update'),
+      })
+      .unwrap();
+    const renderer = {
+      backend: 'webgpu' as const,
+      ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld(): { ok: true; value: undefined } {
+        events.push('attach');
+        return { ok: true, value: undefined };
+      },
+      detachWorld(): void {},
+      draw(): { ok: true; value: undefined } {
+        events.push('draw');
+        return { ok: true, value: undefined };
+      },
+      onError: () => () => {},
+      dispose: () => {},
+    } as unknown as Renderer;
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({
+      world,
+      renderer,
+      now,
+      raf,
+      caf,
+      drawSource: () => {
+        events.push('drawSource');
+        return undefined;
+      },
+    });
+
+    loop.start().unwrap();
+    pump(2);
+    loop.stop().unwrap();
+
+    expect(events).toEqual([
+      'attach',
+      'update',
+      'drawSource',
+      'draw',
+      'update',
+      'drawSource',
+      'draw',
+    ]);
+  });
+
+  it('calls renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }) once per running frame', () => {
     const world = new World();
     const { renderer, calls } = makeSpyRenderer();
     const { raf, caf, now, pump } = makeSyncScheduler();
@@ -97,10 +154,34 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       expect(arr.length).toBe(1);
       expect(arr[0]).toBe(world);
       // owner is the required, defaulted-to-0 index (single-world identity).
-      expect(call.options).toEqual({ owner: 0 });
+      expect(call.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     }
 
     loop.stop();
+  });
+
+  it('does not draw a World whose update did not reach terminal publication', () => {
+    const world = new World();
+    world
+      .addSystem(Update, {
+        name: 'fail-update',
+        queries: [],
+        fn: () => {
+          throw new Error('update failed');
+        },
+      })
+      .unwrap();
+    const { renderer, calls } = makeSpyRenderer();
+    const onError = vi.fn();
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf, onError });
+
+    loop.start().unwrap();
+    pump(1);
+
+    expect(calls).toHaveLength(0);
+    expect(onError).toHaveBeenCalledTimes(1);
+    loop.stop().unwrap();
   });
 
   it('does not mutate the public frame-loop contract: start/stop return Result.ok', () => {
@@ -122,6 +203,8 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const renderer = {
       backend: 'webgpu' as const,
       ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld: () => ({ ok: true, value: undefined }),
+      detachWorld: () => {},
       draw(worlds: unknown, options: unknown): { ok: false; error: typeof rhiErr } {
         calls.push({ worlds, options });
         return { ok: false, error: rhiErr };
@@ -144,7 +227,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     pump(1);
 
     expect(calls[0]?.worlds).toEqual([world]);
-    expect(calls[0]?.options).toEqual({ owner: 0 });
+    expect(calls[0]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
     expect(onError).toHaveBeenCalledWith(rhiErr);
 
     loop.stop();
@@ -157,6 +240,8 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const renderer = {
       backend: 'webgpu' as const,
       ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld: () => ({ ok: true, value: undefined }),
+      detachWorld: () => {},
       health: () => ({ reason, recoverable: reason === 'device-lost' }),
       draw(): { ok: true; value: undefined } {
         calls.push(undefined);
@@ -197,7 +282,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     expect(stepped.ok).toBe(true);
     expect(update).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith(1 / 60);
-    expect(calls).toEqual([{ worlds: [world], options: { owner: 0 } }]);
+    expect(calls).toEqual([{ worlds: [world], options: { cameraOwner: 0, resourceOwner: 0 } }]);
 
     expect(loop.resume().ok).toBe(true);
     expect(loop.stop().ok).toBe(true);
@@ -228,5 +313,129 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     }
     expect(loop.resume().ok).toBe(true);
     expect(loop.stop().ok).toBe(true);
+  });
+
+  it('detaches draw-source Worlds as soon as routing stops referencing them', () => {
+    const world = new World();
+    const overlay = new World();
+    const attached: World[] = [];
+    const detached: World[] = [];
+    const renderer = {
+      backend: 'webgpu' as const,
+      ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld(candidate: World) {
+        attached.push(candidate);
+        return { ok: true as const, value: undefined };
+      },
+      detachWorld(candidate: World): void {
+        detached.push(candidate);
+      },
+      draw: () => ({ ok: true as const, value: undefined }),
+      onError: () => () => {},
+      dispose: () => {},
+    } as unknown as Renderer;
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({
+      world,
+      renderer,
+      now,
+      raf,
+      caf,
+      drawSource: () => ({ worlds: [world, overlay], cameraOwner: 0, resourceOwner: 0 }),
+    });
+
+    loop.start().unwrap();
+    pump(2);
+    expect(attached).toEqual([world, overlay]);
+    expect(detached).toEqual([]);
+
+    loop.setDrawSource(undefined);
+    expect(detached).toEqual([overlay]);
+    loop.stop().unwrap();
+    expect(detached).toEqual([overlay, world]);
+  });
+
+  it('detaches active draw-source Worlds when the loop stops', () => {
+    const world = new World();
+    const overlay = new World();
+    const detached: World[] = [];
+    const renderer = {
+      backend: 'webgpu' as const,
+      ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld: () => ({ ok: true as const, value: undefined }),
+      detachWorld(candidate: World): void {
+        detached.push(candidate);
+      },
+      draw: () => ({ ok: true as const, value: undefined }),
+      onError: () => () => {},
+      dispose: () => {},
+    } as unknown as Renderer;
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({
+      world,
+      renderer,
+      now,
+      raf,
+      caf,
+      drawSource: () => ({ worlds: [world, overlay], cameraOwner: 0, resourceOwner: 0 }),
+    });
+
+    loop.start().unwrap();
+    pump(1);
+    loop.stop().unwrap();
+
+    expect(detached).toEqual([overlay, world]);
+  });
+
+  it('terminates a paused loop and detaches its primary World exactly once', () => {
+    const world = new World();
+    const detached: World[] = [];
+    const renderer = {
+      backend: 'webgpu' as const,
+      ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld: () => ({ ok: true as const, value: undefined }),
+      detachWorld(candidate: World): void {
+        detached.push(candidate);
+      },
+      draw: () => ({ ok: true as const, value: undefined }),
+      onError: () => () => {},
+      dispose: () => {},
+    } as unknown as Renderer;
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf });
+
+    loop.start().unwrap();
+    pump(1);
+    loop.pause().unwrap();
+    loop.stop().unwrap();
+
+    expect(loop.getState()).toBe('stopped');
+    expect(detached).toEqual([world]);
+  });
+
+  it('terminal setStopped releases attachments once across repeated cleanup', () => {
+    const world = new World();
+    const detached: World[] = [];
+    const renderer = {
+      backend: 'webgpu' as const,
+      ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld: () => ({ ok: true as const, value: undefined }),
+      detachWorld(candidate: World): void {
+        detached.push(candidate);
+      },
+      draw: () => ({ ok: true as const, value: undefined }),
+      onError: () => () => {},
+      dispose: () => {},
+    } as unknown as Renderer;
+    const { raf, caf, now, pump } = makeSyncScheduler();
+    const loop = createFrameLoop({ world, renderer, now, raf, caf });
+
+    loop.start().unwrap();
+    pump(1);
+    loop.setStopped();
+    loop.setStopped();
+
+    expect(loop.getState()).toBe('stopped');
+    expect(detached).toEqual([world]);
   });
 });

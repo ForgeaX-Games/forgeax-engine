@@ -74,6 +74,8 @@ if (!ready.ok) {
 }
 
 const world = new World({ time: { fixedDeltaSeconds: 1 / 30, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.25 } });
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildPhysicsFixedWorld(world);
 installPhysicsFixedSystems(world);
 for (let i = 0; i < frames; i++) {
@@ -82,7 +84,7 @@ for (let i = 0; i < frames; i++) {
     console.error(`[smoke] FAIL - world.update: ${updated.error.code}`);
     process.exit(1);
   }
-  const drawn = renderer.draw([world], { owner: 0 });
+  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawn.ok) console.error(`[smoke] draw ${i}: ${drawn.error.code}`);
 }
 const state = readPhysicsFixedState(world);

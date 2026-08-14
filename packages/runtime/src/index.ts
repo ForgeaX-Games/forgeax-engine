@@ -234,9 +234,10 @@ export { createDevImportTransport } from './dev-import-transport';
 /**
  * glyphTextLayoutSystem (feat-20260531-world-space-msdf-text-rendering) -- lays
  * out + bakes every `GlyphText` entity, attaching MeshFilter + MeshRenderer on
- * first observation and re-baking in place on a text / size / color change. The
- * renderer auto-invokes it at the top of `draw(world)`; hosts driving their own
- * loop can call it directly before `renderer.draw(world)`.
+ * first observation and re-baking in place on a text / size / color change.
+ * `renderer.attachWorld(world)` installs this derived-state owner before the
+ * first `world.update()`; `renderer.draw()` only reads the published result.
+ * `createApp` performs the attachment automatically.
  */
 /**
  * GpuBuffer / GpuTexture runtime wrappers + GpuResource union
@@ -270,7 +271,7 @@ export { createDevImportTransport } from './dev-import-transport';
  *
  * Engine-internal phase that walks the World query graph (Extract /
  * Prepare / Record three stages). RenderSystem is **not** registered to
- * the ECS schedule (AC-09); `Renderer.draw(world)` invokes it once per
+ * the ECS schedule (AC-09); `Renderer.draw(worlds, options)` invokes it once per
  * frame.
  *
  * AI users see this re-export so the F-1 single-import contract holds:

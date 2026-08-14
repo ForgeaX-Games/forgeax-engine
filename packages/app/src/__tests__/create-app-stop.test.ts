@@ -1,10 +1,7 @@
 // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M6 / w22.
 //
-// Runtime unit test for AC-08: createApp().stop() chains into
-// Renderer.dispose() and a second stop() is idempotent (no double-fire,
-// no thrown error). Pairs with the M-5 Renderer.dispose 6-step cascade
-// (createRenderer.ts:1774) -- the stop path is the AI-user-visible
-// surface that actually triggers the cascade in production.
+// Runtime unit test for assemble ownership: createApp({renderer, world}).stop()
+// stops the App loop but leaves the host-owned Renderer alive.
 //
 // Mock approach (mirrors packages/app/__tests__/app.unit.test.ts
 // `makeRendererStub` pattern): build a minimal Renderer stub with
@@ -43,6 +40,10 @@ function makeRendererStubForStop(): StubRenderer {
     draw(): { ok: true; value: undefined } {
       return { ok: true, value: undefined };
     },
+    attachWorld(): { ok: true; value: undefined } {
+      return { ok: true, value: undefined };
+    },
+    detachWorld(): void {},
     onError(): () => void {
       return () => {
         // no-op unsubscribe
@@ -101,8 +102,8 @@ describe('create-app-stop.test.ts', () => {
     });
   });
 
-  describe('createApp().stop() chains into Renderer.dispose() (AC-08)', () => {
-    it('start -> stop calls renderer.dispose() exactly once', async () => {
+  describe('assemble App stop preserves its host-owned Renderer', () => {
+    it('start -> stop does not call renderer.dispose()', async () => {
       const { renderer, disposeSpy } = makeRendererStubForStop();
       const result = await createApp({ renderer, world: new World() });
       expect(result.ok).toBe(true);
@@ -114,10 +115,10 @@ describe('create-app-stop.test.ts', () => {
 
       const stopResult = app.stop();
       expect(stopResult.ok).toBe(true);
-      expect(disposeSpy).toHaveBeenCalledTimes(1);
+      expect(disposeSpy).not.toHaveBeenCalled();
     });
 
-    it('second stop() is idempotent: dispose still called only once', async () => {
+    it('second stop() remains inert for renderer ownership', async () => {
       const { renderer, disposeSpy } = makeRendererStubForStop();
       const result = await createApp({ renderer, world: new World() });
       expect(result.ok).toBe(true);
@@ -130,17 +131,10 @@ describe('create-app-stop.test.ts', () => {
       // but the call itself must not throw and must not re-fire dispose.
       const second = app.stop();
       expect(second.ok).toBe(false);
-      expect(disposeSpy).toHaveBeenCalledTimes(1);
+      expect(disposeSpy).not.toHaveBeenCalled();
     });
 
     it('stop() before start() does not call renderer.dispose()', async () => {
-      // Edge case: the cleanup funnel only fires renderer.dispose when the
-      // funnel has not been invoked before. stop() before start() returns
-      // app-not-started err; whether dispose fires here is a design
-      // decision -- currently the cleanupFunnel is invoked unconditionally
-      // by stop(), so dispose runs once even from the unstarted state.
-      // That single fire is harmless (Renderer.dispose itself is
-      // idempotent per renderer.ts:303 + createRenderer.ts:1775).
       const { renderer, disposeSpy } = makeRendererStubForStop();
       const result = await createApp({ renderer, world: new World() });
       expect(result.ok).toBe(true);
@@ -149,12 +143,10 @@ describe('create-app-stop.test.ts', () => {
 
       const stopResult = app.stop();
       expect(stopResult.ok).toBe(false);
-      // Funnel runs once on first stop() call; dispose is called.
-      expect(disposeSpy).toHaveBeenCalledTimes(1);
+      expect(disposeSpy).not.toHaveBeenCalled();
 
-      // Repeat stop(): funnel idempotent -> dispose not re-fired.
       app.stop();
-      expect(disposeSpy).toHaveBeenCalledTimes(1);
+      expect(disposeSpy).not.toHaveBeenCalled();
     });
   });
 });

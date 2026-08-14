@@ -41,6 +41,7 @@ import {
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { createRenderer } from '../index';
+import { drawPublished } from './draw-published';
 
 const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
@@ -211,7 +212,7 @@ async function sample(
   const world = new World();
   buildScene(world, cfg);
   world.update(1 / 60).unwrap();
-  const draw = renderer.draw([world], { owner: 0 });
+  const draw = drawPublished(renderer, world);
   if (!draw.ok) throw new Error('draw failed');
   const res = await renderer.debugSampleShadowFactor?.(points);
   if (!res) throw new Error('debugSampleShadowFactor returned null');

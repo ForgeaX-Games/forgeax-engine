@@ -9741,6 +9741,61 @@ importers:
         specifier: ^0.1.71
         version: 0.1.71
 
+  packages/devkit:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../app
+      '@forgeax/engine-audio':
+        specifier: workspace:*
+        version: link:../audio
+      '@forgeax/engine-audio-webaudio':
+        specifier: workspace:*
+        version: link:../audio-webaudio
+      '@forgeax/engine-fbx':
+        specifier: workspace:*
+        version: link:../fbx
+      '@forgeax/engine-font':
+        specifier: workspace:*
+        version: link:../font
+      '@forgeax/engine-gltf':
+        specifier: workspace:*
+        version: link:../gltf
+      '@forgeax/engine-image':
+        specifier: workspace:*
+        version: link:../image
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../pack
+      '@forgeax/engine-physics':
+        specifier: workspace:*
+        version: link:../physics
+      '@forgeax/engine-shader-compiler':
+        specifier: workspace:*
+        version: link:../shader-compiler
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../types
+      '@forgeax/engine-vfx-compiler':
+        specifier: workspace:*
+        version: link:../vfx-compiler
+      '@forgeax/engine-vite-plugin-pack':
+        specifier: workspace:*
+        version: link:../vite-plugin-pack
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../vite-plugin-shader
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@20.19.40)(esbuild@0.27.7)(jiti@1.21.7)
+      vitest:
+        specifier: 4.1.5
+        version: 4.1.5(@types/node@20.19.40)(@vitest/browser-playwright@4.1.5)(@vitest/coverage-v8@4.1.5)(jsdom@26.1.0)(vite@8.0.10(@types/node@20.19.40)(esbuild@0.27.7)(jiti@1.21.7))
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.40
+
   packages/ecs:
     dependencies:
       '@forgeax/engine-math':
@@ -10297,6 +10352,9 @@ importers:
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
+      pako:
+        specifier: ^1.0.11
+        version: 1.0.11
       pngjs:
         specifier: ^7.0.0
         version: 7.0.0

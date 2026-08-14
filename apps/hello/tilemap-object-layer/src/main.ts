@@ -145,6 +145,8 @@ async function main(): Promise<void> {
     return;
   }
   const world = new World();
+  const attachment = renderer.attachWorld(world);
+  if (!attachment.ok) throw attachment.error;
 
   // charter P5: in-process atlas synthesis — placeholder handles (matches
   // hello-tilemap M0; the dawn smoke verifies extract-system invariants,
@@ -239,7 +241,8 @@ async function main(): Promise<void> {
   );
 
   const loop = (): void => {
-    renderer.draw([world], { owner: 0 });
+    world.update(1 / 60).unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

@@ -37,6 +37,8 @@ renderer.onError((error) => errors.push(error));
 const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeSpriteSheetPixels();
 const texture = { kind: 'texture', width: SHEET_WIDTH, height: SHEET_HEIGHT, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
@@ -80,7 +82,8 @@ for (let i = 0; i < frames; i += 1) {
   if (current.value.currentFrame !== previous) changes += 1;
   previous = current.value.currentFrame;
   propagateTransforms(world);
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   if (i === 5) earlyFrame = await capture();
   if (i === frames - 1) lateFrame = await capture();

@@ -416,9 +416,11 @@ async function readbackPixels(device) {
 // --- 9. Draw frames helper ---
 
 async function drawFrames(world, frames) {
+  const attachment = renderer.attachWorld(world);
+  if (!attachment.ok) throw attachment.error;
   for (let i = 0; i < frames; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { owner: 0 });
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   }
   await sharedDevice.queue.onSubmittedWorkDone();

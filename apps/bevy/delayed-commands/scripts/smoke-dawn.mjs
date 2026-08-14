@@ -57,6 +57,8 @@ const MANIFEST = `data:application/json,${encodeURIComponent(readFileSync(resolv
 let renderer;
 try { renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST }); }
 finally { globalThis.navigator.gpu.requestAdapter = origReqAdapter; }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 console.log(`[delayed-commands] backend=${renderer.backend}`);
 const errors = [];
@@ -81,7 +83,12 @@ world.spawn({ component: Transform, data: { pos: [4, 8, 4], quat: [0, 0, 0, 1], 
 world.spawn({ component: Transform, data: { pos: [0, 0, 6], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }, { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT }) });
 
 let frames = 0;
-for (let i = 0; i < TARGET_FRAMES; i++) { const r = renderer.draw([world], { owner: 0 }); if (!r.ok) console.error(`draw ${i}: ${r.error.code}`); frames++; }
+for (let i = 0; i < TARGET_FRAMES; i++) {
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  if (!result.ok) console.error(`draw ${i}: ${result.error.code}`);
+  frames++;
+}
 
 const device = sharedDevice;
 if (device) await device.queue.onSubmittedWorkDone();

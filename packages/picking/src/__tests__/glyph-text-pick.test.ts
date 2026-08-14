@@ -6,7 +6,6 @@
 // picking package (AC-203), so this cross-cutting test (glyph text bake + pick)
 // lives in the downstream picking package that depends on runtime.
 
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
 import { CAMERA_PROJECTION_PERSPECTIVE, Camera } from '@forgeax/engine-render';
 import {
@@ -20,11 +19,9 @@ import { Transform } from '@forgeax/engine-scene';
 import type { FontAsset, GlyphMetric } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { pick } from '../pick';
-import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 describe('glyph-text-pick', () => {
-  // feat-20260601-gpu-resource-store-extraction M1: glyphTextLayoutSystem gained
-  // a 3rd param (the GPU residency store). Pick tests do not wire a device.
+  // Pick tests do not wire a GPU device; the residency store stays CPU-only.
   const gpuStore = new GpuResourceStore();
 
   const VP = 600;
@@ -120,13 +117,12 @@ describe('glyph-text-pick', () => {
   describe('glyph text pick (AC-13, pick.ts unchanged)', () => {
     it('(d) center-viewport ray hits the baked text entity', () => {
       resetGlyphBakeCache();
-      const assets = new AssetRegistry(makeMockShaderRegistry());
       const world = makeWorld();
       const fontId = registerFont(world, 'Hi');
       const camera = spawnCamera(world, 5);
       const label = spawnLabel(world, fontId);
 
-      glyphTextLayoutSystem(world, assets, gpuStore, 0); // bake + attach MeshFilter + MeshRenderer
+      glyphTextLayoutSystem(world, gpuStore); // bake + attach MeshFilter + MeshRenderer
 
       const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeDefined();

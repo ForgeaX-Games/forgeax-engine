@@ -48,18 +48,27 @@ const candidates = [];
 for (const name of readdirSync(recordsDir)) {
   if (!/^provenance-[^-]+(?:-[^-]+)*-a\d+\.json$/.test(name)) continue;
   const path = join(recordsDir, name);
+  let record;
   try {
-    candidates.push({ path, record: JSON.parse(readFileSync(path, 'utf8')) });
+    record = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     fail('ci-provenance-record-invalid', { path });
   }
+  if (!record || typeof record !== 'object' || Array.isArray(record))
+    fail('ci-provenance-record-invalid', { path });
+  if (!producers.includes(record.producer))
+    fail('ci-provenance-producer-unknown', {
+      path,
+      producer: record.producer ?? null,
+      expected: producers,
+    });
+  candidates.push({ path, record });
 }
 
 const selected = new Map();
 let runId = null;
 let schemaVersion = null;
 for (const { path, record } of candidates) {
-  if (!record || !producers.includes(record.producer)) continue;
   if (
     !Number.isInteger(record.producerRunAttempt) ||
     record.producerRunAttempt < 1 ||

@@ -51,11 +51,11 @@ function stripComments(src: string): string {
 
 describe('deferred lighting ambient SSAO synthesis (M2 / w11)', () => {
   it('(a) ambient calculation uses occlusionStrength * bakedAO texture sample', () => {
-    // The existing ambient line: var ambient = (kD * irradiance * albedo + specularIbl) * skylight.intensity * ao;
-    // where ao = mix(1.0, aoSample.r, material.occlusionStrength).
+    // The ambient expression starts from kD * irradiance before clearcoat and
+    // skylight terms are applied; ao comes from material.occlusionStrength.
     // M7/w32 changed `let` -> `var` so the SSAO blend line `ambient *= mix(...)` can mutate it.
     const codeOnly = stripComments(pbrSource);
-    expect(codeOnly).toMatch(/var\s+ambient\s*=\s*\(\s*\(kD\s*\*\s*irradiance/);
+    expect(codeOnly).toMatch(/var\s+ambient\s*=\s*\(*\s*kD\s*\*\s*irradiance/);
     expect(codeOnly).toMatch(/material\.occlusionStrength/);
     expect(codeOnly).toMatch(/skylight\.intensity/);
   });

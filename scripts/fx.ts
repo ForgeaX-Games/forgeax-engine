@@ -20,9 +20,10 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { createWorktree } from './worktree.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // The harness floating clone is never a submodule and must never be deleted by
@@ -46,7 +47,16 @@ export type StepResult = {
 
 type RunGitOptions = { dryRun?: boolean; inherit?: boolean };
 
-const BUILTIN_COMMANDS = new Set(['setup', 'update', 'clean', 'ci', 'help', '--help', '-h']);
+const BUILTIN_COMMANDS = new Set([
+  'setup',
+  'update',
+  'clean',
+  'worktree',
+  'ci',
+  'help',
+  '--help',
+  '-h',
+]);
 
 // ── pure helpers (exported, unit-tested) ─────────────────────────────────────
 
@@ -65,7 +75,35 @@ export function parseSubmodulePaths(output: string): string[] {
 }
 
 export function submoduleUpdateArgs(path: string): string[] {
-  return ['submodule', 'update', '--init', '--recursive', '--', path];
+  return [
+    'submodule',
+    'update',
+    '--init',
+    '--recursive',
+    '--depth',
+    '1',
+    '--jobs',
+    '1',
+    '--',
+    path,
+  ];
+}
+
+export function parseSubmoduleStatusPaths(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map(
+      (line) =>
+        line
+          .trim()
+          .match(/^[ +-]?[0-9a-f]{7,40}\s+(.+)$/i)?.[1]
+          ?.trim() ?? '',
+    )
+    .filter(Boolean);
+}
+
+export function submoduleUpdateAllArgs(): string[] {
+  return ['submodule', 'update', '--init', '--recursive', '--depth', '1', '--jobs', '1'];
 }
 
 export function updateStashMessage(iso: string): string {
@@ -139,7 +177,7 @@ export function troubleshootHints(results: StepResult[]): string[] {
   if (failed('submodule')) {
     hints.push(
       'submodule update failed: check network/access, then retry ' +
-        '`git submodule update --init --recursive --force`.',
+        '`bun fx update` (it recreates only clean non-shallow checkouts at depth=1).',
     );
   }
   if (failed('harness')) {
@@ -230,6 +268,96 @@ function stashTopOid(): string {
 
 function submodulePaths(): string[] {
   return parseSubmodulePaths(gitOut(['config', '--file', '.gitmodules', '--get-regexp', 'path']));
+}
+
+function recursiveSubmoduleCheckoutPaths(path: string): string[] {
+  const nested = parseSubmoduleStatusPaths(
+    gitOut(['-C', path, 'submodule', 'status', '--recursive']),
+  );
+  return [path, ...nested.map((child) => join(path, child))];
+}
+
+function submoduleTreeIsClean(path: string): boolean {
+  return recursiveSubmoduleCheckoutPaths(path).every((checkout) => {
+    if (!existsSync(resolve(ROOT, checkout))) return true;
+    return (
+      gitOut([
+        '-C',
+        checkout,
+        'status',
+        '--porcelain',
+        '--ignore-submodules=none',
+        '--untracked-files=all',
+      ]) === ''
+    );
+  });
+}
+
+function submoduleTreeNeedsDepthRefresh(path: string): boolean {
+  return recursiveSubmoduleCheckoutPaths(path).some((checkout) => {
+    if (!existsSync(resolve(ROOT, checkout))) return false;
+    const shallow = gitOut(['-C', checkout, 'rev-parse', '--is-shallow-repository']);
+    const commits = gitOut(['-C', checkout, 'rev-list', '--count', 'HEAD']);
+    return shallow !== 'true' || commits !== '1';
+  });
+}
+
+function updateSubmoduleDepthOne(path: string, dryRun: boolean): StepResult {
+  if (dryRun) {
+    return runGitStep(
+      'submodule',
+      path,
+      submoduleUpdateArgs(path),
+      true,
+      'would sync to recorded pin with depth=1',
+    );
+  }
+
+  if (!submoduleTreeIsClean(path)) {
+    return {
+      scope: 'submodule',
+      name: path,
+      result: 'failed',
+      detail: 'submodule has local tracked/untracked changes; refusing depth refresh',
+    };
+  }
+
+  if (submoduleTreeNeedsDepthRefresh(path)) {
+    const deinit = runGitStep(
+      'submodule',
+      `${path} (recreate shallow checkout)`,
+      ['submodule', 'deinit', '--force', '--', path],
+      false,
+      'removed non-shallow checkout after clean-state check',
+    );
+    if (deinit.result === 'failed') return deinit;
+  }
+
+  const update = runGitStep(
+    'submodule',
+    path,
+    submoduleUpdateArgs(path),
+    false,
+    'synced to recorded pin with depth=1',
+  );
+  if (update.result === 'failed') return update;
+
+  const invalid = recursiveSubmoduleCheckoutPaths(path).filter((checkout) => {
+    if (!existsSync(resolve(ROOT, checkout))) return true;
+    return (
+      gitOut(['-C', checkout, 'rev-parse', '--is-shallow-repository']) !== 'true' ||
+      gitOut(['-C', checkout, 'rev-list', '--count', 'HEAD']) !== '1'
+    );
+  });
+  if (invalid.length > 0) {
+    return {
+      scope: 'submodule',
+      name: path,
+      result: 'failed',
+      detail: `depth=1 verification failed for ${invalid.join(', ')}`,
+    };
+  }
+  return update;
 }
 
 /** Top-level directories that carry their own `.git` (nested repos/submodules). */
@@ -354,9 +482,9 @@ function setup(args: string[]): never {
     runGitStep(
       'submodule',
       '(all)',
-      ['submodule', 'update', '--init', '--recursive'],
+      submoduleUpdateAllArgs(),
       dryRun,
-      'submodules initialised',
+      'submodules initialised with depth=1',
     ),
   );
 
@@ -414,7 +542,7 @@ function setup(args: string[]): never {
   finish(results, true);
 }
 
-// update — pull root, update the assets submodule, fast-forward the harness.
+// update — pull root, update clean submodules at depth=1, fast-forward harness.
 function update(args: string[]): never {
   const dryRun = args.includes('--dry-run') || args.includes('-n');
   const stash = updateShouldStash(args);
@@ -474,7 +602,7 @@ function update(args: string[]): never {
   const rootOk = !results.some((r) => r.scope === 'root' && r.result === 'failed');
 
   if (rootOk) {
-    console.log('[fx] update: submodules');
+    console.log('[fx] update: submodules (depth=1, jobs=1)');
     const paths = submodulePaths();
     if (paths.length === 0) {
       results.push({
@@ -485,9 +613,7 @@ function update(args: string[]): never {
       });
     } else {
       for (const p of paths) {
-        results.push(
-          runGitStep('submodule', p, submoduleUpdateArgs(p), dryRun, 'synced to recorded pin'),
-        );
+        results.push(updateSubmoduleDepthOne(p, dryRun));
       }
     }
     console.log(`[fx] update: ${HARNESS_DIR}`);
@@ -535,8 +661,8 @@ function clean(args: string[]): never {
   step(
     'submodule',
     '(all)',
-    ['submodule', 'update', '--init', '--recursive', '--force'],
-    'checkouts synced to pins',
+    [...submoduleUpdateAllArgs(), '--force'],
+    'checkouts synced to pins with depth=1',
   );
   // 3. scrub every submodule tree to bare pin state so none reports "modified" upward.
   step(
@@ -629,8 +755,8 @@ Commands:
                         --recursive, then pnpm install and pnpm build
                         (postinstall materialises ${HARNESS_DIR}). Idempotent —
                         safe to re-run.
-  update [flags]        Pull root (ff-only), update submodules to their pins, and
-                        fast-forward the ${HARNESS_DIR} floating clone.
+  update [flags]        Pull root (ff-only), keep clean submodules at Git depth=1,
+                        and fast-forward the ${HARNESS_DIR} floating clone.
                         --dry-run/-n   preview without changing anything
                         --no-stash     fail instead of auto-stashing a dirty tree
   clean  [flags]        Restore a fully-clean git status. Discards uncommitted
@@ -645,6 +771,14 @@ Commands:
                         --dry-run       print the steps without running them
                         --group <name>  run one PR CI target (for example,
                                         smoke-fleet-1)
+  worktree <name>        Create one complete, disk-conscious worktree:
+                        recursive submodules, shared/sparse harness, and
+                        frozen dependencies ready for bun fx ci.
+                        --from REF      create from a different commit/ref
+                        --jobs N        bound recursive submodule parallelism (1..8)
+                        --no-setup/--fast skip dependency installation
+                        --keep-on-failure retain a failed bootstrap for inspection
+                        --dry-run/-n     print the plan without changing anything
   help                  Show this text
 
 Examples:
@@ -652,6 +786,7 @@ Examples:
   bun fx update --dry-run
   bun fx clean --dry-run
   bun fx clean --deep
+  bun fx worktree feature-name
   bun fx ci --list
 `);
 }
@@ -678,6 +813,9 @@ function main(): void {
         break;
       case 'clean':
         clean(plan.args);
+        break;
+      case 'worktree':
+        createWorktree(plan.args);
         break;
       case 'ci':
         ci(plan.args);

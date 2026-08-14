@@ -92,8 +92,8 @@ export interface DrawSourceResult {
  */
 export const APP_PHASE_CATALOG = [
   'frame-total',
-  'world-update-primary',
   'draw-source',
+  'world-update-primary',
   'world-update-injected',
   'renderer-draw',
   'host-frame',
@@ -112,7 +112,7 @@ export const APP_PHASE_CATALOG = [
  * partitioning.
  *
  *   - Returns `undefined` → the frame-loop degrades to the single-world path,
- *     byte-identical to `renderer.draw([world], { owner: 0 })` where `world` is
+ *     byte-identical to `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` where `world` is
  *     the App's own world (the single-world AI-user default). A host that wires
  *     the seam but has nothing multi-world to inject this frame returns
  *     `undefined`.
@@ -381,9 +381,8 @@ export interface App {
   start(): Result<void, AppError>;
   /**
    * Stop rAF scheduling. State-machine semantics land in M2:
-   *   - 'idle' state second call: Result.err({ code: 'app-not-started' })
-   *   - 'paused' state: Result.err({ code: 'app-paused-while-stop' })
-   *   - 'running' state: Result.ok(undefined)
+   *   - 'idle' / 'stopped' state: Result.err({ code: 'app-not-started' })
+   *   - 'running' / 'paused' state: Result.ok(undefined)
    * M1 stub returns Result.ok(undefined) unconditionally.
    */
   stop(): Result<void, AppError>;

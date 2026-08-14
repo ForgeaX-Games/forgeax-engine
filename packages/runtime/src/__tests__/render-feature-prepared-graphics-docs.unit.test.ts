@@ -65,7 +65,7 @@ function recoveryMatrix(): readonly RecoveryRow[] {
       status: 'active',
       code: 'none',
       detail: 'no error',
-      action: 'continue renderer.draw(worlds, { owner: 0 })',
+      action: 'continue renderer.draw(worlds, { cameraOwner: 0, resourceOwner: 0 })',
       error: undefined,
     },
     {

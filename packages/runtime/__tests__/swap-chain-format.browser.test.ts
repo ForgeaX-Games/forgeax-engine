@@ -77,7 +77,9 @@ describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
     });
     await renderer.ready;
     const world = new World();
-    renderer.draw([world], { owner: 0 });
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
 
     // Inspect every recorded console.warn call: none of them should
     // contain the chromium format-mismatch substring.
@@ -109,7 +111,9 @@ describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
     });
     await renderer.ready;
     const world = new World();
-    renderer.draw([world], { owner: 0 });
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
 
     // The probe is set by ensureContextConfigured in createRenderer.ts after
     // the helper chooses the format and after `context.configure({...})` runs.

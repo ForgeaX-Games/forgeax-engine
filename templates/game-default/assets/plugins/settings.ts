@@ -47,10 +47,15 @@ export function mountSettings(asset: UiAsset | null, root: HTMLElement, state: G
   let inertSiblings: Array<{ element: HTMLElement; value: boolean }> = [];
   const focusables = (): HTMLElement[] => [...shadow.querySelectorAll<HTMLElement>('button,input,[tabindex]:not([tabindex="-1"])')]
     .filter((node) => !node.hasAttribute('disabled') && !node.hidden);
+  const activeFocus = (): HTMLElement | null => {
+    const active = document.activeElement;
+    const shadowActive = active instanceof HTMLElement ? active.shadowRoot?.activeElement : null;
+    return shadowActive instanceof HTMLElement ? shadowActive : active instanceof HTMLElement ? active : null;
+  };
   const setOpen = (open: boolean): void => {
     dialog.hidden = !open;
     if (open) {
-      previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      previousFocus = activeFocus();
       inertSiblings = [...root.children].filter((child): child is HTMLElement => child !== instance.host)
         .map((element) => ({ element, value: element.inert }));
       for (const sibling of inertSiblings) sibling.element.inert = true;

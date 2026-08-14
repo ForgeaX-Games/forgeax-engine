@@ -20,6 +20,8 @@ function makeSpyRenderer(): Renderer {
   return {
     backend: 'webgpu' as const,
     ready: Promise.resolve({ ok: true, value: undefined }),
+    attachWorld: () => ({ ok: true, value: undefined }),
+    detachWorld: () => {},
     draw(): { ok: true; value: undefined } {
       return { ok: true, value: undefined };
     },

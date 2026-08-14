@@ -284,9 +284,11 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
     );
 
     // Render 300 frames for temporal stability (PCF shadow, light accumulation)
+    expect(renderer.attachWorld(world).ok).toBe(true);
     let drawErrors = 0;
     for (let i = 0; i < 300; i++) {
-      const r = renderer.draw([world], { owner: 0 });
+      world.update(1 / 60).unwrap();
+      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) drawErrors++;
     }
     expect(drawErrors).toBe(0);

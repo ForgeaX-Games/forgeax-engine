@@ -147,7 +147,13 @@ const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createRenderer } = enginePkg;
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
-const { ChildOf, Transform, registerPropagateTransforms } = await import('@forgeax/engine-scene');
+const {
+  ChildOf,
+  projectHierarchy,
+  propagateTransforms,
+  Transform,
+  registerPropagateTransforms,
+} = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_SPHERE,
@@ -188,6 +194,8 @@ if (!ready.ok) {
 
 // Mint standard PBR material as a user-tier shared ref (same as demo main.ts).
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
@@ -234,7 +242,7 @@ const parent = world
 // Child: ChildOf{parent} + local +Y offset. No Transform write happens to the
 // child between frames -- its rendered world position changes ONLY because the
 // parent's Transform.world propagates down the ChildOf edge.
-world
+const child = world
   .spawn(
     {
       component: Transform,
@@ -247,7 +255,7 @@ world
   .unwrap();
 
 // Static reference sphere -- not in the hierarchy.
-world
+const staticSphere = world
   .spawn(
     {
       component: Transform,
@@ -255,6 +263,21 @@ world
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
+  )
+  .unwrap();
+
+// Probe-only entities have no render components. They exercise a bounded
+// cycle without changing the visible parent/child and static-sibling oracle.
+const cycleA = world
+  .spawn(
+    { component: Transform, data: { pos: [-2, -2, 0] } },
+    { component: ChildOf, data: { parent } },
+  )
+  .unwrap();
+const cycleB = world
+  .spawn(
+    { component: Transform, data: { pos: [2, -2, 0] } },
+    { component: ChildOf, data: { parent } },
   )
   .unwrap();
 
@@ -319,6 +342,25 @@ async function doReadPixels() {
   return tight;
 }
 
+function readWorld(entity) {
+  return Array.from(world.get(entity, Transform).unwrap().world);
+}
+
+function setParentIfNeeded(entity, nextParent) {
+  const current = world.get(entity, ChildOf);
+  if (current.ok && current.value.parent === nextParent) return { ok: true, changed: false };
+  const result = world.set(entity, ChildOf, { parent: nextParent });
+  return { ok: result.ok, changed: true, error: result.ok ? undefined : result.error.code };
+}
+
+function maxAbsDiff(left, right) {
+  let maximum = 0;
+  for (let index = 0; index < left.length; index++) {
+    maximum = Math.max(maximum, Math.abs((left[index] ?? 0) - (right[index] ?? 0)));
+  }
+  return maximum;
+}
+
 function countNonBlack(pixels) {
   let n = 0;
   for (let i = 0; i < pixels.length; i += 4) {
@@ -345,7 +387,7 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 // --- 7. Frame A (parent at rest) -------------------------------------------
 
 world.update(1 / 60).unwrap(); // runs propagateTransforms so child Transform.world is composed
-const drawARes = renderer.draw([world], { owner: 0 });
+const drawARes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawARes.ok) {
   console.error(`[smoke] FAIL - draw (frame A) failed: ${drawARes.error.code}`);
   process.exit(1);
@@ -353,10 +395,71 @@ if (!drawARes.ok) {
 await device.queue.onSubmittedWorkDone();
 const pixelsA = await doReadPixels();
 
-// --- 8. Stability re-render (parent still at rest) -------------------------
+// --- 8. M23 malformed hierarchy -> same-process recovery ------------------
+
+const baselineHierarchy = projectHierarchy(world);
+const baselineChildWorld = readWorld(child);
+const baselineStaticWorld = readWorld(staticSphere);
+const staleParent = 0xffffffff;
+const staleSet = world.set(child, ChildOf, { parent: staleParent });
+const firstCycleEdge = world.set(cycleA, ChildOf, { parent: cycleB });
+const secondCycleEdge = world.set(cycleB, ChildOf, { parent: cycleA });
+const faultHierarchy = projectHierarchy(world);
+const faultPropagation = propagateTransforms(world, faultHierarchy);
+const drawFaultRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+if (!drawFaultRes.ok) {
+  console.error(`[smoke] FAIL - draw (fault frame) failed: ${drawFaultRes.error.code}`);
+  process.exit(1);
+}
+await device.queue.onSubmittedWorkDone();
+const pixelsFault = await doReadPixels();
+
+const cycleDiagnostics = faultHierarchy.diagnostics.filter((item) => item.code === 'hierarchy-cycle');
+const brokenDiagnostics = faultHierarchy.diagnostics.filter((item) => item.code === 'hierarchy-broken');
+const faultCycleMembers = cycleDiagnostics.map((item) => item.detail.entity).sort((a, b) => a - b);
+const expectedCycleMembers = [cycleA, cycleB].sort((a, b) => a - b);
+const repairEdges = [
+  setParentIfNeeded(child, parent),
+  setParentIfNeeded(cycleA, parent),
+  setParentIfNeeded(cycleB, parent),
+];
+const repairedHierarchy = projectHierarchy(world);
+const repairedPropagation = propagateTransforms(world, repairedHierarchy);
+const drawRepairedRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+if (!drawRepairedRes.ok) {
+  console.error(`[smoke] FAIL - draw (repaired frame) failed: ${drawRepairedRes.error.code}`);
+  process.exit(1);
+}
+await device.queue.onSubmittedWorkDone();
+const pixelsRepaired = await doReadPixels();
+const repeatedCleanup = [
+  setParentIfNeeded(child, parent),
+  setParentIfNeeded(cycleA, parent),
+  setParentIfNeeded(cycleB, parent),
+];
+const repeatedHierarchy = projectHierarchy(world);
+const repeatedPropagation = propagateTransforms(world, repeatedHierarchy);
+const repairedChildWorld = readWorld(child);
+const repairedStaticWorld = readWorld(staticSphere);
+
+console.log(
+  `[m23] Dawn hierarchy diagnostics=${JSON.stringify({
+    broken: brokenDiagnostics.map((item) => item.detail),
+    cycles: cycleDiagnostics.map((item) => item.detail),
+    propagation: faultPropagation.ok ? { ok: true } : {
+      ok: false,
+      code: faultPropagation.error.code,
+      expected: faultPropagation.error.expected,
+      hint: faultPropagation.error.hint,
+      detail: faultPropagation.error.detail,
+    },
+  })}`,
+);
+
+// --- 9. Stability re-render (parent still at rest) -------------------------
 
 world.update(1 / 60).unwrap();
-const drawAARes = renderer.draw([world], { owner: 0 });
+const drawAARes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawAARes.ok) {
   console.error(`[smoke] FAIL - draw (stability frame) failed: ${drawAARes.error.code}`);
   process.exit(1);
@@ -364,7 +467,7 @@ if (!drawAARes.ok) {
 await device.queue.onSubmittedWorkDone();
 const pixelsAA = await doReadPixels();
 
-// --- 9. Frame B (parent moved -> child must follow) ------------------------
+// --- 10. Frame B (parent moved -> child must follow) ------------------------
 
 const setRes = world.set(parent, Transform, { pos: [PARENT_X_MOVED, 0, 0]});
 if (!setRes.ok) {
@@ -372,7 +475,7 @@ if (!setRes.ok) {
   process.exit(1);
 }
 world.update(1 / 60).unwrap(); // re-runs propagateTransforms; child Transform.world follows parent
-const drawBRes = renderer.draw([world], { owner: 0 });
+const drawBRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawBRes.ok) {
   console.error(`[smoke] FAIL - draw (frame B) failed: ${drawBRes.error.code}`);
   process.exit(1);
@@ -380,7 +483,7 @@ if (!drawBRes.ok) {
 await device.queue.onSubmittedWorkDone();
 const pixelsB = await doReadPixels();
 
-// --- 10. Verdict -----------------------------------------------------------
+// --- 11. Verdict -----------------------------------------------------------
 
 const failures = [];
 
@@ -392,6 +495,8 @@ if (renderer.backend !== 'webgpu') {
 // (b) All frames must produce valid buffers.
 for (const [label, px] of [
   ['A', pixelsA],
+  ['fault', pixelsFault],
+  ['repaired', pixelsRepaired],
   ['AA', pixelsAA],
   ['B', pixelsB],
 ]) {
@@ -450,6 +555,42 @@ if (diffCount <= DIFF_THRESHOLD) {
   );
 }
 
+const faultDiff = countDiff(pixelsA, pixelsFault);
+const recoveryDiff = countDiff(pixelsA, pixelsRepaired);
+if (!staleSet.ok || !firstCycleEdge.ok || !secondCycleEdge.ok) {
+  failures.push('(g) public World.set could not inject the stale edge and bounded cycle');
+}
+if (faultPropagation.ok || brokenDiagnostics.length !== 1 || cycleDiagnostics.length !== 2) {
+  failures.push('(g) malformed hierarchy did not produce both structured diagnostic families');
+}
+if (brokenDiagnostics[0]?.expected.length === 0 || brokenDiagnostics[0]?.hint.length === 0) {
+  failures.push('(g) hierarchy-broken diagnostic omitted expected/hint recovery fields');
+}
+if (cycleDiagnostics.some((item) => item.expected.length === 0 || item.hint.length === 0 || item.detail.parent === undefined)) {
+  failures.push('(g) hierarchy-cycle diagnostic omitted expected/hint/detail recovery fields');
+}
+if (JSON.stringify(faultCycleMembers) !== JSON.stringify(expectedCycleMembers)) {
+  failures.push(`(g) cycle membership was not deterministic: ${JSON.stringify(faultCycleMembers)}`);
+}
+if (faultHierarchy === baselineHierarchy || repairedHierarchy === faultHierarchy || repeatedHierarchy !== repairedHierarchy) {
+  failures.push('(g) hierarchy projection cache identity did not invalidate/reuse at the correct boundaries');
+}
+if (!repairedPropagation.ok || !repeatedPropagation.ok || repairedHierarchy.diagnostics.length !== 0 || repeatedHierarchy.diagnostics.length !== 0) {
+  failures.push('(g) same-process repair did not clear hierarchy diagnostics');
+}
+if (repairEdges.some((item) => !item.ok) || repeatedCleanup.some((item) => !item.ok) || repeatedCleanup.some((item) => item.changed)) {
+  failures.push('(g) repeated cleanup was not idempotent');
+}
+if (maxAbsDiff(baselineChildWorld, repairedChildWorld) > 1e-6) {
+  failures.push(`(g) repaired child world differs from baseline by ${maxAbsDiff(baselineChildWorld, repairedChildWorld)}`);
+}
+if (maxAbsDiff(baselineStaticWorld, repairedStaticWorld) > 1e-6) {
+  failures.push(`(g) static sibling world was contaminated by malformed hierarchy`);
+}
+if (faultDiff <= DIFF_THRESHOLD || recoveryDiff > STABILITY_MAX_DIFF) {
+  failures.push(`(g) pixel recovery falsifier failed: faultDiff=${faultDiff}, recoveryDiff=${recoveryDiff}`);
+}
+
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) console.error(`  ${f}`);
@@ -457,6 +598,16 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
+
+console.log(
+  `[m23] Dawn structured hierarchy recovery: PASS ${JSON.stringify({
+    projectionIds: [baselineHierarchy === faultHierarchy, faultHierarchy === repairedHierarchy, repairedHierarchy === repeatedHierarchy],
+    diagnostics: { broken: brokenDiagnostics.length, cycles: cycleDiagnostics.length },
+    faultDiff,
+    recoveryDiff,
+    staticWorldMaxDiff: maxAbsDiff(baselineStaticWorld, repairedStaticWorld),
+  })}`,
+);
 
 console.log(
   `[smoke] PASS - criteria GREEN: backend=webgpu, RhiError count=${errors.length}, ` +

@@ -326,9 +326,12 @@ const falsifyLabel = FALSIFY === 'msaa-noop' ? ' (FALSIFY=msaa-noop)' : '';
 
 // Pass 1: ANTIALIAS_NONE baseline.
 const worldNone = new World();
+const worldAttachment1 = renderer.attachWorld(worldNone);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 spawnScene(worldNone, ANTIALIAS_NONE);
 
-const drawNoneRes = renderer.draw([worldNone], { owner: 0 });
+worldNone.update().unwrap();
+const drawNoneRes = renderer.draw([worldNone], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawNoneRes.ok) {
   console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
   process.exit(1);
@@ -338,9 +341,12 @@ const pixelsNone = await doReadPixels();
 
 // Pass 2: ANTIALIAS_MSAA (or ANTIALIAS_NONE under FALSIFY).
 const worldMsaa = new World();
+const worldAttachment2 = renderer.attachWorld(worldMsaa);
+if (!worldAttachment2.ok) throw worldAttachment2.error;
 spawnScene(worldMsaa, antialiasForPass2);
 
-const drawMsaaRes = renderer.draw([worldMsaa], { owner: 0 });
+worldMsaa.update().unwrap();
+const drawMsaaRes = renderer.draw([worldMsaa], { cameraOwner: 0, resourceOwner: 0 });
 if (!drawMsaaRes.ok) {
   console.error(`[smoke] FAIL - draw (msaa${falsifyLabel}) failed: ${drawMsaaRes.error.code}`);
   process.exit(1);

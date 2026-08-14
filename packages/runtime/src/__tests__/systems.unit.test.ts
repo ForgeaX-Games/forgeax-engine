@@ -60,7 +60,7 @@ import { fileURLToPath } from 'node:url';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle } from '@forgeax/engine-ecs';
+import type { EntityHandle, World as WorldType } from '@forgeax/engine-ecs';
 import {
   ENTITY_NULL_RAW,
   Severity,
@@ -69,6 +69,7 @@ import {
   World,
 } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import {
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
@@ -1837,7 +1838,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -2000,11 +2001,19 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // (getMaterialShaderPipeline's 1-frame-warmup path) resolves before
       // frame 2; the shadow PSO is now obtained via lazy cache lookup instead
       // of the hardcoded perPassResources.shadowCasterPipeline field.
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       await new Promise((r) => setTimeout(r, 0));
       shadow.drawIndexed.mockClear();
       shadow.draw.mockClear();
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Shadow pass drew exactly once (the triangle mesh), never the line mesh.
       const shadowDrawCalls = shadow.drawIndexed.mock.calls.length + shadow.draw.mock.calls.length;
@@ -7673,7 +7682,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -7908,7 +7917,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [0, 1, 0],
         [0, 0, 1],
       ]);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.drawIndexed).toHaveBeenCalledTimes(3);
 
@@ -7960,7 +7973,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [0, 1, 0],
         [0, 0, 1],
       ]);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       const matUboWrites = spies.writeBufferCalls.filter(
         (w) => w.bufferLabel === 'pbr-material-ubo',
@@ -7989,7 +8006,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnMultiMaterialScene(renderer, singleSubmeshTriangle(), [[1, 0.5, 0]]);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.drawIndexed).toHaveBeenCalledTimes(1);
 
@@ -8156,7 +8177,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -8368,7 +8389,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, singleSubmeshTriangle(), 1);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.drawIndexed).toHaveBeenCalledTimes(1);
       // First drawIndexed call: indexCount=3, indexOffset=0
@@ -8386,7 +8411,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, threeSubmeshMesh(), 3);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.drawIndexed).toHaveBeenCalledTimes(3);
       // Each submesh gets its own drawIndexed call with correct indexOffset.
@@ -8405,7 +8434,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, vertexOnlyLineListMesh(), 1);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.draw).toHaveBeenCalled();
       // draw(vertexCount, instanceCount, firstVertex, firstInstance)
@@ -8423,7 +8456,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, mixedTopologyMesh(), 2);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Both submeshes are indexed → 2 drawIndexed calls.
       expect(spies.drawIndexed).toHaveBeenCalledTimes(2);
@@ -9313,7 +9350,7 @@ type ExtractFramesWithPipeline = (
 
   interface IntegrationRenderer {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (e: { code: string }) => void) => () => void;
   }
 
@@ -9506,13 +9543,21 @@ type ExtractFramesWithPipeline = (
       const cube = spawnInstancedCube(world, C, 2);
 
       // Frame 1: allocate the instance buffer (fingerprint = 2 instances).
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Frame 2: fingerprint mismatch -> F12 destroys the old buffer, whose
       // raw .destroy() throws -> rhi-webgpu webgpu-runtime-error -> the F12
       // production fires errorRegistry and continues to set the new buffer.
       world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Sweep continued: a fresh (larger) instance buffer was still allocated
       // after the failed destroy. The failure surfaced as a fired error.
@@ -9537,7 +9582,11 @@ type ExtractFramesWithPipeline = (
       const cube = spawnInstancedCube(world, C, 2);
 
       // Frame 1: cold allocate the 2-instance buffer (128 B).
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(errors).toHaveLength(0);
       const createdAfterF1 = log.created.length;
       expect(createdAfterF1).toBeGreaterThan(0);
@@ -9549,7 +9598,11 @@ type ExtractFramesWithPipeline = (
       // registered, so recordShadowPass early-exits and the main pass is the
       // sole F12 owner this frame.
       world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // The destroyed buffer is specifically the old instance buffer (STORAGE
       // usage, 128 B), not an incidental destroy elsewhere. Disabling :4521
@@ -9584,11 +9637,21 @@ type ExtractFramesWithPipeline = (
       });
       const cube = spawnInstancedCube(world, C, 2);
 
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(log.destroyed).toHaveLength(0);
 
       world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // The shadow pass records the instance entity before the main pass, so
       // it owns the F12 destroy of the old (STORAGE, 128 B) instance buffer

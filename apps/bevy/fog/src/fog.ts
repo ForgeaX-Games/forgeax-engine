@@ -18,13 +18,13 @@ const FOG_PARAMS_BYTES = 16;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 80.0;
 
-export type FogFalloffMode = 'linear' | 'exponential' | 'exponential-squared';
-
-const FOG_MODE_VALUE: Readonly<Record<FogFalloffMode, number>> = {
+const FOG_MODE_VALUE = {
   linear: 0,
   exponential: 1,
   'exponential-squared': 2,
-};
+} as const;
+
+export type FogFalloffMode = keyof typeof FOG_MODE_VALUE;
 
 export function packFogParams(mode: FogFalloffMode, startOrDensity: number, end = 20): Uint8Array {
   const bytes = new ArrayBuffer(FOG_PARAMS_BYTES);

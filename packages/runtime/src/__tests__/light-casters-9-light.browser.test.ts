@@ -356,8 +356,11 @@ async function readbackAfterDraw(renderer: EngineRenderer, world: World): Promis
   // 60 fps; in headless mode (process.env.CI set) the compositor can
   // skip frames if there is no visible output, so the readback path
   // below uses both rAF + setTimeout fences to bracket both modes.
+  const attached = renderer.attachWorld(world);
+  if (!attached.ok) throw attached.error;
   for (let i = 0; i < FRAMES_PER_SCENE; i++) {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update(1 / 60).unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) throw new Error(`renderer.draw frame ${i} failed`);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }

@@ -456,7 +456,7 @@ export function recordMainPass(
                 new RhiError({
                   code: 'asset-not-registered',
                   expected: 'material baseColor TextureAsset uploaded to GPU',
-                  hint: 'register + uploadTexture the baseColor texture before draw([world], { owner: 0 }); rendering falls back to debug pink until then',
+                  hint: 'register + uploadTexture the baseColor texture before draw([world], { cameraOwner: 0, resourceOwner: 0 }); rendering falls back to debug pink until then',
                   detail: { assetHandle: rawId },
                 }),
               );

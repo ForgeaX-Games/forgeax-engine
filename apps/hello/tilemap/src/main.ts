@@ -11,8 +11,8 @@
 //     submodule-backed atlases).
 //   - Register a TilesetAsset with 4 regions + 4 tile entries.
 //   - Spawn a Tilemap (cols=8 rows=8 chunkSize=4) + a single TileLayer with
-//     a hand-chosen anchor table; tilemapChunkExtractSystem will derive one
-//     ECS entity per non-zero cell once renderer.draw is called.
+//     a hand-chosen anchor table; the renderer-attached World system derives
+//     render entities during world.update before draw reads them.
 //   - Pre-Renderer.ready, register an unmanaged TextureAsset handle into the
 //     AssetRegistry so the atlas handle in the Tileset points at a real
 //     uploaded GPU texture (charter P3 — the M0 baseline cannot rely on a
@@ -40,6 +40,8 @@ async function main(): Promise<void> {
     return;
   }
   const world = new World();
+  const attachment = renderer.attachWorld(world);
+  if (!attachment.ok) throw attachment.error;
 
   // Register a placeholder atlas TextureAsset (shared-mode handle id; the
   // M0 baseline does not exercise sampling — the smoke gate verifies only
@@ -120,7 +122,8 @@ async function main(): Promise<void> {
       view[7 * cols + 7] = 1;
       markTileLayerDirty(world, layer).unwrap();
     }
-    renderer.draw([world], { owner: 0 });
+    world.update(1 / 60).unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

@@ -102,10 +102,11 @@ function makeWorldUpdateError(cause: unknown): AppError {
 function fireWorldUpdateResult(
   result: ReturnType<World['update']>,
   fireError: ((e: AppError | RhiError) => void) | undefined,
-): void {
+): boolean {
   if (!result.ok && fireError !== undefined) {
     fireError(makeWorldUpdateError(result.error));
   }
+  return result.ok;
 }
 
 function updateInjectedWorlds(
@@ -113,11 +114,21 @@ function updateInjectedWorlds(
   ownWorld: World,
   deltaSeconds: number,
   fireError: ((e: AppError | RhiError) => void) | undefined,
+  attachedWorlds: ReadonlySet<World>,
+  updatedWorlds: Set<World>,
 ): void {
   for (const injectedWorld of worlds) {
-    if (injectedWorld === ownWorld) continue;
+    if (
+      injectedWorld === ownWorld ||
+      updatedWorlds.has(injectedWorld) ||
+      !attachedWorlds.has(injectedWorld)
+    ) {
+      continue;
+    }
     try {
-      fireWorldUpdateResult(injectedWorld.update(deltaSeconds), fireError);
+      if (fireWorldUpdateResult(injectedWorld.update(deltaSeconds), fireError)) {
+        updatedWorlds.add(injectedWorld);
+      }
     } catch (cause: unknown) {
       if (fireError !== undefined) fireError(makeWorldUpdateError(cause));
     }
@@ -151,6 +162,7 @@ function resolveCaf(opts: FrameLoopOptions): (id: number) => void {
 
 export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
   const { world, renderer } = opts;
+  const primaryDrawWorlds: readonly World[] = [world];
   opts.profiler?.registerPhaseCatalog('app', APP_PHASE_CATALOG);
   let drawSource = opts.drawSource;
   const now = resolveNow(opts);
@@ -162,6 +174,72 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
   let pendingFrameId = 0;
   let profilerFrameId = 0;
   let profilerCaptureId: string | undefined;
+  let primaryAttached = false;
+  let activeInjectedWorlds: Set<World> | undefined;
+  let nextInjectedWorlds: Set<World> | undefined;
+
+  function attachPrimary(fireError: (e: AppError | RhiError) => void): void {
+    if (primaryAttached) return;
+    try {
+      const result = renderer.attachWorld(world);
+      primaryAttached = result.ok;
+      if (!result.ok) fireError(result.error);
+    } catch (cause: unknown) {
+      fireError(makeWorldUpdateError(cause));
+    }
+  }
+
+  function syncInjectedAttachments(
+    worlds: readonly World[] | undefined,
+    fireError?: (e: AppError | RhiError) => void,
+  ): ReadonlySet<World> | undefined {
+    if (worlds === undefined) {
+      if (activeInjectedWorlds !== undefined) {
+        for (const attached of activeInjectedWorlds) renderer.detachWorld(attached);
+        activeInjectedWorlds.clear();
+      }
+      return undefined;
+    }
+
+    const next = nextInjectedWorlds ?? new Set<World>();
+    nextInjectedWorlds = next;
+    next.clear();
+    const active = activeInjectedWorlds;
+    for (const candidate of worlds) {
+      if (candidate === world || next.has(candidate)) continue;
+      if (active?.has(candidate) === true) {
+        next.add(candidate);
+        continue;
+      }
+      try {
+        const result = renderer.attachWorld(candidate);
+        if (result.ok) next.add(candidate);
+        else fireError?.(result.error);
+      } catch (cause: unknown) {
+        fireError?.(makeWorldUpdateError(cause));
+      }
+    }
+    if (active !== undefined) {
+      for (const attached of active) {
+        if (!next.has(attached)) renderer.detachWorld(attached);
+      }
+      active.clear();
+    }
+    activeInjectedWorlds = next;
+    nextInjectedWorlds = active;
+    return next;
+  }
+
+  function releaseInjectedAttachments(): void {
+    syncInjectedAttachments(undefined);
+  }
+
+  function releaseAttachments(): void {
+    releaseInjectedAttachments();
+    if (!primaryAttached) return;
+    renderer.detachWorld(world);
+    primaryAttached = false;
+  }
 
   function runProfiledPhase<T>(
     session: RecorderSession | undefined,
@@ -180,6 +258,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
     const session = opts.profiler?.activeSession();
     let profileFrame: ProfileFrameToken | undefined;
     let frameError: AppError | RhiError | undefined;
+    let primaryUpdated = false;
     const reportError = (error: AppError | RhiError): void => {
       frameError ??= error;
       opts.onError?.(error);
@@ -196,9 +275,13 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
     }
 
     runProfiledPhase(session, 'frame-total', () => {
+      attachPrimary(reportError);
+
       runProfiledPhase(session, 'world-update-primary', () => {
         try {
-          fireWorldUpdateResult(world.update(deltaSeconds), reportError);
+          if (fireWorldUpdateResult(world.update(deltaSeconds), reportError)) {
+            primaryUpdated = true;
+          }
         } catch (cause: unknown) {
           reportError(makeWorldUpdateError(cause));
         }
@@ -216,23 +299,55 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
         }
       });
 
+      const attachedInjectedWorlds = syncInjectedAttachments(injected?.worlds, reportError);
+      const updatedWorlds = injected === undefined ? undefined : new Set<World>();
+      if (updatedWorlds !== undefined && primaryUpdated && primaryAttached) {
+        updatedWorlds.add(world);
+      }
+
       runProfiledPhase(session, 'world-update-injected', () => {
-        if (injected !== undefined) {
-          updateInjectedWorlds(injected.worlds, world, deltaSeconds, reportError);
+        if (
+          injected !== undefined &&
+          attachedInjectedWorlds !== undefined &&
+          updatedWorlds !== undefined
+        ) {
+          updateInjectedWorlds(
+            injected.worlds,
+            world,
+            deltaSeconds,
+            reportError,
+            attachedInjectedWorlds,
+            updatedWorlds,
+          );
         }
       });
 
       runProfiledPhase(session, 'renderer-draw', () => {
         try {
           const profileOptions = profileFrame === undefined ? {} : { profileFrame };
-          const drawResult =
-            injected !== undefined
-              ? renderer.draw([...injected.worlds], {
-                  cameraOwner: injected.cameraOwner,
-                  resourceOwner: injected.resourceOwner,
-                  ...profileOptions,
-                })
-              : renderer.draw([world], { owner: 0, ...profileOptions });
+          let drawResult: ReturnType<Renderer['draw']>;
+          if (injected === undefined) {
+            if (!primaryUpdated || !primaryAttached) return;
+            drawResult = renderer.draw(primaryDrawWorlds, {
+              cameraOwner: 0,
+              resourceOwner: 0,
+              ...profileOptions,
+            });
+          } else {
+            if (updatedWorlds === undefined) return;
+            const readyWorlds = injected.worlds.filter((candidate) => updatedWorlds.has(candidate));
+            const cameraWorld = injected.worlds[injected.cameraOwner];
+            const resourceWorld = injected.worlds[injected.resourceOwner];
+            const cameraOwner = cameraWorld === undefined ? -1 : readyWorlds.indexOf(cameraWorld);
+            const resourceOwner =
+              resourceWorld === undefined ? -1 : readyWorlds.indexOf(resourceWorld);
+            if (readyWorlds.length === 0 || cameraOwner < 0 || resourceOwner < 0) return;
+            drawResult = renderer.draw(readyWorlds, {
+              cameraOwner,
+              resourceOwner,
+              ...profileOptions,
+            });
+          }
           if (drawResult !== undefined) {
             const result = drawResult as { ok: boolean; error?: RhiError };
             if (!result.ok && result.error !== undefined) {
@@ -270,6 +385,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
 
   return {
     setDrawSource(nextDrawSource): void {
+      if (drawSource !== nextDrawSource) syncInjectedAttachments(undefined);
       drawSource = nextDrawSource;
     },
     stepFrame(deltaSeconds): Result<void, AppError | RhiError> {
@@ -329,16 +445,6 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
           ),
         );
       }
-      if (state === 'paused') {
-        return err(
-          makeAppError(
-            'app-paused-while-stop',
-            'state must be "running" to stop; paused handles must resume() first',
-            'call resume() then stop(), or treat stop-while-paused as a host bug',
-            {},
-          ),
-        );
-      }
       if (state === 'stopped') {
         return err(
           makeAppError(
@@ -351,7 +457,8 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
       }
       caf(pendingFrameId);
       pendingFrameId = 0;
-      state = 'idle';
+      state = 'stopped';
+      releaseAttachments();
       finishProfilerCapture(opts.profiler);
       return ok(undefined);
     },
@@ -401,6 +508,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
         caf(pendingFrameId);
         pendingFrameId = 0;
       }
+      releaseAttachments();
       state = 'stopped';
     },
   };

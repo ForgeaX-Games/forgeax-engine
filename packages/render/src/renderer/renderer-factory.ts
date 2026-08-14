@@ -37,7 +37,7 @@ import {
   MeshSsboCapacityExceededError,
   MeshSsboCeilingReachedError,
 } from '@forgeax/engine-assets-runtime';
-import type { World } from '@forgeax/engine-ecs';
+import { Severity, type World } from '@forgeax/engine-ecs';
 import { deriveVertexBufferLayout, PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -67,6 +67,7 @@ import { err, ok, RhiError, validateDrawArgs } from '@forgeax/engine-rhi';
 // bundles. See file-header comment (revision F-01) and `loadBackendPack`
 // JSDoc for the full rationale.
 import * as rhiWebgpu from '@forgeax/engine-rhi-webgpu';
+import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import {
   findVariantByKey,
   type MaterialShaderManifestEntry,
@@ -169,21 +170,21 @@ import {
   type PipelineState,
   type RenderSystem,
 } from '../render-system';
-import {
-  type DrawOwnerOptions,
-  type HealthChangeListener,
-  type HealthSnapshot,
-  type Renderer,
-  type RendererErrorListener,
-  type RendererLostListener,
-  type RendererOptions,
-  type RenderResult,
-  resolveDrawOwners,
+import type {
+  DrawOwnerOptions,
+  HealthChangeListener,
+  HealthSnapshot,
+  Renderer,
+  RendererErrorListener,
+  RendererLostListener,
+  RendererOptions,
+  RenderResult,
 } from '../renderer';
 import {
   createSkinPaletteAllocator,
   type SkinPaletteAllocator,
 } from '../systems/skin-palette-allocator';
+import { tilemapChunkExtractSystem } from '../tilemap-chunk-extract-system';
 import { URP_PIPELINE_ID, urpPipeline } from '../urp-pipeline';
 import { createAssetRegistry } from './asset-service';
 import { loadBackendPack as loadAssemblyBackendPack } from './backend-selection';
@@ -1270,6 +1271,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const featureHostResult = createRenderFeatureHost(internals.options?.features ?? []);
   if (!featureHostResult.ok) throw featureHostResult.error;
   internals.featureHost = featureHostResult.value;
+  let recoverInFlight: Promise<Result<void, RecoverError>> | undefined;
   // Keep producer-declared shader identities live across the renderer
   // lifetime. Features can be installed after boot (the public late-install
   // seam used by asset-driven hosts), so a recovery rebuild must include their
@@ -1764,6 +1766,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // materialShaderPipelineCache / renderSystem) are stable across recover; only
   // `internals.device` / `internals.pack` are read live, so a rebuild after a
   // device swap compiles against the new device.
+  let tonemapRegistered = false;
   const buildPipeline = (): Promise<PipelineState> =>
     buildReadyWebGPU(
       internals.device,
@@ -1804,11 +1807,13 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // mode(u32), pad(f32)]; the extract stage bridges Camera.exposure/whitePoint/
       // tonemap into this channel each frame (render-system-extract.ts w13).
       (source: string) => {
+        if (tonemapRegistered) return;
         renderSystem.postProcess.register(TONEMAP_POST_PROCESS_ID, {
           source,
           params: { byteSize: 16, defaultValue: new Uint8Array(16) },
           reads: ['hdrColor'],
         });
+        tonemapRegistered = true;
       },
     );
   const ready: Promise<Result<void, RhiError>> = buildPipeline().then(
@@ -2627,6 +2632,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // One producer-owned completion signal for diagnostics, FPS reporting, and
   // RHI capture. It fires only after the record stage reaches queue submission.
   const frameEndListeners = new Set<() => void>();
+  const attachedWorlds = new Set<World>();
+  const attachmentOwner = {};
   let surfaceReleased = false;
 
   const renderer: Renderer = {
@@ -2648,6 +2655,62 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     input: RENDERER_INPUT_FACADE,
     ready,
     ...(membershipTiming === undefined ? {} : { membershipTiming }),
+    attachWorld(world: World): Result<void, RhiError> {
+      if (disposed) {
+        return err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'renderer not disposed before attaching a World',
+            hint: 'rebuild the renderer before attaching another World',
+          }),
+        );
+      }
+      if (attachedWorlds.has(world)) return ok(undefined);
+      try {
+        registerPropagateTransforms(world);
+        const internal = world as World & {
+          _attachFrameDerivedState(
+            owner: object,
+            run: (world: World) => void,
+          ): 'attached' | 'already-attached' | 'owner-conflict';
+          _routeError(error: unknown, context: { severity: number; systemName: string }): void;
+        };
+        const attachment = internal._attachFrameDerivedState(attachmentOwner, (scheduledWorld) => {
+          tilemapChunkExtractSystem(scheduledWorld);
+          const glyphResult = glyphTextLayoutSystem(scheduledWorld, gpuStore);
+          if (!glyphResult.ok) {
+            internal._routeError(glyphResult.error, {
+              severity: Severity.Error,
+              systemName: 'glyphTextLayoutSystem',
+            });
+          }
+        });
+        if (attachment === 'owner-conflict') {
+          throw new Error('World is already attached to another Renderer.');
+        }
+        attachedWorlds.add(world);
+        return ok(undefined);
+      } catch (cause) {
+        const error = new RhiError({
+          code: 'webgpu-runtime-error',
+          expected: 'renderer.attachWorld(world) installs derived-state systems once',
+          hint: 'inspect the World schedule registration or derived-state system failure',
+          detail: {
+            error: {
+              code: 'unknown',
+              message: cause instanceof Error ? cause.message : String(cause),
+              ...(cause instanceof Error ? { name: cause.name } : {}),
+            },
+          },
+        });
+        internals.errorRegistry.fire(error);
+        return err(error);
+      }
+    },
+    detachWorld(world: World): void {
+      if (!attachedWorlds.delete(world)) return;
+      world._detachFrameDerivedState(attachmentOwner);
+    },
     observeCurrentFrame(options) {
       return renderSystem.observeCurrentFrame(options);
     },
@@ -2737,7 +2800,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       }
       return installed;
     },
-    draw(worlds: World[], options: DrawOwnerOptions): Result<void, RhiError> {
+    draw(worlds: readonly World[], options: DrawOwnerOptions): Result<void, RhiError> {
       // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21
       // (plan-strategy D-1, D-8): post-dispose the renderer is dead. AI
       // users observing `result.ok === false && err.code === 'rhi-not-
@@ -2747,7 +2810,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (disposed) {
         const e = new RhiError({
           code: 'rhi-not-available',
-          expected: 'renderer not disposed before calling renderer.draw(worlds, { owner })',
+          expected:
+            'renderer not disposed before calling renderer.draw(worlds, { cameraOwner, resourceOwner })',
           hint: 'renderer.dispose() flipped the lifecycle latch; rebuild via createRenderer / Engine.create',
         });
         internals.errorRegistry.fire(e);
@@ -2783,7 +2847,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (!readySettled) {
         const e = new RhiError({
           code: 'rhi-not-available',
-          expected: 'await renderer.ready before calling renderer.draw(worlds, { owner })',
+          expected:
+            'await renderer.ready before calling renderer.draw(worlds, { cameraOwner, resourceOwner })',
           hint: 'await renderer.ready resolves once the manifest / pipeline / asset upload chain completes',
         });
         internals.errorRegistry.fire(e);
@@ -2813,17 +2878,27 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (worldCount === 0 && internals.device.caps.backendKind === 'null') {
         return ok(undefined);
       }
-      // w6: validate both split owner indices (cameraOwner before resourceOwner,
-      // first offender wins). resolveDrawOwners normalizes a legacy { owner }
-      // into the two-index form; the defensive `?? {}` guards a JS caller
-      // passing a non-object despite the compile-time DrawOwnerOptions type
-      // (red-window migration safety — the empty object yields undefined owners
-      // that Number.isInteger rejects with a structured error, never a throw).
-      const drawOwners = resolveDrawOwners(options ?? ({} as DrawOwnerOptions));
+      // Validate both owner indices (cameraOwner before resourceOwner, first
+      // offender wins). The empty object only protects the JS boundary; it is
+      // rejected by the same validation and never becomes another draw shape.
+      const drawOwners = options ?? ({} as DrawOwnerOptions);
       const argsCheck = validateDrawArgs(worldCount, drawOwners);
       if (!argsCheck.ok) {
         internals.errorRegistry.fire(argsCheck.error);
         return argsCheck;
+      }
+      const unpublishedWorld = worlds.findIndex(
+        (world) => !world._isFramePublicationReady(attachmentOwner),
+      );
+      if (unpublishedWorld >= 0) {
+        const e = new RhiError({
+          code: 'webgpu-runtime-error',
+          expected:
+            'each World attached to this Renderer and successfully updated through terminal publication',
+          hint: `call renderer.attachWorld(world), then require world.update(delta).ok before draw; World index ${unpublishedWorld} is not published`,
+        });
+        internals.errorRegistry.fire(e);
+        return err(e);
       }
       // Configure context lazily on first draw (D-S1 single-point
       // exemption): GPUCanvasContext.configure({device}) needs a raw
@@ -2834,20 +2909,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // through onError separately; the facade Result is the synchronous
       // summary AI users can ignore or branch on).
       try {
-        // PreRender stage (plan-strategy D-2): lay out + bake every GlyphText
-        // entity before the render walk reaches it. A `font-concurrency-exceeded`
-        // TextError is a structured author-facing signal (distinct domain from
-        // RhiError); it does not abort the frame -- healthy labels still render.
-        //
-        // feat-20260708-composited-multi-world-rendering M3 / D-1a #6: run the
-        // glyph layout system per world, passing worldId = array index so the
-        // bakeCache key is worldEntityKey(worldId, index) and cross-world glyph
-        // entities never collide. worldId matches extractFrames' stamping
-        // (worlds[] index), so glyph cache keys line up with the render walk.
-        for (let wi = 0; wi < worlds.length; wi++) {
-          const w = worlds[wi];
-          if (w !== undefined) glyphTextLayoutSystem(w, assets, gpuStore, wi);
-        }
         const submitted = renderSystem.draw(worlds, options);
         if (submitted) {
           for (const fn of frameEndListeners) {
@@ -2862,7 +2923,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
             : { code: 'unknown' as const, message: String(cause) };
         const e = new RhiError({
           code: 'webgpu-runtime-error',
-          expected: 'renderSystem.draw(worlds, { owner }) completes without throwing',
+          expected:
+            'renderSystem.draw(worlds, { cameraOwner, resourceOwner }) completes without throwing',
           hint: `RenderSystem internal error: ${error.message}`,
           detail: { error },
         });
@@ -2989,14 +3051,20 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (disposed) return;
       disposed = true;
       membershipTiming?.dispose();
+      for (const world of attachedWorlds) {
+        world._detachFrameDerivedState(attachmentOwner);
+      }
+      attachedWorlds.clear();
       // Release the current swap-chain image before destroying any resource
       // wrappers that may share its underlying device allocation. The wgpu
       // WebGL2 surface owns an explicit SurfaceTexture; leaving this until
       // after the resource sweep lets wasm drop it against a dead Surface.
-      try {
-        internals.context.unconfigure();
-      } catch (cause) {
-        internals.errorRegistry.fire(wrapDisposeError(cause, 'context.unconfigure'));
+      if (!surfaceReleased) {
+        try {
+          internals.context.unconfigure();
+        } catch (cause) {
+          internals.errorRegistry.fire(wrapDisposeError(cause, 'context.unconfigure'));
+        }
       }
       // Step 2: release every Buffer / Texture handle owned by the runtime
       // GPU residency layer (feat-20260601-gpu-resource-store-extraction).
@@ -3056,161 +3124,190 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     health(): HealthSnapshot {
       return internals.healthRegistry.getLastSnapshot();
     },
-    async recover(): Promise<Result<void, RecoverError>> {
-      // feat-20260622-s5 M3 / w17 (A-IN-3 / D-1): single idempotent device
-      // rebuild. One attempt only — no loop, no backoff, no timer, no extra
-      // in-flight health state (A-OOS-1); the host owns the cadence of calling
-      // this again. Fail-Fast entry guards (architecture-principles #5):
-      // disposed renderer or non-device-lost state short-circuits before any
-      // GPU work.
-      if (disposed) {
-        // A-IN-6: disposed latch wins; recover() never rebuilds a dead
-        // renderer. `recover-not-needed` is the sentinel (no degraded state to
-        // recover from on a disposed renderer).
-        return err(new RecoverError('recover-not-needed'));
-      }
-      const snapshot = internals.healthRegistry.getLastSnapshot();
-      // A-AC-08: `alive` (including the alive state after a prior successful
-      // recover) is a no-op signal — idempotent second call.
-      if (snapshot.reason !== 'device-lost') {
-        return err(new RecoverError('recover-not-needed'));
-      }
+    recover(): Promise<Result<void, RecoverError>> {
+      if (recoverInFlight !== undefined) return recoverInFlight;
+      recoverInFlight = (async () => {
+        // feat-20260622-s5 M3 / w17 (A-IN-3 / D-1): single idempotent device
+        // rebuild. One attempt only — no loop, no backoff, no timer, no extra
+        // in-flight health state (A-OOS-1); the host owns the cadence of calling
+        // this again. Fail-Fast entry guards (architecture-principles #5):
+        // disposed renderer or non-device-lost state short-circuits before any
+        // GPU work.
+        if (disposed) {
+          // A-IN-6: disposed latch wins; recover() never rebuilds a dead
+          // renderer. `recover-not-needed` is the sentinel (no degraded state to
+          // recover from on a disposed renderer).
+          return err(new RecoverError('recover-not-needed'));
+        }
+        const snapshot = internals.healthRegistry.getLastSnapshot();
+        // A-AC-08: `alive` (including the alive state after a prior successful
+        // recover) is a no-op signal — idempotent second call.
+        if (snapshot.reason !== 'device-lost') {
+          return err(new RecoverError('recover-not-needed'));
+        }
 
-      // Step (a): release every GPU resource owned by the lost device. The CPU
-      // POD caches (AssetRegistry catalog/payload, pack cache) are NOT touched
-      // (A-AC-12) — only the GpuResourceStore + canvas context are torn down.
-      gpuStore.destroyAll();
-      // The shader adapter owns a per-device module cache. Reusing it after a
-      // loss would hand PSO construction opaque ShaderModule handles minted by
-      // the dead device, which can invalidate the first post-recovery command
-      // buffer (or crash the browser GPU process). Keep the ShaderRegistry's
-      // CPU material/source catalogue, but rebuild this device-bound adapter.
-      clearIblCacheForDevice(internals.device);
-      sharedShaderModuleAdapter = null;
-      // The fullscreen post-process builder keeps one empty group-0 layout
-      // outside RenderSystem's frame cache. It is also device-bound, so retain
-      // the source/registration but force the next post-process pass to derive
-      // a layout from the replacement device.
-      emptyPostProcessBgl = null;
-      internals.context.unconfigure();
+        // Step (a): release every GPU resource owned by the lost device. The CPU
+        // POD caches (AssetRegistry catalog/payload, pack cache) are NOT touched
+        // (A-AC-12) — only the GpuResourceStore + canvas context are torn down.
+        gpuStore.destroyAll();
+        // The shader adapter owns a per-device module cache. Reusing it after a
+        // loss would hand PSO construction opaque ShaderModule handles minted by
+        // the dead device, which can invalidate the first post-recovery command
+        // buffer (or crash the browser GPU process). Keep the ShaderRegistry's
+        // CPU material/source catalogue, but rebuild this device-bound adapter.
+        clearIblCacheForDevice(internals.device);
+        sharedShaderModuleAdapter = null;
+        // The fullscreen post-process builder keeps one empty group-0 layout
+        // outside RenderSystem's frame cache. It is also device-bound, so retain
+        // the source/registration but force the next post-process pass to derive
+        // a layout from the replacement device.
+        emptyPostProcessBgl = null;
+        internals.context.unconfigure();
 
-      // Step (b) / B-2 / B-AC-02: shed device-bound RenderSystem state minted by
-      // the lost device — the render-graph pendingDestroy queue (its PooledTextures
-      // belong to the lost device; the clear skips device.destroyTexture, mirroring
-      // the null-device fast path) plus device-bound post-process resources.
-      // RenderSystem snapshots the CPU declarations, clears old UBOs, and
-      // replays them after the replacement device is live.
-      renderSystem.resetForRecover();
+        // Step (b) / B-2 / B-AC-02: shed device-bound RenderSystem state minted by
+        // the lost device — the render-graph pendingDestroy queue (its PooledTextures
+        // belong to the lost device; the clear skips device.destroyTexture, mirroring
+        // the null-device fast path) plus device-bound post-process resources.
+        // RenderSystem snapshots the CPU declarations, clears old UBOs, and
+        // replays them after the replacement device is live.
+        renderSystem.resetForRecover();
 
-      // Step (c): re-acquire device through the SAME backend pack (the
-      // idempotent factory primitives tryCreateWebGPURenderer uses). On the
-      // adapter / device failure paths, health stays `device-lost` (A-AC-07):
-      // recover() never fakes the renderer back to `alive`.
-      const adapterResult = await internals.pack.rhi.requestAdapter(undefined, internals.canvas);
-      if (!adapterResult.ok) {
-        return err(new RecoverError('recover-adapter-unavailable'));
-      }
-      let device: RhiDevice;
-      try {
-        const deviceResult = await adapterResult.value.requestDevice(
-          deviceOptionsForAdapter(adapterResult.value, internals.options?.membershipTiming),
-        );
-        if (!deviceResult.ok) {
+        // Step (c): re-acquire device through the SAME backend pack (the
+        // idempotent factory primitives tryCreateWebGPURenderer uses). On the
+        // adapter / device failure paths, health stays `device-lost` (A-AC-07):
+        // recover() never fakes the renderer back to `alive`.
+        const adapterResult = await internals.pack.rhi.requestAdapter(undefined, internals.canvas);
+        if (!adapterResult.ok) {
+          return err(new RecoverError('recover-adapter-unavailable'));
+        }
+        let device: RhiDevice;
+        try {
+          const deviceResult = await adapterResult.value.requestDevice(
+            deviceOptionsForAdapter(adapterResult.value, internals.options?.membershipTiming),
+          );
+          if (!deviceResult.ok) {
+            return err(new RecoverError('recover-device-unavailable'));
+          }
+          device = deviceResult.value;
+        } catch {
           return err(new RecoverError('recover-device-unavailable'));
         }
-        device = deviceResult.value;
-      } catch {
-        return err(new RecoverError('recover-device-unavailable'));
-      }
-      const ctxResult = internals.pack.rhi.acquireCanvasContext(internals.canvas);
-      if (!ctxResult.ok) {
-        return err(new RecoverError('recover-device-unavailable'));
-      }
+        if (disposed) return err(new RecoverError('recover-not-needed'));
+        const ctxResult = internals.pack.rhi.acquireCanvasContext(internals.canvas);
+        if (!ctxResult.ok) {
+          return err(new RecoverError('recover-device-unavailable'));
+        }
 
-      // Step (d): swap in the new device + context. Downstream reads device via
-      // getters off `internals` (RenderSystem, ensureContextConfigured), so the
-      // swap is observed without reconstructing the RenderSystem.
-      internals.device = device;
-      internals.context = ctxResult.value;
-      membershipTiming?.bindDevice(device);
+        // Step (d): swap in the new device + context. Downstream reads device via
+        // getters off `internals` (RenderSystem, ensureContextConfigured), so the
+        // swap is observed without reconstructing the RenderSystem.
+        internals.device = device;
+        internals.context = ctxResult.value;
+        membershipTiming?.bindDevice(device);
 
-      // Re-attach the device.lost fan-out to the new device's lost Promise,
-      // reusing the SAME registries the host already subscribed to (SSOT
-      // helper). When this device is lost again, health() flips to
-      // `device-lost` and the host can call recover() once more.
-      attachDeviceLostFanout(device, internals.pack, {
-        lostRegistry: internals.lostRegistry,
-        errorRegistry: internals.errorRegistry,
-        healthRegistry: internals.healthRegistry,
-        onDeviceLost: (detail) => membershipTiming?.markDeviceLost(detail),
-      });
+        // Re-attach the device.lost fan-out to the new device's lost Promise,
+        // reusing the SAME registries the host already subscribed to (SSOT
+        // helper). When this device is lost again, health() flips to
+        // `device-lost` and the host can call recover() once more.
+        attachDeviceLostFanout(device, internals.pack, {
+          lostRegistry: internals.lostRegistry,
+          errorRegistry: internals.errorRegistry,
+          healthRegistry: internals.healthRegistry,
+          onDeviceLost: (detail) => membershipTiming?.markDeviceLost(detail),
+        });
 
-      // Step (e): rebuild GPU-bound state against the new device. The per-shader
-      // PSO + layout caches hold handles minted by the lost device; drop them so
-      // the rebuild compiles fresh PSOs. configureGpuDevice + prepareMaterialShaders
-      // + buildPipeline reuse the exact boot-time assembly (the closures capture
-      // stable references; only `internals.device` changed).
-      materialShaderPipelineCache.clear();
-      perShaderMaterialLayoutCache.clear();
-      group0ResourceLayouts.clear();
-      preparedMaterialPipelineLayoutCache.clear();
-      group0MaterialLayout = null;
-      viewOnlyMaterialPipelineLayout = null;
-      gpuStore.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: MipmapBlitDevice descriptors are typed `any`; RhiDevice satisfies the shape
-        internals.device as any,
-        internals.pack.createShaderModule as unknown as MipmapShaderModuleFactory | undefined,
-        (world, pod) => {
-          let handle: Handle<'EquirectAsset', 'shared'>;
-          handle = world.allocSharedRef('EquirectAsset', pod, () => {
-            gpuStore.evictCubemap(handleSlot(handle));
-          });
-          return ok(handle);
-        },
-        internals.device.caps,
-      );
-      // A device loss invalidates the transient video textures too. Rebind
-      // through the store owner so its cached textures are destroyed before
-      // the first post-recovery upload; unlike CPU asset payloads, these
-      // handles cannot survive a device replacement.
-      dynamicTextureStore.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: DynamicTextureDevice is a structural subset of RhiDevice
-        internals.device as any,
-      );
-      try {
-        await prepareMaterialShaders(
-          internals.device,
-          getShader,
-          assets,
-          materialShaderUvSetCounts,
+        // Step (e): rebuild GPU-bound state against the new device. The per-shader
+        // PSO + layout caches hold handles minted by the lost device; drop them so
+        // the rebuild compiles fresh PSOs. configureGpuDevice + prepareMaterialShaders
+        // + buildPipeline reuse the exact boot-time assembly (the closures capture
+        // stable references; only `internals.device` changed).
+        materialShaderPipelineCache.clear();
+        perShaderMaterialLayoutCache.clear();
+        group0ResourceLayouts.clear();
+        preparedMaterialPipelineLayoutCache.clear();
+        group0MaterialLayout = null;
+        viewOnlyMaterialPipelineLayout = null;
+        gpuStore.configureGpuDevice(
+          // biome-ignore lint/suspicious/noExplicitAny: MipmapBlitDevice descriptors are typed `any`; RhiDevice satisfies the shape
+          internals.device as any,
+          internals.pack.createShaderModule as unknown as MipmapShaderModuleFactory | undefined,
+          (world, pod) => {
+            let handle: Handle<'EquirectAsset', 'shared'>;
+            handle = world.allocSharedRef('EquirectAsset', pod, () => {
+              gpuStore.evictCubemap(handleSlot(handle));
+            });
+            return ok(handle);
+          },
+          internals.device.caps,
         );
-        pipelineState = await buildPipeline();
-        renderSystem.restorePostProcessResources();
-      } catch {
-        // Pipeline rebuild failed against the new device. Treat as a device
-        // unavailability (the device was acquired but is not usable); health
-        // stays `device-lost` so the host can retry.
-        return err(new RecoverError('recover-device-unavailable'));
-      }
+        // A device loss invalidates the transient video textures too. Rebind
+        // through the store owner so its cached textures are destroyed before
+        // the first post-recovery upload; unlike CPU asset payloads, these
+        // handles cannot survive a device replacement.
+        dynamicTextureStore.configureGpuDevice(
+          // biome-ignore lint/suspicious/noExplicitAny: DynamicTextureDevice is a structural subset of RhiDevice
+          internals.device as any,
+        );
+        const abortDisposedRecovery = (): Result<void, RecoverError> | undefined => {
+          if (!disposed) return undefined;
+          gpuStore.destroyAll();
+          renderSystem.disposeFrameState();
+          clearIblCacheForDevice(internals.device);
+          materialShaderPipelineCache.clear();
+          perShaderMaterialLayoutCache.clear();
+          group0ResourceLayouts.clear();
+          preparedMaterialPipelineLayoutCache.clear();
+          group0MaterialLayout = null;
+          viewOnlyMaterialPipelineLayout = null;
+          pipelineState = null;
+          return err(new RecoverError('recover-not-needed'));
+        };
+        try {
+          await prepareMaterialShaders(
+            internals.device,
+            getShader,
+            assets,
+            materialShaderUvSetCounts,
+          );
+          const abortedAfterShaders = abortDisposedRecovery();
+          if (abortedAfterShaders !== undefined) return abortedAfterShaders;
+          pipelineState = await buildPipeline();
+          const abortedAfterPipeline = abortDisposedRecovery();
+          if (abortedAfterPipeline !== undefined) return abortedAfterPipeline;
+          renderSystem.restorePostProcessResources();
+        } catch {
+          // Pipeline rebuild failed against the new device. Treat as a device
+          // unavailability (the device was acquired but is not usable); health
+          // stays `device-lost` so the host can retry.
+          const aborted = abortDisposedRecovery();
+          if (aborted !== undefined) return aborted;
+          return err(new RecoverError('recover-device-unavailable'));
+        }
+        const abortedAfterPostProcess = abortDisposedRecovery();
+        if (abortedAfterPostProcess !== undefined) return abortedAfterPostProcess;
 
-      // Re-evaluate feature capability gates against the replacement device.
-      // Feature recovery is isolated from renderer recovery: a feature that is
-      // still unsupported or fails its hook remains diagnosed as disabled or
-      // failed while the zero-feature renderer can become alive.
-      const featureRecover = internals.featureHost?.recover({
-        caps: internals.device.caps,
-        frameNumber: 0,
+        // Re-evaluate feature capability gates against the replacement device.
+        // Feature recovery is isolated from renderer recovery: a feature that is
+        // still unsupported or fails its hook remains diagnosed as disabled or
+        // failed while the zero-feature renderer can become alive.
+        const featureRecover = internals.featureHost?.recover({
+          caps: internals.device.caps,
+          frameNumber: 0,
+        });
+        if (featureRecover !== undefined && !featureRecover.ok) {
+          internals.errorRegistry.fire(featureRecover.error);
+        }
+
+        // Step (f): the renderer is alive again. The next draw() lazily
+        // re-configures the canvas context (ensureContextConfigured keys off the
+        // fresh pipelineState's `configured` flag) and re-uploads GPU resources
+        // via ensureResident from the preserved CPU POD caches (A-AC-12).
+        internals.healthRegistry.fire({ reason: 'alive', recoverable: false });
+        return ok(undefined);
+      })().finally(() => {
+        recoverInFlight = undefined;
       });
-      if (featureRecover !== undefined && !featureRecover.ok) {
-        internals.errorRegistry.fire(featureRecover.error);
-      }
-
-      // Step (f): the renderer is alive again. The next draw() lazily
-      // re-configures the canvas context (ensureContextConfigured keys off the
-      // fresh pipelineState's `configured` flag) and re-uploads GPU resources
-      // via ensureResident from the preserved CPU POD caches (A-AC-12).
-      internals.healthRegistry.fire({ reason: 'alive', recoverable: false });
-      return ok(undefined);
+      return recoverInFlight;
     },
     onHealthChange(cb: HealthChangeListener): () => void {
       return internals.healthRegistry.add(cb);
@@ -3493,7 +3590,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // processing — the registry + dedup live on the RenderSystem closure).
     postProcess: {
       register(id, entry) {
-        renderSystem.postProcess.register(id, entry);
+        return renderSystem.postProcess.register(id, entry);
       },
     },
     // feat-20260612-skin-palette-per-frame-upload M1 / m1-1: @internal test

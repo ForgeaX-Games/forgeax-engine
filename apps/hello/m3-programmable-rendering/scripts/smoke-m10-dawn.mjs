@@ -260,7 +260,11 @@ if (!ready.ok) throw new Error(`M10 Dawn renderer.ready failed: ${ready.error.co
 const errors = [];
 renderer.onError((error) => errors.push({ code: error.code, hint: error.hint, detail: error.detail }));
 const probe = installFaultProbe(renderer.device, states);
-const firstDraw = renderer.draw([world()], { owner: 0 });
+const firstWorld = world();
+const firstAttachment = renderer.attachWorld(firstWorld);
+if (!firstAttachment.ok) throw firstAttachment.error;
+firstWorld.update().unwrap();
+const firstDraw = renderer.draw([firstWorld], { cameraOwner: 0, resourceOwner: 0 });
 const firstDiagnostics = renderer.renderFeatureDiagnostics();
 const firstPixel = await readCenterPixel();
 const firstErrors = errors.slice();
@@ -281,7 +285,12 @@ if (recoveryModes.has('renderer-recover')) {
   }
 }
 if (recoveryModes.has('next-frame')) recoveryActions.push('next-frame retry');
-const secondDraw = renderer.draw([world()], { owner: 0 });
+const secondWorld = world();
+const secondAttachment = renderer.attachWorld(secondWorld);
+if (!secondAttachment.ok) throw secondAttachment.error;
+renderer.detachWorld(firstWorld);
+secondWorld.update().unwrap();
+const secondDraw = renderer.draw([secondWorld], { cameraOwner: 0, resourceOwner: 0 });
 const secondDiagnostics = renderer.renderFeatureDiagnostics();
 const secondPixel = await readCenterPixel();
 renderer.dispose();

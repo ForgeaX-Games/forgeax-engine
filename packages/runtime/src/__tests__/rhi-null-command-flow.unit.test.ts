@@ -14,7 +14,9 @@
 // File suffix .unit.test.ts ensures pnpm test:unit (vitest node) discovery.
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Renderer } from '@forgeax/engine-render/internal';
 import {
   Camera,
@@ -155,7 +157,11 @@ describe('rhi-null-command-flow.unit.test.ts (T-b)', () => {
     rhiNullDevice.framePassNames = [];
 
     const world = makeWorld();
-    renderer.draw([world], { owner: 0 });
+    if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      throw new Error('World attachment failed');
+    }
+    (world as WorldType).update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
     const passNames = renderer.perFramePassNames;
 
@@ -252,7 +258,11 @@ describe('rhi-null-command-flow.unit.test.ts (T-b)', () => {
       rhiNullDevice.framePassNames = [];
 
       const world = makeWorld();
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       const passNames = renderer.perFramePassNames;
       expect(passNames.length).toBeGreaterThan(0);

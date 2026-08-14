@@ -269,6 +269,8 @@ function buildMultiPrimMesh() {
 
 // w64: mint mesh + materials as user-tier shared refs (register/get deleted M8).
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const meshHandle = world.allocSharedRef('MeshAsset', buildMultiPrimMesh());
 
 function mintUnlit(rgb) {
@@ -370,12 +372,14 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 spawnScene(world);
 
 // First frame + tiny yield to let the first shader-module compile land.
-renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(20);
 
 let frames = 1;
 for (let i = 1; i < FRAMES; i++) {
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   frames++;
 }
 

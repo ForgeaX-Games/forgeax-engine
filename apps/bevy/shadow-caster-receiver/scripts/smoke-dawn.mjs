@@ -19,7 +19,9 @@ const { perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const w=new World();const here=dirname(fileURLToPath(import.meta.url));
 const MU=`data:application/json,${encodeURIComponent(readFileSync(resolve(here,'..','dist','shaders','manifest.json'),'utf8'))}`;
-let r;try{r=await createRenderer(mc,{},{shaderManifestUrl:MU})}catch(e){console.error(`[smoke] FAIL renderer: ${e.message}`);process.exit(1)}finally{globalThis.navigator.gpu.requestAdapter=oa}
+let r;
+try{r=await createRenderer(mc,{},{shaderManifestUrl:MU})}finally{globalThis.navigator.gpu.requestAdapter=oa}
+const attachment=r.attachWorld(w);if(!attachment.ok)throw attachment.error;
 console.log(`[shadow-caster-receiver] backend=${r.backend}`);const errs=[];r.onError(e=>errs.push(e));
 if(!(await r.ready).ok){console.error('[smoke] FAIL ready');process.exit(1)}
 const cube=createBoxGeometry(1,1,1,1,1,1);if(!cube.ok)process.exit(1);const sphere=createSphereGeometry(0.5,16,8);if(!sphere.ok)process.exit(1);
@@ -33,7 +35,7 @@ w.spawn({component:Transform,data:{pos:[1.5,0.5,0],quat:[0,0,0,1],scale:[1,1,1]}
 w.spawn({component:DirectionalLight,data:{direction:[-0.4,-0.8,-0.5],color:[1,1,1],intensity:2}});
 w.spawn({component:Transform,data:{pos:[0,2,5]}},{component:Camera,data:perspective({fov:Math.PI/4,aspect:W/H})});
 const T=Math.max(SMOKE_MIN_FRAMES,Math.ceil(SMOKE_DURATION_MS/16.67));let n=0;
-for(let i=0;i<T;i++){r.draw([w],{owner:0});n++}
+for(let i=0;i<T;i++){w.update().unwrap();r.draw([w],{cameraOwner:0,resourceOwner:0});n++}
 const d=sd;if(d)await d.queue.onSubmittedWorkDone();console.log(`[smoke] frames observed=${n}`);
 const f=[];if(r.backend!=='webgpu')f.push(`backend=${r.backend}`);if(n<SMOKE_MIN_FRAMES)f.push(`frames=${n}`);if(errs.length>0)f.push(`errors=${errs.length}`);
 if(f.length>0){console.error(`[smoke] FAIL: ${f.join('; ')}`);process.exit(1)}

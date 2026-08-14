@@ -1,4 +1,4 @@
-import { Update } from '@forgeax/engine-ecs';
+import { Update, type EntityHandle } from '@forgeax/engine-ecs';
 // apps/hello/transform-hierarchy -- ChildOf hierarchy "parent moves, child
 // follows" visual exemplar
 // (feat-20260531-render-consume-global-transform-hierarchy / M3 / w12).
@@ -31,11 +31,16 @@ import { Update } from '@forgeax/engine-ecs';
 // eye (and the smoke's stability check) a fixed landmark.
 
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  projectHierarchy,
+  propagateTransforms,
+  Transform,
+  registerPropagateTransforms,
+} from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import { World } from '@forgeax/engine-ecs';
@@ -75,6 +80,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // world mat4 lives on Transform; defineComponent makes every component
   // usable, so spawn is direct with no per-World registration).
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   registerPropagateTransforms(world);
 
@@ -106,7 +113,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Child carries ChildOf{parent} + a local +Y offset. Its world position is
   // parent.world x child-local, so it sits above the parent and translates
   // with it. scale is local (multiplied by the parent's 0.4).
-  world
+  const child = world
     .spawn(
       {
         component: Transform,
@@ -120,7 +127,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Static reference sphere -- NOT in the hierarchy. A fixed landmark so the
   // viewer (and the smoke stability check) has something that stays put.
-  world
+  const staticSphere = world
     .spawn(
       {
         component: Transform,
@@ -128,6 +135,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
       { component: MeshRenderer, data: { materials: [materialHandle] } },
+    )
+    .unwrap();
+
+  // Probe-only entities have no render components. They let the real host
+  // exercise a bounded cycle without replacing the visible parent/child oracle
+  // or creating a second scene implementation.
+  const cycleA = world
+    .spawn(
+      { component: Transform, data: { pos: [-2, -2, 0] } },
+      { component: ChildOf, data: { parent } },
+    )
+    .unwrap();
+  const cycleB = world
+    .spawn(
+      { component: Transform, data: { pos: [2, -2, 0] } },
+      { component: ChildOf, data: { parent } },
     )
     .unwrap();
 
@@ -162,11 +185,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // frame, so the stack visibly translates together.
   const hudEl = document.getElementById('th-hud');
   let phase = 0;
+  let paused = false;
 
   world.addSystem(Update, {
     name: 'transform-hierarchy-parent-slide',
     queries: [],
     fn: () => {
+      if (paused) return;
       phase += 0.02;
       const parentX = -0.6 + 1.2 * Math.sin(phase);
       const setRes = world.set(parent, Transform, { pos: [parentX, 0, 0]});
@@ -179,11 +204,145 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   });
 
+  const projectionIds = new WeakMap<object, number>();
+  let nextProjectionId = 1;
+  const staleParent = 0xffffffff as EntityHandle;
+
+  function projectionId(snapshot: object): number {
+    const existing = projectionIds.get(snapshot);
+    if (existing !== undefined) return existing;
+    const id = nextProjectionId++;
+    projectionIds.set(snapshot, id);
+    return id;
+  }
+
+  function transformSnapshot(entity: EntityHandle): { pos: number[]; world: number[] } | null {
+    const result = world.get(entity, Transform);
+    if (!result.ok) return null;
+    return {
+      pos: Array.from(result.value.pos),
+      world: Array.from(result.value.world),
+    };
+  }
+
+  function sceneSnapshot() {
+    const hierarchy = projectHierarchy(world);
+    return {
+      projectionId: projectionId(hierarchy),
+      diagnostics: hierarchy.diagnostics.map((item) => ({
+        code: item.code,
+        expected: item.expected,
+        hint: item.hint,
+        detail: { ...item.detail },
+      })),
+      entities: {
+        parent,
+        child,
+        staticSphere,
+        cycleA,
+        cycleB,
+      },
+      child: transformSnapshot(child),
+      staticSphere: transformSnapshot(staticSphere),
+    };
+  }
+
+  function setParentIfNeeded(entity: EntityHandle, nextParent: EntityHandle) {
+    const current = world.get(entity, ChildOf);
+    if (current.ok && current.value.parent === nextParent) {
+      return { ok: true, changed: false };
+    }
+    const result = world.set(entity, ChildOf, { parent: nextParent });
+    return { ok: result.ok, changed: true, error: result.ok ? undefined : result.error.code };
+  }
+
+  function drawProbeFrame(): { ok: boolean; error?: string } {
+    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    return result.ok ? { ok: true } : { ok: false, error: result.error.code };
+  }
+
+  const controller = {
+    beginProbe(): ReturnType<typeof sceneSnapshot> {
+      paused = true;
+      if (hudEl) hudEl.textContent = 'hierarchy probe paused';
+      const reset = world.set(parent, Transform, {
+        pos: [-0.6, -0.4, 0],
+        quat: [0, 0, 0, 1],
+        scale: [0.4, 0.4, 0.4],
+      });
+      if (!reset.ok) throw reset.error;
+      const propagation = propagateTransforms(world);
+      if (!propagation.ok) throw propagation.error;
+      const draw = drawProbeFrame();
+      if (!draw.ok) throw new Error(`probe baseline draw failed: ${draw.error}`);
+      return sceneSnapshot();
+    },
+    injectFaults() {
+      paused = true;
+      const stale = world.set(child, ChildOf, { parent: staleParent });
+      const firstCycleEdge = world.set(cycleA, ChildOf, { parent: cycleB });
+      const secondCycleEdge = world.set(cycleB, ChildOf, { parent: cycleA });
+      if (!stale.ok || !firstCycleEdge.ok || !secondCycleEdge.ok) {
+        throw new Error('failed to inject public ChildOf faults');
+      }
+      const hierarchy = projectHierarchy(world);
+      const propagation = propagateTransforms(world, hierarchy);
+      const draw = drawProbeFrame();
+      if (!draw.ok) throw new Error(`probe fault draw failed: ${draw.error}`);
+      return {
+        snapshot: sceneSnapshot(),
+        propagation: propagation.ok
+          ? { ok: true as const }
+          : {
+              ok: false as const,
+              code: propagation.error.code,
+              expected: propagation.error.expected,
+              hint: propagation.error.hint,
+              detail: propagation.error.detail ? { ...propagation.error.detail } : null,
+            },
+      };
+    },
+    repairFaults() {
+      paused = true;
+      const repairs = [
+        setParentIfNeeded(child, parent),
+        setParentIfNeeded(cycleA, parent),
+        setParentIfNeeded(cycleB, parent),
+      ];
+      const propagation = propagateTransforms(world);
+      const draw = drawProbeFrame();
+      if (!draw.ok) throw new Error(`probe repair draw failed: ${draw.error}`);
+      return {
+        repairs,
+        propagation: propagation.ok ? { ok: true as const } : { ok: false as const, code: propagation.error.code },
+        snapshot: sceneSnapshot(),
+      };
+    },
+    cleanup() {
+      return this.repairFaults();
+    },
+    resume() {
+      paused = false;
+      if (hudEl) hudEl.textContent = 'parent slides; child follows';
+      return { ok: true };
+    },
+  };
+  (globalThis as typeof globalThis & { __forgeaxTransformHierarchy?: typeof controller }).__forgeaxTransformHierarchy = controller;
+
   // Step 8: rAF loop. world.update(1 / 60).unwrap() runs the schedule (propagateTransforms +
   // the parent-slide system) before each draw.
   function frame(): void {
-    world.update(1 / 60).unwrap();
-    const draw = renderer.draw([world], { owner: 0 });
+    if (paused) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    const update = world.update(1 / 60);
+    if (!update.ok) {
+      console.error('[transform-hierarchy] world.update failed:', update.error.code);
+      requestAnimationFrame(frame);
+      return;
+    }
+    const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!draw.ok) {
       console.error('[transform-hierarchy] draw failed:', draw.error.code);
       return;

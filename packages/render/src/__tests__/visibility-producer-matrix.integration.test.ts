@@ -110,7 +110,7 @@ function tilemap(world: World): EntityHandle {
     { component: TileLayer, data: { tiles: new Uint32Array([1]), dirty: 0 } },
     { component: ChildOf, data: { parent: map } },
   );
-  tilemapChunkExtractSystem(world, 0);
+  tilemapChunkExtractSystem(world);
   return map;
 }
 

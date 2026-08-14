@@ -191,6 +191,8 @@ function pushError(code: string, hint: string | undefined): void {
 
 async function bootstrap(): Promise<void> {
   const renderer = await createRenderer(canvas, {});
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   renderer.onError((e) => {
     console.error('[tetris] renderer.onError:', e.code, e.hint);
     pushError(e.code, e.hint);
@@ -224,7 +226,8 @@ async function bootstrap(): Promise<void> {
     tick(game, dt);
     paint();
     updateHud();
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) {
       console.error('[tetris] draw error:', r.error);
       pushError(r.error.code, r.error.hint);

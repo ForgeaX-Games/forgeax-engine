@@ -66,6 +66,8 @@ describe('renderer.browser - WebGPU path RHI contract (AC-05)', () => {
     // void.
     await renderer.ready;
     const world = new World();
-    expect(() => renderer?.draw([world], { owner: 0 })).not.toThrow();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
   });
 });

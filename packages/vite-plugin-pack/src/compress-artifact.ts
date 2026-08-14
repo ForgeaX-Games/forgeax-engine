@@ -15,9 +15,6 @@
 import type { CodecResult } from '@forgeax/engine-codec';
 import type { AssetCompression } from '@forgeax/engine-types';
 
-/** Artifact kind for compression strategy lookup. */
-type ArtifactKind = 'mesh' | 'texture';
-
 /** Options passed to compressArtifact at each injection point. */
 export interface CompressArtifactOpts {
   readonly bytes: Uint8Array;
@@ -56,10 +53,12 @@ export interface CompressArtifactResult {
  * Internal strategy table — D-6: M2 defaults ALL 'none'.
  * M3 w20 flips mesh → 'zstd'.
  */
-const STRATEGY_TABLE: Record<ArtifactKind, AssetCompression> = {
+const STRATEGY_TABLE = {
   mesh: 'zstd',
   texture: 'none',
-};
+} satisfies Record<string, AssetCompression>;
+
+type ArtifactKind = keyof typeof STRATEGY_TABLE;
 
 /**
  * Shared SSOT compression function.

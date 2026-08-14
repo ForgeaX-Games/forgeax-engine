@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schemas/emscripten-no-xz-evidence-v1.json",
+  "title": "ForgeaX Linux Emscripten no-xz evidence envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "mode",
+    "source",
+    "run",
+    "runner",
+    "xz",
+    "cache",
+    "compiler",
+    "node",
+    "emcc",
+    "consumer",
+    "output",
+    "gate"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "const": "ready" },
+    "mode": { "enum": ["cold", "warm"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "repository"],
+      "properties": {
+        "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "repository": { "type": "string", "minLength": 1 }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "attempt", "workflow"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "workflow": { "type": "string", "minLength": 1 }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "name"],
+      "properties": {
+        "os": { "const": "Linux" },
+        "arch": { "const": "x86_64" },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "xz": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkedCommands",
+        "available",
+        "installAttempted",
+        "invocationDetected",
+        "lanePathControlled",
+        "laneCommandPaths",
+        "hostCommandPaths",
+        "hostPackageStatus",
+        "pythonLzmaUsed"
+      ],
+      "properties": {
+        "checkedCommands": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": { "enum": ["xz", "unxz", "xz-utils", "xzcat", "xzdec", "pixz"] }
+        },
+        "available": { "const": false },
+        "installAttempted": { "const": false },
+        "invocationDetected": { "const": false },
+        "lanePathControlled": { "const": true },
+        "laneCommandPaths": { "$ref": "#/$defs/xzCommandPaths" },
+        "hostCommandPaths": { "$ref": "#/$defs/xzCommandPaths" },
+        "hostPackageStatus": { "enum": ["installed", "not-installed", "unknown"] },
+        "pythonLzmaUsed": { "const": true }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "key", "matchedKey", "fingerprint"],
+      "properties": {
+        "status": { "enum": ["cold-created", "exact-valid"] },
+        "key": { "type": "string", "minLength": 1 },
+        "matchedKey": { "type": ["string", "null"] },
+        "fingerprint": { "$ref": "#/$defs/fingerprint" }
+      }
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["emscriptenVersion", "releaseIdentity", "emccPath", "fingerprint"],
+      "properties": {
+        "emscriptenVersion": { "const": "6.0.2" },
+        "releaseIdentity": { "type": "string", "pattern": "^releases-.+-64bit$" },
+        "emccPath": { "type": "string", "minLength": 1 },
+        "fingerprint": { "$ref": "#/$defs/fingerprint" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedVersion",
+        "nodeVersion",
+        "nodePath",
+        "emsdkNode",
+        "executableSha256",
+        "bundledNodePaths"
+      ],
+      "properties": {
+        "expectedVersion": { "const": "22.22.3" },
+        "nodeVersion": { "const": "v22.22.3" },
+        "nodePath": { "type": "string", "minLength": 1 },
+        "emsdkNode": { "type": "string", "minLength": 1 },
+        "executableSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "bundledNodePaths": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "emcc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocations"],
+      "properties": {
+        "invocations": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/invocation" }
+        }
+      }
+    },
+    "consumer": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/consumer" }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files"],
+      "properties": {
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/output" }
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["results"],
+      "properties": {
+        "results": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/gate" }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["equivalent", "fingerprintEqual", "outputEqual", "nodeEqual"],
+      "properties": {
+        "equivalent": { "const": true },
+        "fingerprintEqual": { "const": true },
+        "outputEqual": { "const": true },
+        "nodeEqual": { "const": true },
+        "coldOutputCount": { "type": "integer", "minimum": 1 },
+        "warmOutputCount": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emscriptenVersion",
+        "releaseIdentity",
+        "runnerOs",
+        "runnerArch",
+        "bootstrapInputDigest"
+      ],
+      "properties": {
+        "emscriptenVersion": { "const": "6.0.2" },
+        "releaseIdentity": { "type": "string", "pattern": "^releases-.+-64bit$" },
+        "runnerOs": { "const": "Linux" },
+        "runnerArch": { "const": "x86_64" },
+        "bootstrapInputDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "xzCommandPaths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["xz", "unxz", "xz-utils", "xzcat", "xzdec", "pixz"],
+      "properties": {
+        "xz": { "type": "boolean" },
+        "unxz": { "type": "boolean" },
+        "xz-utils": { "type": "boolean" },
+        "xzcat": { "type": "boolean" },
+        "xzdec": { "type": "boolean" },
+        "pixz": { "type": "boolean" }
+      }
+    },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "consumer", "command", "exitCode"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "consumer": { "enum": ["fbx", "codec"] },
+        "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "exitCode": { "const": 0 }
+      }
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "invocationIds", "outputNames", "gateIds"],
+      "properties": {
+        "name": { "enum": ["fbx", "codec"] },
+        "invocationIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "outputNames": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "gateIds": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer", "name", "outputSha256"],
+      "properties": {
+        "consumer": { "enum": ["fbx", "codec"] },
+        "name": { "type": "string", "minLength": 1 },
+        "outputSha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "consumer", "name", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "consumer": { "enum": ["fbx", "codec"] },
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "const": "pass" }
+      }
+    }
+  }
+}

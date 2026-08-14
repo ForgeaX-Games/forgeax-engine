@@ -42,6 +42,8 @@
 //   - evalDirectional(...) -> vec3<f32>  (Cook-Torrance + CSM shadow mod)
 //   - evalDirectionalNoShadow(...) -> vec3<f32>  (Cook-Torrance, no shadow;
 //     sprite-lit M1' / w3 D-1; also the inner brdf body of evalDirectional)
+//   - evalDirectionalShadowFactor(...) -> f32 (one reusable CSM sample for
+//     layered BRDFs such as base + clearcoat)
 
 #import forgeax_view::common::{view, shadowMap, shadowSampler}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
@@ -276,22 +278,69 @@ fn _sampleShadowForCascade(
   // -> half=1 -> 9 taps / 9.0 (result-identical to the prior hard-coded 3x3);
   // pcfKernelSize=1 -> half=0 -> single centre tap (hard edge); pcfKernelSize=5
   // -> half=2 -> 25-tap soft penumbra.
-  let kernel = clamp(u32(round(view.pcfKernelSize)), 1u, 2u * MAX_PCF_HALF + 1u);
-  let half = (kernel - 1u) / 2u;
-  let halfI = i32(half);
+  let requestedKernel = clamp(u32(round(view.pcfKernelSize)), 1u, 2u * MAX_PCF_HALF + 1u);
+  // Preserve the previous radius mapping for malformed even values:
+  // 1 -> 1x1, 2/3/4 -> 3x3, 5 -> 5x5. The authored component accepts only
+  // {1,3,5}, but keeping this normalization makes the refactor output-stable
+  // for raw UBO callers too.
+  let kernel = select(select(5u, 3u, requestedKernel <= 4u), 1u, requestedKernel == 1u);
+  if (kernel == 1u) {
+    let lit = textureSampleCompareLevel(shadowMap, shadowSampler, clamp(uv, tileLo, tileHi), adjustedDepth);
+    return lit;
+  }
+
   var blocked = 0.0;
+  if (kernel == 3u) {
+    // A linear comparison sample is already the bilinear average of four
+    // depth comparisons. Three adjacent samples on one axis therefore have
+    // the separable texel weights [1-f, 1, 1, f]. Pairing those four weights
+    // into two bilinear samples is exact, reducing the 3x3 path from 9 samples
+    // to 4. Keep the original 9-sample form at cascade-tile edges where the
+    // per-tap clamp intentionally duplicates edge samples.
+    let interior = all(uv >= tileLo + texel) && all(uv <= tileHi - texel);
+    if (interior) {
+      let pcfFraction = fract(uv / texel - vec2<f32>(0.5));
+      let loWeight = vec2<f32>(2.0) - pcfFraction;
+      let hiWeight = vec2<f32>(1.0) + pcfFraction;
+      let loOffset = vec2<f32>(-1.0) - pcfFraction + vec2<f32>(1.0) / loWeight;
+      let hiOffset = vec2<f32>(1.0) - pcfFraction + pcfFraction / hiWeight;
+      let litLoLo = textureSampleCompareLevel(
+        shadowMap, shadowSampler, uv + vec2<f32>(loOffset.x, loOffset.y) * texel, adjustedDepth,
+      );
+      let litHiLo = textureSampleCompareLevel(
+        shadowMap, shadowSampler, uv + vec2<f32>(hiOffset.x, loOffset.y) * texel, adjustedDepth,
+      );
+      let litLoHi = textureSampleCompareLevel(
+        shadowMap, shadowSampler, uv + vec2<f32>(loOffset.x, hiOffset.y) * texel, adjustedDepth,
+      );
+      let litHiHi = textureSampleCompareLevel(
+        shadowMap, shadowSampler, uv + vec2<f32>(hiOffset.x, hiOffset.y) * texel, adjustedDepth,
+      );
+      return (
+        litLoLo * loWeight.x * loWeight.y +
+        litHiLo * hiWeight.x * loWeight.y +
+        litLoHi * loWeight.x * hiWeight.y +
+        litHiHi * hiWeight.x * hiWeight.y
+      ) / 9.0;
+    }
+    for (var x = -1; x <= 1; x++) {
+      for (var y = -1; y <= 1; y++) {
+        let offsetUv = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, tileLo, tileHi);
+        let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, adjustedDepth);
+        blocked = blocked + (1.0 - lit);
+      }
+    }
+    return 1.0 - blocked / 9.0;
+  }
+
   for (var x = -i32(MAX_PCF_HALF); x <= i32(MAX_PCF_HALF); x++) {
     for (var y = -i32(MAX_PCF_HALF); y <= i32(MAX_PCF_HALF); y++) {
-      if (abs(x) > halfI || abs(y) > halfI) {
-        continue;
-      }
       let offsetUv = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, tileLo, tileHi);
       let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, adjustedDepth);
       blocked = blocked + (1.0 - lit);
     }
   }
-  let tapCount = f32((2u * half + 1u) * (2u * half + 1u));
-  return 1.0 - blocked / tapCount;
+  return 1.0 - blocked / 25.0;
 }
 
 // `evalDirectionalNoShadow` evaluates the GGX direct-lighting term for the
@@ -337,6 +386,39 @@ fn evalDirectionalNoShadow(
   return (diffuse + specular) * view.lightColor * nDotL;
 }
 
+fn evalDirectionalShadowFactor(
+  normal   : vec3<f32>,
+  worldPos : vec3<f32>,
+  viewZ    : f32,
+) -> f32 {
+  let l = normalize(-view.lightDir);
+  let count = u32(max(view.cascadeCount, 1.0));
+  let viewDepth = -viewZ;
+  // `pssmSplit` stores the authored shadowDistance in the last active split.
+  // Geometry beyond that distance is intentionally unshadowed; reject it
+  // before cascade projection, atlas dimension queries, and the PCF loop.
+  if (viewDepth > view.splitPlanes[count - 1u].x) {
+    return 1.0;
+  }
+  let layer = _pickCascadeLayer(viewDepth, count);
+  let shadowCurr = _sampleShadowForCascade(worldPos, layer, count, normal, l);
+
+  var shadow = shadowCurr;
+  if (view.cascadeBlend > 0.0 && layer + 1u < count) {
+    let spCurr = view.splitPlanes[layer].x;
+    let blendWidth = spCurr * view.cascadeBlend;
+    if (blendWidth > 0.0) {
+      let dist = spCurr - viewDepth;
+      let t = clamp(1.0 - dist / blendWidth, 0.0, 1.0);
+      if (t > 0.0) {
+        let shadowNext = _sampleShadowForCascade(worldPos, layer + 1u, count, normal, l);
+        shadow = mix(shadowCurr, shadowNext, t);
+      }
+    }
+  }
+  return shadow;
+}
+
 // `evalDirectional` evaluates the GGX direct-lighting term for the single
 // directional light carried in `view.lightDir / view.lightColor`. CSM
 // pathway: pick cascade layer from viewZ + splitPlanes, sample the atlas
@@ -372,34 +454,5 @@ fn evalDirectional(
   // entry shape doesn't fit (it expects pre-projected light-space coords;
   // CSM derives them per-cascade after dispatch). F-J-1 future-tracks the
   // dedup once `forgeax_view::cascade` lands as its own module (post-#387).
-  let l = normalize(-view.lightDir);
-  let count = u32(max(view.cascadeCount, 1.0));
-  // viewZ is negative in front of the camera; splitPlanes are positive
-  // view-space depths. Convert once so cascade selection + blend math are
-  // positive-vs-positive (see _pickCascadeLayer).
-  let viewDepth = -viewZ;
-  let layer = _pickCascadeLayer(viewDepth, count);
-  let shadowCurr = _sampleShadowForCascade(worldPos, layer, count, normal, l);
-
-  // cascadeBlend mixes the current cascade with the next one across a
-  // band of width `splitPlanes[layer] * cascadeBlend` immediately before
-  // the boundary. cascadeBlend=0 -> hard cut. Last cascade has no
-  // successor; mix collapses to shadowCurr.
-  var shadow = shadowCurr;
-  if (view.cascadeBlend > 0.0 && layer + 1u < count) {
-    let spCurr = view.splitPlanes[layer].x;
-    let blendWidth = spCurr * view.cascadeBlend;
-    if (blendWidth > 0.0) {
-      // Positive view-space depth (viewDepth), matching spCurr's sign;
-      // `dist` shrinks to 0 as the fragment approaches the split boundary.
-      let dist = spCurr - viewDepth;
-      let t = clamp(1.0 - dist / blendWidth, 0.0, 1.0);
-      if (t > 0.0) {
-        let shadowNext = _sampleShadowForCascade(worldPos, layer + 1u, count, normal, l);
-        shadow = mix(shadowCurr, shadowNext, t);
-      }
-    }
-  }
-
-  return lit * shadow;
+  return lit * evalDirectionalShadowFactor(normal, worldPos, viewZ);
 }

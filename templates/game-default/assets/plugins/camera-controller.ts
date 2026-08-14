@@ -163,6 +163,8 @@ export async function createCameraController(args: CameraControllerArgs): Promis
   if (!chromaticAberration.installed && chromaticAberration.error) console.warn(`[game] chromatic aberration unavailable: ${chromaticAberration.error}`);
   installRenderSettingsSystems({ world, camera, settings: settingsState, depthOfField });
   host?.registerCleanup?.(() => settings.dispose());
+  host?.registerCleanup?.(() => depthOfField.dispose());
+  host?.registerCleanup?.(() => chromaticAberration.dispose());
 
   const cameraState = {
     get mode(): ViewMode {

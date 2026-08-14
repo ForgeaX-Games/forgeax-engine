@@ -40,12 +40,34 @@ describe('visibility extract orchestration', () => {
   it('refreshes hierarchy and visibility from the final World state', () => {
     const { world, parent, child } = makeWorld();
     world.set(parent, Visibility, { state: VisibilityStateValue.visible }).unwrap();
+    world.update(0).unwrap();
 
     const frame = extractFrames([world], 0);
     const snapshot = frame.visibilitySnapshots[0];
     expect(snapshot?.get(parent)?.effective).toBe('visible');
     expect(snapshot?.get(child)?.effective).toBe('visible');
     expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(3);
+  });
+
+  it('keeps renderer extraction read-only over derived Transform.world', () => {
+    const { world, parent, child } = makeWorld();
+    world.update(0).unwrap();
+    const before = [...world.get(child, Transform).unwrap().world];
+    const internal = world as unknown as {
+      _getMutationEpoch(): number;
+      _getStructureEpoch(): number;
+    };
+
+    world.set(parent, Transform, { pos: [9, 0, 0] }).unwrap();
+    const mutationBeforeExtract = internal._getMutationEpoch();
+    const structureBeforeExtract = internal._getStructureEpoch();
+    extractFrames([world], 0);
+
+    expect([...world.get(child, Transform).unwrap().world]).toEqual(before);
+    expect(internal._getMutationEpoch()).toBe(mutationBeforeExtract);
+    expect(internal._getStructureEpoch()).toBe(structureBeforeExtract);
+    world.update(0).unwrap();
+    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(11);
   });
 
   it('keeps direct prepared-kernel output aligned with extractFrames output', () => {

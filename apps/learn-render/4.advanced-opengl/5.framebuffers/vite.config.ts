@@ -12,19 +12,23 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
 
-export default withRhiDebug({
-  here,
-  rootDepth: 4,
-  port: 5181,
-  extraPlugins: [
-    pluginPack({
-      runtimeBinding: createStandaloneRuntimeAssetBinding('learn-render-4-5-framebuffers'),
-      refresh: reloadAssetHost(),
-      importers: [imageImporter],
-      roots: [
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
-      ],
-    }),
-  ],
-});
+export default {
+  ...withRhiDebug({
+    here,
+    rootDepth: 4,
+    port: 5181,
+    extraPlugins: [
+      pluginPack({
+        runtimeBinding: createStandaloneRuntimeAssetBinding('learn-render-4-5-framebuffers'),
+        producerReadiness: 'on-demand',
+        refresh: reloadAssetHost(),
+        importers: [imageImporter],
+        roots: [
+          resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
+          resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
+        ],
+      }),
+    ],
+  }),
+  optimizeDeps: { noDiscovery: true },
+};

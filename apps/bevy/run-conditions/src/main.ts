@@ -30,7 +30,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const host = globalThis as {
     __bevyRunConditionsReady?: boolean;
     __bevyRunConditionsState?: () => ReturnType<typeof readRunConditionState>;
+    __prepareRunConditionsCapture?: () => Promise<void>;
   };
   host.__bevyRunConditionsState = () => readRunConditionState(app.world, state);
+  host.__prepareRunConditionsCapture = async () => {
+    const before = readRunConditionState(app.world, state);
+    if (before.skippedFrames === 0) throw new Error('run-condition gate did not record a closed phase');
+    for (let frame = 0; frame < 180 && !state.unlocked; frame++) {
+      const updated = app.world.update(1 / 60);
+      if (!updated.ok) throw updated.error;
+      const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!drawn.ok) throw drawn.error;
+    }
+    const after = readRunConditionState(app.world, state);
+    if (!after.unlocked || after.gatedRuns === 0 || after.pulseRuns !== 1) {
+      throw new Error(`run-condition gate did not open: ${JSON.stringify(after)}`);
+    }
+  };
   host.__bevyRunConditionsReady = true;
 }

@@ -8,7 +8,7 @@
 // This test does NOT re-declare the decision expression and feed it to the
 // pure builder (that would be tautological — the bug could regress verbatim
 // while the suite stays green). Instead it drives the whole pipeline through
-// createRenderer + renderer.draw([world], { owner: 0 }): the URP cascade loop calls
+// createRenderer + renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }): the URP cascade loop calls
 // addShadowPass per cascade, whose execute closure invokes the real
 // recordShadowPass(c, selector, viewport, cascadeIndex). A mock GPU device
 // captures every descriptor handed to beginRenderPass on the dedicated
@@ -16,6 +16,8 @@
 // engine's decision at the real call site — flip the ternary to a constant and
 // these assertions fail.
 
+import type { World as WorldType } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -182,7 +184,7 @@ async function importEngine(): Promise<{
     bundler?: unknown,
   ) => Promise<{
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
   }>;
 }> {
@@ -271,7 +273,11 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
 
   const errors: { code: string }[] = [];
   renderer.onError((e) => errors.push(e));
-  renderer.draw([world], { owner: 0 });
+  if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+    throw new Error('World attachment failed');
+  }
+  (world as WorldType).update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   return log;
 }
 

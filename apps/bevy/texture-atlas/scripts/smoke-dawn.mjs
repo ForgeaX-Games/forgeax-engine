@@ -26,12 +26,14 @@ const { unwrapHandle } = await import('@forgeax/engine-types');
 const { buildTextureAtlasWorld, makeAtlas } = await import(resolve(here, '..', 'src', 'texture-atlas.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
+const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
 renderer.onError((error) => errors.push(error));
 const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
-const world = new World();
 const variants = [];
 for (const [variant, filter] of [['unpadding', 'linear'], ['padding', 'nearest'], ['unpadding', 'linear'], ['padding', 'nearest']]) {
   const atlas = makeAtlas(variant);
@@ -43,7 +45,11 @@ for (const [variant, filter] of [['unpadding', 'linear'], ['padding', 'nearest']
   variants.push({ texture: unwrapHandle(textureHandle), sampler: unwrapHandle(samplerHandle), atlas });
 }
 buildTextureAtlasWorld(world, variants);
-for (let i = 0; i < frames; i += 1) { const result = renderer.draw([world], { owner: 0 }); if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`); }
+for (let i = 0; i < frames; i += 1) {
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
+}
 await device.queue.onSubmittedWorkDone();
 const readback = device.createBuffer({ size: bytesPerRow * height, usage: 0x01 | 0x08 });
 const encoder = device.createCommandEncoder();

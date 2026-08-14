@@ -137,7 +137,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   evidenceWindow.__prepareUpdateGltfSceneCapture = async (): Promise<void> => {
     const updated = world.update(1 / 60);
     if (!updated.ok) throw new Error(`capture preparation update failed: ${updated.error.code}`);
-    const drawn = app.renderer.draw([world], { owner: 0 });
+    const drawn = app.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!drawn.ok) throw new Error(`capture preparation draw failed: ${drawn.error.code}`);
   };
   evidenceWindow.__bevyUpdateGltfSceneReady = true;

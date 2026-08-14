@@ -134,6 +134,8 @@ const ORTHO_HEIGHT = 6;
 const ORTHO_WIDTH = ORTHO_HEIGHT * (16 / 9);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 const planeMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.3, 0.5, 0.3, 1] }));
 world.spawn(
@@ -181,7 +183,8 @@ world.spawn(
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

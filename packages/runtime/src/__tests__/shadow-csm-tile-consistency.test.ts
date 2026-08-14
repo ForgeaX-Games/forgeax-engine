@@ -12,7 +12,7 @@
 // This DOES NOT re-declare the tile formula and test it against itself (the
 // shadow-csm-atlas.test.ts antipattern: a local computeAtlasLayout copy that
 // could agree with a bug verbatim). The depth tile is captured from the actual
-// urp cascade loop driven through createRenderer + renderer.draw([world], { owner: 0 }); the
+// urp cascade loop driven through createRenderer + renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); the
 // sampler tile is read from the WGSL source the GPU actually compiles. The
 // canonical mapping is asserted against BOTH real sources, so a drift on either
 // side breaks the test.
@@ -24,6 +24,8 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { World as WorldType } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -197,7 +199,7 @@ async function importEngine(): Promise<{
     bundler?: unknown,
   ) => Promise<{
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
   }>;
 }> {
@@ -274,7 +276,11 @@ async function captureCascadeViewports(cascadeCount: number, mapSize: number): P
     { component: C.Transform, data: identityTransform() },
   );
   renderer.onError(() => undefined);
-  renderer.draw([world], { owner: 0 });
+  if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+    throw new Error('World attachment failed');
+  }
+  (world as WorldType).update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   return log;
 }
 

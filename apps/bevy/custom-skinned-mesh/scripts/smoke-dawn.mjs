@@ -76,11 +76,13 @@ renderer.onError((error) => errors.push(error));
 const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 if (!(await scenePlugin().build(world)).ok) throw new Error('scene plugin failed');
 const rigs = buildWorld(world);
 const initialUpdate = world.update(0);
 if (!initialUpdate.ok) throw new Error(`${initialUpdate.error.code}: ${initialUpdate.error.hint}`);
-renderer.draw([world], { owner: 0 });
+renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(30);
 const earlyFrame = await capture();
 const early = world.get(rigs[0].upper, Transform);
@@ -88,7 +90,7 @@ const earlyQuat = early.ok ? Array.from(early.value.quat) : [];
 for (let frame = 1; frame < frames; frame++) {
   const update = world.update(1 / 60);
   if (!update.ok) throw new Error(`${update.error.code}: ${update.error.hint}`);
-  const draw = renderer.draw([world], { owner: 0 });
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) errors.push(draw.error);
 }
 await delay(30);

@@ -20,6 +20,8 @@
 // Mirrors the mock harness shape of
 // render-system-record-multi-material-textureview.test.ts (bug-20260610 D2).
 
+import type { World as WorldType } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -187,7 +189,7 @@ function buildManifestDataUrl(): string {
 
 interface RendererLike {
   ready: Promise<unknown>;
-  draw: (worlds: unknown, opts: { owner: number }) => void;
+  draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
   onError: (cb: (err: { code: string }) => void) => () => void;
 }
 
@@ -379,7 +381,11 @@ describe('record: per-submesh transparency (feat-city-glb Bug 5)', () => {
     renderer.onError((e) => errors.push(e.code));
 
     const { world } = await spawnMixedTransparentScene();
-    renderer.draw([world], { owner: 0 });
+    if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      throw new Error('World attachment failed');
+    }
+    (world as WorldType).update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
     // The transparent submesh must be drawn through the generic PBR per-submesh
     // path (label 'pbr-material-skylight-bg'), NOT the sprite fallback

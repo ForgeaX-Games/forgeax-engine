@@ -201,6 +201,8 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       }
 
       const world = buildWorld();
+      const worldAttachment1 = renderer.attachWorld(world);
+      if (!worldAttachment1.ok) throw worldAttachment1.error;
 
       // Cube A: casts shadow (default)
       const matA = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }));
@@ -243,7 +245,8 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       );
 
       // Render one frame to populate shadow map
-      const drawResult = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(drawResult.ok).toBe(true);
 
       // Sample shadow factor at floor positions inside each cube's shadow

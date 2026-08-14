@@ -105,6 +105,8 @@ const { buildTimersWorld } = await import(resolve(here, '..', 'src', 'timers.ts'
 const { quat } = await import('@forgeax/engine-math');
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { getState } = buildTimersWorld(world);
 
 const eye = [-2, 2.5, 5];
@@ -115,7 +117,7 @@ world.spawn(
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(0.016);
-  await renderer.draw([world], { owner: 0 });
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(50);
 

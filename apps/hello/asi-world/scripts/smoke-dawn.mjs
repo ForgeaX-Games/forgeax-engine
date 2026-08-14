@@ -182,7 +182,6 @@ const { toManaged } = types;
 void toManaged;
 
 const world = new World();
-
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
@@ -195,6 +194,8 @@ try {
     `createRenderer threw: ${createErr instanceof Error ? createErr.message : String(createErr)}`,
   );
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 const errors = [];
 renderer.onError((e) => errors.push({ code: e.code }));
@@ -330,7 +331,8 @@ let firstFrameDrawCount = 0;
 let lastFrameDrawCount = 0;
 for (let f = 0; f < TARGET_FRAMES; f++) {
   drawCallsThisFrame = 0;
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) {
     console.error(`[hello-asi-world smoke] draw frame ${f}: ${r.error.code}`);
     process.exit(1);

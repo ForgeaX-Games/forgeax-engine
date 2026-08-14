@@ -363,7 +363,9 @@ describe('prepared graphics browser contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     expect(renderer.renderFeatureDiagnostics()[0]?.status).toBe('active');
@@ -430,7 +432,9 @@ describe('prepared graphics browser contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
 
     expect(errors.map((error) => error.code)).toEqual([
       'render-feature-prepared-state-mismatch',
@@ -495,7 +499,9 @@ describe('prepared graphics browser contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
 
     expect(errors.map((error) => error.code)).toContain(code);
     expect(errors.some((error) => error.detail !== undefined)).toBe(true);
@@ -555,7 +561,9 @@ describe('prepared graphics browser contract', () => {
         { component: Camera, data: { fov: 60, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
-    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(renderer.renderFeatureDiagnostics()[0]?.status).toBe('disabled');
     expect(errors).toContain('render-feature-capability-missing');
   });

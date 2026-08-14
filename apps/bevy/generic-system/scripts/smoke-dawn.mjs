@@ -45,6 +45,8 @@ if (renderer.backend !== 'webgpu') throw new Error(`[smoke] backend=${renderer.b
 const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`[smoke] renderer.ready=${ready.error.code}`);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const genericSystem = await import(resolve(here, '..', 'src', 'generic-system.ts'));
 registerStatesPlugin(world);
 const { buildGenericSystemWorld, readGenericSystemState } = genericSystem;
@@ -53,7 +55,7 @@ const errors = [];
 renderer.onError((error) => errors.push(error.code));
 for (let frame = 0; frame < 180; frame += 1) {
   world.update(0.016).unwrap();
-  const draw = renderer.draw([world], { owner: 0 });
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) throw new Error(`[smoke] draw=${draw.error.code}`);
 }
 const snapshot = readGenericSystemState(world, state);

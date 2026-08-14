@@ -218,6 +218,8 @@ const values = {
   iTime: 0,
 };
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
@@ -282,7 +284,8 @@ async function captureFrameAtT(t) {
   values.iTime = t;
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
     if (!FALSIFY_NO_DRAW) {
-      const r = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
     }
   }

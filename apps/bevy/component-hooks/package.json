@@ -19,6 +19,9 @@
       "category": "ECS (Entity Component System)",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["ecs-scheduling"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-component-hooks smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "demo bundle is downstream of engine package metrics" },

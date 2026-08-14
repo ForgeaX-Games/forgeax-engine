@@ -77,17 +77,19 @@ const ready = await renderer.ready;
 if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`); process.exit(1); }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 if (!(await scenePlugin().build(world)).ok) process.exit(1);
 if (!(await animationPlugin().build(world)).ok) process.exit(1);
 const state = buildEasedMotionWorld(world);
 world.update(0);
-renderer.draw([world], { owner: 0 });
+renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(30);
 const earlyFrame = await capture();
 const earlyState = readEasedMotionState(world, state);
 for (let frame = 1; frame < frames; frame++) {
   world.update(1 / 60);
-  renderer.draw([world], { owner: 0 });
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(30);
 const lateFrame = await capture();

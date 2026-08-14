@@ -109,6 +109,8 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
   expect(plane.ok).toBe(true);
   if (!plane.ok) throw new Error(`tone ramp plane failed: ${plane.error.code}`);
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
   const cases = TONE_REQUIRED_CASES.filter((entry) => entry.tone.mode === mode);
   expect(cases).toHaveLength(TONE_REQUIRED_SAMPLE_COUNT);
@@ -138,7 +140,8 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
     },
   ).unwrap();
 
-  const drawn = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   expect(drawn.ok).toBe(true);
   if (!drawn.ok) throw new Error(`tone ramp draw failed: ${drawn.error.code}`);
   await device.queue.onSubmittedWorkDone();

@@ -209,6 +209,10 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = ambientRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(worldA);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
+const worldAttachment2 = renderer.attachWorld(worldB);
+if (!worldAttachment2.ok) throw worldAttachment2.error;
 
 console.log(`[multi-world] backend=${renderer.backend}`);
 
@@ -225,7 +229,9 @@ if (!ready.ok) {
 const targetFrames = Math.max(MIN_FRAMES, Math.ceil(DURATION_MS / 16.67));
 let frames = 0;
 for (let i = 0; i < targetFrames; i++) {
-  const r = renderer.draw([worldA, worldB], { owner: 0 });
+  worldB.update().unwrap();
+  worldA.update().unwrap();
+  const r = renderer.draw([worldA, worldB], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   frames++;
 }

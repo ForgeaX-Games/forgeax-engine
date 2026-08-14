@@ -305,7 +305,7 @@ function installCaptureHook(app: App, world: App['world']): void {
   const renderer = app.renderer;
   const drawCsmFrame = (): void => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { owner: 0 });
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   };
   const runCsmProbe = async (): Promise<void> => {
     const probeResults = (await renderer.debugSampleShadowFactor?.(csmProbePositions())) ?? null;

@@ -58,12 +58,12 @@
 //   per AGENTS.md evolution contract.
 //   Extended from 21 to 23 in feat-20260708-composited-multi-world-rendering
 //   M3 (D-5): added 'render-system-empty-worlds' + 'render-system-owner-out-of-
-//   range' for the new draw(worlds, { owner }) entry validation. The
+//   range' for draw(worlds, { cameraOwner, resourceOwner }) entry validation. The
 //   owner-out-of-range path exposes .detail = RhiOwnerOutOfRangeDetail
 //   ({ role, owner, worldCount } after feat-20260709-editor-world-partition
 //   M1 / w7: role ∈ {'camera','resource'} names which of the two split draw
 //   owners is out of range); empty-worlds carries no .detail. The pure
-//   validateDrawArgs(worldCount, number | { cameraOwner, resourceOwner })
+//   validateDrawArgs(worldCount, { cameraOwner, resourceOwner })
 //   helper (World-free primitives) emits both and is consumed by the runtime
 //   createRenderer draw entry (the codes' SSOT stays in rhi). Checks run
 //   empty-worlds -> cameraOwner -> resourceOwner; the first out-of-range owner
@@ -297,11 +297,9 @@ export interface RhiInstancingExceedsUniformCapDetail {
  * Detail structure exclusive to the `'render-system-owner-out-of-range'` path
  * (feat-20260708-composited-multi-world-rendering M3 / D-5).
  *
- * Emitted by the `renderer.draw(worlds, { owner })` entry validation when the
- * `owner` index is not a valid index into `worlds` (`owner < 0` or
- * `owner >= worlds.length`). `owner` names the world that supplies cameras +
- * singleton render resources (skylight / skybox / postProcessParams); an
- * out-of-range index cannot resolve, so the frame is skipped before any extract.
+ * Emitted by `renderer.draw(worlds, { cameraOwner, resourceOwner })` when one
+ * owner index is not valid for `worlds` (`owner < 0` or `owner >= worlds.length`).
+ * An out-of-range index cannot resolve, so the frame is skipped before extract.
  *
  * Fields:
  *   - `role` — WHICH of the two draw-owner indices was out of range
@@ -438,12 +436,6 @@ export interface DrawOwnerSplit {
  * non-`ok` result skips the frame with a structured error (charter P3), never a
  * silent no-op.
  *
- * The second argument accepts two forms:
- *   - a bare `number` — the backward-compatible legacy single-owner form where
- *     `cameraOwner === resourceOwner === owner` (frame-loop + single-world
- *     callers, precursor `draw([world], { owner })`); and
- *   - a `{ cameraOwner, resourceOwner }` object — the two-index split form.
- *
  * Checks, in order (D-5 + w6):
  *   1. `worldCount === 0` -> `'render-system-empty-worlds'` (no `.detail`).
  *   2. `cameraOwner` is not a valid index -> `'render-system-owner-out-of-range'`
@@ -455,12 +447,11 @@ export interface DrawOwnerSplit {
  * indices are out of range the FIRST offender wins: `cameraOwner` is checked
  * before `resourceOwner`, so `role === 'camera'` (D-3 / w3 contract).
  *
- * The empty-worlds guard short-circuits first: `validateDrawArgs(0, 5)` returns
- * the empty-worlds code, not the owner-range code.
+ * The empty-worlds guard short-circuits before either owner-range check.
  */
 export function validateDrawArgs(
   worldCount: number,
-  owner: number | DrawOwnerSplit,
+  owner: DrawOwnerSplit,
 ): Result<void, RhiError> {
   if (worldCount === 0) {
     return err(
@@ -471,10 +462,7 @@ export function validateDrawArgs(
       }),
     );
   }
-  // w6: normalize the legacy single-owner number into the two-index form so the
-  // camera-before-resource validation order is uniform for both call shapes.
-  const cameraOwner = typeof owner === 'number' ? owner : owner.cameraOwner;
-  const resourceOwner = typeof owner === 'number' ? owner : owner.resourceOwner;
+  const { cameraOwner, resourceOwner } = owner;
   const outOfRange = (index: number): boolean =>
     !Number.isInteger(index) || index < 0 || index >= worldCount;
   // cameraOwner is validated first: it is the first offender when both indices

@@ -38,13 +38,14 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import {
   AudioListener,
   AudioSource,
   audioPlugin,
   captureAudioSimulationState,
+  type AudioBackend,
 } from '@forgeax/engine-audio';
-import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
   Collider,
@@ -169,6 +170,10 @@ world
 
 // Step 2b: the same GUID -> payload path used by generic editor bindings.
 let sfxClipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
+let m20StaleClipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
+let m20CurrentClipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
+let m20StaleSourceKey = '';
+let m20CurrentSourceKey = '';
 const sfxGuid = AssetGuid.parse(SFX_GUID);
 if (!sfxGuid.ok) {
   console.error('[hello-audio] invalid SFX GUID:', SFX_GUID);
@@ -181,6 +186,18 @@ if (!sfxGuid.ok) {
       playing: false,
       spatialBlend: 1.0,
       bus: 'sfx',
+    });
+    m20StaleSourceKey = `${loadRes.value.sourceKey}:m20-stale-decode`;
+    m20StaleClipHandle = world.allocSharedRef('AudioClipAsset', {
+      ...loadRes.value,
+      sourceKey: m20StaleSourceKey,
+      bytes: loadRes.value.bytes.slice(),
+    });
+    m20CurrentSourceKey = `${loadRes.value.sourceKey}:m20-current-epoch`;
+    m20CurrentClipHandle = world.allocSharedRef('AudioClipAsset', {
+      ...loadRes.value,
+      sourceKey: m20CurrentSourceKey,
+      bytes: loadRes.value.bytes.slice(),
     });
     console.warn('[hello-audio] SFX loaded and registered');
   } else {
@@ -201,13 +218,165 @@ const sfxClipHandleLoaded = () => sfxClipHandle;
 const overlayEl = document.querySelector<HTMLDivElement>('#overlay');
 const listenerEntity = cameraEntity;
 const emitterEntityId = emitterEntity;
-const audioEngine = world.getResource<WebAudioEngine>('AudioEngine');
+const audioEngine = world.getResource<AudioBackend>('AudioEngine');
 let audioStarts = 0;
 let collisionDetected = false;
 let collisionAudioStarted = false;
 let collisionCleanup = false;
 let collisionActor: import('@forgeax/engine-ecs').EntityHandle | undefined;
 let collisionAudioAge = 0;
+
+type M20AudioSnapshot = {
+  readonly phase: string;
+  readonly staleSourceKey: string;
+  readonly currentSourceKey: string;
+  readonly entityId: number | null;
+  readonly entityAlive: boolean;
+  readonly cleanupCalls: number;
+  readonly audio: ReturnType<AudioBackend['getState']>;
+  readonly simulation: {
+    readonly playing: readonly (readonly [number, boolean])[];
+    readonly epochs: readonly (readonly [number, number])[];
+    readonly intents: readonly {
+      readonly kind: string;
+      readonly entityId?: number;
+      readonly sourceKey?: string;
+    }[];
+    readonly cleanup: readonly number[];
+  };
+};
+
+let m20ProbeEntity: EntityHandle | undefined;
+let m20Phase = 'idle';
+let m20CleanupCalls = 0;
+
+function m20Snapshot(): M20AudioSnapshot {
+  const simulation = captureAudioSimulationState(audioEngine);
+  const entityId = m20ProbeEntity === undefined ? null : Number(m20ProbeEntity);
+  const entityAlive = m20ProbeEntity !== undefined && world.get(m20ProbeEntity, AudioSource).ok;
+  return {
+    phase: m20Phase,
+    staleSourceKey: m20StaleSourceKey,
+    currentSourceKey: m20CurrentSourceKey,
+    entityId,
+    entityAlive,
+    cleanupCalls: m20CleanupCalls,
+    audio: audioEngine.getState(),
+    simulation: {
+      playing: simulation.playing,
+      epochs: simulation.epochs,
+      intents: simulation.intents.slice(-12).map((intent) => ({
+        kind: intent.kind,
+        ...('entityId' in intent ? { entityId: intent.entityId } : {}),
+        ...('sourceKey' in intent ? { sourceKey: intent.sourceKey } : {}),
+      })),
+      cleanup: simulation.cleanup,
+    },
+  };
+}
+
+function m20EnsureProbe(): EntityHandle | undefined {
+  if (m20StaleClipHandle === HANDLE_NONE) return undefined;
+  if (m20ProbeEntity !== undefined && world.get(m20ProbeEntity, AudioSource).ok) {
+    return m20ProbeEntity;
+  }
+  const spawned = world.spawn(
+    { component: Transform, data: { pos: [0, 0, 0] } },
+    {
+      component: AudioSource,
+      data: {
+        clip: m20StaleClipHandle,
+        playing: false,
+        loop: true,
+        volume: 0.2,
+        spatialBlend: 1.0,
+        bus: 'sfx',
+      },
+    },
+  );
+  if (!spawned.ok) return undefined;
+  m20ProbeEntity = spawned.value;
+  return m20ProbeEntity;
+}
+
+const m20AudioController = {
+  begin(): M20AudioSnapshot {
+    const entity = m20EnsureProbe();
+    if (entity === undefined) {
+      m20Phase = 'clip-not-ready';
+      return m20Snapshot();
+    }
+    world.set(entity, AudioSource, {
+      clip: m20StaleClipHandle,
+      playing: true,
+      loop: true,
+      volume: 0.2,
+      spatialBlend: 1.0,
+      bus: 'sfx',
+    });
+    m20Phase = 'pending-decode';
+    return m20Snapshot();
+  },
+  stopStale(): M20AudioSnapshot {
+    if (m20ProbeEntity !== undefined && world.get(m20ProbeEntity, AudioSource).ok) {
+      world.set(m20ProbeEntity, AudioSource, {
+        clip: m20StaleClipHandle,
+        playing: false,
+        loop: true,
+        volume: 0.2,
+        spatialBlend: 1.0,
+        bus: 'sfx',
+      });
+    }
+    m20Phase = 'stale-stopped';
+    return m20Snapshot();
+  },
+  replaceCurrentEpoch(): M20AudioSnapshot {
+    const entity = m20EnsureProbe();
+    if (entity !== undefined) {
+      world.set(entity, AudioSource, {
+        clip: m20CurrentClipHandle,
+        playing: true,
+        loop: true,
+        volume: 0.2,
+        spatialBlend: 1.0,
+        bus: 'sfx',
+      });
+    }
+    m20Phase = 'replacement-requested';
+    return m20Snapshot();
+  },
+  markRecovered(): M20AudioSnapshot {
+    m20Phase = 'current-epoch-playing';
+    return m20Snapshot();
+  },
+  cleanup(): M20AudioSnapshot {
+    m20CleanupCalls += 1;
+    if (m20ProbeEntity !== undefined && world.get(m20ProbeEntity, AudioSource).ok) {
+      world.set(m20ProbeEntity, AudioSource, {
+        clip: m20CurrentClipHandle,
+        playing: false,
+        loop: true,
+        volume: 0.2,
+        spatialBlend: 1.0,
+        bus: 'sfx',
+      });
+      world.despawn(m20ProbeEntity);
+      m20Phase = 'cleanup-requested';
+    } else {
+      m20Phase = 'cleanup-idempotent';
+    }
+    return m20Snapshot();
+  },
+  snapshot(): M20AudioSnapshot {
+    return m20Snapshot();
+  },
+};
+
+const browserGlobals = globalThis as typeof globalThis & {
+  __forgeaxAudioM20?: typeof m20AudioController;
+};
+browserGlobals.__forgeaxAudioM20 = m20AudioController;
 
 // Camera movement speed (units/second).
 const MOVE_SPEED = 5;
@@ -360,6 +529,7 @@ world
         `distance = ${distance} | pan = ${pan}<br />`,
         `<span id="physics-status">collision=${collisionDetected ? 1 : 0} | cleanup=${collisionCleanup ? 1 : 0}</span><br />`,
         `<span id="audio-status">audio=${audioState.contextState} | active=${audioState.activeSourceCount} | starts=${audioStarts}</span>`,
+        `<span id="m20-status">m20=${m20Phase} | probe=${m20ProbeEntity === undefined ? 'none' : m20Snapshot().entityAlive ? 'alive' : 'gone'}</span>`,
       ].join('');
     }
   }

@@ -2,7 +2,7 @@
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, scaleTangentSpaceNormal, applyTBN}
-#import forgeax_pbr::lighting_directional::{evalDirectional}
+#import forgeax_pbr::lighting_directional::{evalDirectionalNoShadow, evalDirectionalShadowFactor}
 #import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot}
 #ifdef POINT_SHADOW_AVAILABLE
 #import forgeax_pbr::lighting_punctual::{evalPointShadowed}
@@ -324,21 +324,27 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     skylight.rotation,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
-  let clearcoatIbl = sampleIblSpecular(
-    n, v, coatRoughness, vec3<f32>(0.04),
-    skylight.rotation,
-    prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
-  );
   let skyColor = vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB);
-  let ambient = (
-    (kD * irradiance * albedo + specularIbl) * (vec3<f32>(1.0) - coatF) +
-    clearcoatIbl * material.clearcoat
-  ) * skyColor * skylight.intensity;
+  var ambient = (kD * irradiance * albedo + specularIbl) * (vec3<f32>(1.0) - coatF);
+  if (material.clearcoat != 0.0) {
+    let clearcoatIbl = sampleIblSpecular(
+      n, v, coatRoughness, vec3<f32>(0.04),
+      skylight.rotation,
+      prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
+    );
+    ambient = ambient + clearcoatIbl * material.clearcoat;
+  }
+  ambient = ambient * skyColor * skylight.intensity;
   var color = ambient;
-  color = color + evalDirectional(n, v, albedo, metallic, a, f0, in.worldPos, in.viewZ);
-  color = color + material.clearcoat * evalDirectional(
-    n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04), in.worldPos, in.viewZ,
-  );
+  let directionalShadow = evalDirectionalShadowFactor(n, in.worldPos, in.viewZ);
+  let directionalBase = evalDirectionalNoShadow(n, v, albedo, metallic, a, f0);
+  color = color + directionalShadow * directionalBase;
+  if (material.clearcoat != 0.0) {
+    let directionalClearcoat = evalDirectionalNoShadow(
+      n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+    );
+    color = color + directionalShadow * material.clearcoat * directionalClearcoat;
+  }
   let pointCount = pointLightsBuffer.count;
   for (var i: u32 = 0u; i < pointCount; i = i + 1u) {
     let p = pointLightsBuffer.slots[i];
@@ -350,30 +356,36 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         in.worldPos, n, v, albedo, metallic, a, f0,
         p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
       );
-      color = color + material.clearcoat * evalPointShadowed(
-        p.position, p.colorTimesIntensity, p.invRangeSquared,
-        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-        p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
-      );
+      if (material.clearcoat != 0.0) {
+        color = color + material.clearcoat * evalPointShadowed(
+          p.position, p.colorTimesIntensity, p.invRangeSquared,
+          in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+          p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
+        );
+      }
     } else {
       color = color + evalPoint(
         p.position, p.colorTimesIntensity, p.invRangeSquared,
         in.worldPos, n, v, albedo, metallic, a, f0,
       );
-      color = color + material.clearcoat * evalPoint(
-        p.position, p.colorTimesIntensity, p.invRangeSquared,
-        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-      );
+      if (material.clearcoat != 0.0) {
+        color = color + material.clearcoat * evalPoint(
+          p.position, p.colorTimesIntensity, p.invRangeSquared,
+          in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+        );
+      }
     }
 #else
     color = color + evalPoint(
       p.position, p.colorTimesIntensity, p.invRangeSquared,
       in.worldPos, n, v, albedo, metallic, a, f0,
     );
-    color = color + material.clearcoat * evalPoint(
-      p.position, p.colorTimesIntensity, p.invRangeSquared,
-      in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-    );
+    if (material.clearcoat != 0.0) {
+      color = color + material.clearcoat * evalPoint(
+        p.position, p.colorTimesIntensity, p.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+      );
+    }
 #endif
   }
   let spotCount = spotLightsBuffer.count;
@@ -384,11 +396,13 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
       s.cosInner, s.cosOuter, s.invRangeSquared,
       in.worldPos, n, v, albedo, metallic, a, f0,
     );
-    color = color + material.clearcoat * evalSpot(
-      s.position, s.direction, s.colorTimesIntensity,
-      s.cosInner, s.cosOuter, s.invRangeSquared,
-      in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
-    );
+    if (material.clearcoat != 0.0) {
+      color = color + material.clearcoat * evalSpot(
+        s.position, s.direction, s.colorTimesIntensity,
+        s.cosInner, s.cosOuter, s.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+      );
+    }
   }
   return vec4<f32>(color, material.baseColor.a * baseSample.a);
 }

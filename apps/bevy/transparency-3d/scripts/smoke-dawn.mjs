@@ -99,6 +99,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildTransparencyWorld(world, WIDTH / HEIGHT);
 const captures = [];
 const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
@@ -130,7 +132,8 @@ async function capture(label) {
 for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
   const elapsed = process.env.FALSIFY === 'freeze-alpha' ? 0 : frame * FIXED_DT;
   stepTransparencyAlpha(world, scene, elapsed);
-  const draw = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) errors.push(draw.error);
   if (frame === EARLY_FRAME) await capture('early');
   if (frame === FRAME_COUNT - 1) await capture('late');

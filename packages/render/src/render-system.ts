@@ -2,7 +2,7 @@
 // Prepare -> Record + 4-tier error fan-out).
 //
 // Engine-internal phase: NOT registered to World schedule (AC-09);
-// `Renderer.draw([world], { owner: 0 })` invokes once per frame. See `Renderer` JSDoc in
+// `Renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` invokes once per frame. See `Renderer` JSDoc in
 // `./renderer.ts` for the full error tier table (D-S4..D-S8) and AGENTS.md
 // "ECS render bridge" section for the AI-user-facing contract.
 //
@@ -133,7 +133,6 @@ import {
   type RenderPhase,
   type RenderPhaseSkipReason,
   type RenderRecordPhase,
-  resolveDrawOwners,
 } from './renderer';
 import type { MaterialRenderProjection } from './renderer/material/assembly';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
@@ -364,8 +363,8 @@ export const MATERIAL_PER_ENTITY_STRIDE = 512;
  * w15 M5 dual-pipeline dispatch: `pipelineDispatchCounts` surfaces per-frame
  * counters of how many entities were routed to each pipeline (plan-strategy
  * D-P4 / requirements AC-07). The counts roll over monotonically — test
- * callers read them after `draw([world], { owner: 0 })` to assert each tag saw >= 1 draw.
- * Reset is intentional on every `draw([world], { owner: 0 })` entry so per-frame assertions
+ * callers read them after `draw([world], { cameraOwner: 0, resourceOwner: 0 })` to assert each tag saw >= 1 draw.
+ * Reset is intentional on every `draw([world], { cameraOwner: 0, resourceOwner: 0 })` entry so per-frame assertions
  * stay local (charter proposition 4 explicit failure: test code sees exact
  * per-draw counts, not stale cross-frame totals).
  *
@@ -385,7 +384,7 @@ export interface RenderSystem {
   };
   /**
    * feat-20260528-frustum-culling M5 / w14: per-frame frustum-culling counters.
-   * Updated by `draw([world], { owner: 0 })` on every call from the Extract stage.
+   * Updated by `draw([world], { cameraOwner: 0, resourceOwner: 0 })` on every call from the Extract stage.
    */
   readonly frustumStats: { culled: number; total: number };
   /** Per-frame candidate entities rejected by author visibility. */
@@ -393,7 +392,7 @@ export interface RenderSystem {
   /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
-   * before the first `draw([world], { owner: 0 })` call; populated after the per-frame
+   * before the first `draw([world], { cameraOwner: 0, resourceOwner: 0 })` call; populated after the per-frame
    * graph is built (lazily on first draw). Read-only introspection surface
    * so smoke tests can assert the declarative pass chain is wired without
    * reaching into engine internals.
@@ -401,7 +400,7 @@ export interface RenderSystem {
   readonly perFramePassNames: readonly string[];
   /**
    * feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
-   * createBindGroup counter. Reset to 0 on every `draw([world], { owner: 0 })` entry,
+   * createBindGroup counter. Reset to 0 on every `draw([world], { cameraOwner: 0, resourceOwner: 0 })` entry,
    * bumped on each cache-miss createBindGroup call in the record stage.
    * Aligns with pipelineDispatchCounts precedent: closure-mutable object
    * + draw-entry reset + readonly getter. Stable-frame AC-03 asserts
@@ -447,7 +446,7 @@ export interface RenderSystem {
    * per-frame graph (hot-swap). Takes the payload directly because installation happens at
    * boot/swap time before any World exists -- there is no handle to resolve.
    */
-  installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError>;
+  installPipeline(asset: RenderPipelineAsset): Result<() => void, PipelineError>;
   /**
    * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
    * fullscreen post-process shader registry, parallel to ShaderRegistry.installMaterialArtifact
@@ -457,7 +456,7 @@ export interface RenderSystem {
    * Engine builtins use the `forgeax::` prefix.
    */
   readonly postProcess: {
-    register(id: string, entry: PostProcessShaderEntry): void;
+    register(id: string, entry: PostProcessShaderEntry): () => void;
   };
   /**
    * feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21:
@@ -882,7 +881,7 @@ export interface PipelineState {
   // the 3 BindGroups (view / material / mesh-array) the pbr.wgsl pipeline
   // expects (D-S2 + plan-strategy 1 architecture). The view + material UBOs
   // and the mesh SSBO are reused across frames; only the contents are
-  // queue.writeBuffer-updated each draw([world], { owner: 0 }) invocation.
+  // queue.writeBuffer-updated each draw([world], { cameraOwner: 0, resourceOwner: 0 }) invocation.
   readonly viewBindGroupLayout: BindGroupLayout;
   readonly materialBindGroupLayout: BindGroupLayout;
   readonly meshBindGroupLayout: BindGroupLayout;
@@ -1807,6 +1806,12 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // only forwards). The registry dedups same-id register (Map.has -> throw), mirroring
   // ShaderRegistry.installMaterialArtifact.
   const pipelineRegistry = new Map<string, RenderPipelineDef>();
+  const pipelineInstalls: Array<{
+    readonly token: object;
+    readonly pipeline: RenderPipelineDef;
+    readonly config: RenderPipelineAsset['config'];
+    readonly isHdrp: boolean;
+  }> = [];
   let lastBuiltPipelineHandle = 0;
   // Monotonic install epoch: bumped on every installPipeline call to brand the
   // installed pipeline so `draw` can detect a swap and rebuild the per-frame
@@ -1817,11 +1822,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // post-process shader registry (id -> PostProcessShaderEntry), parallel to pipelineRegistry.
   // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.installMaterialArtifact.
   const postProcessRegistry = new Map<string, PostProcessShaderEntry>();
-  // CPU post-process declarations survive a device loss; only their buffers
-  // and compiled pipelines are device-bound. resetForRecover snapshots these
-  // descriptions before clearing the resource maps, and the renderer invokes
-  // restorePostProcessResources() once the replacement device is live.
-  let postProcessEntriesForRecover: readonly [string, PostProcessShaderEntry][] | null = null;
+  // CPU post-process declarations are the logical registry and remain live
+  // across recovery. Only device-bound buffers and pipelines are rebuilt.
   // D-3 / D-8: per-shader params UBO resource table (id -> GPU Buffer).
   // Eager-created at register time when entry.params is present (byteSize >= 16,
   // defaultValue.length === byteSize); reused frame-to-frame via queue.writeBuffer.
@@ -1872,7 +1874,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     internals as unknown as { getPostProcessPipeline: typeof getPostProcessPipeline }
   ).getPostProcessPipeline = getPostProcessPipeline;
   // w15 M5 (plan-strategy D-P4 / AC-07): per-frame dispatch counters. Reset
-  // on every `draw([world], { owner: 0 })` entry; bumped once per actual `pass.setPipeline`
+  // on every `draw([world], { cameraOwner: 0, resourceOwner: 0 })` entry; bumped once per actual `pass.setPipeline`
   // dispatch in render-system-record.ts. Two-way split mirrors the two
   // render pipelines on PipelineState (bug-20260519: BUILTIN cube migrated
   // to 12F so `unlitBuiltin` retired): `unlit` covers every
@@ -1881,7 +1883,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     unlit: 0,
   };
   // feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
-  // createBindGroup counter scaffolding. Reset on every draw([world], { owner: 0 }) entry,
+  // createBindGroup counter scaffolding. Reset on every draw([world], { cameraOwner: 0, resourceOwner: 0 }) entry,
   // bumped on cache-miss in render-system-record.ts (M2-M4 bump points).
   // Aligns with dispatchCounts precedent: closure-mutable object.
   const bindGroupCounts: { createBindGroup: number; keys: string[] } = {
@@ -2269,12 +2271,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
       }
       try {
-        // w6: resolve the (possibly legacy single-owner) draw options into the
-        // two-index split. cameraOwner drives the surfaced cameras + frustum
+        // cameraOwner drives the surfaced cameras + frustum
         // cull; resourceOwner drives skylight/skybox/postProcess + per-world
-        // record config. When they coincide the whole path is byte-identical to
-        // the pre-split single-owner behaviour.
-        const { cameraOwner, resourceOwner } = resolveDrawOwners(opts);
+        // record config.
+        const { cameraOwner, resourceOwner } = opts;
         // feat-20260601 M1 / w7: pipeline hot-swap detection. If the installed handle
         // changed since the memoized graph was built (a SWAP, not an effect toggle), null
         // perFrameGraph so recordFrame rebuilds it via the now-active pipeline impl. The
@@ -2293,9 +2293,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // feat-20260708-composited-multi-world-rendering M3 / D-2 / m3-i2:
         // extractFrames merges per-world snapshots (renderables + lights from
         // every world, cameras + singleton resources from the owner world),
-        // runs propagateTransforms + tilemapChunkExtractSystem + extractFrame
-        // per world, resetForFrame once, and isolates per-world errors (AC-09).
-        // Single-world draw([world], { owner: 0 }) is the identity path
+        // runs read-only extractFrame per world over the already-updated World,
+        // resets frame state once, and isolates
+        // per-world errors (AC-09).
+        // Single-world draw([world], { cameraOwner: 0, resourceOwner: 0 }) is the identity path
         // (worldId=0), byte-for-byte equivalent to the pre-M3 direct
         // extractFrame path (AC-03 regression guarantee).
         //
@@ -2567,7 +2568,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       }
       pipelineRegistry.set(id, impl);
     },
-    installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError> {
+    installPipeline(asset: RenderPipelineAsset): Result<() => void, PipelineError> {
       const impl = pipelineRegistry.get(asset.pipelineId);
       if (impl === undefined) {
         return err(
@@ -2600,7 +2601,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           throw gridResult.error;
         }
       }
-      frameState.activePipeline = impl;
+      const install = {
+        token: {},
+        pipeline: impl,
+        config: asset.config,
+        isHdrp: asset.pipelineId === 'forgeax::hdrp',
+      };
+      pipelineInstalls.push(install);
+      frameState.activePipeline = install.pipeline;
       // installPipeline no longer carries a handle (D-19: RenderPipelineAsset is
       // installed as a POD at boot/swap time before any World exists). The
       // brand-number that `draw` compares to force a per-frame graph rebuild is
@@ -2609,17 +2617,32 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // is a rare boot/swap event, never a per-frame cost.
       installEpoch += 1;
       frameState.installedPipelineHandle = installEpoch;
-      frameState.isHdrpActive = asset.pipelineId === 'forgeax::hdrp';
+      frameState.isHdrpActive = install.isHdrp;
       // feat-20260601 verify round 2: thread the install-time config to buildGraph. The
       // install epoch changes on every install (two assets sharing one logic id
       // but differing in config get different epochs), so the `draw` brand-number compare
       // already forces a graph rebuild; the rebuilt graph now reads this config via
       // RenderPipelineData.config. config.passCount is no longer a silent no-op.
-      frameState.installedPipelineConfig = asset.config;
-      return ok(undefined);
+      frameState.installedPipelineConfig = install.config;
+      let active = true;
+      return ok(() => {
+        if (!active) return;
+        active = false;
+        const index = pipelineInstalls.findIndex((candidate) => candidate.token === install.token);
+        if (index < 0) return;
+        const wasCurrent = index === pipelineInstalls.length - 1;
+        pipelineInstalls.splice(index, 1);
+        if (!wasCurrent) return;
+        const current = pipelineInstalls.at(-1);
+        frameState.activePipeline = current?.pipeline ?? urpPipeline;
+        frameState.isHdrpActive = current?.isHdrp ?? false;
+        frameState.installedPipelineConfig = current?.config;
+        installEpoch += 1;
+        frameState.installedPipelineHandle = installEpoch;
+      });
     },
     postProcess: {
-      register(id: string, entry: PostProcessShaderEntry): void {
+      register(id: string, entry: PostProcessShaderEntry): () => void {
         if (postProcessRegistry.has(id)) {
           throw new PostProcessError({
             code: 'post-process-already-registered',
@@ -2628,46 +2651,54 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
         // D-3: eager-create params UBO at register time + fail-fast
         // byteSize / defaultValue validation (q5=A).
-        if (entry.params !== undefined) {
-          const { byteSize, defaultValue } = entry.params;
-          if (byteSize < 16 || defaultValue.length !== byteSize) {
-            throw new PostProcessError({
-              code: 'params-size-mismatch',
-              detail: { byteSize, actualLength: defaultValue.length },
+        let paramsBuffer: Buffer | undefined;
+        try {
+          if (entry.params !== undefined) {
+            const { byteSize, defaultValue } = entry.params;
+            if (byteSize < 16 || defaultValue.length !== byteSize) {
+              throw new PostProcessError({
+                code: 'params-size-mismatch',
+                detail: { byteSize, actualLength: defaultValue.length },
+              });
+            }
+            const paramsBufferResult = internals.device.createBuffer({
+              label: `post-process-params-${id}`,
+              size: byteSize,
+              usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+              mappedAtCreation: false,
             });
+            if (!paramsBufferResult.ok) throw paramsBufferResult.error;
+            paramsBuffer = paramsBufferResult.value;
+            const writeResult = internals.device.queue.writeBuffer(paramsBuffer, 0, defaultValue);
+            if (!writeResult.ok) throw writeResult.error;
+          } else if (entryHasDepthRead(entry)) {
+            const paramsBufferResult = internals.device.createBuffer({
+              label: `post-process-params-${id}`,
+              size: DEPTH_MIN_PARAMS_BYTE_SIZE,
+              usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+              mappedAtCreation: false,
+            });
+            if (!paramsBufferResult.ok) throw paramsBufferResult.error;
+            paramsBuffer = paramsBufferResult.value;
           }
-          const paramsBufferResult = internals.device.createBuffer({
-            label: `post-process-params-${id}`,
-            size: byteSize,
-            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
-            mappedAtCreation: false,
-          });
-          if (!paramsBufferResult.ok) throw paramsBufferResult.error;
-          postProcessParamsBuffers.set(id, paramsBufferResult.value);
-          // Write initial defaultValue into the eager-created UBO.
-          const writeResult = internals.device.queue.writeBuffer(
-            paramsBufferResult.value,
-            0,
-            defaultValue,
-          );
-          if (!writeResult.ok) throw writeResult.error;
-        } else if (entryHasDepthRead(entry)) {
-          // D-3: a depth read selects the 'fullscreen-post-with-scene-depth'
-          // BGL, which always declares params@2. Without a bound UBO the
-          // bindgroup arity would mismatch the BGL and dawn would silently
-          // reject createBindGroup (no draw, no error). Auto-allocate a minimal
-          // zero-filled UBO so a param-less depth effect renders (charter P3:
-          // no silent failure on a documented API shape).
-          const paramsBufferResult = internals.device.createBuffer({
-            label: `post-process-params-${id}`,
-            size: DEPTH_MIN_PARAMS_BYTE_SIZE,
-            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
-            mappedAtCreation: false,
-          });
-          if (!paramsBufferResult.ok) throw paramsBufferResult.error;
-          postProcessParamsBuffers.set(id, paramsBufferResult.value);
+          postProcessRegistry.set(id, entry);
+          if (paramsBuffer !== undefined) postProcessParamsBuffers.set(id, paramsBuffer);
+        } catch (cause) {
+          if (paramsBuffer !== undefined) internals.device.destroyBuffer(paramsBuffer);
+          throw cause;
         }
-        postProcessRegistry.set(id, entry);
+        return () => {
+          if (postProcessRegistry.get(id) !== entry) return;
+          postProcessRegistry.delete(id);
+          const paramsBuffer = postProcessParamsBuffers.get(id);
+          if (paramsBuffer !== undefined) {
+            internals.device.destroyBuffer(paramsBuffer);
+            postProcessParamsBuffers.delete(id);
+          }
+          for (const key of postProcessPipelineCache.keys()) {
+            if (key.startsWith(`${id}|`)) postProcessPipelineCache.delete(key);
+          }
+        };
       },
     },
     disposeFrameState(): void {
@@ -2743,29 +2774,42 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // the lost device, so recovery must invalidate this cache alongside the
       // post-process registry/UBOs below.
       postProcessPipelineCache.clear();
-      // (2) post-process declarations + eager param UBOs: declarations are
-      // CPU-owned author intent and must survive recovery (custom template
-      // effects are not re-authored by the host). The UBOs are stale
-      // lost-device handles and are rebuilt after the replacement device is
-      // live. Keep the first snapshot across retry attempts so a failed
-      // recover() cannot erase the preserved declarations.
-      if (postProcessEntriesForRecover === null) {
-        postProcessEntriesForRecover = [...postProcessRegistry.entries()];
-      }
-      postProcessRegistry.clear();
+      // Logical declarations stay live so unregister remains authoritative
+      // while a replacement device is being requested.
       postProcessParamsBuffers.clear();
       resetRenderFeatureGraphState(internals);
     },
     restorePostProcessResources(): void {
-      const entries = postProcessEntriesForRecover;
-      if (entries === null) return;
-      postProcessEntriesForRecover = null;
-      for (const [id, entry] of entries) {
-        // The fresh build registers the built-in tonemap before this replay;
-        // preserving the existing declaration is the idempotent recovery path
-        // for both built-ins and user-authored post-process effects.
-        if (!postProcessRegistry.has(id)) {
-          this.postProcess.register(id, entry);
+      for (const [id, entry] of postProcessRegistry) {
+        let buffer: Buffer | undefined;
+        if (entry.params !== undefined) {
+          const created = internals.device.createBuffer({
+            label: `post-process-params-${id}`,
+            size: entry.params.byteSize,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            mappedAtCreation: false,
+          });
+          if (!created.ok) throw created.error;
+          buffer = created.value;
+          const written = internals.device.queue.writeBuffer(buffer, 0, entry.params.defaultValue);
+          if (!written.ok) {
+            internals.device.destroyBuffer(buffer);
+            throw written.error;
+          }
+        } else if (entryHasDepthRead(entry)) {
+          const created = internals.device.createBuffer({
+            label: `post-process-params-${id}`,
+            size: DEPTH_MIN_PARAMS_BYTE_SIZE,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            mappedAtCreation: false,
+          });
+          if (!created.ok) throw created.error;
+          buffer = created.value;
+        }
+        if (buffer !== undefined && postProcessRegistry.get(id) === entry) {
+          postProcessParamsBuffers.set(id, buffer);
+        } else if (buffer !== undefined) {
+          internals.device.destroyBuffer(buffer);
         }
       }
     },

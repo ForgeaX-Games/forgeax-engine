@@ -103,7 +103,7 @@ world.addSystem(Update, {
 // rAF 主循环：每帧先跑 schedule（system fn 写 Transform SoA 列）再 draw
 const tick = (): void => {
   world.update(1 / 60);
-  renderer.draw([world], { owner: 0 });
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   requestAnimationFrame(tick);
 };
 requestAnimationFrame(tick);

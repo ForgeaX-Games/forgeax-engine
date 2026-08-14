@@ -132,6 +132,8 @@ try {
 } catch (createErr) {
   await deferred(`createRenderer threw: ${createErr instanceof Error ? createErr.message : String(createErr)}`);
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const errors = [];
 renderer.onError((e) => errors.push({ code: e.code }));
 
@@ -242,7 +244,8 @@ for (let f = 0; f < TARGET_FRAMES; f++) {
     markTileLayerDirty(world, layer).unwrap();
     dirtyTriggered = true;
   }
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) {
     console.error(`[hello-tilemap smoke] draw frame ${f} error: ${r.error.code}`);
     process.exit(1);

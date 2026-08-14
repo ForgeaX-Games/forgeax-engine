@@ -889,6 +889,62 @@ describe('tape-format — blob pool dedup', () => {
       expect(new Uint8Array(deserData!)).toEqual(data);
     }
   });
+
+  it('gzip-compressed blob stream round-trips and records its wire mode', () => {
+    const data = new Uint8Array(128 * 1024);
+    data.fill(7);
+    const tape = makeTapeWithEventsAndBlobs(
+      [{ kind: 'createBuffer', handleId: 'buf-1', desc: { size: data.byteLength, usage: 16 } }],
+      [['payload', data]],
+    );
+
+    const compressed = serializeTape(tape, { blobCompression: 'gzip' });
+    const header = JSON.parse(compressed.json) as {
+      header: { blobCompression?: string };
+    };
+    expect(header.header.blobCompression).toBe('gzip');
+    expect(compressed.blob[0]).toBe(0x1f);
+    expect(compressed.blob[1]).toBe(0x8b);
+    expect(compressed.blob.byteLength).toBeLessThan(data.byteLength);
+
+    const res = deserializeTape(compressed.json, compressed.blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(new Uint8Array(res.value.blobPool.get('payload')!)).toEqual(data);
+    }
+  });
+
+  it('recognizes migrated gzip blobs when an old report has no compression field', () => {
+    const data = new Uint8Array(1024).fill(3);
+    const tape = makeTapeWithEventsAndBlobs(
+      [{ kind: 'createBuffer', handleId: 'buf-1', desc: { size: data.byteLength, usage: 16 } }],
+      [['payload', data]],
+    );
+    const compressed = serializeTape(tape, { blobCompression: 'gzip' });
+    const parsed = JSON.parse(compressed.json) as {
+      header: Record<string, unknown>;
+      events: unknown;
+    };
+    delete parsed.header.blobCompression;
+
+    const res = deserializeTape(JSON.stringify(parsed), compressed.blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(new Uint8Array(res.value.blobPool.get('payload')!)).toEqual(data);
+    }
+  });
+
+  it('honors an explicit raw mode even when the first bytes resemble gzip magic', () => {
+    const data = new Uint8Array([0x1f, 0x8b, 0x00, 0x01]);
+    const tape = makeTapeWithEventsAndBlobs([], [['payload', data]]);
+    const raw = serializeTape(tape, { blobCompression: 'none' });
+
+    const res = deserializeTape(raw.json, raw.blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(new Uint8Array(res.value.blobPool.get('payload')!)).toEqual(data);
+    }
+  });
 });
 
 // ============================================================================

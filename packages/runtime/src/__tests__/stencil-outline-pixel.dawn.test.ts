@@ -276,8 +276,9 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       },
     );
 
+    expect(renderer.attachWorld(world).ok).toBe(true);
     world.update(1 / 60).unwrap();
-    const drawn = renderer.draw([world], { owner: 0 });
+    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (renderTarget === undefined) throw new Error('renderTarget not configured');

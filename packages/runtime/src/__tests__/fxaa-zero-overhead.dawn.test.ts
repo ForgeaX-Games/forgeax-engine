@@ -14,6 +14,7 @@ import { ANTIALIAS_NONE, Camera, MeshFilter, MeshRenderer } from '@forgeax/engin
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { createRenderer } from '../index';
+import { drawPublished } from './draw-published';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -148,7 +149,7 @@ describe('feat-20260528-fxaa-post-processing M3 w14: AC-02 zero-overhead pixel t
     );
 
     // Frame 1: render with antialias=none.
-    const drawn1 = renderer.draw([world], { owner: 0 });
+    const drawn1 = drawPublished(renderer, world);
     expect(drawn1.ok).toBe(true);
 
     const device = sharedDevice;
@@ -201,7 +202,7 @@ describe('feat-20260528-fxaa-post-processing M3 w14: AC-02 zero-overhead pixel t
     expect(centerR1 + centerG1 + centerB1).toBeGreaterThan(0);
 
     // Frame 2: render again with antialias=none.
-    const drawn2 = renderer.draw([world], { owner: 0 });
+    const drawn2 = drawPublished(renderer, world);
     expect(drawn2.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 

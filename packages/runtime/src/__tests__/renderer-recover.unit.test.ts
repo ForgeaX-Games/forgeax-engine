@@ -36,6 +36,7 @@ const recoverMock = {
   requestDeviceCalls: 0,
   requestDeviceOptions: [] as unknown[],
   shaderModuleLabels: [] as string[],
+  deviceRequestGate: undefined as Promise<void> | undefined,
 };
 
 function resetRecoverMock(): void {
@@ -45,6 +46,7 @@ function resetRecoverMock(): void {
   recoverMock.requestDeviceCalls = 0;
   recoverMock.requestDeviceOptions = [];
   recoverMock.shaderModuleLabels = [];
+  recoverMock.deviceRequestGate = undefined;
 }
 
 let testDeviceLostResolve: ((info: unknown) => void) | null = null;
@@ -129,6 +131,7 @@ function makeExplicitRhi(): RhiInstance {
     requestDevice: async (options?: unknown) => {
       recoverMock.requestDeviceCalls += 1;
       recoverMock.requestDeviceOptions.push(options);
+      await recoverMock.deviceRequestGate;
       if (recoverMock.deviceThrows) {
         throw new Error('mock requestDevice failure (recover-device-unavailable path)');
       }
@@ -317,6 +320,9 @@ type TestRenderer = {
   assets: { inspect?: () => unknown };
   ready: Promise<unknown>;
   installRenderFeature: (feature: RenderFeature<unknown>) => Promise<Result<void, RenderError>>;
+  postProcess: {
+    register(id: string, entry: { source: string }): () => void;
+  };
   dispose: () => void;
 };
 
@@ -389,6 +395,35 @@ describe('recover() single idempotent rebuild (M3)', () => {
       expect(recoverMock.requestDeviceCalls).toBeGreaterThan(deviceCallsBefore);
       // pipeline rebuild completes; subsequent ready resolves ok.
       await renderer.ready;
+    },
+    RECOVER_BOOT_TIMEOUT_MS,
+  );
+
+  it(
+    'keeps unregister authoritative while recovery is acquiring the replacement device',
+    async () => {
+      const renderer = await makeRenderer();
+      await renderer.ready;
+      const unregister = renderer.postProcess.register('test::recover-race', {
+        source: 'fn main() {}',
+      });
+      await driveDeviceLost(renderer);
+
+      let releaseDevice!: () => void;
+      recoverMock.deviceRequestGate = new Promise<void>((resolve) => {
+        releaseDevice = resolve;
+      });
+      const recovering = renderer.recover();
+      await vi.waitFor(() => expect(recoverMock.requestDeviceCalls).toBeGreaterThan(1));
+      unregister();
+      releaseDevice();
+
+      expect((await recovering).ok).toBe(true);
+      const unregisterReplacement = renderer.postProcess.register('test::recover-race', {
+        source: 'fn main() {}',
+      });
+      unregisterReplacement();
+      renderer.dispose();
     },
     RECOVER_BOOT_TIMEOUT_MS,
   );
@@ -560,7 +595,48 @@ describe('recover() single idempotent rebuild (M3)', () => {
     RECOVER_BOOT_TIMEOUT_MS,
   );
 
-  it('w13(c): recover() function body has no setTimeout / retryCount / recovering / maxRetries', () => {
+  it(
+    'w13(c): concurrent recover calls share one device rebuild',
+    async () => {
+      const renderer = await makeRenderer();
+      await renderer.ready;
+      await driveDeviceLost(renderer);
+      const adapterCallsBefore = recoverMock.requestAdapterCalls;
+
+      const first = renderer.recover();
+      const second = renderer.recover();
+      expect(second).toBe(first);
+      expect((await first).ok).toBe(true);
+      expect(recoverMock.requestAdapterCalls).toBe(adapterCallsBefore + 1);
+    },
+    RECOVER_BOOT_TIMEOUT_MS,
+  );
+
+  it(
+    'w13(d): dispose wins while recovery is acquiring a replacement device',
+    async () => {
+      const renderer = await makeRenderer();
+      await renderer.ready;
+      await driveDeviceLost(renderer);
+
+      let releaseDevice!: () => void;
+      recoverMock.deviceRequestGate = new Promise<void>((resolve) => {
+        releaseDevice = resolve;
+      });
+      const recovering = renderer.recover();
+      await vi.waitFor(() => expect(recoverMock.requestDeviceCalls).toBeGreaterThan(1));
+      renderer.dispose();
+      releaseDevice();
+
+      const result = await recovering;
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('recover-not-needed');
+      expect(renderer.health().reason).not.toBe('alive');
+    },
+    RECOVER_BOOT_TIMEOUT_MS,
+  );
+
+  it('w13(e): recover() function body has no timer or retry loop', () => {
     // Hard acceptanceCheck (PD5): the compressed-discipline mandate forbids any
     // background state machine, retry counter, or timer in the recover path.
     // Source-text assertion over createRenderer.ts isolates the recover()
@@ -569,7 +645,7 @@ describe('recover() single idempotent rebuild (M3)', () => {
       fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
       'utf8',
     );
-    const startIdx = src.indexOf('async recover(): Promise<Result<void, RecoverError>>');
+    const startIdx = src.indexOf('recover(): Promise<Result<void, RecoverError>>');
     expect(startIdx).toBeGreaterThan(-1);
     // The onHealthChange method declaration immediately follows recover() in
     // the renderer facade object; bound the slice there.
@@ -581,7 +657,6 @@ describe('recover() single idempotent rebuild (M3)', () => {
     expect(body).not.toMatch(/retryCount/);
     expect(body).not.toMatch(/maxRetries/);
     expect(body).not.toMatch(/maxLetries/);
-    expect(body).not.toMatch(/recovering/);
   });
 
   // ── w14: preserves CPU POD cache (A-AC-12) ─────────────────────────────────

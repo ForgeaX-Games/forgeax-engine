@@ -201,6 +201,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // raw-device escape hatch demonstrated below: it only supplies the shader
   // manifest URL plumbing.
   const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   // Configure the canvas WebGPU context through the RHI canvas-context
   // abstraction (`acquireCanvasContext(canvas)` -> `canvasContext.
@@ -293,17 +295,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // RenderSystem walks the query graph (D-S2 Extract / Prepare / Record) and
   // submits one GPU command buffer per call. AC-09 contract: RenderSystem is
   // NOT registered to world.systems schedule; world.update() does not run
-  // it - renderer.draw([world], { owner: 0 }) is the sole invocation site.
+  // it - renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }) is the sole invocation site.
   const frame = (): void => {
     if (!clearOnly) {
       // w25 — draw returns Result; ignore .ok for the smoke path (onError
       // listener handles fan-out separately).
       // feat-20260708-composited-multi-world-rendering M3: this is the D-8
       // integration probe -- hello-triangle is the first real consumer migrated
-      // to the new draw(worlds, { owner }) signature (AC-01/AC-02), proving the
+      // to the explicit draw-owner signature (AC-01/AC-02), proving the
       // breaking change compiles + runs end-to-end (dawn-node smoke) rather
       // than passing compile-only. Single world composites at owner 0.
-      const r = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!r.ok) console.error('[triangle] draw error:', r.error);
     } else {
       // Counter-example (ii): skip the draw call, leaving the canvas at
@@ -324,9 +327,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 // bundler + lint happy) so they add no runtime behaviour to the smoke path.
 //
 // Each `@ts-expect-error` asserts the illegal call form fails tsc under the new
-// draw(worlds: World[], { owner: number }) signature:
-//   1. omitting the required `{ owner }` options argument;
-//   2. passing the legacy non-array draw(world) form.
+// draw(worlds: World[], { cameraOwner: number; resourceOwner: number }) signature:
+//   1. omitting the required owner options argument;
+//   2. passing a non-array draw(world) form.
 //
 // Validation timing: hello-triangle is not in the M3 scoped sweep (it is the D-8
 // smoke integration probe), and during the M3->M4 red window the runtime
@@ -335,10 +338,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 // enforced by the M4 full-repo `pnpm run typecheck` gate. The migrated real call
 // above is exercised by the M3 dawn-node smoke (runtime execution).
 function __ac02OwnerRequiredCompileProbes(renderer: Renderer, world: World): void {
-  // @ts-expect-error AC-02: `owner` is required; omitting the options argument must fail tsc.
+  world.update().unwrap();
+  // @ts-expect-error AC-02: owner options are required; omitting them must fail tsc.
   renderer.draw([world]);
+  const worldAttachment2 = renderer.attachWorld(world);
+  if (!worldAttachment2.ok) throw worldAttachment2.error;
   // @ts-expect-error AC-02: `worlds` must be an array; the legacy draw(world) form must fail tsc.
-  renderer.draw(world);
+  renderer.draw(world, { cameraOwner: 0, resourceOwner: 0 });
 }
 void __ac02OwnerRequiredCompileProbes;
 

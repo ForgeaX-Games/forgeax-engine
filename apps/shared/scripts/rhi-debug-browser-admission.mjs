@@ -72,7 +72,7 @@ export async function runRhiDebugBrowserAdmission(options) {
     if (health.pageConnected !== true) throw new Error(`remote-live page did not connect: ${JSON.stringify(health)}`);
     const prep = await remoteEval(
       bridgePort,
-      '(async () => { const updated = world.update(1 / 60); if (!updated.ok) throw updated.error; const drawn = renderer.draw([world], { owner: 0 }); if (!drawn.ok) throw drawn.error; return { updated: true, drawn: true }; })()',
+      '(async () => { const updated = world.update(1 / 60); if (!updated.ok) throw updated.error; const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); if (!drawn.ok) throw drawn.error; return { updated: true, drawn: true }; })()',
     );
     if (prep.updated !== true || prep.drawn !== true) throw new Error(`remote-live capture preparation failed: ${JSON.stringify(prep)}`);
 

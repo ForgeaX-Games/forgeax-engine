@@ -38,6 +38,8 @@ const host = createVfxRuntimeHost({ camera });
 const renderer = await createRenderer(shim.mockCanvas, { features: [host.feature] }, { shaderManifestUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}` });
 const ready = await renderer.ready;
 if (!ready.ok) fail(`Dawn renderer readiness failed: ${ready.error.code}`, { error: ready.error });
+const attachment = renderer.attachWorld(world);
+if (!attachment.ok) throw attachment.error;
 const assets = renderer.assets;
 if (assets === null) fail('Dawn renderer has no AssetRegistry');
 assets.configurePackIndex('/pack-index.json');
@@ -53,7 +55,7 @@ const player = world.spawn({ component: Transform, data: { pos: [0, 0, 0] } }, {
 scenePlugin().build(world).unwrap();
 const errors = []; let drawnFrames = 0;
 renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
-for (let frame = 0; frame < 90; frame += 1) { world.update(1 / 60).unwrap(); const drawn = renderer.draw([world], { owner: 0 }); if (!drawn.ok) errors.push({ code: drawn.error.code, hint: drawn.error.hint }); else drawnFrames += 1; await new Promise((resolve) => setImmediate(resolve)); }
+for (let frame = 0; frame < 90; frame += 1) { world.update(1 / 60).unwrap(); const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); if (!drawn.ok) errors.push({ code: drawn.error.code, hint: drawn.error.hint }); else drawnFrames += 1; await new Promise((resolve) => setImmediate(resolve)); }
 await shim.sharedDevice?.queue.onSubmittedWorkDone();
 const runtime = world.getResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
 const diagnostics = renderer.renderFeatureDiagnostics();

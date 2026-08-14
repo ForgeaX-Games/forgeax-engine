@@ -50,6 +50,7 @@ import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from '../draw-published';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -227,7 +228,7 @@ describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () =
       },
     );
 
-    const drawn = renderer.draw([world], { owner: 0 });
+    const drawn = drawPublished(renderer, world);
     expect(drawn.ok).toBe(true);
 
     const device = sharedDevice;

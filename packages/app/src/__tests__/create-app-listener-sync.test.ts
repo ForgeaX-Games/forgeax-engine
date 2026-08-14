@@ -51,6 +51,10 @@ vi.mock('@forgeax/engine-runtime', async (importOriginal) => {
     draw(): { ok: true; value: undefined } {
       return { ok: true, value: undefined };
     },
+    attachWorld(): { ok: true; value: undefined } {
+      return { ok: true, value: undefined };
+    },
+    detachWorld(): void {},
     onError(): () => void {
       return () => {};
     },

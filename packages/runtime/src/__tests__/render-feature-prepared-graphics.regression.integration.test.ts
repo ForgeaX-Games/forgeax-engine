@@ -206,7 +206,11 @@ async function runCase(
 ): Promise<MatrixResult> {
   const renderer = await rendererWith([feature]);
   const drawCount = observeDrawCalls(renderer.device);
-  const result = renderer.draw([world()], { owner: 0 });
+  const activeWorld = world();
+  const attachment = renderer.attachWorld(activeWorld);
+  if (!attachment.ok) throw attachment.error;
+  activeWorld.update().unwrap();
+  const result = renderer.draw([activeWorld], { cameraOwner: 0, resourceOwner: 0 });
   const firstDiagnostics = renderer.renderFeatureDiagnostics();
   let featureStatuses = firstDiagnostics.map((diagnostic) => diagnostic.status);
   const first: MatrixResult = {
@@ -220,7 +224,8 @@ async function runCase(
   };
   expect(result.ok).toBe(true);
   if (name === 'recovery') {
-    expect(renderer.draw([world()], { owner: 0 }).ok).toBe(true);
+    activeWorld.update().unwrap();
+    expect(renderer.draw([activeWorld], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     featureStatuses = renderer.renderFeatureDiagnostics().map((diagnostic) => diagnostic.status);
   }
   renderer.dispose();
@@ -278,7 +283,11 @@ describe('prepared graphics full-stack regression matrix', () => {
       graphicsFeature('synthetic.failing', failingState, 'mismatch'),
     ]);
     const drawCount = observeDrawCalls(renderer.device);
-    const result = renderer.draw([world()], { owner: 0 });
+    const activeWorld = world();
+    const attachment = renderer.attachWorld(activeWorld);
+    if (!attachment.ok) throw attachment.error;
+    activeWorld.update().unwrap();
+    const result = renderer.draw([activeWorld], { cameraOwner: 0, resourceOwner: 0 });
     const diagnostics = renderer.renderFeatureDiagnostics();
 
     expect(result.ok).toBe(true);
@@ -300,7 +309,11 @@ describe('prepared graphics full-stack regression matrix', () => {
       return submit(buffers);
     };
 
-    const result = renderer.draw([world()], { owner: 0 });
+    const activeWorld = world();
+    const attachment = renderer.attachWorld(activeWorld);
+    if (!attachment.ok) throw attachment.error;
+    activeWorld.update().unwrap();
+    const result = renderer.draw([activeWorld], { cameraOwner: 0, resourceOwner: 0 });
 
     expect(result.ok).toBe(true);
     expect(renderer.renderFeatureDiagnostics()).toEqual([]);

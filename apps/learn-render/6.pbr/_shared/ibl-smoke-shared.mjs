@@ -287,6 +287,8 @@ export async function runIblSmoke(opts) {
 
   // --- 5. Build scene (3x3 sphere matrix) ---
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   // Mint a user-tier handle for the equirect pod. The equirect->cubemap + IBL
   // projection is now INTERNAL to the engine (lazy, in the render record arm) --
@@ -383,7 +385,7 @@ export async function runIblSmoke(opts) {
   let framesObserved = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { owner: 0 });
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
     framesObserved++;
     // Drain the device queue + yield every few frames so the fire-and-forget IBL
@@ -404,7 +406,7 @@ export async function runIblSmoke(opts) {
   }
   for (let i = 0; i < 32; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { owner: 0 });
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error(`[smoke] post-settle draw frame ${i} error: ${r.error.code}`);
     framesObserved++;
     if (i % 8 === 7) {

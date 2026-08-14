@@ -64,19 +64,25 @@ const canvas = {
 };
 
 const { createApp } = await import('@forgeax/engine-app');
-const { AUDIO_ENGINE_RESOURCE_KEY } = await import('@forgeax/engine-audio');
-const { audioPlugin } = await import('@forgeax/engine-audio');
+const { AUDIO_ENGINE_RESOURCE_KEY, audioPlugin, createAudioIntentBackend } = await import('@forgeax/engine-audio');
+const { World } = await import('@forgeax/engine-ecs');
+const { createRenderer } = await import('@forgeax/engine-runtime');
 const { buildSpatialAudioWorld } = await import('../src/spatial-audio-3d.ts');
 const here = dirname(fileURLToPath(import.meta.url));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const shaderManifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 
-const appResult = await createApp(canvas, { plugins: [audioPlugin()] }, { shaderManifestUrl });
+const renderer = await createRenderer(canvas, {}, { shaderManifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
+const world = new World();
+world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, createAudioIntentBackend({ emit: () => {} }));
+const appResult = await createApp({ renderer, world, plugins: [audioPlugin()] });
 if (!appResult.ok) throw new Error(`createApp failed: ${appResult.error.code}`);
 const app = appResult.value;
 const ready = await app.renderer.ready;
 if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
+const attachment = app.renderer.attachWorld(app.world);
+if (!attachment.ok) throw attachment.error;
 
 const scene = buildSpatialAudioWorld(app.world, WIDTH / HEIGHT);
 const errors = [];
@@ -84,7 +90,8 @@ app.onError((error) => errors.push(error));
 let frames = 0;
 let drawErrors = 0;
 for (; frames < MIN_FRAMES; frames += 1) {
-  const result = app.renderer.draw([app.world], { owner: 0 });
+  app.world.update(1 / 60).unwrap();
+  const result = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) drawErrors += 1;
 }
 

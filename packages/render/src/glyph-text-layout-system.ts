@@ -2,10 +2,11 @@
 // (feat-20260531-world-space-msdf-text-rendering M4 / w18).
 //
 // The named ECS system that turns `GlyphText` authoring data into a rendered
-// world-space label (plan-strategy D-2). The renderer invokes it at the top of
-// `draw(world)`, BEFORE the render record (equivalent to a PreRender stage), so
-// a freshly-spawned `GlyphText` entity gains its `MeshFilter` + `MeshRenderer`
-// before the same frame's render walk reaches it. Per `GlyphText` entity:
+// world-space label (plan-strategy D-2). A Renderer attaches it to World's
+// internal render-derived phase,
+// so a freshly-spawned `GlyphText` entity gains its `MeshFilter` +
+// `MeshRenderer` before final publication resolves transforms and the same frame's
+// read-only render walk reaches it. Per `GlyphText` entity:
 //
 //   1. First observation (entity has no `MeshFilter`): resolve the FontAsset,
 //      run `layoutGlyphText` (w15) + `bakeGlyphMesh` (w17), then attach
@@ -27,17 +28,8 @@
 // AABB and the entity carries MeshFilter + MeshRenderer + Transform, so the
 // existing `pick()` raycast walk catches it for free.
 
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import {
-  decodeEntity,
-  Entity,
-  type EntityHandle,
-  err,
-  ok,
-  type Result,
-  type World,
-} from '@forgeax/engine-ecs';
+import { Entity, type EntityHandle, err, ok, type Result, type World } from '@forgeax/engine-ecs';
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import {
   bakeGlyphMesh,
@@ -46,42 +38,73 @@ import {
   resetFontConcurrency,
   trackFontConcurrency,
 } from '@forgeax/engine-graphics-extras';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { FontAsset, Handle, MeshAsset, Submesh } from '@forgeax/engine-types';
-import { TextError } from '@forgeax/engine-types';
+import type { FontAsset, Handle, MaterialAsset, MeshAsset, Submesh } from '@forgeax/engine-types';
+import { TextError, unpackSlot } from '@forgeax/engine-types';
 import { MeshFilter, MeshRenderer } from './components';
 import { GlyphText } from './components/glyph-text';
 import type { GpuResourceStore } from './gpu-resource-store';
-import { worldEntityKey } from './record/frame-snapshot';
 
 // Per-entity bake bookkeeping: the baked mesh handle id + the authoring
-// signature it was baked from. Keyed by the entity index slot (stable across
-// archetype migrations). A signature change triggers an in-place updateMesh;
-// an entity with no entry is a first-observation bake. Module-level because the
-// system is a free function invoked once per frame (mirrors the
-// font-concurrency tracker in glyph-layout.ts).
+// signature it was baked from. A WeakMap owns one cache per World and each
+// entry is bounded by entity slot while retaining the full generation-bearing
+// EntityHandle, so slot reuse replaces stale state instead of aliasing it or
+// growing one historical entry per generation.
 interface BakeRecord {
   readonly meshHandleId: number;
   signature: string;
   /** The MeshRenderer.material handle assigned on first observation. */
   readonly materialHandleId: number;
 }
-const bakeCache = new Map<number, BakeRecord>();
+interface BakeCacheEntry {
+  readonly handle: EntityHandle;
+  readonly record: BakeRecord;
+}
+let bakeCache = new WeakMap<World, Map<number, BakeCacheEntry>>();
 
-// Per-(font, tintColor) MSDF MaterialAsset cache (F-1 / plan D-7). The layout
-// system builds ONE MaterialAsset per distinct (font, color) and reuses its
-// handle across every GlyphText entity sharing that font + tint, so the atlas
-// texture + generated sampler + tintColor + packed distance range are bound to the
-// `forgeax::msdf-text` shader without re-registering a material per frame or
-// per entity (avoids the unbounded-growth hazard mirrored by the mesh
-// bakeCache). Keyed by `${fontHandle}|${r},${g},${b},${a}` because tintColor
-// is a per-text uniform value folded into the material UBO.
-const fontMaterialCache = new Map<string, number>();
+// One current material producer handle per GlyphText entity slot. Continuous
+// tint edits replace and release the previous producer instead of growing a
+// historical color-key cache.
+let materialCache = new WeakMap<World, Map<number, number>>();
+let liveGlyphHandles = new WeakMap<World, Set<number>>();
 
 /** Clear the per-entity bake + per-font material caches (test isolation). */
 export function resetGlyphBakeCache(): void {
-  bakeCache.clear();
-  fontMaterialCache.clear();
+  bakeCache = new WeakMap();
+  materialCache = new WeakMap();
+  liveGlyphHandles = new WeakMap();
+}
+
+function worldBakeCache(world: World): Map<number, BakeCacheEntry> {
+  let cache = bakeCache.get(world);
+  if (cache === undefined) {
+    cache = new Map();
+    bakeCache.set(world, cache);
+  }
+  return cache;
+}
+
+function worldMaterialCache(world: World): Map<number, number> {
+  let cache = materialCache.get(world);
+  if (cache === undefined) {
+    cache = new Map();
+    materialCache.set(world, cache);
+  }
+  return cache;
+}
+
+/** Release renderer-derived producer refs at GlyphText removal time. */
+function releaseGlyphProducers(world: World, entity: EntityHandle): void {
+  const slot = unpackSlot(entity as unknown as number);
+  const bake = bakeCache.get(world)?.get(slot);
+  if (bake?.handle === entity) {
+    world.sharedRefs.release(asMeshHandle(bake.record.meshHandleId));
+    bakeCache.get(world)?.delete(slot);
+  }
+  const material = materialCache.get(world)?.get(slot);
+  if (material !== undefined) {
+    world.sharedRefs.release(asMaterialHandle(material));
+    materialCache.get(world)?.delete(slot);
+  }
 }
 
 // Premultiplied-alpha blend (mirrors the sprite path, plan D-7). The
@@ -127,16 +150,13 @@ interface WorldInternalView {
  * on first observation and re-baking in place on a text / size / color change.
  *
  * @param world The ECS world holding the GlyphText entities.
- * @param assets The AssetRegistry that owns the baked mesh lifecycle.
  * @returns `ok(void)` on a clean pass, or `err(TextError)` carrying the FIRST
  *   structured failure (currently only `font-concurrency-exceeded`). Healthy
  *   entities observed before the failing one are still baked.
  */
 export function glyphTextLayoutSystem(
   world: World,
-  assets: AssetRegistry,
   gpuStore: GpuResourceStore,
-  worldId: number,
 ): Result<void, TextError> {
   resetFontConcurrency();
 
@@ -146,10 +166,17 @@ export function glyphTextLayoutSystem(
   // is gone (feat-20260602 dropped the registered concept); column presence is
   // read directly from the archetype graph by `collectGlyphEntities`.
   const entities = collectGlyphEntities(worldInternal, GlyphText.id);
+  const live = liveGlyphHandles.get(world) ?? new Set<number>();
+  live.clear();
+  for (const entity of entities) live.add(entity as unknown as number);
+  liveGlyphHandles.set(world, live);
+  for (const entry of worldBakeCache(world).values()) {
+    if (!live.has(entry.handle as unknown as number)) releaseGlyphProducers(world, entry.handle);
+  }
 
   let firstError: TextError | null = null;
   for (const entity of entities) {
-    const error = processEntity(world, assets, gpuStore, entity, worldId);
+    const error = processEntity(world, gpuStore, entity);
     if (error !== null && firstError === null) firstError = error;
   }
 
@@ -179,10 +206,8 @@ function collectGlyphEntities(worldInternal: WorldInternalView, gtId: number): E
  */
 function processEntity(
   world: World,
-  assets: AssetRegistry,
   gpuStore: GpuResourceStore,
   entity: EntityHandle,
-  worldId: number,
 ): TextError | null {
   const gtRes = world.get(entity, GlyphText);
   if (!gtRes.ok) return null;
@@ -204,10 +229,19 @@ function processEntity(
   const font = fontRes.value;
 
   const signature = signatureOf(gt);
-  const indexSlot = decodeEntity(entity).index;
-  // D-1a #6: bakeCache key = worldEntityKey(worldId, index) for cross-world isolation.
-  const cacheKey = worldEntityKey(worldId, indexSlot);
-  const cached = bakeCache.get(cacheKey);
+  const entityCache = worldBakeCache(world);
+  const slot = unpackSlot(entity as unknown as number);
+  const cachedEntry = entityCache.get(slot);
+  if (cachedEntry !== undefined && cachedEntry.handle !== entity) {
+    world.sharedRefs.release(asMeshHandle(cachedEntry.record.meshHandleId));
+    const staleMaterial = worldMaterialCache(world).get(slot);
+    if (staleMaterial !== undefined) {
+      world.sharedRefs.release(asMaterialHandle(staleMaterial));
+      worldMaterialCache(world).delete(slot);
+    }
+    entityCache.delete(slot);
+  }
+  const cached = cachedEntry?.handle === entity ? cachedEntry.record : undefined;
 
   // Dirty path: same entity already baked, but the authoring signature changed.
   if (cached !== undefined) {
@@ -245,19 +279,21 @@ function processEntity(
       });
     }
     gpuStore.updateMesh(meshHandle, layout.vertices, layout.indices, 0, submeshes);
-    // A color change re-keys the per-(font, tint) material; re-resolve and
-    // re-bind it in place so the tint follows the authoring edit (the mesh
-    // handle stays stable, only MeshRenderer.material is overwritten).
-    const materialId = resolveTextMaterial(world, assets, gt, font);
+    // A color change replaces the material payload at this entity's stable
+    // derived slot and re-binds the new producer handle in place.
+    const materialId = resolveTextMaterial(world, gt, font, slot);
     if (materialId !== cached.materialHandleId) {
       world.set(entity, MeshRenderer, {
         materials: [materialId] as unknown as never,
       });
     }
-    bakeCache.set(cacheKey, {
-      meshHandleId: cached.meshHandleId,
-      signature,
-      materialHandleId: materialId,
+    entityCache.set(slot, {
+      handle: entity,
+      record: {
+        meshHandleId: cached.meshHandleId,
+        signature,
+        materialHandleId: materialId,
+      },
     });
     return null;
   }
@@ -272,27 +308,30 @@ function processEntity(
   const bake = bakeGlyphMesh(world, layout);
   if (!bake.ok) return null; // register fail-fast (should not happen for w15 output)
 
-  // F-1: resolve (build + cache) the per-(font, tint) MSDF MaterialAsset so the
+  // F-1: resolve the entity-owned MSDF MaterialAsset so the
   // `forgeax::msdf-text` shader + atlas texture + sampler are bound to this
   // text entity (plan D-7). Without this the MeshRenderer would carry material
   // handle 0 -> default mid-grey unlit, and the atlas would never be sampled.
-  const materialId = resolveTextMaterial(world, assets, gt, font);
+  const materialId = resolveTextMaterial(world, gt, font, slot);
 
   world.addComponent(entity, { component: MeshFilter, data: { assetHandle: bake.value.handle } });
   world.addComponent(entity, {
     component: MeshRenderer,
     data: { materials: [materialId] as unknown as never },
   });
-  bakeCache.set(cacheKey, {
-    meshHandleId: handleId(bake.value.handle),
-    signature,
-    materialHandleId: materialId,
+  entityCache.set(slot, {
+    handle: entity,
+    record: {
+      meshHandleId: handleId(bake.value.handle),
+      signature,
+      materialHandleId: materialId,
+    },
   });
   return null;
 }
 
 /**
- * Build (or reuse) the MSDF text MaterialAsset for `(font, tintColor)` and
+ * Build the MSDF text MaterialAsset for one World/entity slot and
  * return its raw unmanaged handle id. The material carries a single
  * Transparent-queue pass on the `forgeax::msdf-text` shader with premultiplied
  * blend, and values binding the tint color, packed atlas distance data, and an
@@ -302,15 +341,12 @@ function processEntity(
  */
 function resolveTextMaterial(
   world: World,
-  assets: AssetRegistry,
   gt: GlyphTextData,
   font: FontAsset,
+  slot: number,
 ): number {
-  const key = `${gt.fontHandle}|${gt.color[0]},${gt.color[1]},${gt.color[2]},${gt.color[3]}`;
-  const cached = fontMaterialCache.get(key);
-  if (cached !== undefined) return cached;
-
-  const reg = assets.catalog(assets.parseGuid(deriveTextMaterialGuid(key)), {
+  const cache = worldMaterialCache(world);
+  const material = {
     kind: 'material',
     passes: [
       {
@@ -329,14 +365,14 @@ function resolveTextMaterial(
       },
     ],
     values: {
-      tintColor: [gt.color[0], gt.color[1], gt.color[2], gt.color[3]],
+      tintColor: [gt.color[0] ?? 1, gt.color[1] ?? 1, gt.color[2] ?? 1, gt.color[3] ?? 1],
       distanceRange: [
         font.common.distanceRange,
         font.common.atlasWidth,
         font.common.atlasHeight,
         0,
       ],
-      baseColorTexture: { texture: AssetGuid.format(font.atlas) },
+      baseColorTexture: { texture: font.atlas },
     },
     parameters: [
       { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
@@ -345,31 +381,14 @@ function resolveTextMaterial(
       { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
       { name: 'normalTexture', type: 'texture', optional: true },
     ],
-  });
-  // catalog can only fail on schema validation; the literal passes/values
-  // above are schema-valid for forgeax::msdf-text, so a failure here is an
-  // engine-internal invariant break. The material then needs a column handle
-  // for the MeshRenderer; mint it from the catalogued payload.
-  const id = reg.ok ? (world.allocSharedRef('MaterialAsset', reg.value) as unknown as number) : 0;
-  fontMaterialCache.set(key, id);
-  return id;
-}
-
-// Deterministic per-(font, tint) material GUID derived from the cache key so
-// repeat resolves catalogue the same row (idempotent). The 32-hex-char digest
-// is the key's char codes folded into a UUIDv4-shaped string -- it never
-// collides with a real asset GUID (the registry catalogues by lowercased GUID
-// string; this synthetic key lives only in the runtime text-material space).
-function deriveTextMaterialGuid(key: string): string {
-  let h = 0x811c9dc5;
-  const hex: string[] = [];
-  for (let i = 0; i < key.length; i++) {
-    h = Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0;
-    hex.push((h & 0xff).toString(16).padStart(2, '0'));
+  } satisfies MaterialAsset;
+  const id = world.allocSharedRef('MaterialAsset', material) as unknown as number;
+  const previous = cache.get(slot);
+  cache.set(slot, id);
+  if (previous !== undefined && previous !== id) {
+    world.sharedRefs.release(asMaterialHandle(previous));
   }
-  while (hex.length < 16) hex.push('00');
-  const h32 = hex.slice(0, 16).join('');
-  return `${h32.slice(0, 8)}-${h32.slice(8, 12)}-4${h32.slice(13, 16)}-8${h32.slice(17, 20)}-${h32.slice(20, 32).padEnd(12, '0')}`;
+  return id;
 }
 
 function signatureOf(gt: GlyphTextData): string {
@@ -385,6 +404,9 @@ function asFontHandle(raw: number): Handle<'FontAsset', 'shared'> {
 }
 function asMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
   return id as unknown as Handle<'MeshAsset', 'shared'>;
+}
+function asMaterialHandle(id: number): Handle<'MaterialAsset', 'shared'> {
+  return id as unknown as Handle<'MaterialAsset', 'shared'>;
 }
 function handleId(handle: Handle<'MeshAsset', 'shared'>): number {
   return handle as unknown as number;

@@ -134,8 +134,17 @@ import { createRenderer } from '@forgeax/engine-runtime';
 
 const renderer = await createRenderer(canvas);
 const ready = await renderer.ready;
-if (ready.ok) renderer.draw([world], { owner: 0 });
+const attached = renderer.attachWorld(world);
+if (ready.ok && attached.ok) {
+  world.update(1 / 60).unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+}
 ```
+
+`attachWorld` installs renderer-required derived-state systems once. Hosts built
+with `createApp` get this wiring automatically. A custom loop attaches each
+World before its first update, then keeps `draw` as a read-only consumer of the
+state published by `World.update()`.
 
 When a host constructs a feature only after its World or asset catalogue is
 ready, use `await renderer.installRenderFeature(feature)`. The late path inserts into
@@ -265,7 +274,11 @@ const feature = {
 
 const renderer = await createRenderer(canvas, { features: [feature] });
 const ready = await renderer.ready;
-if (ready.ok) renderer.draw([world], { owner: 0 });
+const attached = renderer.attachWorld(world);
+if (ready.ok && attached.ok) {
+  world.update(1 / 60).unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+}
 ```
 
 ### Five render terms

@@ -169,8 +169,10 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
       sutErrors.push(e);
     });
 
+    expect(renderer.attachWorld(world).ok).toBe(true);
     for (let f = 0; f < 10; f++) {
-      const drawn = renderer.draw([world], { owner: 0 });
+      world.update(1 / 60).unwrap();
+      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(drawn.ok).toBe(true);
     }
 

@@ -96,6 +96,8 @@ for (let y = 0; y < SPRITE_SIZE; y++) {
   }
 }
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const texture = { kind: 'texture', width: SPRITE_SIZE, height: SPRITE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 const textureId = unwrapHandle(textureHandle);
@@ -138,7 +140,8 @@ world.spawn(
 );
 
 for (let i = 0; i < FRAMES; i++) {
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }
 await device.queue.onSubmittedWorkDone();

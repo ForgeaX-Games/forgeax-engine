@@ -27,6 +27,8 @@
 // the BG construction inside the loop but forgets to re-resolve textureViews
 // per-material -- assertion (b) catches that even if (a) passes).
 
+import type { World as WorldType } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -223,7 +225,7 @@ function buildManifestDataUrl(): string {
 
 interface RendererLike {
   ready: Promise<unknown>;
-  draw: (worlds: unknown, opts: { owner: number }) => void;
+  draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
   onError: (cb: (err: { code: string }) => void) => () => void;
 }
 
@@ -425,7 +427,11 @@ describe('record: per-submesh PBR material BG textureView (bug-20260610 D2 regre
     renderer.onError((e) => errors.push(e.code));
 
     const world = await spawnPbrMultiMaterialScene();
-    renderer.draw([world], { owner: 0 });
+    if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      throw new Error('World attachment failed');
+    }
+    (world as WorldType).update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
     // Filter to the PBR-bucket BG creations only. Sprite / shadow / tonemap
     // BGs use different labels and would falsely inflate the count.
@@ -588,8 +594,16 @@ describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missin
       // Two frames: the RhiError fires per-frame (machine-readable signal), but
       // the console.warn fires exactly once (warn-once across RenderSystem
       // lifetime -- signal/noise floor, charter P3).
-      renderer.draw([world], { owner: 0 });
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       const missing = errors.filter((e) => e.code === 'asset-not-registered');
       expect(missing.length).toBeGreaterThanOrEqual(1);

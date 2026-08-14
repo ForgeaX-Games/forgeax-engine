@@ -125,6 +125,8 @@ describe('drawSource injected worlds are updated same-frame (w9, stale-matrix re
     const renderer = {
       backend: 'webgpu' as const,
       ready: Promise.resolve({ ok: true, value: undefined }),
+      attachWorld: () => ({ ok: true, value: undefined }),
+      detachWorld: () => {},
       draw(worlds: readonly World[]): { ok: true; value: undefined } {
         // worlds is what drawSource returned; find the injected world in it.
         const iw = worlds.find((w) => w === injectedWorld);

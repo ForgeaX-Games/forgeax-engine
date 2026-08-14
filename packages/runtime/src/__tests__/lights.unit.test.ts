@@ -19,8 +19,10 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type {
   PointLightSnapshot,
   ShadowInvalidConfigError,
@@ -1904,7 +1906,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       ) => Promise<{
         backend: string;
         ready: Promise<void>;
-        draw: (worlds: unknown, opts: { owner: number }) => void;
+        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
         onError: (
           cb: (err: { code: string; detail?: unknown; hint?: string; expected?: string }) => void,
         ) => () => void;
@@ -1946,7 +1948,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       ) => Promise<{
         backend: string;
         ready: Promise<void>;
-        draw: (worlds: unknown, opts: { owner: number }) => void;
+        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
         onError: (
           cb: (err: { code: string; detail?: unknown; hint?: string; expected?: string }) => void,
         ) => () => void;
@@ -2022,7 +2024,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         }
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        renderer.draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         const multiLightCalls = warnSpy.mock.calls.filter(
           (c) =>
@@ -2063,7 +2069,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         }
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        renderer.draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         const multiLightCalls = warnSpy.mock.calls.filter(
           (c) =>
@@ -2100,7 +2110,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         world.spawn({ component: C.DirectionalLight, data: directionalLightData(2) });
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        renderer.draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         const multiLightCalls = warnSpy.mock.calls.filter(
           (c) =>
@@ -2141,7 +2155,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
         const errors: { code: string }[] = [];
         renderer.onError((e) => errors.push(e));
-        renderer.draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         expect(errors.some((e) => e.code === 'render-system-multi-light')).toBe(false);
       });
@@ -2175,7 +2193,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
         const errors: { code: string }[] = [];
         renderer.onError((e) => errors.push(e));
-        renderer.draw([world], { owner: 0 });
+        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+          throw new Error('World attachment failed');
+        }
+        (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         expect(errors.some((e) => e.code === 'render-system-multi-light')).toBe(false);
       });

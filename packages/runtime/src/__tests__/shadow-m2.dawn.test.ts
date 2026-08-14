@@ -32,6 +32,7 @@ import {
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from './draw-published';
 
 // ── Fixture constants SSOT (plan-strategy section 8.1 test anchor) ─────────
 
@@ -303,7 +304,7 @@ describe('shadow M2 dawn (AC-12 real)', () => {
       // Build fixture world and render at least one frame to populate
       // the shadow depth texture.
       const world = buildFixtureWorld();
-      const drawResult = renderer.draw([world], { owner: 0 });
+      const drawResult = drawPublished(renderer, world);
       expect(drawResult.ok).toBe(true);
 
       // Verify the shadow RT exists (shadow pass ran).

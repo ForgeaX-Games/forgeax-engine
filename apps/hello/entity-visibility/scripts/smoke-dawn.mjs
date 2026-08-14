@@ -252,6 +252,8 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
   gpu.requestAdapter = originalRequestAdapter;
   const ready = await renderer.ready;
   if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
+  const attachment = renderer.attachWorld(world.value);
+  if (!attachment.ok) throw attachment.error;
   const errors = [];
   renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
   const captureFrames = {
@@ -268,7 +270,7 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
     if (frame === Math.floor((frames * 5) / 6)) scene.setAncestorHidden();
     const updateResult = world.value.update(1 / 60);
     if (!updateResult.ok) errors.push({ code: updateResult.error.code, hint: updateResult.error.hint });
-    const drawResult = renderer.draw([world.value], { owner: 0 });
+    const drawResult = renderer.draw([world.value], { cameraOwner: 0, resourceOwner: 0 });
     if (!drawResult.ok) errors.push({ code: drawResult.error.code, hint: drawResult.error.hint });
     for (const [phase, captureFrame] of Object.entries(captureFrames)) {
       if (frame === captureFrame) {

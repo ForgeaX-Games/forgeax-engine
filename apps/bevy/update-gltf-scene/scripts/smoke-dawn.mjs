@@ -82,6 +82,8 @@ const material = toMaterialAsset(materialIr);
 assets.catalog(guidFor('mesh'), mesh);
 assets.catalog(guidFor('material'), material);
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const meshHandle = world.allocSharedRef('MeshAsset', mesh);
 const materialHandle = world.allocSharedRef('MaterialAsset', material);
 const meshNode = docResult.value.nodes[0];
@@ -134,7 +136,8 @@ async function meanLuma() {
 let frames = 0;
 for (; frames < minFrames; frames += 1) {
   stepUpdateGltfScene(world, frames / 60);
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) errors.push(result.error);
 }
 const luma = await meanLuma();

@@ -420,11 +420,13 @@ async function compareDemo(demo) {
   }
 
   console.log(`  backend=${renderer.backend}`);
+  renderer.attachWorld(world).unwrap();
 
   // 6. Run frames 0..29
   for (let frame = 0; frame < TARGET_FRAME; frame++) {
     currentFrame = frame;
-    renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     await delay(0);
   }
 

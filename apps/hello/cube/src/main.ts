@@ -107,7 +107,7 @@ if (!app.ok) {
                 capturedDevice: debugRhi._getCapturedDevice() !== undefined,
               };
         },
-        drawOnce: () => app.value.renderer.draw([world], { owner: 0 }),
+        drawOnce: () => app.value.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }),
       },
     });
   }

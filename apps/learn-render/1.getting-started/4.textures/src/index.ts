@@ -264,6 +264,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // off HANDLE_CUBE via the two-tier `resolveAssetHandle` (M8 D-15) and
     // re-catalogued under the demo GUID via `catalog`.
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
     const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
     if (!cubeAssetRes.ok) {
       console.error('[learn-render 1.4 textures] HANDLE_CUBE asset unavailable');
@@ -360,7 +362,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // automatically consumes baseColorTexture via AssetRegistry.get
     // TextureGpuView (research F-6 fix) on every frame.
     const tick = (): void => {
-      const drawn = renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       if (!drawn.ok) {
         console.error('[learn-render 1.4 textures] draw failed:', drawn.error);
         return;
@@ -382,7 +385,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     type TexturesCaptureHook = () => Promise<Uint8Array>;
     const win = window as unknown as { __captureTextures?: TexturesCaptureHook };
     win.__captureTextures = async (): Promise<Uint8Array> => {
-      renderer.draw([world], { owner: 0 });
+      world.update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       const r = await renderer.readPixels();
       if (!r.ok) throw new Error(`[learn-render 1.4 textures] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
       return r.value;

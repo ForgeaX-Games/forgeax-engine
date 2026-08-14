@@ -20,6 +20,7 @@ import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from '../draw-published';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -227,7 +228,7 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       },
     );
 
-    const drawn = renderer.draw([world], { owner: 0 });
+    const drawn = drawPublished(renderer, world);
     expect(drawn.ok).toBe(true);
     if (sharedDevice !== undefined) {
       await sharedDevice.queue.onSubmittedWorkDone();

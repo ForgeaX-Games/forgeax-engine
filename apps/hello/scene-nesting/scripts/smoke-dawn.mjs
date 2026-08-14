@@ -149,6 +149,8 @@ if (!ready.ok) {
 // Mint a user-tier column handle for the unlit material so the inline
 // SceneAsset materials array references a real shared-ref id.
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const unlitMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([0.8, 0.4, 0.2, 1]));
 
 // R2/B-5: bind a real material to the cube so the smoke produces a
@@ -267,7 +269,8 @@ const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 1
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

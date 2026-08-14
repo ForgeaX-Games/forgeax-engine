@@ -61,6 +61,8 @@ if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
 const pixels = makeShipPixels();
 const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: TEXTURE_SIZE, height: TEXTURE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
 if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
@@ -90,7 +92,8 @@ for (let i = 0; i < frames; i += 1) {
   propagateTransforms(world);
   if (!stepRotateToCursor(world, scene, screenX, height * 0.5, width, height)) throw new Error(`[smoke] cursor ray missed at frame ${i}`);
   propagateTransforms(world);
-  const drawn = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawn.ok) throw new Error(`${drawn.error.code}: ${drawn.error.hint}`);
   if (i === Math.max(1, Math.floor(frames * 0.05))) { early = await capture(); earlyRotation = readShipRotation(world, scene); }
   if (i === frames - 1) { late = await capture(); lateRotation = readShipRotation(world, scene); }

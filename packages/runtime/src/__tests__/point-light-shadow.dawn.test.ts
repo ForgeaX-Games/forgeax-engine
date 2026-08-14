@@ -12,6 +12,7 @@
 // 6*N layers (plan-strategy risk R-1).
 
 import { describe, expect, it } from 'vitest';
+import { drawPublished } from './draw-published';
 
 const WIDTH = 512;
 const HEIGHT = 512;
@@ -687,7 +688,7 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         },
       );
 
-      const drawnBaseline = renderer.draw([worldBaseline], { owner: 0 });
+      const drawnBaseline = drawPublished(renderer, worldBaseline);
       expect(drawnBaseline.ok).toBe(true);
       await device.queue.onSubmittedWorkDone();
       if (renderTarget === undefined) throw new Error('renderTarget not configured');
@@ -769,10 +770,10 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       // Render two frames of the shadow scene -- the first allocates the
       // ShadowAtlas + warms the shadow caster PSO cache; the second is the
       // assertion frame.
-      const drawnShadow1 = renderer.draw([worldShadow], { owner: 0 });
+      const drawnShadow1 = drawPublished(renderer, worldShadow);
       expect(drawnShadow1.ok).toBe(true);
       await device.queue.onSubmittedWorkDone();
-      const drawnShadow2 = renderer.draw([worldShadow], { owner: 0 });
+      const drawnShadow2 = drawPublished(renderer, worldShadow);
       expect(drawnShadow2.ok).toBe(true);
       await device.queue.onSubmittedWorkDone();
       if (renderTarget === undefined) throw new Error('renderTarget not configured');

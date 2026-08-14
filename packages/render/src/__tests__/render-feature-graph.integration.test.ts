@@ -1,6 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { RenderGraph } from '@forgeax/engine-render-graph';
-import { type RhiNullDevice, rhi } from '@forgeax/engine-rhi-null';
+import type { RhiCanvasContext } from '@forgeax/engine-rhi';
+import { RhiNullCanvasContext, type RhiNullDevice, rhi } from '@forgeax/engine-rhi-null';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { constructRenderer } from '../construct-renderer';
@@ -64,16 +65,17 @@ function feature(
 function pipeline(
   trace: string[],
   builds: { count: number; graph: RenderGraph<RenderPipelineContext> | undefined },
+  baseName = 'base',
 ): RenderPipeline {
   return {
     buildGraph: (context) => {
       builds.count += 1;
       const graph = new RenderGraph<RenderPipelineContext>();
-      graph.addResource('base', resource);
-      graph.addPass('base', {
+      graph.addResource(baseName, resource);
+      graph.addPass(baseName, {
         reads: [],
-        writes: ['base'],
-        execute: () => trace.push('base'),
+        writes: [baseName],
+        execute: () => trace.push(baseName),
       });
       const compiled = graph.compile({
         backendKind: context.runtime.device.caps.backendKind,
@@ -89,6 +91,48 @@ function pipeline(
 }
 
 describe('render feature graph composition', () => {
+  it('removes pipeline installations by lease without reviving a disposed predecessor', async () => {
+    const renderer = await constructRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
+    expect((await renderer.ready).ok).toBe(true);
+    const firstBuilds = {
+      count: 0,
+      graph: undefined as RenderGraph<RenderPipelineContext> | undefined,
+    };
+    const secondBuilds = {
+      count: 0,
+      graph: undefined as RenderGraph<RenderPipelineContext> | undefined,
+    };
+    renderer.registerPipeline('synthetic::first', pipeline([], firstBuilds, 'first'));
+    renderer.registerPipeline('synthetic::second', pipeline([], secondBuilds, 'second'));
+    const first = renderer.installPipeline({
+      kind: 'render-pipeline',
+      pipelineId: 'synthetic::first',
+    });
+    const second = renderer.installPipeline({
+      kind: 'render-pipeline',
+      pipelineId: 'synthetic::second',
+    });
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    const world = new World();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(renderer.perFramePassNames).toContain('second');
+
+    first.value();
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(renderer.perFramePassNames).toContain('second');
+
+    second.value();
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(renderer.perFramePassNames).not.toContain('first');
+    expect(renderer.perFramePassNames).not.toContain('second');
+    renderer.dispose();
+  });
+
   it('uses the active RenderSystem graph and one submit boundary', async () => {
     const trace: string[] = [];
     const builds = {
@@ -129,7 +173,10 @@ describe('render feature graph composition', () => {
       return submit(buffers);
     };
 
-    const drawn = renderer.draw([new World()], { owner: 0 });
+    const world = new World();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update().unwrap();
+    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
     expect(drawn.ok).toBe(true);
     expect(builds.graph).toBeDefined();
@@ -153,7 +200,8 @@ describe('render feature graph composition', () => {
     trace.length = 0;
     device.totalDrawCount = 0;
     submitCount = 0;
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(builds.count).toBe(1);
     expect(submitCount).toBe(1);
     expect(trace).toEqual([
@@ -167,11 +215,68 @@ describe('render feature graph composition', () => {
     trace.length = 0;
     device.totalDrawCount = 0;
     submitCount = 0;
-    expect(renderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     expect(builds.count).toBe(2);
     expect(submitCount).toBe(1);
     expect(renderer.perFramePassNames).toContain('synthetic.alpha::alpha-rebuilt');
     expect(trace).toContain('synthetic.alpha:alpha-rebuilt');
+  });
+
+  it('rejects a cyclic pipeline before acquiring the swap-chain texture', async () => {
+    let currentTextureCalls = 0;
+    const countedRhi = {
+      ...rhi,
+      acquireCanvasContext: (): { ok: true; value: RhiCanvasContext } => {
+        const base = new RhiNullCanvasContext();
+        return {
+          ok: true,
+          value: {
+            configure: base.configure.bind(base),
+            unconfigure: base.unconfigure.bind(base),
+            getConfiguration: base.getConfiguration.bind(base),
+            getCurrentTexture: () => {
+              currentTextureCalls += 1;
+              return base.getCurrentTexture();
+            },
+          },
+        };
+      },
+    };
+    const renderer = await constructRenderer(
+      canvas(),
+      { rhi: countedRhi },
+      { shaderManifestUrl: manifest },
+    );
+    expect((await renderer.ready).ok).toBe(true);
+
+    const cycle = new RenderGraph<RenderPipelineContext>();
+    cycle.addResource('cycle-a', resource);
+    cycle.addResource('cycle-b', resource);
+    cycle.addPass('cycle-pass-a', { reads: ['cycle-b'], writes: ['cycle-a'] });
+    cycle.addPass('cycle-pass-b', { reads: ['cycle-a'], writes: ['cycle-b'] });
+    renderer.registerPipeline('synthetic::cycle', {
+      buildGraph: (context) => {
+        const compiled = cycle.compile({
+          backendKind: context.runtime.device.caps.backendKind,
+          caps: context.runtime.device.caps,
+          device: context.runtime.device,
+        });
+        expect(compiled).toMatchObject({ ok: false, error: { code: 'cyclic-dependency' } });
+        return null;
+      },
+      execute: () => undefined,
+    });
+    expect(
+      renderer.installPipeline({ kind: 'render-pipeline', pipelineId: 'synthetic::cycle' }).ok,
+    ).toBe(true);
+
+    const world = new World();
+    expect(renderer.attachWorld(world).ok).toBe(true);
+    world.update().unwrap();
+    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(currentTextureCalls).toBe(0);
+    expect(renderer.perFramePassNames).toEqual([]);
   });
 
   it('attributes graph pass failures to the owning feature', async () => {
@@ -200,7 +305,10 @@ describe('render feature graph composition', () => {
         pipelineId: 'synthetic::pipeline',
       }).ok,
     ).toBe(true);
-    expect(passRenderer.draw([new World()], { owner: 0 }).ok).toBe(true);
+    const world = new World();
+    expect(passRenderer.attachWorld(world).ok).toBe(true);
+    world.update().unwrap();
+    expect(passRenderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
     const passError = passErrors.find(
       (error) => error.code === 'render-feature-draw-recording-failed',
     );

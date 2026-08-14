@@ -493,13 +493,16 @@ async function main() {
   const WARM_UP = 30;
   const measureFrames = FRAMES - WARM_UP;
   let drawErrors = 0;
+  renderer.attachWorld(world).unwrap();
   for (let i = 0; i < WARM_UP; i++) {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) drawErrors++;
   }
   const t0 = process.hrtime.bigint();
   for (let i = 0; i < measureFrames; i++) {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) drawErrors++;
   }
   await sharedDevice?.queue.onSubmittedWorkDone();

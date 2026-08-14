@@ -7,7 +7,7 @@ Composited multi-world rendering exemplar for `@forgeax/engine-runtime`
 merged-world draw signature AI users discover via `@forgeax/engine-runtime`:
 
 ```ts
-renderer.draw([worldA, worldB], { owner: 0 });
+renderer.draw([worldA, worldB], { cameraOwner: 0, resourceOwner: 0 });
 ```
 
 ## Scene

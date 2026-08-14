@@ -351,9 +351,12 @@ export function classifyRequiredContextAdmission(input = {}) {
     });
   }
 
-  const failedContexts = requiredJobs
-    .filter((job) => FAILURE_CONCLUSIONS.has(jobConclusion(job)))
-    .map((job) => jobName(job));
+  const failedContextSet = new Set(
+    requiredJobs
+      .filter((job) => FAILURE_CONCLUSIONS.has(jobConclusion(job)))
+      .map((job) => jobName(job)),
+  );
+  const failedContexts = REQUIRED_CHECK_NAMES.filter((name) => failedContextSet.has(name));
   const unknownContexts = requiredJobs
     .filter((job) => {
       const conclusion = jobConclusion(job);

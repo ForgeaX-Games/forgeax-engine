@@ -275,6 +275,7 @@ export function worldUpdate(
   void,
   TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError | WorldPoisonedError
 > {
+  world._beginFramePublication();
   if (world.execution.health === 'poisoned') {
     return err(new WorldPoisonedError(world.identity, world.execution.fault));
   }
@@ -339,6 +340,14 @@ export function worldUpdate(
   if (frameEnd && frameEnd.systems.size > 0) {
     runSchedule(frameEnd, world, world._getErrorHandler());
   }
+  // Terminal owner pipeline. It is deliberately not a public Schedule: user
+  // systems cannot register after the final Transform.world publication.
+  // The first publication gives camera-dependent render derivation current
+  // matrices; the second publishes transforms of newly derived entities.
+  world._publishFrameTransforms();
+  world._deriveFrameRenderState();
+  world._publishFrameTransforms();
+  world._completeFramePublication();
   return ok(undefined);
 }
 

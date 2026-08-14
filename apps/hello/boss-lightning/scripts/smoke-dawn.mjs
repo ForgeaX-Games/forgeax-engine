@@ -129,6 +129,8 @@ if (!ready.ok) {
   console.error(`[smoke-dawn] FAIL readiness=${ready.error.code} ${ready.error.hint}`);
   process.exit(1);
 }
+const attachment = renderer.attachWorld(world);
+if (!attachment.ok) throw attachment.error;
 const assets = renderer.assets;
 if (assets === null) throw new Error('AssetRegistry unavailable');
 assets.configurePackIndex('/pack-index.json');
@@ -270,7 +272,7 @@ for (let frame = 0; frame < frameLimit; frame += 1) {
     });
     eventSubmitted = true;
   }
-  const drawn = renderer.draw([world], { owner: 0 });
+  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawn.ok) {
     errors.push({
       code: drawn.error.code,
@@ -312,7 +314,8 @@ if (m11Mode) {
   const currentInspect = runtime.inspectPlayer(playerEntity);
   for (let recoveryFrame = 0; recoveryFrame < 10; recoveryFrame += 1) {
     currentFrame += 1;
-    const recoveredDraw = renderer.draw([world], { owner: 0 });
+    world.update(1 / 60).unwrap();
+    const recoveredDraw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!recoveredDraw.ok) {
       errors.push({
         code: recoveredDraw.error.code,
@@ -322,7 +325,6 @@ if (m11Mode) {
       });
     }
     await new Promise(resolve => setImmediate(resolve));
-    if (recoveryFrame < 9) world.update(1 / 60).unwrap();
   }
   queuedIntents = runtime.snapshot().length;
   runtimeDiagnostics = runtime.diagnostics();

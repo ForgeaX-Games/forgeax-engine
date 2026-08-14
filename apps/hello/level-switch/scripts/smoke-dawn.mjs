@@ -162,6 +162,8 @@ try {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 console.log(`[hello-level-switch] backend=${renderer.backend}`);
 
 const ready = await renderer.ready;
@@ -324,7 +326,7 @@ const STATE_VARIANTS = ['tutorial', 'street-a'];
 for (const variant of STATE_VARIANTS) {
   setNextState(world, LevelId, variant);
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] warmup transition to ${variant} failed: ${r.error.code}`);
 }
 console.log('[smoke] warmup transitions complete: tutorial -> street-a');
@@ -333,7 +335,7 @@ console.log('[smoke] warmup transitions complete: tutorial -> street-a');
 const BASELINE_FRAMES = 30;
 for (let i = 0; i < BASELINE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] baseline draw frame ${i} error: ${r.error.code}`);
 }
 
@@ -346,7 +348,7 @@ for (let s = 0; s < 10; s++) {
   const variant = STATE_VARIANTS[s % STATE_VARIANTS.length];
   setNextState(world, LevelId, variant);
   world.update(1 / 60).unwrap();
-  renderer.draw([world], { owner: 0 });
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 const switchTotalWall = performance.now() - switchTotalStart;
 console.log(`[smoke] INFO - 10-switch wall = ${switchTotalWall.toFixed(2)}ms`);
@@ -354,7 +356,7 @@ console.log(`[smoke] INFO - 10-switch wall = ${switchTotalWall.toFixed(2)}ms`);
 // Stabilise: 5 frames after all switches.
 for (let i = 0; i < 5; i++) {
   world.update(1 / 60).unwrap();
-  renderer.draw([world], { owner: 0 });
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 
 // AC-14 #2: Player survives through all transitions.
@@ -412,7 +414,7 @@ console.log(`[smoke] GATE 4/5 PASS: falsification check — scope-despawn verifi
 const remainingFrames = Math.max(0, SMOKE_MIN_FRAMES - BASELINE_FRAMES - 10 - 5);
 for (let i = 0; i < remainingFrames; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] tail draw frame ${i} error: ${r.error.code}`);
 }
 

@@ -274,6 +274,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (falsify === 'missing-normal-resource') throw new Error('FALSIFY_EXPECTED_FAILURE:missing-normal-resource');
 
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   const materialArtifact = shader.findMaterialArtifact(PULSE_MATERIAL_SHADER_PATH);
   if (!materialArtifact.ok) {
@@ -541,7 +543,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     derivedValues.time = liveResizeEnabled || liveMutationEnabled ? 0 : (now - startTime) / 1000;
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) {
       drawErrorCodes.push(r.error.code);
       console.error('[custom-shader] draw error:', r.error);

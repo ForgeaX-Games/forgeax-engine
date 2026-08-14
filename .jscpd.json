@@ -1647,6 +1647,13 @@
         "apps/bevy/gamepad-input/scripts/smoke-dawn.mjs"
       ],
       "rationale": "solo bevy-examples round 20260729-191752: touch_input and gamepad_input are sibling frame-start input examples, so they intentionally keep the canonical Dawn global injection and mock-canvas recipe inline for AI grepability. Their pointer fixtures, state proofs, and verdicts are distinct; extract only if a third raw-input smoke repeats the same bootstrap."
+    },
+    {
+      "files": [
+        "apps/bevy/component-hooks/scripts/smoke-browser.mjs",
+        "apps/bevy/system-closure/scripts/smoke-browser.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260813-210615: both ECS browser admissions keep the low-level RHI tape buffer decoder inline so an AI user can inspect one demo's material and scene proof without traversing a helper. The assertions remain demo-specific: component_hooks proves two lifecycle marker slices; system_closure proves three closure tracks and their movement bands. Revisit if a third Bevy RHI browser admission needs the same decoder."
     }
   ]
 }

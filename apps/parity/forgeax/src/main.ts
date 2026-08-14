@@ -105,6 +105,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // path consumes the unlit entry). Default `shaderManifestUrl` resolves;
   // no inline data: URL is required.
   const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
   // Note: @forgeax/engine-runtime internally configures the canvas context
   // with its own `bgra8unorm` + alphaMode:'opaque' format during pipeline
   // setup (createRenderer.ts:1709 applyCanvasConfiguration). An additional
@@ -149,10 +151,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Static fixture: draw once. window.__captureRight re-issues a draw
   // before each readback so the canvas observes the latest frame even
   // if the compositor cleared it between calls.
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
   declare_capture_hook(renderer, () => {
-    renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   });
 }
 

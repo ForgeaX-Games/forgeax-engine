@@ -140,6 +140,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   // Single entity holding the Instances component + cube mesh + standard
   // material renderer. Per requirements.md §4 "Per-draw fallback" + group
@@ -196,7 +198,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Steady rAF loop so scripts/metrics/run-fps.mjs observes natural pacing
   // across its sampleCount * frameCount window.
   const tick = (): void => {
-    renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);

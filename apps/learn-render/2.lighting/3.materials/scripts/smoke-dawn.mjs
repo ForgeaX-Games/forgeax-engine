@@ -180,6 +180,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // Register materials (mirrors src/index.ts scene setup).
 // Single standard material with roughness ~0.3 (PBR equivalent of LO shininess=32).
@@ -290,7 +292,7 @@ let device;
 let probeReadbackBuffer;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
   if (!device && sharedDevice) device = sharedDevice;

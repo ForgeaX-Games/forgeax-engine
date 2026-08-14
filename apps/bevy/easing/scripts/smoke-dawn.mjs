@@ -139,6 +139,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildEasingWorld(world);
 
 // --- read the two movers' x by mode (0=linear, 1=eased) ---
@@ -198,7 +200,8 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   const u = (i % 120) / 120; // sweep 0..1 over 120 frames
   stepEasing(world, u);
   propagateTransforms(world);
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
   if (i === CAPTURE_EARLY) earlyFrame = await capture(sharedDevice);

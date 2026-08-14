@@ -257,6 +257,10 @@ const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 const rendererErrors = [];
 renderer.onError((err) => rendererErrors.push({ code: err.code, hint: err.hint }));
+const unsubscribeFrameEnd = renderer.subscribeFrameEnd(() => {
+  pipelineRecoveryState.frameEndCount += 1;
+  pipelineRecoveryState.lastSubmittedPipelineId = pipelineRecoveryState.activePipelineId;
+});
 
 const ready = await renderer.ready;
 if (!ready.ok) {
@@ -365,8 +369,29 @@ world.spawn(
 
 const OFFSCREEN_COLOR_KEY = 'offscreenColor';
 const OFFSCREEN_DEPTH_KEY = 'offscreenDepth';
+const CYCLE_PIPELINE_ID = 'learn-render-5-pipeline::cycle';
+const REPAIRED_PIPELINE_ID = 'learn-render-5-pipeline::repaired';
+const CYCLE_PASS_A = 'cycle-pass-a';
+const CYCLE_PASS_B = 'cycle-pass-b';
+const CYCLE_RESOURCE_A = 'cycle-resource-a';
+const CYCLE_RESOURCE_B = 'cycle-resource-b';
+const REPAIRED_PASS_A = 'repaired-stage-a';
+const REPAIRED_PASS_B = 'repaired-stage-b';
+const REPAIRED_RESOURCE_A = 'repaired-resource-a';
+const REPAIRED_RESOURCE_B = 'repaired-resource-b';
 
-function makeEffectPipeline(shaderId) {
+const pipelineRecoveryState = {
+  activePipelineId: null,
+  cycleDiagnostic: null,
+  cycleDrawSubmitted: null,
+  repairedDrawSubmitted: null,
+  repairedPassOrder: [],
+  lastPassNames: [],
+  frameEndCount: 0,
+  lastSubmittedPipelineId: null,
+};
+
+function makeEffectPipeline(shaderId, configureGraph) {
   return {
     buildGraph(ctx) {
       const graph = new RenderGraph();
@@ -382,9 +407,11 @@ function makeEffectPipeline(shaderId) {
         sample: 1,
         usage: 0x10,
       });
+      configureGraph?.(graph);
       addScenePass(graph, 'main', {
         color: OFFSCREEN_COLOR_KEY,
         depth: OFFSCREEN_DEPTH_KEY,
+        ...(configureGraph === undefined ? {} : { reads: [REPAIRED_RESOURCE_B] }),
         _routeFromOpts: true,
       });
       addFullscreenPass(graph, 'post', {
@@ -406,6 +433,61 @@ function makeEffectPipeline(shaderId) {
       ctx.frameState.perFrameGraph?.execute(ctx);
     },
   };
+}
+
+function makeCyclePipeline() {
+  return {
+    buildGraph(ctx) {
+      const graph = new RenderGraph();
+      graph.addResource(CYCLE_RESOURCE_A, { kind: 'buffer', lifetime: 'transient' });
+      graph.addResource(CYCLE_RESOURCE_B, { kind: 'buffer', lifetime: 'transient' });
+      graph.addPass(CYCLE_PASS_A, { reads: [CYCLE_RESOURCE_B], writes: [CYCLE_RESOURCE_A] });
+      graph.addPass(CYCLE_PASS_B, { reads: [CYCLE_RESOURCE_A], writes: [CYCLE_RESOURCE_B] });
+      const compileResult = graph.compile({
+        backendKind: ctx.runtime.device.caps.backendKind,
+        caps: ctx.runtime.device.caps,
+        device: ctx.runtime.device,
+      });
+      if (!compileResult.ok) {
+        const detail = compileResult.error.detail;
+        pipelineRecoveryState.cycleDiagnostic = {
+          code: compileResult.error.code,
+          expected: compileResult.error.expected,
+          hint: compileResult.error.hint,
+          detail: detail && 'cycle' in detail ? { cycle: [...detail.cycle] } : undefined,
+        };
+        return null;
+      }
+      return graph;
+    },
+    execute(ctx) {
+      ctx.frameState.perFrameGraph?.execute(ctx);
+    },
+  };
+}
+
+function configureRepairedGraph(graph) {
+  pipelineRecoveryState.repairedPassOrder = [];
+  graph.addResource(REPAIRED_RESOURCE_A, { kind: 'buffer', lifetime: 'transient' });
+  graph.addResource(REPAIRED_RESOURCE_B, { kind: 'buffer', lifetime: 'transient' });
+  graph.addPass(REPAIRED_PASS_A, {
+    reads: [],
+    writes: [REPAIRED_RESOURCE_A],
+    execute() {
+      pipelineRecoveryState.repairedPassOrder.push(REPAIRED_PASS_A);
+    },
+  });
+  graph.addPass(REPAIRED_PASS_B, {
+    reads: [REPAIRED_RESOURCE_A],
+    writes: [REPAIRED_RESOURCE_B],
+    execute() {
+      pipelineRecoveryState.repairedPassOrder.push(REPAIRED_PASS_B);
+    },
+  });
+}
+
+function makeRepairedPipeline() {
+  return makeEffectPipeline('learn-render-5::passthrough', configureRepairedGraph);
 }
 
 const SHADER_FILE = {
@@ -469,12 +551,28 @@ if (registerErrCount > 0) {
   process.exit(1);
 }
 
+try {
+  renderer.registerPipeline(CYCLE_PIPELINE_ID, makeCyclePipeline());
+  renderer.registerPipeline(REPAIRED_PIPELINE_ID, makeRepairedPipeline());
+} catch (e) {
+  originalConsoleError('[smoke] FAIL - recovery pipeline register threw:', e instanceof Error ? e.message : String(e));
+  process.exit(1);
+}
+
 function installPipelineByKey(key) {
   const asset = pipelineAssets.get(key);
   if (!asset) {
     return { ok: false, error: { code: 'unknown-effect-key', hint: `expected '1'..'6', received ${JSON.stringify(key)}` } };
   }
-  return renderer.installPipeline(asset);
+  const result = renderer.installPipeline(asset);
+  if (result.ok) pipelineRecoveryState.activePipelineId = asset.pipelineId;
+  return result;
+}
+
+function installRecoveryPipeline(pipelineId) {
+  const result = renderer.installPipeline({ kind: 'render-pipeline', pipelineId });
+  if (result.ok) pipelineRecoveryState.activePipelineId = pipelineId;
+  return result;
 }
 
 let fakeNow = 0;
@@ -570,11 +668,50 @@ if (!device) {
   originalConsoleError('[smoke] FAIL - no shared device captured');
   process.exit(1);
 }
+
+async function drawOnce() {
+  world.update(1 / 60).unwrap();
+  const frameEndsBefore = pipelineRecoveryState.frameEndCount;
+  const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  pipelineRecoveryState.lastPassNames = [...renderer.perFramePassNames];
+  const submitted = pipelineRecoveryState.frameEndCount > frameEndsBefore;
+  if (pipelineRecoveryState.activePipelineId === CYCLE_PIPELINE_ID) {
+    pipelineRecoveryState.cycleDrawSubmitted = submitted;
+  }
+  if (pipelineRecoveryState.activePipelineId === REPAIRED_PIPELINE_ID) {
+    pipelineRecoveryState.repairedDrawSubmitted = submitted;
+  }
+  await device.queue.onSubmittedWorkDone();
+  return { drawResult, submitted };
+}
+
+function differingBytes(before, after) {
+  if (before.length !== after.length) return before.length + after.length;
+  let changed = 0;
+  for (let i = 0; i < before.length; i++) {
+    if (before[i] !== after[i]) changed++;
+  }
+  return changed;
+}
+
 await device.queue.onSubmittedWorkDone();
 const bytesA = await readbackBgra(device);
 const samplesA = SAMPLE_SITES.map(([x, y]) => readRgbaLinear(bytesA, x, y));
 
-// --- 10. State B: inversion ---
+// --- 10. Cycle fault -> repaired pipeline in the same renderer ---
+
+const cycleInstall = installRecoveryPipeline(CYCLE_PIPELINE_ID);
+const cycleDraw = cycleInstall.ok ? await drawOnce() : null;
+const bytesAfterCycle = await readbackBgra(device);
+
+const repairedInstall = installRecoveryPipeline(REPAIRED_PIPELINE_ID);
+const repairedDraw = repairedInstall.ok ? await drawOnce() : null;
+const bytesAfterRepair = await readbackBgra(device);
+const repairedPassNames = [...pipelineRecoveryState.lastPassNames];
+const repairedPassOrder = [...pipelineRecoveryState.repairedPassOrder];
+const cycleNames = pipelineRecoveryState.cycleDiagnostic?.detail?.cycle ?? [];
+
+// --- 11. State B: inversion ---
 
 const installBResult = installPipelineByKey('2');
 if (!installBResult.ok) {
@@ -586,10 +723,10 @@ await device.queue.onSubmittedWorkDone();
 const bytesB = await readbackBgra(device);
 const samplesB = SAMPLE_SITES.map(([x, y]) => readRgbaLinear(bytesB, x, y));
 
-const totalFrames = framesA + framesB;
+const totalFrames = framesA + framesB + (repairedDraw?.submitted === true ? 1 : 0);
 console.log(`[smoke] frames observed=${totalFrames} (a=${framesA}, b=${framesB})`);
 
-// --- 11. Stop app + clean up ---
+// --- 12. Stop app + clean up ---
 
 globalThis.performance.now = realPerformanceNow;
 await delay(200);
@@ -598,8 +735,11 @@ if (!stopResult.ok) {
   originalConsoleError(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
   process.exit(1);
 }
+unsubscribeFrameEnd();
+renderer.dispose();
+renderer.dispose();
 
-// --- 12. Verdict ---
+// --- 13. Verdict ---
 
 const failures = [];
 if (renderer.backend !== 'webgpu') {
@@ -607,6 +747,36 @@ if (renderer.backend !== 'webgpu') {
 }
 if (totalFrames < SMOKE_MIN_FRAMES) {
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
+}
+if (!cycleInstall.ok) {
+  failures.push(`(m24-a) cycle install failed: ${cycleInstall.error.code}`);
+}
+if (!repairedInstall.ok) {
+  failures.push(`(m24-b) repaired install failed: ${repairedInstall.error.code}`);
+}
+if (pipelineRecoveryState.cycleDiagnostic?.code !== 'cyclic-dependency') {
+  failures.push(`(m24-c) cycle diagnostic code=${pipelineRecoveryState.cycleDiagnostic?.code ?? 'missing'}`);
+}
+if (!cycleNames.includes(CYCLE_PASS_A) || !cycleNames.includes(CYCLE_PASS_B)) {
+  failures.push(`(m24-d) cycle diagnostic lost pass names: ${JSON.stringify(cycleNames)}`);
+}
+if (cycleDraw?.submitted !== false || pipelineRecoveryState.cycleDrawSubmitted !== false) {
+  failures.push(`(m24-e) cyclic pipeline reached submission: ${JSON.stringify({ cycleDraw, state: pipelineRecoveryState.cycleDrawSubmitted })}`);
+}
+if (differingBytes(bytesA, bytesAfterCycle) !== 0) {
+  failures.push(`(m24-f) healthy pixels changed during cycle: ${differingBytes(bytesA, bytesAfterCycle)} bytes`);
+}
+if (repairedDraw?.submitted !== true || pipelineRecoveryState.repairedDrawSubmitted !== true) {
+  failures.push(`(m24-g) repaired pipeline did not submit: ${JSON.stringify({ repairedDraw, state: pipelineRecoveryState.repairedDrawSubmitted })}`);
+}
+if (repairedPassOrder.join('>') !== `${REPAIRED_PASS_A}>${REPAIRED_PASS_B}`) {
+  failures.push(`(m24-h) repaired execute order=${repairedPassOrder.join('>')}`);
+}
+if (repairedPassNames.join('>') !== `${REPAIRED_PASS_A}>${REPAIRED_PASS_B}>main>post`) {
+  failures.push(`(m24-i) repaired declared order=${repairedPassNames.join('>')}`);
+}
+if (differingBytes(bytesA, bytesAfterRepair) !== 0) {
+  failures.push(`(m24-j) repaired passthrough did not recover baseline: ${differingBytes(bytesA, bytesAfterRepair)} bytes`);
 }
 const allErrorEvents = [...onErrorEvents, ...rendererErrors];
 if (allErrorEvents.length > 0) {
@@ -679,6 +849,12 @@ if (FALSIFY) {
 if (!relationOK) {
   failures.push(
     `(f) AC-03 inversion linear-relation violated at ${relationViolations}/${SAMPLE_SITES.length * 3} channels (epsilon=${EPSILON}). first: ${relationDetails.join(' | ')}`,
+  );
+}
+
+if (failures.length === 0) {
+  console.log(
+    `[smoke] M24 cycle/recovery: PASS cycle=${pipelineRecoveryState.cycleDiagnostic?.code} cyclePasses=${cycleNames.join('>')} cycleSubmitted=${pipelineRecoveryState.cycleDrawSubmitted} repairedPasses=${repairedPassNames.join('>')} repairedSubmitted=${pipelineRecoveryState.repairedDrawSubmitted} recoveredBytes=${differingBytes(bytesA, bytesAfterRepair)} cleanup=renderer-dispose-idempotent`,
   );
 }
 

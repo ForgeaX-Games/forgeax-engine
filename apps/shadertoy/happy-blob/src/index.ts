@@ -93,6 +93,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   const values: Record<string, number | number[]> = {
     iResolution: [target.width, target.height],
@@ -142,7 +144,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     values.iTime = (now - startTime) / 1000;
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error('[happy-blob] draw error:', r.error);
     requestAnimationFrame(frame);
   };

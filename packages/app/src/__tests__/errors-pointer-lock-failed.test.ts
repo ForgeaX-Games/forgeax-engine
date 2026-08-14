@@ -34,7 +34,6 @@ describe('AppErrorCode closed union', () => {
       'app-not-started',
       'app-already-running',
       'app-canvas-detached',
-      'app-paused-while-stop',
       'app-frame-step-invalid',
       'app-system-update-failed',
       'app-pointer-lock-failed',
@@ -46,11 +45,11 @@ describe('AppErrorCode closed union', () => {
       'app-execution-rebuild-failed',
     ];
 
-    expect(allCodes).toHaveLength(13);
+    expect(allCodes).toHaveLength(12);
 
     // Each member must be unique.
     const unique = new Set(allCodes);
-    expect(unique.size).toBe(13);
+    expect(unique.size).toBe(12);
   });
 
   it('exhaustive switch over AppErrorCode has zero default branch', () => {
@@ -67,8 +66,6 @@ describe('AppErrorCode closed union', () => {
           return 'already running';
         case 'app-canvas-detached':
           return 'canvas detached';
-        case 'app-paused-while-stop':
-          return 'paused while stop';
         case 'app-frame-step-invalid':
           return 'frame step invalid';
         case 'app-system-update-failed':
@@ -85,11 +82,10 @@ describe('AppErrorCode closed union', () => {
       }
     }
 
-    // Verify the function is callable for all 6 codes.
+    // Verify the function is callable for representative codes.
     expect(exhaust('app-not-started')).toBe('not started');
     expect(exhaust('app-already-running')).toBe('already running');
     expect(exhaust('app-canvas-detached')).toBe('canvas detached');
-    expect(exhaust('app-paused-while-stop')).toBe('paused while stop');
     expect(exhaust('app-system-update-failed')).toBe('system update failed');
     expect(exhaust('app-pointer-lock-failed')).toBe('pointer lock failed');
   });
@@ -185,14 +181,14 @@ describe("'app-pointer-lock-failed' detail shape", () => {
 // ---------------------------------------------------------------------------
 
 describe('APP_EXPECTED / APP_ERROR_HINTS bidirectional symmetry', () => {
-  it('APP_EXPECTED has 6 keys (one per AppErrorCode member)', () => {
+  it('APP_EXPECTED has one key per AppErrorCode member', () => {
     const keys = Object.keys(APP_EXPECTED);
-    expect(keys).toHaveLength(13);
+    expect(keys).toHaveLength(12);
   });
 
-  it('APP_ERROR_HINTS has 6 keys (one per AppErrorCode member)', () => {
+  it('APP_ERROR_HINTS has one key per AppErrorCode member', () => {
     const keys = Object.keys(APP_ERROR_HINTS);
-    expect(keys).toHaveLength(13);
+    expect(keys).toHaveLength(12);
   });
 
   it('APP_EXPECTED and APP_ERROR_HINTS have the same key set', () => {

@@ -249,6 +249,8 @@ const synthPod = {
   mipmap: false,
 };
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const textureHandle = world.allocSharedRef('TextureAsset', synthPod);
 
 const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod, {
@@ -357,7 +359,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   rhiDrawIndexedCallsThisFrame = 0;
   rhiLastInstanceCount = 0;
 
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) {
     console.warn(`[smoke] draw frame ${i}: ${r.error.code}`);
     continue;

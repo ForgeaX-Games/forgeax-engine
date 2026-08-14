@@ -97,7 +97,6 @@ const { createRenderer } = await import('@forgeax/engine-runtime');
 const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine-render');
 
 const world = new World();
-
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
@@ -111,6 +110,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 console.log(`[bloom] backend=${renderer.backend}`);
 
@@ -162,7 +163,8 @@ let framesObserved = 0;
 let drawErrors = 0;
 const drawPhase = (count) => {
   for (let i = 0; i < count; i += 1) {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) { drawErrors += 1; console.error(`[smoke] draw frame ${framesObserved} error: ${r.error.code}`); }
     framesObserved += 1;
   }

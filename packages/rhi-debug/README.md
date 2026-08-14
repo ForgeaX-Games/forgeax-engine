@@ -23,7 +23,7 @@ The browser-to-CLI loop is: **one line in the browser console to capture one or 
 | layer | surface | entry | output |
 |:--|:--|:--|:--|
 | **L0** | low-level subpath (raw bytes) | `@forgeax/engine-rhi-debug/capture-browser` -> `captureFramesToMemory(debugInst, frames, label?)` | `CaptureBrowserTape { runId, json, blob, passOffsets, valid }` (in-memory, zero fs/network) |
-| **L1** | on-disk tape | POST `/__forgeax-debug/tape` (dev-server) or the Node `finalize()` tail | `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json` (byte-identical from both writers, D-3) |
+| **L1** | on-disk tape | POST `/__forgeax-debug/tape` (dev-server) or the Node `finalize()` tail | `.forgeax-debug/<runId>/frame-0.tape.bin` (gzip blob stream) + `frame-0.report.json` (byte-identical from both writers, D-3) |
 | **L2a** | external CLI trigger | `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` | `{ runId, tapePath, reportPath }` -- synchronous round-trip; no browser DevTools console switch |
 | **L2c** | one-line browser trigger | `window.__forgeax.captureFrame(n, options?)` (console autocomplete) | `{ runId, tapePath, reportPath }` -- `tapePath` feeds L3a |
 | **L3a** | offline CLI inspect | `forgeax-rhi-debug inspect-offline <tapePath> <drawIdx> [--fields=...]` | structured InspectReport JSON (bindings / drawCall / **pipelineState**) + RT PNG path |
@@ -264,6 +264,10 @@ The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-d
 
 ### Dawn performance result contract
 
+The validated performance result is the single machine-readable authority for
+one retained RHI-debug campaign. Stage telemetry stays in that result and uses
+the same identity and validation outcome as the retained tape and report.
+
 The root runner records one repeatable result over the admitted Lighting Maps Dawn path:
 
 ```bash
@@ -274,9 +278,63 @@ It runs the real app's native Dawn smoke, retains its tape and report, and invok
 --lifecycle-only` plus `inspect-offline` on a fresh Dawn device. The result schema is
 `packages/rhi-debug/schema/performance-result.schema.json`; the reusable conforming and malformed
 fixtures are under `scripts/rhi-debug-performance/fixtures/`. The contract records public capture
-and finalize boundaries, marks off/idle as unavailable when the path does not expose them, and
+and finalize boundaries, records observed off/idle workload windows when the path exposes them, and
 separates tape JSON, binary blob, and report JSON bytes. It does not start Browser/Vite or infer
-stage telemetry that the app does not expose.
+stage telemetry that the app does not expose; unsupported values remain explicitly unavailable.
+
+#### Stage telemetry contract
+
+Every result exposes exactly these five top-level stages:
+
+| stage | boundary | fixed child group |
+|:--|:--|:--|
+| `off` | Matched workload with RHI-debug and stage telemetry disabled. | none |
+| `idle` | RHI-debug is available but no capture is requested. | `telemetryBookkeeping` |
+| `capture` | A capture request is accepted until frame evidence is ready to finalize. | `snapshot`, `queueWait`, `readback` |
+| `finalize` | Captured evidence becomes durable and its validation outcome is known. | `serialization`, `persistence` |
+| `analyze` | An existing consumer starts until its first valid answer. | `cliFirstAnswer`, `viewerFirstAnswer` |
+
+Children are fixed aggregate slots at one nesting level. They do not become
+per-draw, per-command, or runtime-generated records. A parent owns each child;
+available child windows do not overlap, and `remainderMs` is the non-negative
+parent remainder after available child `wallTimeMs` values are summed.
+
+The result uses these literal units and arithmetic fields:
+
+| field | meaning and unit |
+|:--|:--|
+| `wallTimeMs` | Observed wall time in milliseconds. |
+| `window.startMs` / `window.endMs` | Child window bounds in milliseconds. |
+| `remainderMs` | Unattributed parent time in milliseconds. |
+| `absoluteOverheadMs` | Absolute difference between enabled and matched disabled control, in milliseconds. |
+| `relativeOverheadPercent` | Absolute overhead divided by a positive disabled control, in percent. |
+| `tapeBytes`, `logicalResourceBytes`, `driverAllocationBytes` | Memory categories in `bytes`; their sources remain distinct. |
+
+For `idle`, `capture`, `finalize`, and `analyze`, `control` is the
+telemetry-disabled observation. `comparison` records matching `workload`,
+`environment`, `samplePolicy`, and `scope`. A mismatched pair remains diagnostic
+and cannot support an overhead claim. A zero control can still produce
+`absoluteOverheadMs`, but its relative value is unavailable rather than a
+division result.
+
+Every observation and child reports an explicit state: `observed`,
+`unavailable`, `incomplete`, or `failed`. An `observed` zero requires a real
+measurement source. The other states carry `reasonCode`, `affectedScope`,
+`expectedPrecondition`, and an executable `recoveryAction`; a populated timing
+does not make a failed oracle or invalid retained artifact baseline-ready.
+
+Memory categories are intentionally truthful: `tapeBytes` is observed retained
+storage, `logicalResourceBytes` is an `estimated` descriptor/resource value,
+and `driverAllocationBytes` is unavailable without a direct driver source.
+Process or browser heap is not a GPU allocation measurement. Dawn is the
+closure oracle; Browser/Vite and GPU timing remain explicit capability or
+environment availability values.
+
+For an unavailable or failed retained-evidence path, Rerun the existing `pnpm rhi-debug-performance` command
+shown above, then inspect the retained pair
+with the existing `forgeax-rhi-debug summary <tapePath> --lifecycle-only` entry.
+This uses the current schema and tape/report authority; it does not add a new
+telemetry artifact, UI, RPC, workflow, or recovery command.
 
 ### Live inspect via eval scope
 
@@ -350,11 +408,11 @@ Each error object carries structured `.code` / `.expected` / `.hint` / `.detail`
 
 | constant | value | locked in |
 |:--|:--|:--|
-| `TAPE_FORMAT_VERSION` | `4` | bumped in v4 for resource destroy-event capture |
-| `SUPPORTED_TAPE_VERSIONS` | `new Set([2, 3, 4])` | deserialize accepts {2,3,4}; older tapes remain readable |
+| `TAPE_FORMAT_VERSION` | `5` | bumped in v5 for the current tape event schema; blob compression is optional metadata |
+| `SUPPORTED_TAPE_VERSIONS` | `new Set([2, 3, 4, 5])` | deserialize accepts {2,3,4,5}; older tapes remain readable |
 | `PER_EVENT_OVERHEAD` | `192` bytes | plan-strategy 5.3; m2-4 blob pool |
 
-Serialization: `serializeTape(tape) -> { json: string, bin: ArrayBuffer }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + events array. Binary blob pool contains hash-keyed `ArrayBuffer` data for `writeBuffer` / `writeTexture` / shader source. Newly recorded tapes always write `formatVersion = 4`. v2/v3 tapes deserialize without version-mismatch error; missing newer events produce natural empty state -- no separate error branch.
+Serialization: `serializeTape(tape, { blobCompression }) -> { json: string, blob: Uint8Array }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + `blobEntries` + `blobCompression`; the binary blob pool contains hash-keyed data for `writeBuffer` / `writeTexture` / shader source. Finalized captures use `blobCompression: 'gzip'` at level 6, while `blobCompression: 'none'` remains available for raw in-memory exchange. Deserialization transparently accepts raw legacy blobs, declared gzip blobs, and migrated gzip blobs whose old report has no compression field. Newly recorded tapes write `formatVersion = 5`; v2-v4 tapes deserialize without version-mismatch error, and missing newer events produce natural empty state -- no separate error branch.
 
 ### v3 event additions
 
@@ -540,7 +598,7 @@ The forgeax engine binds a `array<InstanceData>` buffer at `@group(3) @binding(0
 | OOS-3 | Timestamp trace (`writeTimestamp` / `resolveQuerySet`) | v2; in `DEFERRED_COMMANDS` |
 | OOS-4 | UI panel | shipped in v3 (four-panel dockview viewer at `apps/rhi-debug-viewer/`) |
 | OOS-5 | Destroy-event recording (`destroyBuffer` / `destroyTexture`) | shipped in v4; lifecycle summary also exposes known descriptor-byte estimates |
-| OOS-6 | Tape cross-version compatibility | shipped in v4 (`SUPPORTED_TAPE_VERSIONS = {2,3,4}`) |
+| OOS-6 | Tape cross-version compatibility | shipped in v4 (`SUPPORTED_TAPE_VERSIONS = {2,3,4,5}`) |
 | OOS-7 | rhi-wgpu (wasm) backend capture/replay testing | v2 |
 | OOS-8 | Browser pixel-deterministic replay | dawn-node only epsilon <= 0.01; browser: non-zero + structural only |
 | OOS-9 | URL param `?forgeax-debug=1` trigger | v2 (`FORGEAX_ENGINE_RHI_DEBUG=1` env only) |

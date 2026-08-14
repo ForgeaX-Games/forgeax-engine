@@ -8,8 +8,8 @@ import { APP_PHASE_CATALOG } from '../types';
 
 const FRAME_LOOP_PHASES = [
   'frame-total',
-  'world-update-primary',
   'draw-source',
+  'world-update-primary',
   'world-update-injected',
   'renderer-draw',
 ] as const;
@@ -36,6 +36,8 @@ function makeRenderer(onDraw: (options: unknown) => void = () => {}): Renderer {
   return {
     backend: 'webgpu',
     ready: Promise.resolve({ ok: true, value: undefined }),
+    attachWorld: () => ({ ok: true, value: undefined }),
+    detachWorld: () => {},
     draw: (_worlds: World[], options: DrawOwnerOptions) => {
       onDraw(options);
       return { ok: true, value: undefined };
@@ -170,7 +172,6 @@ describe('App profiler frame token', () => {
     const overflowSession = startSession(profiler, 1, 1);
     loop.start().unwrap();
     scheduler.tick(1000);
-    loop.stop().unwrap();
 
     const overflow = profiler.latestCapture();
     expect(overflow?.captureId).toBe(overflowSession.captureId);
@@ -178,7 +179,6 @@ describe('App profiler frame token', () => {
     expect(overflow?.completeness.droppedEventCount).toBeGreaterThan(0);
 
     const completeSession = startSession(profiler, 1, 64);
-    loop.start().unwrap();
     scheduler.tick(1016);
     loop.stop().unwrap();
 

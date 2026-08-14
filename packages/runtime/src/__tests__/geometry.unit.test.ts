@@ -17,14 +17,17 @@
 // (geometry-tangent / geometry-winding / geometry / vertex-attribute-layout)
 // moved to packages/geometry/src/__tests__/geometry.unit.test.ts (leaf package
 // must not import runtime -- D-2).
+
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { RenderError, SkinError } from '@forgeax/engine-render/internal';
 import {
   Camera,
@@ -2105,7 +2108,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (worlds: unknown, opts: { owner: number }) => void;
+    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -2288,7 +2291,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnInstancedScene(renderer, twoSubmeshMesh(), 2, 4);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Each submesh draws M times (4 instances each, shared instanceCount).
       // N=2 submeshes * M=1 draw each = 2 drawIndexed calls.
@@ -2306,7 +2313,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnInstancedScene(renderer, twoSubmeshMesh(), 2, 4);
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // All submesh draws share the same instanceCount (D-8).
       // Verify drawIndexed calls carry instanceCount parameter at index 1.
@@ -2377,7 +2388,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: originTransform() },
       );
 
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+
+      (world as WorldType).update().unwrap();
+
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Without Instances, instanceCount defaults to 1.
       const indexedCalls = spies.drawIndexed.mock.calls as Array<

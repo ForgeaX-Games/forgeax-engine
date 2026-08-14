@@ -7,7 +7,7 @@
 
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,7 @@ import { extractViteLocalUrl } from './vite-local-url.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
 const ARTIFACT_DIR = resolve(REPO_ROOT, 'apps', 'hello', 'audio', '.forgeax-audio', 'browser');
+const M20_MODE = process.env.FORGEAX_AUDIO_M20 === '1';
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 const READINESS_TIMEOUT_MS = Number.parseInt(
   process.env.FORGEAX_AUDIO_READINESS_TIMEOUT_MS ?? '90000',
@@ -167,6 +168,85 @@ try {
   });
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    if (M20_MODE) {
+      await page.addInitScript(() => {
+        const audioContext = window.AudioContext;
+        if (audioContext === undefined) return;
+        const prototype = audioContext.prototype;
+        const originalDecode = prototype.decodeAudioData;
+        const state = {
+          armed: false,
+          started: 0,
+          released: 0,
+          resolved: 0,
+          sourceStarts: 0,
+          pending: false,
+          releaseRequested: false,
+        };
+        let releaseHeld;
+
+        const originalCreateBufferSource = prototype.createBufferSource;
+        Object.defineProperty(prototype, 'createBufferSource', {
+          configurable: true,
+          value: function instrumentedCreateBufferSource(...args) {
+            const node = originalCreateBufferSource.apply(this, args);
+            const originalStart = node.start.bind(node);
+            Object.defineProperty(node, 'start', {
+              configurable: true,
+              value: function instrumentedStart(...startArgs) {
+                state.sourceStarts += 1;
+                return originalStart(...startArgs);
+              },
+            });
+            return node;
+          },
+        });
+
+        Object.defineProperty(prototype, 'decodeAudioData', {
+          configurable: true,
+          value: function delayedDecode(arrayBuffer, ...callbacks) {
+            const decoded = originalDecode.call(this, arrayBuffer, ...callbacks);
+            if (!state.armed) return decoded;
+            state.armed = false;
+            state.started += 1;
+            state.pending = true;
+            return new Promise((resolve, reject) => {
+              decoded.then(
+                (buffer) => {
+                  const complete = () => {
+                    state.pending = false;
+                    state.resolved += 1;
+                    resolve(buffer);
+                  };
+                  if (state.releaseRequested) complete();
+                  else releaseHeld = complete;
+                },
+                (error) => {
+                  state.pending = false;
+                  reject(error);
+                },
+              );
+            });
+          },
+        });
+
+        window.__forgeaxM20DecodeGate = {
+          arm() {
+            state.armed = true;
+            state.releaseRequested = false;
+          },
+          release() {
+            state.released += 1;
+            state.releaseRequested = true;
+            releaseHeld?.();
+            releaseHeld = undefined;
+          },
+          snapshot() {
+            return { ...state };
+          },
+        };
+      });
+    }
     const pageErrors = [];
     const consoleErrors = [];
     const consoleMessages = [];
@@ -207,6 +287,160 @@ try {
     const initialOverlay = await page.locator('#overlay').textContent();
     const beforePath = resolve(ARTIFACT_DIR, 'before-gesture.png');
     await page.screenshot({ path: beforePath });
+
+    if (M20_MODE) {
+      const m20BeforePath = resolve(ARTIFACT_DIR, 'm20-before-gate.png');
+      const m20StalePath = resolve(ARTIFACT_DIR, 'm20-stale-stopped.png');
+      const m20RecoveredPath = resolve(ARTIFACT_DIR, 'm20-recovered.png');
+      await page.screenshot({ path: m20BeforePath });
+
+      const baseline = await page.evaluate(() => window.__forgeaxAudioM20?.snapshot());
+      await page.evaluate(() => window.__forgeaxM20DecodeGate?.arm());
+      await page.evaluate(() => window.__forgeaxAudioM20?.begin());
+      await page.waitForFunction(
+        () => {
+          const gate = window.__forgeaxM20DecodeGate?.snapshot();
+          const probe = window.__forgeaxAudioM20?.snapshot();
+          return gate?.started === 1
+            && gate.pending
+            && probe?.phase === 'pending-decode'
+            && probe.simulation.intents.some((intent) => intent.kind === 'play');
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const pendingDecode = await page.evaluate(() => ({
+        gate: window.__forgeaxM20DecodeGate?.snapshot(),
+        probe: window.__forgeaxAudioM20?.snapshot(),
+      }));
+
+      await page.evaluate(() => window.__forgeaxAudioM20?.stopStale());
+      await page.waitForFunction(
+        () => {
+          const probe = window.__forgeaxAudioM20?.snapshot();
+          const entityId = probe?.entityId;
+          return probe?.phase === 'stale-stopped'
+            && probe.audio.activeSourceCount === 0
+            && probe.simulation.intents.some(
+              (intent) => intent.kind === 'stop' && intent.entityId === entityId,
+            );
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const staleStopped = await page.evaluate(() => ({
+        gate: window.__forgeaxM20DecodeGate?.snapshot(),
+        probe: window.__forgeaxAudioM20?.snapshot(),
+      }));
+      await page.screenshot({ path: m20StalePath });
+
+      await page.evaluate(() => window.__forgeaxAudioM20?.replaceCurrentEpoch());
+      await page.waitForFunction(
+        () => {
+          const probe = window.__forgeaxAudioM20?.snapshot();
+          return probe?.phase === 'replacement-requested'
+            && probe.simulation.intents.some(
+              (intent) => intent.kind === 'play'
+                && intent.entityId === probe.entityId
+                && intent.sourceKey === probe.currentSourceKey,
+            );
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const replacementRequested = await page.evaluate(() => ({
+        gate: window.__forgeaxM20DecodeGate?.snapshot(),
+        probe: window.__forgeaxAudioM20?.snapshot(),
+      }));
+
+      await page.waitForFunction(
+        () => {
+          const gate = window.__forgeaxM20DecodeGate?.snapshot();
+          const probe = window.__forgeaxAudioM20?.snapshot();
+          return gate?.pending
+            && gate.sourceStarts === 1
+            && probe?.audio.activeSourceCount === 1;
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const replacementPlaying = await page.evaluate(() => ({
+        gate: window.__forgeaxM20DecodeGate?.snapshot(),
+        probe: window.__forgeaxAudioM20?.snapshot(),
+      }));
+
+      // This keydown is a real user gesture for the same AudioContext. Enter
+      // is not the demo's spacebar path and does not trigger canvas pointer
+      // lock, so only the probe can become active.
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () => document.querySelector('#audio-status')?.textContent?.includes('audio=running'),
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      await page.evaluate(() => window.__forgeaxM20DecodeGate?.release());
+      await page.waitForFunction(
+        () => {
+          const gate = window.__forgeaxM20DecodeGate?.snapshot();
+          const probe = window.__forgeaxAudioM20?.snapshot();
+          return gate?.resolved === 1
+            && gate.sourceStarts === 1
+            && probe?.audio.activeSourceCount === 1
+            && probe?.simulation.playing.some(([entity, playing]) => entity === probe.entityId && playing);
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const recovered = await page.evaluate(() => window.__forgeaxAudioM20?.markRecovered());
+      await page.screenshot({ path: m20RecoveredPath });
+
+      await page.evaluate(() => window.__forgeaxAudioM20?.cleanup());
+      await page.waitForFunction(
+        () => {
+          const probe = window.__forgeaxAudioM20?.snapshot();
+          return probe?.phase === 'cleanup-requested'
+            && !probe.entityAlive
+            && probe.audio.activeSourceCount === 0
+            && probe.entityId !== null
+            && probe.simulation.cleanup.includes(probe.entityId);
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const cleanup = await page.evaluate(() => window.__forgeaxAudioM20?.snapshot());
+      const cleanupAgain = await page.evaluate(() => window.__forgeaxAudioM20?.cleanup());
+
+      const evidence = {
+        baseline,
+        pendingDecode,
+        staleStopped,
+        replacementRequested,
+        replacementPlaying,
+        recovered,
+        cleanup,
+        cleanupAgain,
+        gate: await page.evaluate(() => window.__forgeaxM20DecodeGate?.snapshot()),
+        screenshots: {
+          baseline: m20BeforePath,
+          stale: m20StalePath,
+          recovered: m20RecoveredPath,
+        },
+        pageErrors,
+        consoleErrors,
+      };
+      const evidencePath = resolve(ARTIFACT_DIR, 'm20-browser-evidence.json');
+      writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+
+      await closeWithTimeout('page', () => page.close());
+      if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
+      if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
+      if (cleanupAgain?.cleanupCalls !== 2 || cleanupAgain.phase !== 'cleanup-idempotent') {
+        throw new Error(`cleanup was not idempotent: ${JSON.stringify(cleanupAgain)}`);
+      }
+      console.log(`[m20] Browser phases: baseline -> pending-decode -> stale-stop -> replacement -> recovery -> cleanup`);
+      console.log(`[m20] Browser evidence: ${evidencePath}`);
+      console.log('[m20] Browser stale-decode epoch recovery: PASS');
+    } else {
 
     // A real keydown is the browser gesture consumed by WebAudioEngine's
     // one-shot resume listener; the keyup is also the demo's play trigger.
@@ -260,6 +494,7 @@ try {
     console.log(`[smoke-browser] collision=${collisionStatus} cleanupAudio=${cleanupAudioStatus}`);
     console.log(`[smoke-browser] artifacts: before=${beforePath} after=${afterPath}`);
     console.log(`[smoke-browser] PASS - real Chrome gesture resumed AudioContext, collision triggered spatial SFX, despawn cleaned audio, and listener pan moved; changedPixels=${pixels}.`);
+    }
   } finally {
     await closeWithTimeout('browser', () => browser.close());
   }

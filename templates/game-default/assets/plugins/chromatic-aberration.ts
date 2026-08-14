@@ -18,6 +18,7 @@ export interface ChromaticAberrationHandle {
   readonly error?: string;
   setIntensity(intensity: number): void;
   reset(): void;
+  dispose(): void;
   snapshot(): ChromaticAberrationSnapshot;
 }
 
@@ -44,10 +45,11 @@ export function installChromaticAberration(
       error: 'Renderer is unavailable; chromatic aberration remains disabled.',
       setIntensity: () => {},
       reset: () => {},
+      dispose: () => {},
       snapshot: () => ({ active: false, intensity: 0, effect: CHROMATIC_ABERRATION_ID }),
     };
   }
-  renderer.postProcess.register(CHROMATIC_ABERRATION_ID, {
+  const unregister = renderer.postProcess.register(CHROMATIC_ABERRATION_ID, {
     source: chromaticShader.wgsl,
     reads: ['sceneColor'],
     params: { byteSize: CHROMATIC_ABERRATION_PARAM_BYTES, defaultValue: packParams(0) },
@@ -57,6 +59,7 @@ export function installChromaticAberration(
     pipelineId: 'forgeax::urp',
     config: { postEffects },
   });
+  if (!installed.ok) unregister();
   const write = (): void => {
     world.set(paramsEntity, PostProcessParams, { data: packParams(intensity) });
   };
@@ -71,6 +74,11 @@ export function installChromaticAberration(
     reset(): void {
       intensity = 0;
       write();
+    },
+    dispose(): void {
+      if (!installed.ok) return;
+      installed.value();
+      unregister();
     },
     snapshot(): ChromaticAberrationSnapshot {
       return { active: installed.ok && intensity > 0, intensity, effect: CHROMATIC_ABERRATION_ID };

@@ -1,43 +1,305 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
   "identity": {
     "engine": { "commit": "0123456", "branch": "fixture" },
     "app": { "package": "@forgeax/fixture-app", "path": "apps/fixture" },
     "backend": "webgpu",
+    "backendEvidence": { "backend": "webgpu", "source": "fixture-backend-line" },
+    "captureRunId": "fixture-run-001",
     "environment": { "node": "v24.0.0", "platform": "darwin", "arch": "arm64" }
   },
   "experiment": { "warmupCount": 1, "trialCount": 1, "retainedTrialIndex": 1 },
   "observations": {
-    "off": { "status": "unavailable", "reason": "fixture has no paired off observation" },
-    "idle": { "status": "unavailable", "reason": "fixture has no public idle boundary" },
+    "off": {
+      "status": "observed",
+      "wallTimeMs": 6,
+      "source": "fixture-control",
+      "boundary": "fixture off workload window"
+    },
+    "idle": {
+      "status": "observed",
+      "wallTimeMs": 10,
+      "source": "fixture-enabled",
+      "boundary": "fixture idle workload window",
+      "children": {
+        "telemetryBookkeeping": {
+          "status": "observed",
+          "wallTimeMs": 1,
+          "source": "fixture-enabled",
+          "boundary": "fixture idle bookkeeping",
+          "window": { "startMs": 0, "endMs": 1 }
+        }
+      },
+      "remainderMs": 9,
+      "control": {
+        "status": "observed",
+        "wallTimeMs": 8,
+        "source": "fixture-control",
+        "boundary": "fixture idle control window"
+      },
+      "comparison": {
+        "enabled": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "control": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "scope": "idle"
+      },
+      "absoluteOverheadMs": 2,
+      "relativeOverheadPercent": 25
+    },
     "capture": {
       "status": "observed",
-      "wallTimeMs": 4,
-      "source": "app-public-boundary",
-      "boundary": "fixture capture boundary"
+      "wallTimeMs": 10,
+      "source": "fixture-enabled",
+      "boundary": "fixture capture boundary",
+      "children": {
+        "snapshot": {
+          "status": "observed",
+          "wallTimeMs": 2,
+          "source": "fixture-enabled",
+          "boundary": "fixture snapshot",
+          "window": { "startMs": 0, "endMs": 2 }
+        },
+        "queueWait": {
+          "status": "observed",
+          "wallTimeMs": 3,
+          "source": "fixture-enabled",
+          "boundary": "fixture queue wait",
+          "window": { "startMs": 2, "endMs": 5 }
+        },
+        "readback": {
+          "status": "observed",
+          "wallTimeMs": 1,
+          "source": "fixture-enabled",
+          "boundary": "fixture readback",
+          "window": { "startMs": 5, "endMs": 6 }
+        }
+      },
+      "remainderMs": 4,
+      "control": {
+        "status": "observed",
+        "wallTimeMs": 7,
+        "source": "fixture-control",
+        "boundary": "fixture capture control window"
+      },
+      "comparison": {
+        "enabled": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "control": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "scope": "capture"
+      },
+      "absoluteOverheadMs": 3,
+      "relativeOverheadPercent": 42.857142857142854
     },
     "finalize": {
       "status": "observed",
-      "wallTimeMs": 1,
-      "source": "app-public-boundary",
-      "boundary": "fixture finalize boundary"
+      "wallTimeMs": 5,
+      "source": "fixture-enabled",
+      "boundary": "fixture finalize boundary",
+      "children": {
+        "serialization": {
+          "status": "observed",
+          "wallTimeMs": 2,
+          "source": "fixture-enabled",
+          "boundary": "fixture serialization",
+          "window": { "startMs": 0, "endMs": 2 }
+        },
+        "persistence": {
+          "status": "observed",
+          "wallTimeMs": 1,
+          "source": "fixture-enabled",
+          "boundary": "fixture persistence",
+          "window": { "startMs": 2, "endMs": 3 }
+        }
+      },
+      "remainderMs": 2,
+      "control": {
+        "status": "observed",
+        "wallTimeMs": 4,
+        "source": "fixture-control",
+        "boundary": "fixture finalize control window"
+      },
+      "comparison": {
+        "enabled": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "control": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "scope": "finalize"
+      },
+      "absoluteOverheadMs": 1,
+      "relativeOverheadPercent": 25
     },
     "analyze": {
       "status": "observed",
-      "wallTimeMs": 2,
-      "source": "runner-cli",
-      "boundary": "fixture analyze boundary"
+      "wallTimeMs": 8,
+      "source": "fixture-enabled",
+      "boundary": "fixture analyze boundary",
+      "children": {
+        "cliFirstAnswer": {
+          "status": "observed",
+          "wallTimeMs": 3,
+          "source": "fixture-enabled",
+          "boundary": "fixture CLI first answer",
+          "window": { "startMs": 0, "endMs": 3 }
+        },
+        "viewerFirstAnswer": {
+          "status": "observed",
+          "wallTimeMs": 2,
+          "source": "fixture-enabled",
+          "boundary": "fixture viewer model ready",
+          "window": { "startMs": 3, "endMs": 5 }
+        }
+      },
+      "remainderMs": 3,
+      "control": {
+        "status": "observed",
+        "wallTimeMs": 6,
+        "source": "fixture-control",
+        "boundary": "fixture analyze control window"
+      },
+      "comparison": {
+        "enabled": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "control": {
+          "workload": "fixture-workload",
+          "environment": "fixture-environment",
+          "samplePolicy": "fixture-policy",
+          "oracle": "fixture-oracle",
+          "readbackPlacement": "fixture-after-workload",
+          "persistenceBaseline": "fixture-persistence",
+          "controlFlags": {
+            "FALSIFY_NO_LIGHT": "0",
+            "FALSIFY_NO_SPECULAR_MAP": "0"
+          }
+        },
+        "scope": "analyze"
+      },
+      "absoluteOverheadMs": 2,
+      "relativeOverheadPercent": 33.333333333333336
     }
   },
   "scaleInputs": { "eventCount": 3, "resourceCount": 2, "frameCount": 1 },
   "artifacts": {
+    "captureRunId": "fixture-run-001",
     "paths": { "tape": "fixture/frame-0.tape.bin", "report": "fixture/frame-0.report.json" },
     "bytes": { "tapeJson": 100, "blob": 200, "reportJson": 300, "total": 600 }
+  },
+  "memory": {
+    "tapeBytes": {
+      "status": "observed",
+      "value": 600,
+      "unit": "bytes",
+      "source": "retained-artifacts"
+    },
+    "logicalResourceBytes": {
+      "status": "estimated",
+      "value": 512,
+      "unit": "bytes",
+      "source": "resource-descriptors"
+    },
+    "driverAllocationBytes": {
+      "status": "unavailable",
+      "reasonCode": "capability-absent",
+      "affectedScope": "driver allocation",
+      "expectedPrecondition": "A portable driver allocation query is available.",
+      "recoveryAction": "Run on a backend that exposes driver allocation telemetry."
+    }
+  },
+  "capabilities": {
+    "browserVite": {
+      "status": "unavailable",
+      "reasonCode": "environment-unavailable",
+      "affectedScope": "Browser/Vite measurement",
+      "expectedPrecondition": "A browser dev server and WebGPU adapter are available.",
+      "recoveryAction": "Run the existing Browser/Vite smoke on a WebGPU-capable host."
+    },
+    "gpuTiming": {
+      "status": "unavailable",
+      "reasonCode": "capability-absent",
+      "affectedScope": "GPU timestamp timing",
+      "expectedPrecondition": "The selected device exposes timestamp-query.",
+      "recoveryAction": "Use a device with timestamp-query support."
+    }
   },
   "verdicts": {
     "tapeValidity": { "status": "pass", "basis": "fixture tape validity" },
     "replayFidelity": { "status": "pass", "basis": "fixture replay" },
-    "appOracle": { "status": "pass", "basis": "fixture oracle" }
+    "appOracle": { "status": "pass", "basis": "fixture oracle" },
+    "baselineAdmission": {
+      "status": "pass",
+      "basis": "all retained evidence and the app oracle passed"
+    }
   },
   "contractCheck": {
     "validSample": true,

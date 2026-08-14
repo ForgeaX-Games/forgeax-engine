@@ -34,9 +34,7 @@ export interface CreateWorkerExecutionAppOptions {
   readonly selection: ExecutionSelection;
 }
 
-function lifecycleError(
-  code: 'app-not-started' | 'app-already-running' | 'app-paused-while-stop',
-): AppErrorType {
+function lifecycleError(code: 'app-not-started' | 'app-already-running'): AppErrorType {
   return new AppError({
     code,
     expected: APP_EXPECTED[code],
@@ -162,6 +160,7 @@ export async function createWorkerExecutionApp(
   let frameDeadline: ReturnType<typeof setTimeout> | undefined;
   let lastError: AppDispatchError | undefined;
   let rebuildResolve: ((result: Result<ExecutionReport, AppErrorType>) => void) | undefined;
+  let rebuildInFlight: Promise<Result<ExecutionReport, AppErrorType>> | undefined;
   const hostFrameMeasurements = createMeasurementSeries();
   const engineMeasurements = createMeasurementSeries();
   const kernelMeasurements = createMeasurementSeries();
@@ -343,6 +342,7 @@ export async function createWorkerExecutionApp(
       };
       rebuildResolve?.(ok(cloneExecutionReport(report)));
       rebuildResolve = undefined;
+      rebuildInFlight = undefined;
     } else if (message.kind === 'host-control') {
       if (message.command === 'set-pointer-lock-allowed') {
         input.setPointerLockAllowed?.(message.allowed);
@@ -357,6 +357,7 @@ export async function createWorkerExecutionApp(
         audio: executionAudioReport(audio.state()),
       }),
     rebuild: () => {
+      if (rebuildInFlight !== undefined) return rebuildInFlight;
       if (state !== 'faulted' || report.world.identity === null) {
         return Promise.resolve(
           err(
@@ -372,12 +373,13 @@ export async function createWorkerExecutionApp(
           ),
         );
       }
-      return new Promise((resolve) => {
+      rebuildInFlight = new Promise((resolve) => {
         rebuildResolve = resolve;
         session.post({ kind: 'rebuild', worldIdentity: report.world.identity as string });
         setTimeout(() => {
           if (rebuildResolve !== resolve) return;
           rebuildResolve = undefined;
+          rebuildInFlight = undefined;
           resolve(
             err(
               new AppError({
@@ -390,6 +392,7 @@ export async function createWorkerExecutionApp(
           );
         }, startupTimeoutMs);
       });
+      return rebuildInFlight;
     },
   };
 
@@ -406,10 +409,9 @@ export async function createWorkerExecutionApp(
       return ok(undefined);
     },
     stop: () => {
-      if (state === 'paused') return err(lifecycleError('app-paused-while-stop'));
-      if (state !== 'running') return err(lifecycleError('app-not-started'));
+      if (state !== 'running' && state !== 'paused') return err(lifecycleError('app-not-started'));
+      if (state === 'running') cancelAnimationFrame(rafId);
       state = 'stopped';
-      cancelAnimationFrame(rafId);
       inputHandle?.();
       audio.dispose();
       session.dispose();

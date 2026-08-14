@@ -132,7 +132,7 @@ try {
   const renderer = await createRenderer(canvas);
   const ready = await renderer.ready;
   if (!ready.ok) return ready.error;
-  return renderer.draw([world], { owner: 0 });
+  return renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 } catch (error) {
   // EngineEnvironmentError reports unusable backend/environment setup.
 }

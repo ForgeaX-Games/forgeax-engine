@@ -102,6 +102,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 console.log(`[tonemapping] backend=${renderer.backend}`);
 const errors = [];
@@ -158,7 +160,8 @@ for (let i = 0; i < TONEMAP_MODES.length; i += 1) {
   if (tonemap === undefined) continue;
   world.set(scene.camera, Camera, { tonemap });
   for (let frame = 0; frame < modeFrames; frame += 1) {
-    const result = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!result.ok) drawErrors += 1;
     framesObserved += 1;
   }
@@ -166,7 +169,8 @@ for (let i = 0; i < TONEMAP_MODES.length; i += 1) {
 }
 const remainingFrames = targetFrames - framesObserved;
 for (let frame = 0; frame < remainingFrames; frame += 1) {
-  const result = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!result.ok) drawErrors += 1;
   framesObserved += 1;
 }

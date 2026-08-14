@@ -154,7 +154,7 @@ construction as proof that a particle asset is ready or visible.
 Every frame follows one host-owned sequence:
 
 ```text
-measured deltaSeconds -> world.update(deltaSeconds) -> renderer.draw([world], { owner: 0 })
+measured deltaSeconds -> world.update(deltaSeconds) -> renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })
 ```
 
 The host measures the delta once and forwards that same value to its World. A `World` validates the delta, owns `Time` and `FixedTime`, runs its `Update` and `FixedUpdate` schedules, and applies its own time policy. App does not maintain an elapsed clock, clamp time, register frame callbacks, or offer a second scheduling surface.

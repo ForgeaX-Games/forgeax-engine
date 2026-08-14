@@ -47,6 +47,7 @@ import type {
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createRenderer } from '../index';
+import { drawPublished } from './draw-published';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const WIDTH = 128;
@@ -274,7 +275,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
       )
       .unwrap();
 
-    const drawn = renderer.draw([world], { owner: 0 });
+    const drawn = drawPublished(renderer, world);
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (typeof unsub === 'function') unsub();
@@ -352,7 +353,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
       )
       .unwrap();
 
-    const drawn = renderer.draw([world], { owner: 0 });
+    const drawn = drawPublished(renderer, world);
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (typeof unsub === 'function') unsub();

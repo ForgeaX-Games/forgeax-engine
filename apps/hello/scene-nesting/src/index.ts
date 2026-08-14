@@ -26,6 +26,8 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   if (!assets) throw new Error('AssetRegistry is null');
 
   const world = new World();
+  const worldAttachment1 = renderer.attachWorld(world);
+  if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   // Register built-in materials.
   const unlitMatGuid = AssetGuid.parse('008e4f75-e7a3-4715-b05b-b93a9ec12074');
@@ -129,7 +131,8 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   });
 
   function frame() {
-    const r = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     if (!r.ok) console.error(`[hello-scene-nesting] draw error: ${r.error.code}`);
     requestAnimationFrame(frame);
   }

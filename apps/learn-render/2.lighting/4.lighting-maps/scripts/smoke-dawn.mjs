@@ -31,7 +31,7 @@
 //   - `[smoke] pixelSamples=<json>`
 //   - `[smoke] PASS - 6 criteria GREEN: ...`
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -42,10 +42,25 @@ const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOL
 const FALSIFY_NO_LIGHT = process.env.FALSIFY_NO_LIGHT === '1';
 const FALSIFY_NO_SPECULAR_MAP = process.env.FALSIFY_NO_SPECULAR_MAP === '1';
 const RHI_DEBUG_DAWN_CAPTURE = process.env.FORGEAX_RHI_DEBUG_DAWN_CAPTURE === '1';
+const RHI_DEBUG_DAWN_IDLE = process.env.FORGEAX_RHI_DEBUG_DAWN_IDLE === '1';
+const RHI_DEBUG_STAGE_TELEMETRY = process.env.FORGEAX_RHI_DEBUG_STAGE_TELEMETRY !== '0';
 const RHI_DEBUG_CAPTURE_FRAMES = 1;
+const COMPARISON_CONTROL_FLAGS = {
+  FALSIFY_NO_LIGHT: process.env.FALSIFY_NO_LIGHT ?? '0',
+  FALSIFY_NO_SPECULAR_MAP: process.env.FALSIFY_NO_SPECULAR_MAP ?? '0',
+};
+const ORACLE_READBACK_PLACEMENT = 'after-target-frame-workload';
+const PERSISTENCE_BASELINE = 'finalize-plus-retained-report-and-artifact-validation';
 
 const WIDTH = 800;
 const HEIGHT = 600;
+const PIXEL_SITES = [
+  { name: 'litCubeCenter', x: Math.floor(WIDTH / 2), y: Math.floor(HEIGHT / 2) },
+  { name: 'litCubeUL', x: Math.floor(WIDTH * 0.4), y: Math.floor(HEIGHT * 0.42) },
+  { name: 'litCubeBR', x: Math.floor(WIDTH * 0.6), y: Math.floor(HEIGHT * 0.58) },
+  { name: 'lampMarker', x: Math.floor(WIDTH * 0.86), y: Math.floor(HEIGHT * 0.32) },
+  { name: 'cornerTL', x: Math.floor(WIDTH * 0.05), y: Math.floor(HEIGHT * 0.05) },
+];
 
 const here = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(here, '..');
@@ -131,6 +146,50 @@ function ensureRenderTarget(device, format) {
   return renderTarget;
 }
 
+async function readbackRenderTarget(device) {
+  const readbackStart = performance.now();
+  const bytesPerPixel = 4;
+  const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
+  const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+  const readbackBuffer = device.createBuffer({
+    size: bytesPerRow * HEIGHT,
+    usage: 0x01 | 0x08,
+  });
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([enc.finish()]);
+  try {
+    await readbackBuffer.mapAsync(0x01);
+  } catch (err) {
+    console.error(
+      `[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  }
+  const mapped = readbackBuffer.getMappedRange();
+  const bytes = new Uint8Array(mapped.slice(0));
+  readbackBuffer.unmap();
+  readbackBuffer.destroy();
+  const readRgba = (px, py) => {
+    const off = py * bytesPerRow + px * bytesPerPixel;
+    return [
+      (bytes[off + 0] ?? 0) / 255,
+      (bytes[off + 1] ?? 0) / 255,
+      (bytes[off + 2] ?? 0) / 255,
+    ];
+  };
+  const pixelSamples = {};
+  for (const site of PIXEL_SITES) pixelSamples[site.name] = readRgba(site.x, site.y);
+  return {
+    pixelSamples,
+    wallTimeMs: Math.max(0, Math.round(performance.now() - readbackStart)),
+  };
+}
+
 const mockCanvas = {
   width: WIDTH,
   height: HEIGHT,
@@ -201,7 +260,7 @@ let debugInst;
 let renderer;
 try {
   let rendererOptions = {};
-  if (RHI_DEBUG_DAWN_CAPTURE) {
+  if (RHI_DEBUG_DAWN_CAPTURE || RHI_DEBUG_DAWN_IDLE) {
     const { rhi: realRhi, createShaderModule } = await import('@forgeax/engine-rhi-webgpu');
     const { wrap, wrapCreateShaderModule } = await import('@forgeax/engine-rhi-debug');
     debugInst = wrap(realRhi);
@@ -222,10 +281,12 @@ try {
       };
       return { ...contextResult, value: wrappedContext };
     };
-    const armResult = debugInst.arm(RHI_DEBUG_CAPTURE_FRAMES);
-    if (!armResult.ok) {
-      console.error(`[smoke] FAIL - Dawn RHI-debug arm failed: ${armResult.error.code}`);
-      process.exit(1);
+    if (RHI_DEBUG_DAWN_CAPTURE) {
+      const armResult = debugInst.arm(RHI_DEBUG_CAPTURE_FRAMES);
+      if (!armResult.ok) {
+        console.error(`[smoke] FAIL - Dawn RHI-debug arm failed: ${armResult.error.code}`);
+        process.exit(1);
+      }
     }
     rendererOptions = { rhi: debugInst };
   }
@@ -265,6 +326,8 @@ if (!diffuseGuidRes.ok || !specularGuidRes.ok || !cubeGuidRes.ok || !matGuidRes.
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 const mkTex = (decoded) => ({
   kind: 'texture',
@@ -358,39 +421,88 @@ const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 1
 const frameStart = Date.now();
 let framesObserved = 0;
 let rhiDebugCapture;
+let telemetryReadback;
 if (debugInst !== undefined) {
-  const rendererInternal = renderer;
-  const unsubscribe = rendererInternal._onFrameEnd(() => debugInst.onFrameEnd());
-  const captureStart = performance.now();
-  const snapshotResult = await debugInst.snapshotAllLiveResources();
-  if (!snapshotResult.ok) {
-    unsubscribe();
-    console.error(`[smoke] FAIL - Dawn RHI-debug snapshot failed: ${snapshotResult.error.code}`);
-    process.exit(1);
+  if (RHI_DEBUG_DAWN_CAPTURE) {
+    const captureStart = performance.now();
+    const snapshotStart = performance.now();
+    const snapshotResult = await debugInst.snapshotAllLiveResources();
+    const snapshotWallMs = Math.max(0, Math.round(performance.now() - snapshotStart));
+    if (!snapshotResult.ok) {
+      console.error(`[smoke] FAIL - Dawn RHI-debug snapshot failed: ${snapshotResult.error.code}`);
+      process.exit(1);
+    }
+    world.update().unwrap();
+    const captureDraw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    if (!captureDraw.ok) console.error(`[smoke] draw capture frame error: ${captureDraw.error.code}`);
+    debugInst.onFrameEnd();
+    const queueWaitStart = performance.now();
+    await sharedDevice.queue.onSubmittedWorkDone();
+    const queueWaitWallMs = Math.max(0, Math.round(performance.now() - queueWaitStart));
+    let readbackWallMs = 0;
+    if (RHI_DEBUG_STAGE_TELEMETRY) {
+      // The stage readback is telemetry work. The final oracle readback below
+      // remains unconditional so disabled and enabled controls render the same
+      // workload while only the enabled path records this extra boundary.
+      const readbackStart = performance.now();
+      telemetryReadback = await readbackRenderTarget(sharedDevice);
+      readbackWallMs = Math.max(0, Math.round(performance.now() - readbackStart));
+    }
+    const captureWallMs = Math.max(0, Math.round(performance.now() - captureStart));
+    const finalizeStart = performance.now();
+    const finalizeResult = debugInst.finalize();
+    const serializationWallMs = Math.max(0, Math.round(performance.now() - finalizeStart));
+    if (!finalizeResult.ok) {
+      console.error(`[smoke] FAIL - Dawn RHI-debug finalize failed: ${finalizeResult.error.code}`);
+      process.exit(1);
+    }
+    const persistenceStart = performance.now();
+    const persistedReport = JSON.parse(readFileSync(finalizeResult.value.reportPath, 'utf8'));
+    statSync(finalizeResult.value.tapePath);
+    statSync(finalizeResult.value.reportPath);
+    if (persistedReport.valid !== true) {
+      console.error('[smoke] FAIL - retained RHI-debug report is not valid');
+      process.exit(1);
+    }
+    const persistenceWallMs = Math.max(0, Math.round(performance.now() - persistenceStart));
+    const finalizeWallMs = serializationWallMs + persistenceWallMs;
+    rhiDebugCapture = {
+      ...finalizeResult.value,
+      requestedFrames: RHI_DEBUG_CAPTURE_FRAMES,
+      captureWallMs,
+      finalizeWallMs,
+      comparisonDimensions: {
+        oracle: 'diffuse-specular-point-light-plus-specular-map',
+        readbackPlacement: ORACLE_READBACK_PLACEMENT,
+        persistenceBaseline: PERSISTENCE_BASELINE,
+        controlFlags: COMPARISON_CONTROL_FLAGS,
+      },
+      ...(RHI_DEBUG_STAGE_TELEMETRY
+        ? {
+            stageEvidence: {
+              capture: {
+                wallTimeMs: captureWallMs,
+                snapshotWallMs,
+                queueWaitWallMs,
+                readbackWallMs,
+                readbackSampleCount: Object.keys(telemetryReadback.pixelSamples).length,
+              },
+              finalize: {
+                wallTimeMs: finalizeWallMs,
+                serializationWallMs,
+                persistenceWallMs,
+              },
+            },
+          }
+        : {}),
+    };
+    console.log(`[smoke] rhiDebugCapture=${JSON.stringify(rhiDebugCapture)}`);
+    framesObserved++;
   }
-  const captureDraw = renderer.draw([world], { owner: 0 });
-  if (!captureDraw.ok) console.error(`[smoke] draw capture frame error: ${captureDraw.error.code}`);
-  await sharedDevice.queue.onSubmittedWorkDone();
-  const captureWallMs = Math.max(0, Math.round(performance.now() - captureStart));
-  const finalizeStart = performance.now();
-  const finalizeResult = debugInst.finalize();
-  const finalizeWallMs = Math.max(0, Math.round(performance.now() - finalizeStart));
-  unsubscribe();
-  if (!finalizeResult.ok) {
-    console.error(`[smoke] FAIL - Dawn RHI-debug finalize failed: ${finalizeResult.error.code}`);
-    process.exit(1);
-  }
-  rhiDebugCapture = {
-    ...finalizeResult.value,
-    requestedFrames: RHI_DEBUG_CAPTURE_FRAMES,
-    captureWallMs,
-    finalizeWallMs,
-  };
-  console.log(`[smoke] rhiDebugCapture=${JSON.stringify(rhiDebugCapture)}`);
-  framesObserved++;
 }
 for (let i = framesObserved; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -411,51 +523,11 @@ if (!renderTarget) {
   console.error('[smoke] FAIL - renderTarget never allocated');
   process.exit(1);
 }
-const bytesPerPixel = 4;
-const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
-const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
-const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
-{
-  const enc = device.createCommandEncoder();
-  enc.copyTextureToBuffer(
-    { texture: renderTarget },
-    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
-    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
-  );
-  device.queue.submit([enc.finish()]);
-}
-try {
-  await readbackBuffer.mapAsync(0x01);
-} catch (err) {
-  console.error(
-    `[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`,
-  );
-  process.exit(1);
-}
-const mapped = readbackBuffer.getMappedRange();
-const bytes = new Uint8Array(mapped.slice(0));
-readbackBuffer.unmap();
-readbackBuffer.destroy();
-
-const readRgba = (px, py) => {
-  const off = py * bytesPerRow + px * bytesPerPixel;
-  const r = (bytes[off + 0] ?? 0) / 255;
-  const g = (bytes[off + 1] ?? 0) / 255;
-  const b = (bytes[off + 2] ?? 0) / 255;
-  return [r, g, b];
-};
 // LO 2.4 sample sites: litCubeCenter (origin lit cube) + litCubeUL/BR
 // (cube interior at offset 0.4/0.6 -- distinct from textures' 0.35/0.65)
 // + lampMarker (1.2, 1.0, 2.0) projects to NDC upper-right area.
-const sites = [
-  { name: 'litCubeCenter', x: Math.floor(WIDTH / 2), y: Math.floor(HEIGHT / 2) },
-  { name: 'litCubeUL', x: Math.floor(WIDTH * 0.4), y: Math.floor(HEIGHT * 0.42) },
-  { name: 'litCubeBR', x: Math.floor(WIDTH * 0.6), y: Math.floor(HEIGHT * 0.58) },
-  { name: 'lampMarker', x: Math.floor(WIDTH * 0.86), y: Math.floor(HEIGHT * 0.32) },
-  { name: 'cornerTL', x: Math.floor(WIDTH * 0.05), y: Math.floor(HEIGHT * 0.05) },
-];
-const pixelSamples = {};
-for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
+const readback = await readbackRenderTarget(device);
+const { pixelSamples } = readback;
 console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
 // --- 5. Verdict (6 criteria) ------------------------------------------------

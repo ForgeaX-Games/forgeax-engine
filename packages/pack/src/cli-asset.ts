@@ -28,10 +28,11 @@ import { isValidAssetGuidString } from './guid.js';
 import { parsePackV2 } from './index.js';
 import { scan } from './scanner.js';
 
-interface PackEntry {
+export interface PackEntry {
   readonly guid: string;
   readonly kind: string;
   readonly sourcePath: string;
+  readonly name?: string;
 }
 
 interface AssetCtx {
@@ -59,7 +60,7 @@ function emitError(ctx: AssetCtx, err: ScanErrShape): number {
   return 1;
 }
 
-async function scanEntries(
+export async function scanEntries(
   roots: readonly string[],
   ctx: AssetCtx,
 ): Promise<{ ok: true; value: PackEntry[] } | { ok: false }> {
@@ -93,11 +94,16 @@ async function scanEntries(
     } catch {
       continue;
     }
-    const packObj = parsed as { assets?: { guid?: unknown; kind?: unknown }[] };
+    const packObj = parsed as { assets?: { guid?: unknown; kind?: unknown; name?: unknown }[] };
     if (!Array.isArray(packObj.assets)) continue;
     for (const asset of packObj.assets) {
       if (typeof asset.guid === 'string' && typeof asset.kind === 'string') {
-        entries.push({ guid: asset.guid, kind: asset.kind, sourcePath: packPath });
+        entries.push({
+          guid: asset.guid,
+          kind: asset.kind,
+          sourcePath: packPath,
+          ...(typeof asset.name === 'string' ? { name: asset.name } : {}),
+        });
       }
     }
   }
@@ -109,11 +115,24 @@ async function scanEntries(
     } catch {
       continue;
     }
-    const metaObj = parsed as { subAssets?: { guid?: unknown; kind?: unknown }[] };
+    const metaObj = parsed as {
+      subAssets?: { guid?: unknown; kind?: unknown; name?: unknown; sourceKey?: unknown }[];
+    };
     if (!Array.isArray(metaObj.subAssets)) continue;
     for (const sub of metaObj.subAssets) {
       if (typeof sub.guid === 'string' && typeof sub.kind === 'string') {
-        entries.push({ guid: sub.guid, kind: sub.kind, sourcePath: metaPath });
+        const name =
+          typeof sub.name === 'string'
+            ? sub.name
+            : typeof sub.sourceKey === 'string'
+              ? sub.sourceKey
+              : undefined;
+        entries.push({
+          guid: sub.guid,
+          kind: sub.kind,
+          sourcePath: metaPath,
+          ...(name === undefined ? {} : { name }),
+        });
       }
     }
   }

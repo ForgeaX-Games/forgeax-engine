@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const { create, globals } = await import('webgpu');
 Object.assign(globalThis, globals);
+const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10), 180);
 const gpu = create([]);
 Object.defineProperty(globalThis, 'navigator', { value: { gpu }, configurable: true });
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
@@ -47,21 +48,23 @@ const ready = await renderer.ready;
 if (!ready.ok) throw new Error(`[smoke] renderer.ready=${ready.error.code}`);
 const { buildSystemClosureWorld, readSystemClosureState } = await import(resolve(here, '..', 'src', 'system-closure.ts'));
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildSystemClosureWorld(world);
 const errors = [];
 renderer.onError((error) => errors.push(error.code));
-for (let frame = 0; frame < 180; frame++) {
+for (let frame = 0; frame < FRAMES; frame++) {
   world.update(0.016).unwrap();
-  const draw = renderer.draw([world], { owner: 0 });
+  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!draw.ok) throw new Error(`[smoke] draw=${draw.error.code}`);
 }
 const finalState = readSystemClosureState(world, state);
 console.log(`[smoke] state=${JSON.stringify(finalState)}`);
 if (
-  finalState.simpleRuns !== 180 ||
-  finalState.statefulRuns !== 180 ||
-  finalState.capturedRuns !== 180 ||
-  finalState.statefulValue !== 180 ||
+  finalState.simpleRuns !== FRAMES ||
+  finalState.statefulRuns !== FRAMES ||
+  finalState.capturedRuns !== FRAMES ||
+  finalState.statefulValue !== FRAMES ||
   finalState.capturedValue <= 7 ||
   finalState.simpleX === -260 ||
   finalState.statefulX === 0 ||
@@ -70,5 +73,5 @@ if (
 ) {
   throw new Error(`[smoke] FAIL - state=${JSON.stringify(finalState)}, errors=${errors.join(',')}`);
 }
-console.log('[smoke] PASS - Dawn render plus closure capture evidence');
+console.log(`[smoke] PASS - ${FRAMES} frames, Dawn render plus closure capture evidence`);
 device?.destroy?.();

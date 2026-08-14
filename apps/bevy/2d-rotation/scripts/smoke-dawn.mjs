@@ -84,6 +84,8 @@ if (!ready.ok) {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildRotationWorld(world);
 propagateTransforms(world);
 const noInput = {
@@ -113,7 +115,8 @@ let late;
 let earlyState;
 let lateState;
 for (let i = 0; i < frames; i++) {
-  const drawn = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawn.ok) console.error(`[smoke] draw ${i}: ${drawn.error.code}`);
   if (i === Math.max(1, Math.floor(frames * 0.05))) {
     early = await capture();

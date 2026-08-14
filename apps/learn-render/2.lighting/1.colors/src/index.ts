@@ -1523,7 +1523,7 @@ function installCaptureHook(
   const renderer = app.renderer;
   win.__captureColors = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { owner: 0 });
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(

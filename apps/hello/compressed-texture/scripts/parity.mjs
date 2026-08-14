@@ -306,6 +306,8 @@ if (typeof renderer.onError === 'function') {
 }
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const texHandle = world.allocSharedRef('TextureAsset', {
   kind: 'texture',
   width: blockTranscoded.value.width,
@@ -347,7 +349,8 @@ world.spawn(
 const start = performance.now();
 let frames = 0;
 while (true) {
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   frames++;
   if (performance.now() - start >= SMOKE_DURATION_MS) break;
   await delay(0);

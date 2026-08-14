@@ -153,4 +153,4 @@ export type {
   RenderPhaseSkipReason,
   RenderResult,
 } from './renderer';
-export { RENDER_PHASE_CATALOG, resolveDrawOwners } from './renderer';
+export { RENDER_PHASE_CATALOG } from './renderer';

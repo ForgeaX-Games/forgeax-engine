@@ -357,6 +357,8 @@ if (!assets) { console.error('[smoke] FAIL - AssetRegistry null'); process.exit(
 
 // --- 5. Canonical load: configurePackIndex + loadByGuid<SceneAsset> ---
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 assets.configurePackIndex(PACK_INDEX_URL);
 
 const sceneGuidRes = AssetGuid.parse(SCENE_GUID);
@@ -444,7 +446,7 @@ if (!device) { console.error('[smoke] FAIL - no shared device captured'); proces
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { owner: 0 });
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) errors.push(r.error?.code ?? 'unknown');
   framesObserved++;
 }

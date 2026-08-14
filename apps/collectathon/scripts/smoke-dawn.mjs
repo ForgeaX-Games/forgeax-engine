@@ -147,6 +147,8 @@ try {
 console.log(`[collectathon] backend=${renderer.backend}`);
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // Spawn Camera + DirectionalLight for empty-scene structural smoke.
 // Track entity handles to verify existence after render loop.
@@ -435,7 +437,8 @@ if (!ready.ok) {
 
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   // Track draw errors via onError — do not fail on individual frames.
   void r;
   framesObserved++;

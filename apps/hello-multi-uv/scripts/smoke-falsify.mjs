@@ -280,6 +280,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 const ready = await renderer.ready;
 if (!ready.ok) {
@@ -335,12 +337,14 @@ if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
 
 const yieldTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 for (let warm = 0; warm < 16; warm++) {
-  renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   await yieldTick();
 }
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!r.ok) console.error(`[falsify-smoke] draw frame ${i} error: ${r.error.code}`);
 }
 await sharedDevice.queue.onSubmittedWorkDone();

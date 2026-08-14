@@ -133,6 +133,8 @@ const { buildRandomSamplingWorld, spawnSamplePoint } = await import(
 );
 
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { wireframeHalf, pointMat } = buildRandomSamplingWorld(world);
 
 // Spawn sample points inside the cube
@@ -142,7 +144,8 @@ for (let i = 0; i < 50; i++) {
 
 // --- render at SMOKE_MIN_FRAMES ---
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  await renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(50);
 

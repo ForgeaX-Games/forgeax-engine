@@ -102,20 +102,28 @@ if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.cod
 
 const { buildAlterMeshWorld, mutateSharedMesh, swapRightMesh } = await import(resolve(here, '..', 'src', 'alter-mesh.ts'));
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildAlterMeshWorld(world);
 
-await renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(50);
 const before = await capture();
 swapRightMesh(world, state);
-await renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(50);
 const afterSwap = await capture();
 mutateSharedMesh(state, renderer.store);
-await renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(50);
 const afterMutation = await capture();
-for (let i = 3; i < SMOKE_MIN_FRAMES; i++) await renderer.draw([world], { owner: 0 });
+for (let i = 3; i < SMOKE_MIN_FRAMES; i++) {
+  world.update().unwrap();
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+}
 mkdirSync(resolve(here, '..', 'artifacts'), { recursive: true });
 writeFileSync(resolve(here, '..', 'artifacts', 'alter-mesh-ref.png'), writeReferencePng(afterMutation, WIDTH, HEIGHT));
 

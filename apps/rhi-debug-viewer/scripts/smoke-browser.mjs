@@ -36,10 +36,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 
 const APP_DIR = resolve(HERE, '..');
+const INPUT_TAPE_PATH = process.env.FORGEAX_RHI_DEBUG_TAPE_PATH;
+const INPUT_REPORT_PATH = process.env.FORGEAX_RHI_DEBUG_REPORT_PATH;
 // Zero-binary invariant: no committed .tape.bin. Synthesise the fixture in
 // memory and write to a throwaway temp dir for playwright setInputFiles.
 const FIXTURES_DIR = mkdtempSync(resolve(tmpdir(), 'rhi-debug-viewer-fixture-'));
-{
+const inputPair =
+  INPUT_TAPE_PATH !== undefined && INPUT_REPORT_PATH !== undefined
+    ? { binPath: resolve(INPUT_TAPE_PATH), jsonPath: resolve(INPUT_REPORT_PATH) }
+    : null;
+if (inputPair === null) {
   const { blob, report } = buildHelloCubeFixture();
   writeFileSync(resolve(FIXTURES_DIR, 'frame-0.tape.bin'), blob);
   writeFileSync(resolve(FIXTURES_DIR, 'frame-0.report.json'), JSON.stringify(report, null, 2));
@@ -58,6 +64,22 @@ const FIXTURES_DIR = mkdtempSync(resolve(tmpdir(), 'rhi-debug-viewer-fixture-'))
 // exits 0 to signal falsification confirmed.
 const FALSIFY_MODE = process.env.FALSIFY_NO_SHADER_MODULE === '1';
 const captureEvidence = { mode: 'pixel' };
+const viewerFirstAnswerStartedAt = performance.now();
+
+function emitViewerFailure(reasonCode, affectedScope, recoveryAction, detail) {
+  console.error(
+    `[smoke-browser] consumerAnswer=${JSON.stringify({
+      consumer: 'viewer',
+      status: 'failed',
+      source: 'browser-smoke',
+      boundary: 'existing viewer model ready',
+      reasonCode,
+      affectedScope,
+      recoveryAction,
+      ...(detail === undefined ? {} : { detail }),
+    })}`,
+  );
+}
 if (FALSIFY_MODE) {
   console.log('[smoke-browser] FALSIFY mode: skipping createShaderModule — RT expected all-black');
 }
@@ -78,6 +100,11 @@ viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`
 const deadline = Date.now() + 30000;
 while (!portUrl && Date.now() < deadline) await sleep(200);
 if (!portUrl) {
+  emitViewerFailure(
+    'vite-start-failure',
+    'viewer Vite dev server',
+    'Inspect the Vite startup output and rerun the existing viewer smoke.',
+  );
   console.error('FAIL: vite did not become ready in 30s');
   viteProc.kill();
   process.exit(2);
@@ -117,8 +144,8 @@ console.log('[smoke-browser] page loaded');
 // ============================================================================
 // The DropZone has a hidden <input type=file accept=".tape.bin,.json" multiple>
 // that we target for playwright setInputFiles.
-const binPath = resolve(FIXTURES_DIR, 'frame-0.tape.bin');
-const jsonPath = resolve(FIXTURES_DIR, 'frame-0.report.json');
+const binPath = inputPair?.binPath ?? resolve(FIXTURES_DIR, 'frame-0.tape.bin');
+const jsonPath = inputPair?.jsonPath ?? resolve(FIXTURES_DIR, 'frame-0.report.json');
 console.log(`[smoke-browser] uploading ${binPath} + ${jsonPath}`);
 
 const fileInput = page.locator('input[type="file"][accept=".tape.bin,.json"]');
@@ -127,9 +154,30 @@ await fileInput.setInputFiles([binPath, jsonPath]);
 // Wait for the load-status anchor to appear with "loaded"
 try {
   await page.waitForSelector('[data-forgeax-load-status="loaded"]', { timeout: 10000 });
+  const viewerFirstAnswerWallTimeMs = Math.max(
+    0,
+    Math.round(performance.now() - viewerFirstAnswerStartedAt),
+  );
+  console.log(
+    `[smoke-browser] consumerAnswer=${JSON.stringify({
+      consumer: 'viewer',
+      status: 'observed',
+      wallTimeMs: viewerFirstAnswerWallTimeMs,
+      source: 'browser-smoke',
+      boundary: 'existing viewer model ready',
+      affectedScope: 'viewer first answer',
+      recoveryAction: 'Inspect the load-status and retained tape/report pair.',
+    })}`,
+  );
   console.log('[smoke-browser] AC-01 GREEN: data-forgeax-load-status=loaded');
 } catch {
   const currentStatus = await page.getAttribute('[data-forgeax-load-status]', 'data-forgeax-load-status');
+  emitViewerFailure(
+    currentStatus === 'parse-error' ? 'malformed-artifact' : 'replay-failure',
+    'viewer first answer',
+    'Inspect the load-status, Vite output, and retained tape/report pair.',
+    `load-status=${currentStatus}`,
+  );
   console.error(`[smoke-browser] AC-01 RED: load-status is "${currentStatus}", expected "loaded"`);
   await browser.close();
   viteProc.kill('SIGTERM');
@@ -626,6 +674,14 @@ if (errors.length > 0) {
   console.error(`\n[smoke-browser] ${errors.length} page error(s):`);
   errors.forEach((e) => console.error(`  ${e}`));
   // Don't fail on CONSOLE-ERR only — pages may emit benign console errors
+  if (errors.some((error) => error.startsWith('PAGEERROR'))) {
+    emitViewerFailure(
+      'replay-failure',
+      'viewer replay/model loading',
+      'Inspect the page error and rerun with the retained tape/report pair.',
+      errors.filter((error) => error.startsWith('PAGEERROR')).join('; '),
+    );
+  }
 }
 
 console.log(`\n[smoke-browser] GREEN — all assertions passed`);

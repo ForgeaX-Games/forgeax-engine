@@ -8,7 +8,7 @@ import {
   Visibility,
   VisibilityStateValue,
 } from '@forgeax/engine-render/internal';
-import { Transform } from '@forgeax/engine-scene';
+import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
 function spawnCamera(world: World): void {
@@ -34,8 +34,10 @@ function spawnCandidate(world: World, state: keyof typeof VisibilityStateValue) 
 describe('visibility diagnostics', () => {
   it('switches from explicit hidden to frustum culling without changing frustum totals', () => {
     const world = new World();
+    registerPropagateTransforms(world);
     spawnCamera(world);
     const entity = spawnCandidate(world, 'hidden');
+    world.update(0).unwrap();
 
     const hidden = extractFrames([world], 0);
     expect(hidden.renderables).toHaveLength(0);

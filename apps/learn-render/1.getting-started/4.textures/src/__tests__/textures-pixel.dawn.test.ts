@@ -169,6 +169,8 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     //    Skips the pack-index fetch path -- the dawn harness has no vite
     //    middleware behind it, so we mint the column directly.
     const world = new World();
+    const worldAttachment1 = renderer.attachWorld(world);
+    if (!worldAttachment1.ok) throw worldAttachment1.error;
     const decodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
     expect(decodeRes.ok, `decodeImageFromFile failed: ${decodeRes.ok ? '' : decodeRes.error.code}`)
       .toBe(true);
@@ -252,7 +254,8 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     expect(uploadRes.ok, `uploadTexture failed: ${uploadRes.ok ? '' : uploadRes.error.code}`)
       .toBe(true);
     if (!uploadRes.ok) return;
-    const drawn = renderer.draw([world], { owner: 0 });
+    world.update().unwrap();
+    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
     expect(drawn.ok).toBe(true);
 
     const device = sharedDevice;

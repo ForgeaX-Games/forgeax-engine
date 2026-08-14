@@ -128,10 +128,13 @@ if (!ready.ok) {
 
 const { buildWindowResizingWorld } = await import(resolve(here, '..', 'src', 'window-resizing.ts'));
 const world = new World();
+const worldAttachment1 = renderer.attachWorld(world);
+if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildWindowResizingWorld(world);
 
 // --- render at initial size + verify not black ---
-await renderer.draw([world], { owner: 0 });
+world.update().unwrap();
+await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 await delay(50);
 const initialPixels = await capture(WIDTH, HEIGHT);
 const initialIdx = (Math.floor(HEIGHT / 2) * WIDTH + Math.floor(WIDTH / 2)) * 4;
@@ -142,7 +145,8 @@ const initialNotBlack = initialR > 10 || initialG > 10 || initialB > 10;
 
 // --- render at SMOKE_MIN_FRAMES ---
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  await renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(50);
 const afterPixels = await capture(WIDTH, HEIGHT);
@@ -171,7 +175,8 @@ for (const row of cameraQuery) {
 }
 
 for (let i = 0; i < 10; i++) {
-  await renderer.draw([world], { owner: 0 });
+  world.update().unwrap();
+  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 }
 await delay(50);
 const resizedPixels = await capture(640, 360);

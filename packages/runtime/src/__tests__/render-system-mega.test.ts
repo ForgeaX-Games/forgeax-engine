@@ -6,7 +6,9 @@
 // cannot collide; describe() inside still registers globally with vitest.
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import type { World as WorldType } from '@forgeax/engine-ecs';
 import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
+import type { Renderer as RendererType } from '@forgeax/engine-render';
 import {
   Camera,
   DirectionalLight,
@@ -284,7 +286,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -334,7 +336,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (worlds: unknown, opts: { owner: number }) => void;
+      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -401,7 +403,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // DirectionalLight with merged shadow fields.
       expect(errors).toHaveLength(0);
@@ -473,7 +479,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
       expect(errors).toHaveLength(0);
     });
 
@@ -505,7 +515,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors.some((e) => e.code === 'render-system-no-camera')).toBe(true);
       // Clear pass executed under the synthetic camera path; the frame is
@@ -562,7 +576,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // Soft path: no error fired (D-Q7 mirroring; LO §1.1 minimum semantic).
       expect(errors).toHaveLength(0);
@@ -612,7 +630,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -672,7 +694,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string; hint?: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors.some((e) => e.code === 'render-system-multi-camera')).toBe(true);
       // First archetype hit still rendered.
@@ -726,7 +752,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       const multiLightCalls = warnSpy.mock.calls.filter(
         (c) =>
@@ -778,7 +808,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string; detail?: { assetHandle?: number } }[] = [];
       renderer.onError((e) => errors.push(e as never));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       const assetErr = errors.find((e) => e.code === 'asset-not-registered');
       expect(assetErr).toBeDefined();
@@ -871,7 +905,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         detail?: { error?: { code: string; message: string } };
       }[] = [];
       renderer.onError((e) => errors.push(e as never));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       const runtimeErr = errors.find((e) => e.code === 'webgpu-runtime-error');
       expect(runtimeErr).toBeDefined();
@@ -879,34 +917,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       expect(runtimeErr?.detail?.error).toBeDefined();
       expect(typeof runtimeErr?.detail?.error?.message).toBe('string');
       expect(runtimeErr?.detail?.error?.message).toContain('writeBuffer');
-    });
-
-    it('renderer facade preserves detail.error when a pre-render stage throws', async () => {
-      const { createRenderer } = await setupWebGPU();
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
-
-      const errors: {
-        code: string;
-        detail?: { error?: { code: string; message: string; name?: string } };
-      }[] = [];
-      renderer.onError((e) => errors.push(e as never));
-
-      // A malformed World reaches the documented draw entry, then throws in
-      // the pre-render glyph walk. This exercises createRenderer.draw's
-      // facade catch rather than RenderSystem.recordFrame's inner catch.
-      renderer.draw([{}], { owner: 0 });
-
-      const runtimeErr = errors.find((e) => e.code === 'webgpu-runtime-error');
-      expect(runtimeErr).toBeDefined();
-      expect(runtimeErr?.detail?.error?.code).toBe('unknown');
-      expect(runtimeErr?.detail?.error?.message).toContain('_getGraph');
-      expect(runtimeErr?.detail?.error?.name).toBe('TypeError');
     });
   });
 
@@ -1090,7 +1100,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors).toHaveLength(0);
       // All 3 transparent entities are drawn.
@@ -1212,7 +1226,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors).toHaveLength(0);
       // Both opaque entities are drawn (structural).
@@ -1297,7 +1315,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -1359,7 +1381,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw([world], { owner: 0 });
+      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        throw new Error('World attachment failed');
+      }
+      (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);

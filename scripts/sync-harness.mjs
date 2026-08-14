@@ -115,8 +115,10 @@ if (!existsSync(resolve(DIR, '.git'))) {
   process.exit(0);
 }
 
-// Existing clone: fast-forward to origin/main. Never clobber local divergence.
-const fetch = git(['fetch', '--quiet', 'origin', 'main'], { cwd: DIR });
+// Existing clone: fast-forward to origin/main while keeping managed shallow
+// clones at one commit. Never clobber local divergence; legacy full clones are
+// preserved because they may carry local branches or loop-state history.
+const fetch = git(['fetch', '--quiet', '--depth=1', 'origin', 'main'], { cwd: DIR });
 if (fetch.status !== 0) {
   warnExit0(
     `fetch failed (offline?); leaving .forgeax-harness as-is:\n${(fetch.stderr || '').trim()}`,
